@@ -86,6 +86,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     jwt_key_mapping_cache_key,
     key_access_group_grants_model,
     key_model_aliases_for_auth_check,
+    model_max_budget_of,
     resolve_and_validate_end_user_id,
     resolve_default_end_user_budget,
     route_skips_budget_checks,
@@ -385,15 +386,6 @@ class _TeamModelBudgetLimiter(Protocol):
     ) -> bool: ...
 
 
-class _ModelMaxBudgetHolder(Protocol):
-    @property
-    def model_max_budget(self) -> Mapping[str, object] | None: ...
-
-
-def _model_max_budget_of(holder: _ModelMaxBudgetHolder) -> Mapping[str, object] | None:
-    return holder.model_max_budget
-
-
 class _EndUserModelBudgetLimiter(Protocol):
     async def is_end_user_within_model_budget(
         self, end_user_id: str, end_user_model_max_budget: Mapping[str, object], model: str
@@ -551,7 +543,7 @@ async def _check_end_user_model_budget(
     Reads the request's end-user row, not the token: the master key's cached auth object keeps
     the limits of whichever end user it was cached with."""
     budget_table: Final = end_user_object.litellm_budget_table if end_user_object is not None else None
-    end_user_model_max_budget: Final = _model_max_budget_of(budget_table) if budget_table is not None else None
+    end_user_model_max_budget: Final = model_max_budget_of(budget_table) if budget_table is not None else None
     if end_user_object is None or not end_user_model_max_budget:
         return
     for model_name in models:
@@ -2459,6 +2451,7 @@ async def user_api_key_auth_builder(
                         auto_registered.user_model_max_budget = (
                             user_object.model_max_budget if user_object is not None else None
                         )
+                        auto_registered.end_user_model_max_budget = valid_token.end_user_model_max_budget
                         valid_token = auto_registered
                         api_key = valid_token.token or ""
 
@@ -2508,19 +2501,26 @@ async def user_api_key_auth_builder(
                         # zero-cost model would be refused here and allowed there,
                         # while the log above claims all budget checks were skipped.
                         if not skip_budget_checks:
+                            jwt_budget_models: Final = _get_model_names_for_budget_checks(
+                                model=_get_model_from_request_context(
+                                    request_data=request_data,
+                                    route=route,
+                                    request=request,
+                                    llm_router=llm_router,
+                                    team_id=valid_token.team_id,
+                                )
+                            )
                             await _check_user_model_budget(
                                 valid_token=cast(UserAPIKeyAuth, valid_token),
                                 model_max_budget_limiter=model_max_budget_limiter,
-                                models=_get_model_names_for_budget_checks(
-                                    model=_get_model_from_request_context(
-                                        request_data=request_data,
-                                        route=route,
-                                        request=request,
-                                        llm_router=llm_router,
-                                        team_id=valid_token.team_id,
-                                    )
-                                ),
+                                models=jwt_budget_models,
                             )
+                            if not route_skips_budget_checks(route=route):
+                                await _check_end_user_model_budget(
+                                    end_user_object=result["end_user_object"],
+                                    model_max_budget_limiter=model_max_budget_limiter,
+                                    models=jwt_budget_models,
+                                )
 
                         return cast(UserAPIKeyAuth, valid_token)
 
@@ -3875,15 +3875,15 @@ async def run_centralized_common_checks(
                 model_max_budget_limiter=model_max_budget_limiter,
                 models=models,
             )
-            await _check_end_user_model_budget(
-                end_user_object=end_user_object,
-                model_max_budget_limiter=model_max_budget_limiter,
-                models=models,
-            )
             typed_project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (
                 project_object if isinstance(project_object, LiteLLM_ProjectTableCachedObj) else None
             )
             if not route_skips_budget_checks(route=route):
+                await _check_end_user_model_budget(
+                    end_user_object=end_user_object,
+                    model_max_budget_limiter=model_max_budget_limiter,
+                    models=models,
+                )
                 await _check_team_member_model_budget_with_fallback(
                     valid_token=user_api_key_auth_obj,
                     model_max_budget_limiter=model_max_budget_limiter,

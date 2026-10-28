@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -5219,40 +5219,109 @@ def _master_key_token_cached_with_another_end_users_cap() -> UserAPIKeyAuth:
     )
 
 
+def _end_user_linked_to_the_capped_budget() -> LiteLLM_EndUserTable:
+    return LiteLLM_EndUserTable(
+        user_id="eu-1",
+        blocked=False,
+        budget_id="eu-budget",
+        litellm_budget_table=LiteLLM_BudgetTable(budget_id="eu-budget", model_max_budget=_END_USER_MODEL_CAPS),
+    )
+
+
+def _end_user_on_the_proxy_default_budget() -> LiteLLM_EndUserTable:
+    return LiteLLM_EndUserTable(user_id="eu-1", blocked=False)
+
+
 @pytest.mark.parametrize(
-    ("make_token", "gpt_4o_spend", "model", "must_raise"),
+    ("make_token", "make_end_user", "gpt_4o_spend", "model", "route", "must_raise"),
     [
-        pytest.param(_virtual_key_token_for_end_user, 0.0001, "gpt-4o", True, id="virtual-key-over-cap"),
         pytest.param(
-            _master_key_token_cached_with_another_end_users_cap, 0.0001, "gpt-4o", True, id="master-key-over-cap"
+            _virtual_key_token_for_end_user,
+            _end_user_linked_to_the_capped_budget,
+            0.0001,
+            "gpt-4o",
+            "/v1/chat/completions",
+            True,
+            id="virtual-key-over-cap",
         ),
-        pytest.param(_virtual_key_token_for_end_user, 0.00001, "gpt-4o", False, id="under-cap"),
-        pytest.param(_virtual_key_token_for_end_user, 0.0001, "gpt-4o-mini", False, id="model-without-a-cap"),
+        pytest.param(
+            _master_key_token_cached_with_another_end_users_cap,
+            _end_user_linked_to_the_capped_budget,
+            0.0001,
+            "gpt-4o",
+            "/v1/chat/completions",
+            True,
+            id="master-key-over-cap",
+        ),
+        pytest.param(
+            _virtual_key_token_for_end_user,
+            _end_user_on_the_proxy_default_budget,
+            0.0001,
+            "gpt-4o",
+            "/v1/chat/completions",
+            True,
+            id="proxy-default-budget-over-cap",
+        ),
+        pytest.param(
+            _virtual_key_token_for_end_user,
+            _end_user_linked_to_the_capped_budget,
+            0.00001,
+            "gpt-4o",
+            "/v1/chat/completions",
+            False,
+            id="under-cap",
+        ),
+        pytest.param(
+            _virtual_key_token_for_end_user,
+            _end_user_linked_to_the_capped_budget,
+            0.0001,
+            "gpt-4o-mini",
+            "/v1/chat/completions",
+            False,
+            id="model-without-a-cap",
+        ),
+        pytest.param(
+            _master_key_token_cached_with_another_end_users_cap,
+            _end_user_linked_to_the_capped_budget,
+            0.0001,
+            "gpt-4o",
+            "/spend/calculate",
+            False,
+            id="budget-exempt-route",
+        ),
     ],
 )
 @pytest.mark.asyncio
-async def test_centralized_common_checks_enforces_the_end_users_linked_model_max_budget(
-    make_token, gpt_4o_spend, model, must_raise
-):
-    """An end user linked to a budget whose model_max_budget caps a model is refused that model
-    once its spend reaches the cap, whether the caller holds a virtual key or the master key, and
-    the cap is read off the end user's row rather than whatever the token carried."""
+async def test_centralized_common_checks_enforces_the_end_users_model_max_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    make_token: Callable[[], UserAPIKeyAuth],
+    make_end_user: Callable[[], LiteLLM_EndUserTable],
+    gpt_4o_spend: float,
+    model: str,
+    route: str,
+    must_raise: bool,
+) -> None:
+    """An end user whose budget (linked, or the proxy-wide default) caps a model is refused that
+    model once its spend reaches the cap, whether the caller holds a virtual key or the master key,
+    and the cap is read off the end user's row rather than whatever the token carried. Routes
+    exempt from budget checks are never refused."""
     from starlette.datastructures import URL
 
     import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
     from litellm.proxy.utils import ProxyLogging
 
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", "eu-default")
     user_api_key_cache: Final = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
         key=end_user_cache_key("eu-1"),
-        value=LiteLLM_EndUserTable(
-            user_id="eu-1",
-            blocked=False,
-            budget_id="eu-budget",
-            litellm_budget_table=LiteLLM_BudgetTable(budget_id="eu-budget", model_max_budget=_END_USER_MODEL_CAPS),
-        ),
+        value=make_end_user(),
         model_type=LiteLLM_EndUserTable,
+    )
+    await user_api_key_cache.async_set_cache(
+        key="default_end_user_budget:eu-default",
+        value=LiteLLM_BudgetTable(budget_id="eu-default", model_max_budget=_END_USER_MODEL_CAPS),
+        model_type=LiteLLM_BudgetTable,
     )
     await user_api_key_cache.async_set_cache(
         key="admin",
@@ -5288,7 +5357,7 @@ async def test_centralized_common_checks_enforces_the_end_users_linked_model_max
     }
     originals: Final = {attribute: getattr(_proxy_server_mod, attribute, None) for attribute in attrs}
     request: Final = Request(scope={"type": "http"})
-    request._url = URL(url="/v1/chat/completions")
+    request._url = URL(url=route)
     try:
         for attribute, value in attrs.items():
             setattr(_proxy_server_mod, attribute, value)
@@ -5297,7 +5366,7 @@ async def test_centralized_common_checks_enforces_the_end_users_linked_model_max
                 user_api_key_auth_obj=make_token(),
                 request=request,
                 request_data={"model": model, "messages": [{"role": "user", "content": "hi"}]},
-                route="/v1/chat/completions",
+                route=route,
             )
     finally:
         for attribute, value in originals.items():

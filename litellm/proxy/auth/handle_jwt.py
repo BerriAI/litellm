@@ -59,7 +59,7 @@ from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_age
 from litellm.proxy.agent_endpoints.identity import has_legacy_identity
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, resolve_managed_agent
 from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
-from litellm.proxy.auth.auth_checks import can_team_access_model
+from litellm.proxy.auth.auth_checks import can_team_access_model, model_max_budget_of
 from litellm.proxy.auth.model_access_denied import (
     ModelAccessDeniedHTTPException,
     model_access_denied_client_message,
@@ -3035,6 +3035,9 @@ class JWTAuthManager:
         """Keep JWT identity and permission attribution identical across consumers."""
         user: Final = result["user_object"]
         admin: Final = result["is_proxy_admin"]
+        end_user: Final = result["end_user_object"]
+        end_user_budget: Final = end_user.litellm_budget_table if end_user is not None else None
+        end_user_caps: Final = model_max_budget_of(end_user_budget) if end_user_budget is not None else None
         auth: Final = UserAPIKeyAuth(
             api_key=None,
             user_role=(
@@ -3057,6 +3060,7 @@ class JWTAuthManager:
             user_tpm_limit=user.tpm_limit if user is not None and not admin else None,
             user_rpm_limit=user.rpm_limit if user is not None and not admin else None,
             user_model_max_budget=user.model_max_budget if user is not None and not admin else None,
+            end_user_model_max_budget=dict(end_user_caps) if end_user_caps is not None else None,
             **team_grants(
                 team_object=result["team_object"],
                 team_membership=result.get("team_membership"),

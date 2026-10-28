@@ -5,6 +5,7 @@
 import litellm.proxy
 import litellm.proxy.proxy_server
 
+from contextlib import nullcontext
 from typing import Dict, Final, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,7 +23,7 @@ from litellm.proxy.auth.user_api_key_auth import (
 )
 from fastapi import WebSocket, HTTPException, status
 
-from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_UserTable, LitellmUserRoles
 from tests._master_key import MASTER_KEY
 
 
@@ -2103,6 +2104,79 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
     assert result.user_id == "jwt-user"
     assert user_model_budget_check.await_count == (1 if expect_user_model_budget_check else 0)
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("gpt_4o_spend", "must_raise"), [(0.0001, True), (0.00001, False)], ids=["over-cap", "under-cap"]
+)
+async def test_jwt_path_charges_and_enforces_the_end_users_model_max_budget(
+    monkeypatch: pytest.MonkeyPatch, gpt_4o_spend: float, must_raise: bool
+) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_EndUserTable, LiteLLM_JWTAuth, Litellm_EntityType
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
+    from litellm.proxy.hooks.model_max_budget_limiter import model_budget_spend_cache_key
+    from litellm.proxy.proxy_server import model_max_budget_limiter
+
+    end_user_caps: Final = {"gpt-4o": {"budget_limit": 0.00004, "time_period": "1d"}}
+    jwt_response: Final = {
+        "is_proxy_admin": False,
+        "jwt_claims": {},
+        "team_id": None,
+        "team_object": None,
+        "user_id": "jwt-user",
+        "user_email": None,
+        "user_object": LiteLLM_UserTable(user_id="jwt-user"),
+        "org_id": None,
+        "org_object": None,
+        "end_user_id": "jwt-end-user",
+        "end_user_object": LiteLLM_EndUserTable(
+            user_id="jwt-end-user",
+            blocked=False,
+            budget_id="jwt-eu-budget",
+            litellm_budget_table=LiteLLM_BudgetTable(budget_id="jwt-eu-budget", model_max_budget=end_user_caps),
+        ),
+        "token": "fake.jwt.token",
+    }
+    await model_max_budget_limiter.dual_cache.async_set_cache(
+        key=model_budget_spend_cache_key(
+            entity_type=Litellm_EntityType.END_USER,
+            entity_id="jwt-end-user",
+            budget_model="gpt-4o",
+            budget_duration="1d",
+        ),
+        value=gpt_4o_spend,
+        ttl=600,
+    )
+    mock_request: Final = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": "Bearer fake.jwt.token"}
+    mock_request.query_params = {}
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True})
+    litellm.proxy.proxy_server.jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder", return_value=jwt_response),
+        pytest.raises(Exception, match="jwt-end-user") if must_raise else nullcontext(),
+    ):
+        result: Final = await user_api_key_auth_builder(
+            request=mock_request,
+            api_key="Bearer fake.jwt.token",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert result.end_user_model_max_budget == end_user_caps
 
 def _qa_websocket(messages):
     async def receive():
