@@ -338,7 +338,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         namespace_kwargs: Final = {"namespace": tool_namespace} if tool_namespace else {}
         return {**item_kwargs, "name": tool_name, **namespace_kwargs}
 
-    def _is_reasoning_end(self, chunk):
+    def _is_reasoning_end(self, chunk: ModelResponseStream) -> bool:
         if not chunk.choices:
             return False
         delta: Final = chunk.choices[0].delta
@@ -349,7 +349,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if hasattr(delta, "thinking_blocks") and delta.thinking_blocks:
             return False
 
-        return delta.content or delta.function_call or delta.tool_calls or chunk.choices[0].finish_reason is not None
+        return bool(
+            delta.content
+            or delta.function_call
+            or delta.tool_calls
+            or getattr(delta, "annotations", None)
+            or chunk.choices[0].finish_reason is not None
+        )
 
     def _reserve_web_search_indexes(self, provider_fields: object) -> None:
         if not isinstance(provider_fields, dict):

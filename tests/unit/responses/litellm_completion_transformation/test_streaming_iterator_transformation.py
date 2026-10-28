@@ -1635,6 +1635,9 @@ async def test_citation_after_reasoning_opens_its_message_before_text(sync_mode:
     message_added: Final = next(
         event for event in events if event.type == "response.output_item.added" and event.item.type == "message"
     )
+    reasoning_done: Final = next(
+        event for event in events if event.type == "response.output_item.done" and event.item.type == "reasoning"
+    )
     part_added: Final = next(event for event in events if event.type == "response.content_part.added")
     citations: Final = [event for event in events if event.type == "response.output_text.annotation.added"]
     text_delta: Final = next(event for event in events if event.type == "response.output_text.delta")
@@ -1644,7 +1647,11 @@ async def test_citation_after_reasoning_opens_its_message_before_text(sync_mode:
     message: Final = events[-1].response.output[message_index]
     assert len(citations) == 1
     assert (
-        events.index(message_added) < events.index(part_added) < events.index(citations[0]) < events.index(text_delta)
+        events.index(reasoning_done)
+        < events.index(message_added)
+        < events.index(part_added)
+        < events.index(citations[0])
+        < events.index(text_delta)
     )
     assert message_added.item.id == part_added.item_id == citations[0].item_id == text_delta.item_id == message.id
     assert (
