@@ -7000,6 +7000,8 @@ def get_model_info_helper(
                 supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
                 supports_max_reasoning_effort=_model_info.get("supports_max_reasoning_effort", None),
                 reasoning_effort_levels=_model_info.get("reasoning_effort_levels", None),
+                reasoning_modes=_model_info.get("reasoning_modes", None),
+                reasoning_contexts=_model_info.get("reasoning_contexts", None),
                 default_reasoning_effort=_model_info.get("default_reasoning_effort", None),
                 bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
                 bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
