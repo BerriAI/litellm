@@ -1,22 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
+import { renderWithProviders as render } from "@/../tests/test-utils";
 import ChatLayout from "./layout";
 
-const { mockUseAuthorized, mockUseUISettings, mockReplace, mockMigratedHref, state } = vi.hoisted(() => {
+const { mockUseAuthorized, mockUseUISettings, mockReplace, mockUiHref, state } = vi.hoisted(() => {
   const state = {
     enableChatUI: false,
     isUISettingsLoading: false,
+    isIdentityLoading: false,
+    isAuthorized: true,
   };
   return {
     state,
     mockReplace: vi.fn(),
-    mockMigratedHref: vi.fn((segment: string) => `/mocked-ui/${segment}`),
+    mockUiHref: vi.fn((segment: string) => `/mocked-ui/${segment}`),
     mockUseAuthorized: vi.fn(() => ({
       accessToken: "token-123",
       userRole: "Internal User",
       userId: "user-1",
       userEmail: "user@example.com",
       premiumUser: false,
+      isLoading: state.isIdentityLoading,
+      isAuthorized: state.isAuthorized,
     })),
     mockUseUISettings: vi.fn(() => ({
       data: { values: { enable_chat_ui: state.enableChatUI } },
@@ -30,7 +35,7 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: mockUseAuthorized }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({ useUISettings: mockUseUISettings }));
-vi.mock("@/utils/migratedPages", () => ({ migratedHref: mockMigratedHref }));
+vi.mock("@/utils/uiHref", () => ({ uiHref: mockUiHref }));
 vi.mock("@/components/navbar", () => ({ default: () => <div data-testid="navbar" /> }));
 vi.mock("@/contexts/ThemeContext", () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -46,8 +51,10 @@ describe("ChatLayout", () => {
   afterEach(() => {
     state.enableChatUI = false;
     state.isUISettingsLoading = false;
+    state.isIdentityLoading = false;
+    state.isAuthorized = true;
     mockReplace.mockClear();
-    mockMigratedHref.mockClear();
+    mockUiHref.mockClear();
   });
 
   it("renders the chat shell when enable_chat_ui is on", () => {
@@ -82,5 +89,29 @@ describe("ChatLayout", () => {
     );
     expect(screen.queryByTestId("chat-shell")).not.toBeInTheDocument();
     expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("renders nothing until the signed-in user's identity has loaded", () => {
+    state.enableChatUI = true;
+    state.isIdentityLoading = true;
+    render(
+      <ChatLayout>
+        <div data-testid="page-content" />
+      </ChatLayout>,
+    );
+    expect(screen.queryByTestId("chat-shell")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("page-content")).not.toBeInTheDocument();
+  });
+
+  it("renders nothing when the signed-in user's identity could not be confirmed", () => {
+    state.enableChatUI = true;
+    state.isAuthorized = false;
+    render(
+      <ChatLayout>
+        <div data-testid="page-content" />
+      </ChatLayout>,
+    );
+    expect(screen.queryByTestId("chat-shell")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("page-content")).not.toBeInTheDocument();
   });
 });

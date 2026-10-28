@@ -1,0 +1,3 @@
+{
+  "SELECT $n": "SELECT 1 health probe: the database watchdog and probe target query whichever pool reader_unavailable selects and the reconnect smoke test always uses the writer, all timer driven, so it lands under whichever test is in flight"
+}

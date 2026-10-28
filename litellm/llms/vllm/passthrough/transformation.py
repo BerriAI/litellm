@@ -1,11 +1,24 @@
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
+from httpx import Response
+
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+from litellm.llms.openai_like.passthrough.transformation import (
+    logged_openai_like_response,
+    logged_openai_like_stream,
+    logged_text_completion_response,
+    logged_text_completion_stream,
+    relays_text_completion,
+)
 
 from ..common_utils import VLLMModelInfo
 
 if TYPE_CHECKING:
     from httpx import URL
+
+    from litellm.llms.base_llm.passthrough.transformation import LoggedRelayResponse
 
 
 class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
@@ -30,3 +43,28 @@ class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
             self.format_url(endpoint, base_target_url, request_query_params),
             base_target_url,
         )
+
+    def logging_non_streaming_response(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        httpx_response: Response,
+        request_data: Mapping[str, object],
+        logging_obj: Logging,
+        endpoint: str,
+    ) -> "LoggedRelayResponse | None":
+        if relays_text_completion(endpoint):
+            return logged_text_completion_response(httpx_response, logging_obj, endpoint)
+        return logged_openai_like_response(model, httpx_response, request_data, logging_obj, endpoint)
+
+    def handle_logging_collected_chunks(
+        self,
+        all_chunks: Sequence[str],
+        litellm_logging_obj: Logging,
+        model: str,
+        custom_llm_provider: str,
+        endpoint: str,
+    ) -> "LoggedRelayResponse | None":
+        if relays_text_completion(endpoint):
+            return logged_text_completion_stream(all_chunks, litellm_logging_obj, model)
+        return logged_openai_like_stream(all_chunks, litellm_logging_obj, model, endpoint)

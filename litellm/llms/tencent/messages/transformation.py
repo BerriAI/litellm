@@ -8,7 +8,7 @@ alongside its standard OpenAI-compatible chat completions endpoint.
 from typing import Any
 
 import litellm
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.secret_managers.main import get_secret_str

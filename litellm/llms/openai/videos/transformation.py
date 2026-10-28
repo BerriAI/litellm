@@ -8,11 +8,10 @@ from urllib.parse import quote
 import httpx
 from httpx._types import FileContent, FileTypes, RequestFiles
 
-import litellm
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
-from litellm.secret_managers.main import get_secret_str
+from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.types.llms.openai import CreateVideoRequest
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import (
@@ -28,6 +27,7 @@ from litellm.types.videos.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
 
@@ -77,16 +77,13 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
     ) -> dict:
-        # Use api_key from litellm_params if available, otherwise fall back to other sources
-        if litellm_params and litellm_params.api_key:
-            api_key = api_key or litellm_params.api_key
-
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
-            }
+        params: Final = litellm_params or GenericLiteLLMParams()
+        bearer_token: Final = resolve_openai_bearer_token(
+            api_key=api_key or params.api_key,
+            api_base=params.api_base,
+            litellm_params=params.model_dump(exclude_none=True),
         )
+        headers.update({"Authorization": f"Bearer {bearer_token}"})
         return headers
 
     def get_complete_url(
@@ -237,7 +234,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Transform the video remix request for OpenAI API.
@@ -252,7 +249,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         url: Final = f"{api_base.rstrip('/')}/{encoded_video_id}/remix"
 
         # Prepare the request data
-        data: Final = {"prompt": prompt}
+        data: Final[dict[str, object]] = {"prompt": prompt}
 
         # Add any extra body parameters
         if extra_body:
@@ -264,6 +261,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        client: "HTTPHandler | None" = None,
     ) -> bytes:
         """Transform the OpenAI video content download response."""
         return raw_response.content
@@ -305,7 +303,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict[str, Any] | None = None,
+        extra_query: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Transform the video list request for OpenAI API.
@@ -437,6 +435,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
+        client: "HTTPHandler | None" = None,
     ) -> VideoObject:
         """
         Transform the OpenAI video retrieve response.

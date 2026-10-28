@@ -6,9 +6,11 @@ Handles transformation between OpenAI-compatible format and ModelScope API forma
 API Reference: https://modelscope.cn/docs/model-service/API-Inference/intro
 """
 
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import override
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -28,6 +30,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = object
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 
 class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
@@ -177,8 +182,10 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
             )
 
         # Check for errors in response
-        if "error" in response_data:
-            error_msg: Final = response_data["error"].get("message", str(response_data["error"]))
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        if "error" in response_object:
+            error: Final = _JSON_OBJECT.validate_python(response_object["error"])
+            error_msg: Final = error.get("message", str(error))
             raise self.get_error_class(
                 error_message=f"ModelScope error: {error_msg}",
                 status_code=raw_response.status_code,
@@ -186,7 +193,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
             )
 
         # Extract images from response
-        data_list: Final = response_data.get("data", [])
+        data_list: Final = _JSON_OBJECTS.validate_python(response_object.get("data", []))
         if not model_response.data:
             model_response.data = []
 

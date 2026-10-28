@@ -1,7 +1,8 @@
 import { useMemo } from "react";
-import { LineChart, type ChartColor } from "@/components/shared/charts";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ChartLine } from "lucide-react";
+import { LineChart, stackedUsageColor } from "@/components/shared/charts";
 import { DailyData } from "@/components/UsagePage/types";
+import { Panel } from "../../overview/Primitives";
 
 interface EndpointUsageLineChartProps {
   dailyData?: { results: DailyData[] };
@@ -58,41 +59,24 @@ export function EndpointUsageLineChart({ dailyData }: EndpointUsageLineChartProp
     return keys;
   }, [chartData]);
 
-  // Tremor color palette for multiple lines
-  const colors: readonly ChartColor[] = [
-    "blue",
-    "cyan",
-    "indigo",
-    "violet",
-    "purple",
-    "fuchsia",
-    "pink",
-    "rose",
-    "red",
-    "orange",
-  ];
+  const colors = useMemo(() => categories.map((_, i) => stackedUsageColor(i)), [categories]);
 
   return (
-    <Card className="mb-6">
-      <CardHeader>
-        <CardTitle className="text-base font-semibold">Endpoint Usage Trends</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <LineChart
-          className="h-80"
-          data={chartData}
-          index="date"
-          categories={categories}
-          colors={colors.slice(0, categories.length)}
-          valueFormatter={(value) => value.toLocaleString()}
-          showLegend={true}
-          showGridLines={true}
-          yAxisWidth={60}
-          connectNulls={true}
-          curveType="natural"
-        />
-      </CardContent>
-    </Card>
+    <Panel icon={ChartLine} title="Endpoint Usage Trends">
+      <LineChart
+        className="h-64"
+        data={chartData}
+        index="date"
+        categories={categories}
+        colors={colors}
+        valueFormatter={(value) => value.toLocaleString()}
+        showLegend={true}
+        showGridLines={true}
+        yAxisWidth={56}
+        connectNulls={true}
+        curveType="monotone"
+      />
+    </Panel>
   );
 }
 

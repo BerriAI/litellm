@@ -1,0 +1,2575 @@
+import asyncio
+import base64
+import json
+import logging
+import os
+import pathlib
+import re
+import traceback
+from typing import Final
+from unittest.mock import MagicMock, call, patch
+
+import google.auth.exceptions
+import pytest
+
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
+
+import litellm
+from litellm.llms.vertex_ai.vertex_ai_aws_wif import VertexAIAwsWifAuth
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.types.llms.vertex_ai import VertexPartnerProvider
+
+
+def run_sync(coro):
+    """Helper to run coroutine synchronously for testing"""
+    import asyncio
+
+    return asyncio.run(coro)
+
+
+class TestVertexBase:
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_credential_project_validation(self, is_async):
+        vertex_base = VertexBase()
+
+        # Mock credentials with project_id "project-1"
+        mock_creds = MagicMock()
+        mock_creds.project_id = "project-1"
+        mock_creds.token = "fake-token-1"
+        mock_creds.expired = False
+        mock_creds.quota_project_id = "project-1"
+
+        # Test case 1: Ensure credentials match project
+        with patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")):
+            if is_async:
+                token, project = await vertex_base.ensure_access_token_async(
+                    credentials={"type": "service_account", "project_id": "project-1"},
+                    project_id="project-1",
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, project = vertex_base.ensure_access_token(
+                    credentials={"type": "service_account", "project_id": "project-1"},
+                    project_id="project-1",
+                    custom_llm_provider="vertex_ai",
+                )
+            assert project == "project-1"
+            assert token == "fake-token-1"
+
+        # Test case 2: Allow using credentials from different project
+        with patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")):
+            if is_async:
+                result = await vertex_base.ensure_access_token_async(
+                    credentials={"type": "service_account"},
+                    project_id="different-project",
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                result = vertex_base.ensure_access_token(
+                    credentials={"type": "service_account"},
+                    project_id="different-project",
+                    custom_llm_provider="vertex_ai",
+                )
+            print(f"result: {result}")
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_cached_credentials(self, is_async):
+        vertex_base = VertexBase()
+
+        # Initial credentials
+        mock_creds = MagicMock()
+        mock_creds.token = "token-1"
+        mock_creds.expired = False
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        # Test initial credential load and caching
+        with patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")):
+            # First call should load credentials
+            if is_async:
+                token, project = await vertex_base.ensure_access_token_async(
+                    credentials={"type": "service_account"},
+                    project_id="project-1",
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, project = vertex_base.ensure_access_token(
+                    credentials={"type": "service_account"},
+                    project_id="project-1",
+                    custom_llm_provider="vertex_ai",
+                )
+            assert token == "token-1"
+
+            # Second call should use cached credentials
+            if is_async:
+                token2, project2 = await vertex_base.ensure_access_token_async(
+                    credentials={"type": "service_account"},
+                    project_id="project-1",
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token2, project2 = vertex_base.ensure_access_token(
+                    credentials={"type": "service_account"},
+                    project_id="project-1",
+                    custom_llm_provider="vertex_ai",
+                )
+            assert token2 == "token-1"
+            assert project2 == "project-1"
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_credential_refresh(self, is_async):
+        vertex_base = VertexBase()
+
+        # Create expired credentials
+        mock_creds = MagicMock()
+        mock_creds.token = "my-token"
+        mock_creds.expired = True
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        with (
+            patch.object(
+                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
+            ),
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+                creds.expired = False
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            if is_async:
+                token, project = await vertex_base.ensure_access_token_async(
+                    credentials={"type": "service_account"},
+                    project_id="project-1",
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, project = vertex_base.ensure_access_token(
+                    credentials={"type": "service_account"},
+                    project_id="project-1",
+                    custom_llm_provider="vertex_ai",
+                )
+
+            assert mock_refresh.called
+            assert token == "refreshed-token"
+            assert not mock_creds.expired
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_gemini_credentials(self, is_async):
+        vertex_base = VertexBase()
+
+        # Test that Gemini requests bypass credential checks
+        if is_async:
+            token, project = await vertex_base.ensure_access_token_async(
+                credentials=None, project_id=None, custom_llm_provider="gemini"
+            )
+        else:
+            token, project = vertex_base.ensure_access_token(
+                credentials=None, project_id=None, custom_llm_provider="gemini"
+            )
+        assert token == ""
+        assert project == ""
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_authorized_user_credentials(self, is_async):
+        vertex_base = VertexBase()
+
+        quota_project_id = "test-project"
+
+        credentials = {
+            "account": "",
+            "client_id": "fake-client-id",
+            "client_secret": "fake-secret",
+            "quota_project_id": "test-project",
+            "refresh_token": "fake-refresh-token",
+            "type": "authorized_user",
+            "universe_domain": "googleapis.com",
+        }
+
+        mock_creds = MagicMock()
+        mock_creds.token = "token-1"
+        mock_creds.expired = False
+        mock_creds.quota_project_id = quota_project_id
+
+        with (
+            patch.object(
+                vertex_base,
+                "_credentials_from_authorized_user",
+                return_value=mock_creds,
+            ) as mock_credentials_from_authorized_user,
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            # 1. Test that authorized_user-style credentials are correctly handled and uses quota_project_id
+            if is_async:
+                token, project = await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, project = vertex_base.ensure_access_token(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+
+            assert mock_credentials_from_authorized_user.called
+            assert token == "refreshed-token"
+            assert project == quota_project_id
+
+            # 2. Test that authorized_user-style credentials are correctly handled and uses passed in project_id
+            not_quota_project_id = "new-project"
+            if is_async:
+                token, project = await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=not_quota_project_id,
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, project = vertex_base.ensure_access_token(
+                    credentials=credentials,
+                    project_id=not_quota_project_id,
+                    custom_llm_provider="vertex_ai",
+                )
+
+            assert token == "refreshed-token"
+            assert project == not_quota_project_id
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_identity_pool_credentials(self, is_async):
+        vertex_base = VertexBase()
+
+        # Test case: Using Workload Identity Federation for Microsoft Azure and
+        # OIDC identity providers (default behavior)
+        credentials = {
+            "project_id": "test-project",
+            "refresh_token": "fake-refresh-token",
+            "type": "external_account",
+        }
+        mock_creds = MagicMock()
+        mock_creds.token = "token-1"
+        mock_creds.expired = False
+        mock_creds.project_id = "test-project"
+
+        with (
+            patch.object(
+                vertex_base, "_credentials_from_identity_pool", return_value=mock_creds
+            ) as mock_credentials_from_identity_pool,
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            if is_async:
+                token, _ = await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, _ = vertex_base.ensure_access_token(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+
+            assert mock_credentials_from_identity_pool.called
+            assert mock_credentials_from_identity_pool.call_args[1]["scopes"] == [
+                "https://www.googleapis.com/auth/cloud-platform"
+            ]
+            assert token == "refreshed-token"
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_identity_pool_credentials_with_aws(self, is_async):
+        vertex_base = VertexBase()
+
+        # Test case: Using Workload Identity Federation for Microsoft Azure and
+        # OIDC identity providers (default behavior)
+        credentials = {
+            "project_id": "test-project",
+            "refresh_token": "fake-refresh-token",
+            "type": "external_account",
+            "credential_source": {"environment_id": "aws1"},
+        }
+        mock_creds = MagicMock()
+        mock_creds.token = "token-1"
+        mock_creds.expired = False
+        mock_creds.project_id = "test-project"
+
+        with (
+            patch.object(
+                vertex_base,
+                "_credentials_from_identity_pool_with_aws",
+                return_value=mock_creds,
+            ) as mock_credentials_from_identity_pool_with_aws,
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            if is_async:
+                token, _ = await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, _ = vertex_base.ensure_access_token(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+
+            assert mock_credentials_from_identity_pool_with_aws.called
+            assert mock_credentials_from_identity_pool_with_aws.call_args[1]["scopes"] == [
+                "https://www.googleapis.com/auth/cloud-platform"
+            ]
+            assert token == "refreshed-token"
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_new_cache_format_tuple_storage(self, is_async):
+        """Test that new cache format stores (credentials, project_id) tuples"""
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "token-1"
+        mock_creds.expired = False
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        credentials = {"type": "service_account", "project_id": "project-1"}
+
+        with patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")):
+            if is_async:
+                token, project = await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id="project-1",
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, project = vertex_base.ensure_access_token(
+                    credentials=credentials,
+                    project_id="project-1",
+                    custom_llm_provider="vertex_ai",
+                )
+
+            assert token == "token-1"
+            assert project == "project-1"
+
+            # Verify cache stores tuple format
+            cache_key = (json.dumps(credentials), "project-1")
+            assert cache_key in vertex_base._credentials_project_mapping
+            cached_entry = vertex_base._credentials_project_mapping[cache_key]
+            assert isinstance(cached_entry, tuple)
+            assert len(cached_entry) == 2
+            cached_creds, cached_project = cached_entry
+            assert cached_creds == mock_creds
+            assert cached_project == "project-1"
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_backward_compatibility_old_cache_format(self, is_async):
+        """Test backward compatibility with old cache format (just credentials)"""
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "token-1"
+        mock_creds.expired = False
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        credentials = {"type": "service_account", "project_id": "project-1"}
+
+        # Simulate old cache format by manually adding just credentials (not tuple)
+        cache_key = (json.dumps(credentials), "project-1")
+        vertex_base._credentials_project_mapping[cache_key] = mock_creds
+
+        # Should handle old format gracefully
+        if is_async:
+            token, project = await vertex_base.ensure_access_token_async(
+                credentials=credentials,
+                project_id="project-1",
+                custom_llm_provider="vertex_ai",
+            )
+        else:
+            token, project = vertex_base.ensure_access_token(
+                credentials=credentials,
+                project_id="project-1",
+                custom_llm_provider="vertex_ai",
+            )
+
+        assert token == "token-1"
+        assert project == "project-1"
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_resolved_project_id_cache_optimization(self, is_async):
+        """Test that resolved project_id creates additional cache entries for optimization"""
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "token-1"
+        mock_creds.expired = False
+        mock_creds.project_id = "resolved-project"
+        mock_creds.quota_project_id = "resolved-project"
+
+        credentials = {"type": "service_account"}
+
+        with patch.object(vertex_base, "load_auth", return_value=(mock_creds, "resolved-project")):
+            # Call without project_id, should use resolved project from credentials
+            if is_async:
+                token, project = await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, project = vertex_base.ensure_access_token(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+
+            assert token == "token-1"
+            assert project == "resolved-project"
+
+            # Verify both cache entries exist
+            original_cache_key = (json.dumps(credentials), None)
+            resolved_cache_key = (json.dumps(credentials), "resolved-project")
+
+            assert original_cache_key in vertex_base._credentials_project_mapping
+            assert resolved_cache_key in vertex_base._credentials_project_mapping
+
+            # Both should contain the same tuple
+            original_entry = vertex_base._credentials_project_mapping[
+                original_cache_key
+            ]
+            resolved_entry = vertex_base._credentials_project_mapping[
+                resolved_cache_key
+            ]
+
+            assert isinstance(original_entry, tuple)
+            assert isinstance(resolved_entry, tuple)
+            assert original_entry[0] == mock_creds
+            assert original_entry[1] == "resolved-project"
+            assert resolved_entry[0] == mock_creds
+            assert resolved_entry[1] == "resolved-project"
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_cache_update_on_credential_refresh(self, is_async):
+        """Test that cache is updated when credentials are refreshed"""
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "original-token"
+        mock_creds.expired = True  # Start with expired credentials
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        credentials = {"type": "service_account", "project_id": "project-1"}
+
+        with (
+            patch.object(
+                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
+            ),
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+                creds.expired = False
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            if is_async:
+                token, project = await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id="project-1",
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, project = vertex_base.ensure_access_token(
+                    credentials=credentials,
+                    project_id="project-1",
+                    custom_llm_provider="vertex_ai",
+                )
+
+            assert mock_refresh.called
+            assert token == "refreshed-token"
+            assert project == "project-1"
+
+            # Verify cache was updated with refreshed credentials
+            cache_key = (json.dumps(credentials), "project-1")
+            assert cache_key in vertex_base._credentials_project_mapping
+            cached_entry = vertex_base._credentials_project_mapping[cache_key]
+            assert isinstance(cached_entry, tuple)
+            cached_creds, cached_project = cached_entry
+            assert cached_creds.token == "refreshed-token"
+            assert not cached_creds.expired
+            assert cached_project == "project-1"
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_cache_with_different_project_id_combinations(self, is_async):
+        """Test caching behavior with different project_id parameter combinations"""
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "token-1"
+        mock_creds.expired = False
+        mock_creds.project_id = "cred-project"
+        mock_creds.quota_project_id = "cred-project"
+
+        credentials = {"type": "service_account", "project_id": "cred-project"}
+
+        with patch.object(vertex_base, "load_auth", return_value=(mock_creds, "cred-project")):
+            # First call with explicit project_id
+            if is_async:
+                token1, project1 = await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id="explicit-project",
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token1, project1 = vertex_base.ensure_access_token(
+                    credentials=credentials,
+                    project_id="explicit-project",
+                    custom_llm_provider="vertex_ai",
+                )
+
+            # Second call with None project_id (should use credential project)
+            if is_async:
+                token2, project2 = await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token2, project2 = vertex_base.ensure_access_token(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+
+            assert token1 == "token-1"
+            assert project1 == "explicit-project"  # Should use explicit project_id
+            assert token2 == "token-1"
+            assert project2 == "cred-project"  # Should use credential project_id
+
+            # Verify separate cache entries
+            explicit_cache_key = (json.dumps(credentials), "explicit-project")
+            none_cache_key = (json.dumps(credentials), None)
+            resolved_cache_key = (json.dumps(credentials), "cred-project")
+
+            assert explicit_cache_key in vertex_base._credentials_project_mapping
+            assert none_cache_key in vertex_base._credentials_project_mapping
+            assert resolved_cache_key in vertex_base._credentials_project_mapping
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_project_id_resolution_and_caching_core_issue(self, is_async):
+        """
+        When user doesn't provide project_id, system should resolve it from credentials
+        and cache the resolved project_id for future calls without calling load_auth again.
+        """
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "token-from-creds"
+        mock_creds.expired = False
+        mock_creds.project_id = "resolved-from-credentials"
+        mock_creds.quota_project_id = "resolved-from-credentials"
+
+        # User provides credentials but NO project_id (this is the key scenario)
+        credentials = {"type": "service_account"}
+
+        with patch.object(
+            vertex_base,
+            "load_auth",
+            return_value=(mock_creds, "resolved-from-credentials"),
+        ) as mock_load_auth:
+            # First call: User provides NO project_id, should resolve from credentials
+            if is_async:
+                token1, project1 = await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=None,  # Key: user doesn't provide project_id
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token1, project1 = vertex_base.ensure_access_token(
+                    credentials=credentials,
+                    project_id=None,  # Key: user doesn't provide project_id
+                    custom_llm_provider="vertex_ai",
+                )
+
+            # Should have called load_auth once to resolve project_id
+            assert mock_load_auth.call_count == 1
+            assert token1 == "token-from-creds"
+            assert project1 == "resolved-from-credentials"
+
+            # Verify cache contains both the original key and resolved key
+            original_cache_key = (json.dumps(credentials), None)
+            resolved_cache_key = (json.dumps(credentials), "resolved-from-credentials")
+
+            assert original_cache_key in vertex_base._credentials_project_mapping
+            assert resolved_cache_key in vertex_base._credentials_project_mapping
+
+            # Both should contain the tuple with resolved project_id
+            original_entry = vertex_base._credentials_project_mapping[
+                original_cache_key
+            ]
+            resolved_entry = vertex_base._credentials_project_mapping[
+                resolved_cache_key
+            ]
+
+            assert isinstance(original_entry, tuple)
+            assert isinstance(resolved_entry, tuple)
+            assert original_entry[1] == "resolved-from-credentials"
+            assert resolved_entry[1] == "resolved-from-credentials"
+
+            # Second call: Same scenario - should use cache and NOT call load_auth again
+            if is_async:
+                token2, project2 = await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=None,  # Still no project_id provided
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token2, project2 = vertex_base.ensure_access_token(
+                    credentials=credentials,
+                    project_id=None,  # Still no project_id provided
+                    custom_llm_provider="vertex_ai",
+                )
+
+            # Should NOT have called load_auth again (still 1 call total)
+            assert mock_load_auth.call_count == 1
+            assert token2 == "token-from-creds"
+            assert project2 == "resolved-from-credentials"
+
+            # Third call: Now user provides the resolved project_id explicitly
+            # This should also use cache (the resolved_cache_key)
+            if is_async:
+                token3, project3 = await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id="resolved-from-credentials",  # Explicit resolved project_id
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token3, project3 = vertex_base.ensure_access_token(
+                    credentials=credentials,
+                    project_id="resolved-from-credentials",  # Explicit resolved project_id
+                    custom_llm_provider="vertex_ai",
+                )
+
+            # Should still NOT have called load_auth again (cache hit)
+            assert mock_load_auth.call_count == 1
+            assert token3 == "token-from-creds"
+            assert project3 == "resolved-from-credentials"
+
+    @pytest.mark.parametrize(
+        "api_base, vertex_location, expected",
+        [
+            (None, "us-central1", "https://us-central1-aiplatform.googleapis.com"),
+            (None, "global", "https://aiplatform.googleapis.com"),
+            (
+                "https://us-central1-aiplatform.googleapis.com",
+                "us-central1",
+                "https://us-central1-aiplatform.googleapis.com",
+            ),
+            (
+                "https://aiplatform.googleapis.com",
+                "global",
+                "https://aiplatform.googleapis.com",
+            ),
+            (
+                "https://us-central1-aiplatform.googleapis.com",
+                "global",
+                "https://us-central1-aiplatform.googleapis.com",
+            ),
+            (
+                "https://aiplatform.googleapis.com",
+                "us-central1",
+                "https://aiplatform.googleapis.com",
+            ),
+        ],
+    )
+    def test_get_api_base(self, api_base, vertex_location, expected):
+        vertex_base = VertexBase()
+        assert (
+            vertex_base.get_api_base(api_base=api_base, vertex_location=vertex_location)
+            == expected
+        ), f"Expected {expected} with api_base {api_base} and vertex_location {vertex_location}"
+
+    @pytest.mark.parametrize(
+        "api_base, custom_llm_provider, gemini_api_key, endpoint, stream, auth_header, url, model, expected_auth_header, expected_url",
+        [
+            # Test case 1: Gemini with custom API base
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+                "gemini",
+                "test-api-key",
+                "generateContent",
+                False,
+                None,
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "gemini-2.5-flash-lite",
+                {"x-goog-api-key": "test-api-key"},
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            ),
+            # Test case 2: Gemini with custom API base and streaming
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+                "gemini",
+                "test-api-key",
+                "generateContent",
+                True,
+                None,
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "gemini-2.5-flash-lite",
+                {"x-goog-api-key": "test-api-key"},
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse",
+            ),
+            # Test case 3: Non-Gemini provider with custom API base
+            (
+                "https://custom-vertex-api.com",
+                "vertex_ai",
+                None,
+                "generateContent",
+                False,
+                "Bearer token123",
+                "https://aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:generateContent",
+                "gemini-pro",
+                "Bearer token123",
+                "https://custom-vertex-api.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:generateContent",
+            ),
+            # Test case 4: No API base provided (should return original values)
+            (
+                None,
+                "gemini",
+                "test-api-key",
+                "generateContent",
+                False,
+                "Bearer token123",
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "gemini-2.5-flash-lite",
+                "Bearer token123",
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            ),
+            # Test case 5: Gemini without API key (should raise ValueError)
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+                "gemini",
+                None,
+                "generateContent",
+                False,
+                None,
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "gemini-2.5-flash-lite",
+                None,  # This should raise an exception
+                None,
+            ),
+        ],
+    )
+    def test_check_custom_proxy(
+        self,
+        api_base,
+        custom_llm_provider,
+        gemini_api_key,
+        endpoint,
+        stream,
+        auth_header,
+        url,
+        model,
+        expected_auth_header,
+        expected_url,
+    ):
+        """Test the _check_custom_proxy method for handling custom API base URLs"""
+        vertex_base = VertexBase()
+
+        if custom_llm_provider == "gemini" and api_base and gemini_api_key is None:
+            # Test case 5: Should raise ValueError for Gemini without API key
+            with pytest.raises(ValueError, match="Missing Gemini API key"):
+                vertex_base._check_custom_proxy(
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    gemini_api_key=gemini_api_key,
+                    endpoint=endpoint,
+                    stream=stream,
+                    auth_header=auth_header,
+                    url=url,
+                    model=model,
+                )
+        else:
+            # Test cases 1-4: Should work correctly
+            result_auth_header, result_url = vertex_base._check_custom_proxy(
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                gemini_api_key=gemini_api_key,
+                endpoint=endpoint,
+                stream=stream,
+                auth_header=auth_header,
+                url=url,
+                model=model,
+            )
+
+            assert (
+                result_auth_header == expected_auth_header
+            ), f"Expected auth_header {expected_auth_header}, got {result_auth_header}"
+            assert (
+                result_url == expected_url
+            ), f"Expected URL {expected_url}, got {result_url}"
+
+    def test_check_custom_proxy_gemini_url_construction(self):
+        """Test that Gemini URLs are constructed correctly with custom API base"""
+        vertex_base = VertexBase()
+
+        # Test various Gemini models with custom API base
+        test_cases = [
+            (
+                "gemini-2.5-flash-lite",
+                "generateContent",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            ),
+            (
+                "gemini-2.5-pro",
+                "generateContent",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+            ),
+            (
+                "gemini-1.5-flash",
+                "streamGenerateContent",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent",
+            ),
+        ]
+
+        for model, endpoint, expected_url in test_cases:
+            _, result_url = vertex_base._check_custom_proxy(
+                api_base="https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+                custom_llm_provider="gemini",
+                gemini_api_key="test-api-key",
+                endpoint=endpoint,
+                stream=False,
+                auth_header=None,
+                url=f"https://generativelanguage.googleapis.com/v1beta/models/{model}:{endpoint}",
+                model=model,
+            )
+
+            assert (
+                result_url == expected_url
+            ), f"Expected {expected_url}, got {result_url} for model {model}"
+
+    def test_check_custom_proxy_streaming_parameter(self):
+        """Test that streaming parameter correctly adds ?alt=sse to URLs"""
+        vertex_base = VertexBase()
+
+        # Test with streaming enabled
+        _, result_url_streaming = vertex_base._check_custom_proxy(
+            api_base="https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+            custom_llm_provider="gemini",
+            gemini_api_key="test-api-key",
+            endpoint="generateContent",
+            stream=True,
+            auth_header=None,
+            url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            model="gemini-2.5-flash-lite",
+        )
+
+        expected_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
+        assert (
+            result_url_streaming == expected_streaming_url
+        ), f"Expected {expected_streaming_url}, got {result_url_streaming}"
+
+        # Test with streaming disabled
+        _, result_url_no_streaming = vertex_base._check_custom_proxy(
+            api_base="https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+            custom_llm_provider="gemini",
+            gemini_api_key="test-api-key",
+            endpoint="generateContent",
+            stream=False,
+            auth_header=None,
+            url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            model="gemini-2.5-flash-lite",
+        )
+
+        expected_no_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+        assert (
+            result_url_no_streaming == expected_no_streaming_url
+        ), f"Expected {expected_no_streaming_url}, got {result_url_no_streaming}"
+
+    def test_check_custom_proxy_vertex_bare_host_api_base_grafts_default_path(self):
+        vertex_base = VertexBase()
+
+        result_auth_header, result_url = vertex_base._check_custom_proxy(
+            api_base="https://aiplatform.googleapis.com",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="embedContent",
+            stream=None,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-2:embedContent",
+            model="gemini-embedding-2",
+        )
+
+        assert result_auth_header == "Bearer token123"
+        assert (
+            result_url
+            == "https://aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-2:embedContent"
+        )
+
+    def test_check_custom_proxy_vertex_bare_host_api_base_with_trailing_slash(self):
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base="https://internal-gateway.example.com/",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="embedContent",
+            stream=None,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-2:embedContent",
+            model="gemini-embedding-2",
+        )
+
+        assert (
+            result_url
+            == "https://internal-gateway.example.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-2:embedContent"
+        )
+
+    def test_check_custom_proxy_vertex_api_base_with_path_keeps_endpoint_append(self):
+        vertex_base = VertexBase()
+        gateway_api_base = "https://gateway.ai.cloudflare.com/v1/account-id/my-gateway/google-vertex-ai/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-2"
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base=gateway_api_base,
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="embedContent",
+            stream=None,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-2:embedContent",
+            model="gemini-embedding-2",
+        )
+
+        assert result_url == f"{gateway_api_base}:embedContent"
+
+    def test_check_custom_proxy_vertex_api_base_with_version_path_grafts_default_path(self):
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base="https://aiplatform.googleapis.com/v1beta1",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="generateContent",
+            stream=None,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent",
+            model="gemini-3.5-flash-lite",
+        )
+
+        assert (
+            result_url
+            == "https://aiplatform.googleapis.com/v1beta1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent"
+        )
+
+    def test_check_custom_proxy_vertex_api_base_with_version_path_trailing_slash_grafts_default_path(self):
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base="https://internal-gateway.example.com/v1/",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="generateContent",
+            stream=None,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent",
+            model="gemini-3.5-flash-lite",
+        )
+
+        assert (
+            result_url
+            == "https://internal-gateway.example.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent"
+        )
+
+    def test_check_custom_proxy_vertex_api_base_with_version_path_and_query_grafts_before_query(self):
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base="https://internal-gateway.example.com/v1beta1?key=abc",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="generateContent",
+            stream=None,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent",
+            model="gemini-3.5-flash-lite",
+        )
+
+        assert (
+            result_url
+            == "https://internal-gateway.example.com/v1beta1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent?key=abc"
+        )
+
+    def test_check_custom_proxy_vertex_api_base_with_version_path_and_query_streaming_appends_alt_sse(self):
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base="https://internal-gateway.example.com/v1beta1?key=abc",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="streamGenerateContent",
+            stream=True,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:streamGenerateContent",
+            model="gemini-3.5-flash-lite",
+        )
+
+        assert (
+            result_url
+            == "https://internal-gateway.example.com/v1beta1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:streamGenerateContent?key=abc&alt=sse"
+        )
+
+    def test_check_custom_proxy_vertex_api_base_with_non_version_path_keeps_endpoint_append(self):
+        vertex_base = VertexBase()
+        gateway_api_base = "https://gateway.example.com/vertex-proxy"
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base=gateway_api_base,
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="generateContent",
+            stream=None,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent",
+            model="gemini-3.5-flash-lite",
+        )
+
+        assert result_url == f"{gateway_api_base}:generateContent"
+
+    def test_check_custom_proxy_vertex_api_base_without_projects_in_default_url_keeps_endpoint_append(self):
+        vertex_base = VertexBase()
+        gemma_api_base = "https://example.com/custom/gemma-deployment"
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base=gemma_api_base,
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="predict",
+            stream=False,
+            auth_header=None,
+            url=gemma_api_base,
+            model="gemma-3-27b-it",
+        )
+
+        assert result_url == f"{gemma_api_base}:predict"
+
+    def test_check_custom_proxy_vertex_bare_host_streaming_keeps_single_alt_sse(self):
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base="https://internal-gateway.example.com",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="streamGenerateContent",
+            stream=True,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+            model="gemini-2.5-pro",
+        )
+
+        assert (
+            result_url
+            == "https://internal-gateway.example.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
+        )
+
+    def test_check_custom_proxy_psc_endpoint_format_unaffected_by_bare_host(self):
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base="https://10.96.32.8",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="predict",
+            stream=None,
+            auth_header="Bearer token123",
+            url="",
+            model="1234567890",
+            vertex_project="test-project",
+            vertex_location="us-central1",
+            vertex_api_version="v1",
+            use_psc_endpoint_format=True,
+        )
+
+        assert result_url == "https://10.96.32.8/v1/projects/test-project/locations/us-central1/endpoints/1234567890:predict"
+
+    @pytest.mark.parametrize(
+        "custom_api_base, stream, expected_url",
+        [
+            (
+                "https://aiplatform-myendpoint.p.googleapis.com",
+                False,
+                "https://aiplatform-myendpoint.p.googleapis.com/v1/projects/test-project/locations/global/endpoints/openapi/chat/completions",
+            ),
+            (
+                "https://aiplatform-myendpoint.p.googleapis.com",
+                True,
+                "https://aiplatform-myendpoint.p.googleapis.com/v1/projects/test-project/locations/global/endpoints/openapi/chat/completions",
+            ),
+            (
+                "https://gateway.example.com/vertex-proxy",
+                False,
+                "https://gateway.example.com/vertex-proxy/v1/projects/test-project/locations/global/endpoints/openapi/chat/completions",
+            ),
+        ],
+        ids=["psc-host", "psc-host-streaming", "api-base-with-path"],
+    )
+    def test_get_complete_vertex_url_openai_path_partner_custom_api_base(
+        self, custom_api_base, stream, expected_url
+    ):
+        vertex_base = VertexBase()
+
+        result = vertex_base.get_complete_vertex_url(
+            custom_api_base=custom_api_base,
+            vertex_location="global",
+            vertex_project="test-project",
+            project_id="test-project",
+            partner=VertexPartnerProvider.llama,
+            stream=stream,
+            model="minimaxai/minimax-m2-maas",
+        )
+
+        assert result == expected_url
+        assert result.count("://") == 1
+
+    def test_get_complete_vertex_url_openai_path_partner_default_api_base(self):
+        vertex_base = VertexBase()
+
+        result = vertex_base.get_complete_vertex_url(
+            custom_api_base=None,
+            vertex_location="us-central1",
+            vertex_project="test-project",
+            project_id="test-project",
+            partner=VertexPartnerProvider.llama,
+            stream=True,
+            model="meta/llama-3.1-405b-instruct-maas",
+        )
+
+        assert (
+            result
+            == "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/endpoints/openapi/chat/completions"
+        )
+
+    def test_get_complete_vertex_url_rawpredict_partner_custom_api_base_keeps_endpoint_format(self):
+        vertex_base = VertexBase()
+
+        result = vertex_base.get_complete_vertex_url(
+            custom_api_base="https://gateway.example.com/vertex-proxy",
+            vertex_location="us-central1",
+            vertex_project="test-project",
+            project_id="test-project",
+            partner=VertexPartnerProvider.mistralai,
+            stream=False,
+            model="mistral-large-2411",
+        )
+
+        assert result == "https://gateway.example.com/vertex-proxy:rawPredict"
+
+    @pytest.mark.parametrize(
+        "api_base, custom_llm_provider, gemini_api_key, endpoint, stream, auth_header, url, model, expected_auth_header, expected_url",
+        [
+            # Test case 1: Gemini with custom API base
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+                "gemini",
+                "test-api-key",
+                "generateContent",
+                False,
+                None,
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "gemini-2.5-flash-lite",
+                {"x-goog-api-key": "test-api-key"},
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            ),
+            # Test case 2: Gemini with custom API base and streaming
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+                "gemini",
+                "test-api-key",
+                "generateContent",
+                True,
+                None,
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "gemini-2.5-flash-lite",
+                {"x-goog-api-key": "test-api-key"},
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse",
+            ),
+        ],
+    )
+    def test_check_custom_proxy_minimal_gemini_key_param(
+        self,
+        api_base,
+        custom_llm_provider,
+        gemini_api_key,
+        endpoint,
+        stream,
+        auth_header,
+        url,
+        model,
+        expected_auth_header,
+        expected_url,
+    ):
+        """Single focused test to ensure ?key is appended (and &alt=sse for streaming)."""
+        vertex_base = VertexBase()
+        result_auth_header, result_url = vertex_base._check_custom_proxy(
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            gemini_api_key=gemini_api_key,
+            endpoint=endpoint,
+            stream=stream,
+            auth_header=auth_header,
+            url=url,
+            model=model,
+        )
+        assert result_auth_header == expected_auth_header
+        assert result_url == expected_url
+
+    def test_credentials_from_identity_pool_implementation(self):
+        """Test the actual implementation of _credentials_from_identity_pool"""
+        vertex_base = VertexBase()
+        json_obj = {"type": "external_account", "audience": "test"}
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+        # Mock the credentials object
+        mock_creds = MagicMock()
+        mock_creds.requires_scopes = True
+        mock_creds.with_scopes.return_value = "scoped_creds"
+
+        # Mock the identity_pool module
+        with patch("google.auth.identity_pool.Credentials") as MockCredentials:
+            MockCredentials.from_info.return_value = mock_creds
+
+            # Call the method
+            result = vertex_base._credentials_from_identity_pool(json_obj, scopes)
+
+            # Verify calls
+            MockCredentials.from_info.assert_called_once_with(json_obj)
+            mock_creds.with_scopes.assert_called_once_with(scopes)
+            assert result == "scoped_creds"
+
+    def test_credentials_from_identity_pool_no_scopes_needed(self):
+        """Test _credentials_from_identity_pool when scopes are not needed"""
+        vertex_base = VertexBase()
+        json_obj = {"type": "external_account", "audience": "test"}
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+        # Mock the credentials object
+        mock_creds = MagicMock()
+        mock_creds.requires_scopes = False  # Scopes not required
+
+        # Mock the identity_pool module
+        with patch("google.auth.identity_pool.Credentials") as MockCredentials:
+            MockCredentials.from_info.return_value = mock_creds
+
+            # Call the method
+            result = vertex_base._credentials_from_identity_pool(json_obj, scopes)
+
+            # Verify calls
+            MockCredentials.from_info.assert_called_once_with(json_obj)
+            mock_creds.with_scopes.assert_not_called()
+            assert result == mock_creds
+
+    def test_credentials_from_identity_pool_with_aws_implementation(self):
+        """Test the actual implementation of _credentials_from_identity_pool_with_aws"""
+        vertex_base = VertexBase()
+        json_obj = {
+            "type": "external_account",
+            "credential_source": {"environment_id": "aws1"},
+        }
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+        # Mock the credentials object
+        mock_creds = MagicMock()
+        mock_creds.requires_scopes = True
+        mock_creds.with_scopes.return_value = "scoped_creds"
+
+        # Mock the aws module
+        with patch("google.auth.aws.Credentials") as MockCredentials:
+            MockCredentials.from_info.return_value = mock_creds
+
+            # Call the method
+            result = vertex_base._credentials_from_identity_pool_with_aws(
+                json_obj, scopes
+            )
+
+            # Verify calls
+            MockCredentials.from_info.assert_called_once_with(json_obj)
+            mock_creds.with_scopes.assert_called_once_with(scopes)
+            assert result == "scoped_creds"
+
+    def test_credentials_from_pluggable_implementation(self):
+        """Test _credentials_from_pluggable dispatches to pluggable.Credentials"""
+        vertex_base = VertexBase()
+        json_obj = {
+            "type": "external_account",
+            "credential_source": {
+                "executable": {"command": "/path/to/executable", "timeout_millis": 5000}
+            },
+        }
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+        mock_creds = MagicMock()
+        mock_creds.requires_scopes = True
+        mock_creds.with_scopes.return_value = "scoped_creds"
+
+        with patch("google.auth.pluggable.Credentials") as MockCredentials:
+            MockCredentials.from_info.return_value = mock_creds
+
+            result = vertex_base._credentials_from_pluggable(json_obj, scopes)
+
+            MockCredentials.from_info.assert_called_once_with(json_obj)
+            mock_creds.with_scopes.assert_called_once_with(scopes)
+            assert result == "scoped_creds"
+
+    def test_credentials_from_pluggable_no_scopes_needed(self):
+        """Test _credentials_from_pluggable when scopes are not needed"""
+        vertex_base = VertexBase()
+        json_obj = {
+            "type": "external_account",
+            "credential_source": {"executable": {"command": "/path/to/executable"}},
+        }
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+        mock_creds = MagicMock()
+        mock_creds.requires_scopes = False
+
+        with patch("google.auth.pluggable.Credentials") as MockCredentials:
+            MockCredentials.from_info.return_value = mock_creds
+
+            result = vertex_base._credentials_from_pluggable(json_obj, scopes)
+
+            MockCredentials.from_info.assert_called_once_with(json_obj)
+            mock_creds.with_scopes.assert_not_called()
+            assert result == mock_creds
+
+    def test_load_auth_dispatches_to_pluggable_for_executable(self):
+        """Test that load_auth routes executable credential_source to _credentials_from_pluggable"""
+        vertex_base = VertexBase()
+        json_obj = {
+            "type": "external_account",
+            "credential_source": {
+                "executable": {"command": "/path/to/executable", "timeout_millis": 5000}
+            },
+        }
+
+        mock_creds = MagicMock()
+        mock_creds.project_id = "test-project"
+
+        with (
+            patch.object(
+                vertex_base, "_credentials_from_pluggable", return_value=mock_creds
+            ) as mock_pluggable,
+            patch.object(
+                vertex_base, "_credentials_from_identity_pool"
+            ) as mock_identity_pool,
+            patch.object(vertex_base, "refresh_auth"),
+        ):
+            creds, project_id = vertex_base.load_auth(
+                credentials=json.dumps(json_obj), project_id=None
+            )
+
+            mock_pluggable.assert_called_once_with(
+                json_obj,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+            mock_identity_pool.assert_not_called()
+            assert creds == mock_creds
+            assert project_id == "test-project"
+
+    def test_extract_aws_params(self):
+        """Test _extract_aws_params: extraction, empty case, and unrecognized keys."""
+        # Case 1: Extracts recognized aws_* keys, ignores GCP-standard fields
+        json_with_role = {
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/...",
+            "token_url": "https://sts.googleapis.com/v1/token",
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_region_name": "us-east-1",
+        }
+        result = VertexAIAwsWifAuth.extract_aws_params(json_with_role)
+        assert result == {
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_region_name": "us-east-1",
+        }
+
+        # Case 2: Returns empty dict for standard WIF JSON (no aws_* keys)
+        json_standard = {
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/...",
+            "credential_source": {"environment_id": "aws1"},
+        }
+        assert VertexAIAwsWifAuth.extract_aws_params(json_standard) == {}
+
+        # Case 3: Ignores unrecognized aws_* keys (e.g. aws_bedrock_runtime_endpoint)
+        json_with_unknown = {
+            "type": "external_account",
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_region_name": "us-east-1",
+            "aws_unknown_field": "should-be-ignored",
+            "aws_bedrock_runtime_endpoint": "should-also-be-ignored",
+        }
+        result = VertexAIAwsWifAuth.extract_aws_params(json_with_unknown)
+        assert result == {
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_region_name": "us-east-1",
+        }
+
+    def test_extract_aws_params_keeps_values_that_are_not_strings(self):
+        json_with_null_region = {
+            "type": "external_account",
+            "aws_region_name": None,
+            "aws_session_name": 123,
+        }
+
+        assert VertexAIAwsWifAuth.extract_aws_params(json_with_null_region) == {
+            "aws_region_name": None,
+            "aws_session_name": 123,
+        }
+
+    def test_credentials_from_aws_with_explicit_auth(self):
+        """Test that explicit AWS auth creates credentials via supplier, not metadata."""
+        json_obj = {
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/aws",
+            "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+            "token_url": "https://sts.googleapis.com/v1/token",
+            "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/sa@proj.iam.gserviceaccount.com:generateAccessToken",
+            "credential_source": {"environment_id": "aws1"},
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_region_name": "us-east-1",
+        }
+        aws_params = {
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_region_name": "us-east-1",
+        }
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+        # Mock BaseAWSLLM.get_credentials to return fake boto3 credentials
+        mock_boto3_creds = MagicMock()
+        mock_boto3_creds.access_key = "AKIAIOSFODNN7EXAMPLE"
+        mock_boto3_creds.secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        mock_boto3_creds.token = "FwoGZXIvYXdzEBYaDHqa0AP"
+
+        # Mock aws.Credentials constructor
+        mock_gcp_creds = MagicMock()
+        mock_gcp_creds.requires_scopes = True
+        mock_gcp_creds.with_scopes.return_value = mock_gcp_creds
+
+        # IMPORTANT: Patch at the SOURCE modules, not at vertex_llm_base level.
+        # The imports happen inside the function via `from X import Y`, so
+        # the mock must replace the class in its defining module.
+        with (
+            patch("litellm.llms.bedrock.base_aws_llm.BaseAWSLLM") as MockBaseAWSLLM,
+            patch(
+                "google.auth.aws.Credentials",
+            ) as MockAwsCredentials,
+        ):
+            mock_base_aws = MagicMock()
+            mock_base_aws.get_credentials.return_value = mock_boto3_creds
+            MockBaseAWSLLM.return_value = mock_base_aws
+            MockAwsCredentials.return_value = mock_gcp_creds
+
+            result = VertexAIAwsWifAuth.credentials_from_explicit_aws(
+                json_obj, aws_params, scopes
+            )
+
+            # Verify aws.Credentials was called with supplier (not from_info)
+            MockAwsCredentials.assert_called_once()
+            call_kwargs = MockAwsCredentials.call_args[1]
+            assert call_kwargs["audience"] == json_obj["audience"]
+            assert call_kwargs["subject_token_type"] == json_obj["subject_token_type"]
+            assert call_kwargs["token_url"] == json_obj["token_url"]
+            assert call_kwargs["credential_source"] is None
+            assert (
+                call_kwargs["service_account_impersonation_url"]
+                == json_obj["service_account_impersonation_url"]
+            )
+
+            # Verify the supplier is a lazy credentials provider (calls
+            # get_credentials on demand, not at construction time)
+            supplier = call_kwargs["aws_security_credentials_supplier"]
+            assert supplier is not None
+            # Trigger the lazy provider — this should call get_credentials
+            supplier.get_aws_security_credentials(context=None, request=None)
+            mock_base_aws.get_credentials.assert_called_once_with(**aws_params)
+
+            # Verify scopes were applied
+            mock_gcp_creds.with_scopes.assert_called_once_with(scopes)
+            assert result == mock_gcp_creds
+
+    def test_credentials_from_aws_with_explicit_auth_requires_region(self):
+        """Test that explicit AWS auth raises ValueError when region is missing."""
+        json_obj = {
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/...",
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+        }
+        aws_params = {
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            # No aws_region_name — should fail
+        }
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+        with pytest.raises(ValueError, match="aws_region_name is required"):
+            VertexAIAwsWifAuth.credentials_from_explicit_aws(
+                json_obj, aws_params, scopes
+            )
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_aws_wif_routes_to_explicit_auth_when_aws_params_present(
+        self, is_async
+    ):
+        """Test that load_auth routes to explicit auth when aws_* keys are in JSON."""
+        vertex_base = VertexBase()
+
+        credentials = {
+            "type": "external_account",
+            "credential_source": {"environment_id": "aws1"},
+            "audience": "//iam.googleapis.com/...",
+            "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+            "token_url": "https://sts.googleapis.com/v1/token",
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_region_name": "us-east-1",
+        }
+
+        mock_creds = MagicMock()
+        mock_creds.token = "explicit-auth-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "test-project"
+
+        with (
+            patch(
+                "litellm.llms.vertex_ai.vertex_ai_aws_wif.VertexAIAwsWifAuth.credentials_from_explicit_aws",
+                return_value=mock_creds,
+            ) as mock_explicit_auth,
+            patch.object(
+                vertex_base,
+                "_credentials_from_identity_pool_with_aws",
+            ) as mock_metadata_auth,
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            if is_async:
+                token, _ = await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, _ = vertex_base.ensure_access_token(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+
+            # Explicit auth should be called, NOT metadata auth
+            assert mock_explicit_auth.called
+            mock_metadata_auth.assert_not_called()
+            # Verify correct kwargs were passed to explicit auth
+            call_kwargs = mock_explicit_auth.call_args[1]
+            assert call_kwargs["aws_params"] == {
+                "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+                "aws_region_name": "us-east-1",
+            }
+            assert call_kwargs["scopes"] == [
+                "https://www.googleapis.com/auth/cloud-platform"
+            ]
+            assert token == "refreshed-token"
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_aws_wif_falls_back_to_metadata_when_no_aws_params(self, is_async):
+        """Test that load_auth falls back to metadata flow when no aws_* keys in JSON."""
+        vertex_base = VertexBase()
+
+        # Standard WIF JSON — no aws_* keys
+        credentials = {
+            "type": "external_account",
+            "credential_source": {"environment_id": "aws1"},
+            "audience": "//iam.googleapis.com/...",
+            "token_url": "https://sts.googleapis.com/v1/token",
+        }
+
+        mock_creds = MagicMock()
+        mock_creds.token = "metadata-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "test-project"
+
+        with (
+            patch(
+                "litellm.llms.vertex_ai.vertex_ai_aws_wif.VertexAIAwsWifAuth.credentials_from_explicit_aws",
+            ) as mock_explicit_auth,
+            patch.object(
+                vertex_base,
+                "_credentials_from_identity_pool_with_aws",
+                return_value=mock_creds,
+            ) as mock_metadata_auth,
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            if is_async:
+                token, _ = await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, _ = vertex_base.ensure_access_token(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+
+            # Metadata auth should be called, NOT explicit auth
+            mock_explicit_auth.assert_not_called()
+            assert mock_metadata_auth.called
+            assert token == "refreshed-token"
+
+    def test_aws_credentials_supplier(self):
+        """Test AwsCredentialsSupplier: wraps credentials provider, handles token=None."""
+        from litellm.llms.vertex_ai.aws_credentials_supplier import (
+            AwsCredentialsSupplier,
+        )
+
+        # Case 1: With session token (STS temporary credentials)
+        mock_boto3_creds = MagicMock()
+        mock_boto3_creds.access_key = "AKIAIOSFODNN7EXAMPLE"
+        mock_boto3_creds.secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        mock_boto3_creds.token = "FwoGZXIvYXdzEBYaDHqa0AP"
+
+        supplier = AwsCredentialsSupplier(
+            credentials_provider=lambda: mock_boto3_creds,
+            aws_region="us-east-1",
+        )
+
+        aws_creds = supplier.get_aws_security_credentials(context=None, request=None)
+        assert aws_creds.access_key_id == "AKIAIOSFODNN7EXAMPLE"
+        assert aws_creds.secret_access_key == "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        assert aws_creds.session_token == "FwoGZXIvYXdzEBYaDHqa0AP"
+        assert supplier.get_aws_region(context=None, request=None) == "us-east-1"
+
+        # Case 2: Without session token (static IAM credentials)
+        mock_static_creds = MagicMock()
+        mock_static_creds.access_key = "AKIAIOSFODNN7EXAMPLE"
+        mock_static_creds.secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        mock_static_creds.token = None
+
+        supplier_static = AwsCredentialsSupplier(
+            credentials_provider=lambda: mock_static_creds,
+            aws_region="eu-west-1",
+        )
+
+        aws_creds_static = supplier_static.get_aws_security_credentials(
+            context=None, request=None
+        )
+        assert aws_creds_static.access_key_id == "AKIAIOSFODNN7EXAMPLE"
+        assert aws_creds_static.session_token is None
+
+    def test_aws_credentials_supplier_returns_correct_type(self):
+        """Test that AwsCredentialsSupplier returns AwsSecurityCredentials dataclass."""
+        from google.auth.aws import AwsSecurityCredentials
+
+        from litellm.llms.vertex_ai.aws_credentials_supplier import (
+            AwsCredentialsSupplier,
+        )
+
+        mock_boto3_creds = MagicMock()
+        mock_boto3_creds.access_key = "AKID"
+        mock_boto3_creds.secret_key = "SECRET"
+        mock_boto3_creds.token = "TOKEN"
+
+        supplier = AwsCredentialsSupplier(
+            credentials_provider=lambda: mock_boto3_creds,
+            aws_region="us-east-1",
+        )
+
+        aws_creds = supplier.get_aws_security_credentials(context=None, request=None)
+        assert isinstance(aws_creds, AwsSecurityCredentials)
+
+    @pytest.mark.asyncio
+    async def test_single_flight_refresh(self):
+        """Under high concurrency, only one coroutine should refresh expired credentials."""
+        import asyncio
+
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "expired-token"
+        mock_creds.expired = True
+        mock_creds.expiry = None
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        credentials = {"type": "service_account", "project_id": "project-1"}
+
+        refresh_call_count = 0
+
+        with (
+            patch.object(
+                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
+            ),
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
+
+            async def slow_refresh(creds):
+                nonlocal refresh_call_count
+                refresh_call_count += 1
+                await asyncio.sleep(0.05)  # simulate network latency
+                creds.token = "refreshed-token"
+                creds.expired = False
+
+            # refresh_auth is sync, but we need to count calls.
+            # get_access_token_async wraps it with asyncify, so the sync side_effect works.
+            def sync_refresh_impl(creds):
+                nonlocal refresh_call_count
+                refresh_call_count += 1
+                creds.token = "refreshed-token"
+                creds.expired = False
+
+            mock_refresh.side_effect = sync_refresh_impl
+
+            # Launch 50 concurrent requests
+            tasks = [
+                vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id="project-1",
+                    custom_llm_provider="vertex_ai",
+                )
+                for _ in range(50)
+            ]
+            results = await asyncio.gather(*tasks)
+
+            # All should return the refreshed token
+            for token, project in results:
+                assert token == "refreshed-token"
+                assert project == "project-1"
+
+            # refresh_auth should be called exactly once (single-flight)
+            assert (
+                refresh_call_count == 1
+            ), f"Expected 1 refresh call, got {refresh_call_count}"
+
+    @pytest.mark.asyncio
+    async def test_async_reauthentication_uses_async_single_flight(self):
+        """Concurrent async reauth should reload once without using the sync path."""
+        from google.auth.credentials import TokenState
+
+        vertex_base = VertexBase()
+        stale_creds = MagicMock()
+        stale_creds.token = "expired-token"
+        stale_creds.token_state = TokenState.INVALID
+        stale_creds.project_id = "project-1"
+        stale_creds.quota_project_id = "project-1"
+
+        refreshed_creds = MagicMock()
+        refreshed_creds.token = "refreshed-token"
+        refreshed_creds.token_state = TokenState.FRESH
+        refreshed_creds.project_id = "project-1"
+        refreshed_creds.quota_project_id = "project-1"
+
+        credentials = {"type": "service_account", "project_id": "project-1"}
+        cache_key = (json.dumps(credentials), "project-1")
+        vertex_base._credentials_project_mapping[cache_key] = (
+            stale_creds,
+            "project-1",
+        )
+
+        load_call_count = 0
+
+        def load_auth_impl(*_args, **_kwargs):
+            nonlocal load_call_count
+            load_call_count += 1
+            return refreshed_creds, "project-1"
+
+        with (
+            patch.object(
+                vertex_base,
+                "refresh_auth",
+                side_effect=Exception("Reauthentication is needed"),
+            ),
+            patch.object(vertex_base, "load_auth", side_effect=load_auth_impl),
+            patch.object(vertex_base, "get_access_token") as mock_get_access_token,
+        ):
+            results = await asyncio.gather(
+                *[
+                    vertex_base.ensure_access_token_async(
+                        credentials=credentials,
+                        project_id="project-1",
+                        custom_llm_provider="vertex_ai",
+                    )
+                    for _ in range(10)
+                ]
+            )
+
+            assert results == [("refreshed-token", "project-1")] * 10
+            assert load_call_count == 1
+            mock_get_access_token.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_background_refresh_when_near_expiry(self):
+        """When token_state is STALE (within the 3:45 REFRESH_THRESHOLD window),
+        return the current token immediately and refresh in the background —
+        zero added latency."""
+        import asyncio
+
+        from google.auth.credentials import TokenState
+
+        vertex_base = VertexBase()
+
+        # Simulate STALE state: token is usable but near expiry.
+        mock_creds = MagicMock()
+        mock_creds.token = "near-expiry-token"
+        mock_creds.token_state = TokenState.STALE
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        credentials = {"type": "service_account", "project_id": "project-1"}
+
+        with (
+            patch.object(
+                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
+            ),
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+                creds.token_state = TokenState.FRESH
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            token, project = await vertex_base.ensure_access_token_async(
+                credentials=credentials,
+                project_id="project-1",
+                custom_llm_provider="vertex_ai",
+            )
+
+            # Should return the current (still usable) token immediately
+            assert token == "near-expiry-token"
+
+            background_refreshes = tuple(vertex_base._background_refresh_tasks.values())
+            await asyncio.wait_for(asyncio.gather(*background_refreshes), timeout=5)
+
+            assert mock_refresh.called, "Background refresh should have been triggered"
+
+    @pytest.mark.asyncio
+    async def test_stale_malformed_token_blocks_on_refresh(self):
+        """Malformed STALE tokens should refresh instead of failing validation."""
+        from google.auth.credentials import TokenState
+
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = None
+        mock_creds.token_state = TokenState.STALE
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        credentials = {"type": "service_account", "project_id": "project-1"}
+
+        with (
+            patch.object(
+                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
+            ),
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+                creds.token_state = TokenState.FRESH
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            token, project = await vertex_base.ensure_access_token_async(
+                credentials=credentials,
+                project_id="project-1",
+                custom_llm_provider="vertex_ai",
+            )
+
+            assert mock_refresh.called
+            assert token == "refreshed-token"
+            assert project == "project-1"
+
+    @pytest.mark.asyncio
+    async def test_fresh_token_skips_refresh(self):
+        """Credentials not marked expired by google-auth should not trigger refresh."""
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "fresh-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        credentials = {"type": "service_account", "project_id": "project-1"}
+        cache_key = (json.dumps(credentials), "project-1")
+        vertex_base._credentials_project_mapping[cache_key] = (
+            mock_creds,
+            "project-1",
+        )
+
+        with patch.object(vertex_base, "refresh_auth") as mock_refresh:
+            token, project = await vertex_base.ensure_access_token_async(
+                credentials=credentials,
+                project_id="project-1",
+                custom_llm_provider="vertex_ai",
+            )
+
+            assert not mock_refresh.called, "Fresh token should not trigger refresh"
+            assert token == "fresh-token"
+
+    @pytest.mark.asyncio
+    async def test_background_refresh_task_removed_after_completion(self):
+        """Completed background-refresh tasks must be evicted from
+        _background_refresh_tasks so the dict does not grow unboundedly."""
+        import asyncio
+
+        from google.auth.credentials import TokenState
+
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "near-expiry-token"
+        mock_creds.token_state = TokenState.STALE
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        credentials = {"type": "service_account", "project_id": "project-1"}
+
+        with (
+            patch.object(
+                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
+            ),
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+                creds.token_state = TokenState.FRESH
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            await vertex_base.ensure_access_token_async(
+                credentials=credentials,
+                project_id="project-1",
+                custom_llm_provider="vertex_ai",
+            )
+
+            background_refreshes = tuple(vertex_base._background_refresh_tasks.values())
+            await asyncio.wait_for(asyncio.gather(*background_refreshes), timeout=5)
+
+            # After completion the entry should have been removed by the done-callback.
+            assert len(vertex_base._background_refresh_tasks) == 0, (
+                "Completed background refresh task was not removed from "
+                "_background_refresh_tasks"
+            )
+
+    @pytest.mark.asyncio
+    async def test_background_refresh_tasks_no_accumulation_across_many_keys(self):
+        """With many distinct credential keys the dict must not hold completed tasks."""
+        import asyncio
+        import json as _json
+
+        from google.auth.credentials import TokenState
+
+        vertex_base = VertexBase()
+
+        num_keys = 20
+        background_refreshes: list[asyncio.Task] = []
+
+        for i in range(num_keys):
+            mock_creds = MagicMock()
+            mock_creds.token = f"token-{i}"
+            mock_creds.token_state = TokenState.STALE
+            mock_creds.project_id = f"project-{i}"
+            mock_creds.quota_project_id = f"project-{i}"
+
+            credentials = {"type": "service_account", "project_id": f"project-{i}"}
+
+            with (
+                patch.object(
+                    vertex_base,
+                    "load_auth",
+                    return_value=(mock_creds, f"project-{i}"),
+                ),
+                patch.object(vertex_base, "refresh_auth") as mock_refresh,
+            ):
+
+                def mock_refresh_impl(creds, idx=i):
+                    creds.token = f"refreshed-{idx}"
+                    creds.token_state = TokenState.FRESH
+
+                mock_refresh.side_effect = mock_refresh_impl
+
+                await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=f"project-{i}",
+                    custom_llm_provider="vertex_ai",
+                )
+                background_refreshes.extend(vertex_base._background_refresh_tasks.values())
+
+        await asyncio.wait_for(asyncio.gather(*set(background_refreshes)), timeout=5)
+
+        assert len(vertex_base._background_refresh_tasks) == 0, (
+            f"Expected 0 tasks after all refreshes completed, "
+            f"found {len(vertex_base._background_refresh_tasks)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_refresh_lock_shared_while_in_use(self):
+        """Concurrent callers for the same key must coordinate on the same lock."""
+        vertex_base = VertexBase()
+        key = ("creds", "project-1")
+
+        lock_a = vertex_base._acquire_async_refresh_lock(key)
+        try:
+            async with lock_a:
+                lock_b = vertex_base._acquire_async_refresh_lock(key)
+                try:
+                    assert lock_a is lock_b, (
+                        "While a coroutine still holds the lock, concurrent callers must "
+                        "receive the same Lock instance to preserve single-flight."
+                    )
+                finally:
+                    vertex_base._release_async_refresh_lock(key, lock_b)
+        finally:
+            vertex_base._release_async_refresh_lock(key, lock_a)
+
+    @pytest.mark.asyncio
+    async def test_async_refresh_lock_pruned_after_release(self):
+        """get_access_token_async must drop the per-key Lock from the registry
+        once no coroutine is using it, so the dict stays bounded in
+        high-cardinality deployments. Without this, every distinct credential
+        leaks a Lock object for the lifetime of the process."""
+        from google.auth.credentials import TokenState
+
+        vertex_base = VertexBase()
+
+        for i in range(10):
+            mock_creds = MagicMock()
+            mock_creds.token = f"refreshed-{i}"
+            mock_creds.token_state = TokenState.FRESH
+            mock_creds.project_id = f"project-{i}"
+            mock_creds.quota_project_id = f"project-{i}"
+
+            credentials = {"type": "service_account", "project_id": f"project-{i}"}
+
+            with (
+                patch.object(
+                    vertex_base,
+                    "load_auth",
+                    return_value=(mock_creds, f"project-{i}"),
+                ),
+                patch.object(vertex_base, "refresh_auth"),
+            ):
+                await vertex_base.ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=f"project-{i}",
+                    custom_llm_provider="vertex_ai",
+                )
+
+        assert len(vertex_base._async_refresh_locks) == 0, (
+            "expected per-key locks to be pruned once no coroutine holds or "
+            f"waits on them; found {len(vertex_base._async_refresh_locks)}"
+        )
+        assert len(vertex_base._async_refresh_lock_refcounts) == 0
+
+    @pytest.mark.asyncio
+    async def test_async_refresh_lock_kept_while_waiter_pending(self):
+        """The prune must not run while another coroutine is still waiting on
+        the lock — otherwise the waiter ends up on a lock that's been replaced
+        in the registry and single-flight breaks."""
+        vertex_base = VertexBase()
+        key = ("creds", "project-1")
+
+        holder_lock = vertex_base._acquire_async_refresh_lock(key)
+        release_holder = asyncio.Event()
+
+        async def hold_then_release():
+            async with holder_lock:
+                await release_holder.wait()
+            vertex_base._release_async_refresh_lock(key, holder_lock)
+
+        holder = asyncio.create_task(hold_then_release())
+        await asyncio.sleep(0)  # let holder grab the lock
+
+        async def queue_for_lock():
+            waiter_lock = vertex_base._acquire_async_refresh_lock(key)
+            try:
+                async with waiter_lock:
+                    pass
+            finally:
+                vertex_base._release_async_refresh_lock(key, waiter_lock)
+
+        waiter = asyncio.create_task(queue_for_lock())
+        await asyncio.sleep(0)  # let waiter queue on the lock
+
+        assert (
+            vertex_base._async_refresh_locks.get(key) is holder_lock
+        ), "lock with active holder/waiter must not be pruned"
+
+        release_holder.set()
+        await holder
+        await waiter
+
+        assert key not in vertex_base._async_refresh_locks
+        assert key not in vertex_base._async_refresh_lock_refcounts
+
+    @pytest.mark.asyncio
+    async def test_fast_path_no_lock(self):
+        """Cached fresh credentials should return without acquiring the lock."""
+        import datetime
+
+        vertex_base = VertexBase()
+
+        try:
+            from google.auth import _helpers as google_auth_helpers
+
+            now = google_auth_helpers.utcnow()
+        except ImportError:
+            now = datetime.datetime.utcnow()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "cached-token"
+        mock_creds.expired = False
+        mock_creds.expiry = now + datetime.timedelta(minutes=30)
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        credentials = {"type": "service_account", "project_id": "project-1"}
+        cache_key = (json.dumps(credentials), "project-1")
+        vertex_base._credentials_project_mapping[cache_key] = (
+            mock_creds,
+            "project-1",
+        )
+
+        # Spy on _acquire_async_refresh_lock to verify it's never called
+        with patch.object(
+            vertex_base,
+            "_acquire_async_refresh_lock",
+            wraps=vertex_base._acquire_async_refresh_lock,
+        ) as mock_get_lock:
+            token, project = await vertex_base.ensure_access_token_async(
+                credentials=credentials,
+                project_id="project-1",
+                custom_llm_provider="vertex_ai",
+            )
+
+            assert token == "cached-token"
+            assert not mock_get_lock.called, "Fast path should not acquire lock"
+
+
+_ENCODED_VERTEX_KEY: Final = base64.b64encode(
+    json.dumps({"type": "service_account", "private_key_id": "kid-123", "private_key": "MIIEvQIBADA???>>>"}).encode()
+).decode()
+
+
+class TestVertexCredentialsSource:
+    """A `vertex_credentials` path that cannot be read must not be reported as malformed JSON.
+
+    Regression for https://github.com/BerriAI/litellm/issues/40166: dispatching on
+    os.path.exists() sent a missing or unreadable path down the inline-JSON branch,
+    where the path string itself was parsed and every failure came back as a
+    JSONDecodeError blaming the key material.
+    """
+
+    FILE_FAILURE: Final = "Unable to load the vertex credentials file"
+
+    def test_missing_credentials_file_names_the_read_failure_in_the_log(self, tmp_path, caplog):
+        missing = tmp_path / "vertexai.json"
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
+                VertexBase().load_auth(credentials=str(missing), project_id="p")
+
+        message = str(exc_info.value)
+        assert "not valid JSON" not in message
+        assert str(missing) not in message
+        assert repr(str(missing)) in caplog.text
+        assert "No such file or directory" in caplog.text
+
+    def test_unreadable_credentials_file_names_the_read_failure_in_the_log(self, tmp_path, caplog):
+        # Present but not openable as a file, the same shape as a path on a mount
+        # that has stopped serving reads.
+        unreadable = tmp_path / "vertexai.json"
+        unreadable.mkdir()
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
+                VertexBase().load_auth(credentials=str(unreadable), project_id="p")
+
+        assert str(unreadable) not in str(exc_info.value)
+        assert repr(str(unreadable)) in caplog.text
+        assert "Is a directory" in caplog.text
+        assert "not valid JSON" not in caplog.text
+
+    def test_malformed_credentials_file_logs_the_private_key_hint(self, tmp_path, caplog):
+        malformed = tmp_path / "vertexai.json"
+        malformed.write_text('{"type": "service_account", "private_key": "-----BEGIN\nPRIVATE KEY-----"}')
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
+                VertexBase().load_auth(credentials=str(malformed), project_id="p")
+
+        assert str(malformed) not in str(exc_info.value)
+        assert repr(str(malformed)) in caplog.text
+        assert "is not valid JSON" in caplog.text
+        assert "private_key" in caplog.text
+
+    def test_every_file_failure_gives_the_caller_the_same_message(self, tmp_path):
+        """Callers allowed to send `vertex_credentials` must not learn what is on the proxy's disk."""
+        directory = tmp_path / "directory.json"
+        directory.mkdir()
+        malformed = tmp_path / "malformed.json"
+        malformed.write_text("{not json")
+        not_an_object = tmp_path / "list.json"
+        not_an_object.write_text("[1, 2]")
+        not_a_key = tmp_path / "settings.json"
+        not_a_key.write_text('{"hello": "world"}')
+        bad_private_key = tmp_path / "bad-key.json"
+        bad_private_key.write_text(
+            '{"type": "service_account", "private_key": "x", "client_email": "a@b.c", "token_uri": "https://t"}'
+        )
+        paths = (tmp_path / "missing.json", directory, malformed, not_an_object, not_a_key, bad_private_key)
+
+        def message_for(path: pathlib.Path) -> str:
+            with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
+                VertexBase().load_auth(credentials=str(path), project_id="p")
+            return str(exc_info.value)
+
+        assert {message_for(path) for path in paths} == {
+            "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason."
+        }
+
+    NOT_A_KEY: Final = '{"hello": "world"}'
+
+    def _google_auth_rejection(self) -> str:
+        with pytest.raises(google.auth.exceptions.GoogleAuthError) as exc_info:
+            VertexBase()._credentials_from_service_account(json.loads(self.NOT_A_KEY), scopes=None)
+        return str(exc_info.value)
+
+    def test_google_auth_rejecting_a_credentials_file_is_named_only_in_the_log(self, tmp_path, caplog):
+        not_a_key = tmp_path / "settings.json"
+        not_a_key.write_text(self.NOT_A_KEY)
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
+                VertexBase().load_auth(credentials=str(not_a_key), project_id="p")
+
+        rejection = self._google_auth_rejection()
+        assert rejection not in "".join(traceback.format_exception(exc_info.value))
+        assert repr(str(not_a_key)) in caplog.text
+        assert rejection in caplog.text
+
+    def test_google_auth_rejecting_inline_credentials_still_tells_the_caller_why(self):
+        rejection = self._google_auth_rejection()
+
+        with pytest.raises(ValueError, match=re.escape(rejection)) as exc_info:
+            VertexBase().load_auth(credentials=self.NOT_A_KEY, project_id="p")
+
+        assert self.FILE_FAILURE not in str(exc_info.value)
+
+    def test_litellm_rejecting_a_credentials_file_is_not_blamed_on_google_auth(self, tmp_path, caplog):
+        wif_without_region = tmp_path / "wif.json"
+        wif_without_region.write_text(
+            json.dumps(
+                {
+                    "type": "external_account",
+                    "credential_source": {"environment_id": "aws1"},
+                    "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+                }
+            )
+        )
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=str(wif_without_region), project_id="p")
+
+        assert "holds credentials that cannot be used: aws_region_name is required" in caplog.text
+        assert "Google auth" not in caplog.text
+
+    def test_a_credentials_file_too_large_to_be_a_key_is_not_read_whole(self, tmp_path, caplog):
+        oversized = tmp_path / "vertexai.json"
+        oversized.write_text("{" + " " * (1 << 20) + "}")
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=str(oversized), project_id="p")
+
+        assert "larger than any credentials file" in caplog.text
+
+    def test_a_credentials_file_holding_json_that_is_not_an_object_says_so_in_the_log(self, tmp_path, caplog):
+        double_encoded = tmp_path / "vertexai.json"
+        double_encoded.write_text(json.dumps(json.dumps({"type": "service_account"})))
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=str(double_encoded), project_id="p")
+
+        assert "is JSON but not a JSON object" in caplog.text
+        assert "not valid JSON" not in caplog.text
+
+    def test_a_path_with_a_newline_cannot_forge_a_log_line(self, tmp_path, caplog):
+        forged = str(tmp_path / "vertexai.json") + "\nLiteLLM:ERROR: forged entry"
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=forged, project_id="p")
+
+        assert "\nLiteLLM:ERROR: forged entry" not in caplog.text
+        assert "\\nLiteLLM:ERROR: forged entry" in caplog.text
+
+    def test_a_value_too_long_to_be_a_path_is_logged_by_length_only(self, caplog):
+        not_a_path = "not a path, " * 25
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=not_a_path, project_id="p")
+
+        assert "not a path, not a path" not in caplog.text
+        assert f"{len(not_a_path)}-character value" in caplog.text
+
+    def test_malformed_inline_credentials_do_not_echo_the_credential(self):
+        inline = (
+            '{"type": "service_account", "private_key": '
+            '"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"}'
+        )
+
+        with pytest.raises(
+            ValueError, match="The inline `vertex_credentials` value is not valid JSON"
+        ) as exc_info:
+            VertexBase().load_auth(credentials=inline, project_id="p")
+
+        message = str(exc_info.value)
+        assert "MIIEvQIBADA" not in message
+        assert "unescaped newlines in private_key" in message
+
+    def test_a_credential_misconfigured_as_a_path_is_not_echoed(self):
+        """A value that is neither a path nor JSON must not come back in the message."""
+        pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"
+
+        with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
+            VertexBase().load_auth(credentials=pem, project_id="p")
+
+        message = str(exc_info.value)
+        assert "MIIEvQIBADA" not in message
+        assert "BEGIN PRIVATE KEY" not in message
+
+    def test_readable_credentials_file_is_still_loaded(self, tmp_path):
+        creds_file = tmp_path / "vertexai.json"
+        creds_file.write_text(json.dumps({"type": "service_account", "project_id": "from-file"}))
+        vertex_base = VertexBase()
+        mock_creds = MagicMock()
+        mock_creds.project_id = "from-file"
+
+        with (
+            patch.object(vertex_base, "_credentials_from_service_account", return_value=mock_creds) as from_sa,
+            patch.object(vertex_base, "refresh_auth"),
+        ):
+            creds, project_id = vertex_base.load_auth(credentials=str(creds_file), project_id=None)
+
+        assert creds is mock_creds
+        assert project_id == "from-file"
+        assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-file"}
+
+    @pytest.mark.parametrize("leading", ["", "\n  "])
+    def test_inline_credentials_json_is_still_parsed(self, leading):
+        vertex_base = VertexBase()
+        mock_creds = MagicMock()
+        mock_creds.project_id = "from-inline"
+
+        with (
+            patch.object(vertex_base, "_credentials_from_service_account", return_value=mock_creds) as from_sa,
+            patch.object(vertex_base, "refresh_auth"),
+        ):
+            creds, project_id = vertex_base.load_auth(
+                credentials=leading + json.dumps({"type": "service_account", "project_id": "from-inline"}),
+                project_id=None,
+            )
+
+        assert creds is mock_creds
+        assert project_id == "from-inline"
+        assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-inline"}
+
+    def test_a_credential_misconfigured_as_a_path_is_not_logged_either(self, caplog):
+        """The path reaches the log, so a credential put in that field must be scrubbed first."""
+        pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=pem, project_id="p")
+
+        assert "MIIEvQIBADA" not in caplog.text
+        assert "REDACTED" in caplog.text
+
+    def test_a_path_open_rejects_outright_is_reported_not_raised_raw(self, caplog):
+        """open() rejects some paths with a bare ValueError before any filesystem call."""
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials="creds" + chr(0) + ".json", project_id="p")
+
+        assert "embedded null" in caplog.text
+
+    def test_a_file_whose_name_starts_with_a_brace_is_still_read(self, tmp_path, monkeypatch):
+        """Shape dispatch must not strand a real file that happens to be named like JSON.
+
+        The value has to be relative for this to bite: an absolute path never starts with
+        a brace, so only "{vertex}.json" reaches the inline branch and needs the fallback.
+        """
+        braced = tmp_path / "{vertex}.json"
+        braced.write_text(json.dumps({"type": "service_account", "project_id": "from-braced-file"}))
+        monkeypatch.chdir(tmp_path)
+        vertex_base = VertexBase()
+        mock_creds = MagicMock()
+        mock_creds.project_id = "from-braced-file"
+
+        with (
+            patch.object(vertex_base, "_credentials_from_service_account", return_value=mock_creds) as from_sa,
+            patch.object(vertex_base, "refresh_auth"),
+        ):
+            creds, project_id = vertex_base.load_auth(credentials="{vertex}.json", project_id=None)
+
+        assert creds is mock_creds
+        assert project_id == "from-braced-file"
+        assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-braced-file"}
+
+    @pytest.mark.parametrize(
+        "encoded",
+        [
+            pytest.param(_ENCODED_VERTEX_KEY, id="padded"),
+            pytest.param(_ENCODED_VERTEX_KEY.rstrip("="), id="unpadded"),
+            pytest.param('"' + _ENCODED_VERTEX_KEY + '"', id="quoted"),
+            pytest.param("base64:" + _ENCODED_VERTEX_KEY, id="prefixed"),
+            pytest.param(_ENCODED_VERTEX_KEY.replace("+", "-").replace("/", "_"), id="urlsafe"),
+            pytest.param("\n".join(_ENCODED_VERTEX_KEY[i : i + 64] for i in range(0, len(_ENCODED_VERTEX_KEY), 64)), id="wrapped"),
+        ],
+    )
+    def test_base64_encoded_credentials_are_named_and_kept_out_of_the_log(self, encoded, caplog):
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+            with pytest.raises(ValueError, match="is base64-encoded JSON") as exc_info:
+                VertexBase().load_auth(credentials=encoded, project_id="p")
+
+        assert _ENCODED_VERTEX_KEY[8:40] not in str(exc_info.value)
+        assert _ENCODED_VERTEX_KEY[8:40] not in caplog.text
+
+    @pytest.mark.parametrize(
+        ("wrapped", "expected"),
+        [
+            pytest.param(
+                json.dumps(json.dumps({"type": "service_account"})),
+                "The `vertex_credentials` value is JSON but not a JSON object, it may be quoted or encoded twice",
+                id="double-encoded",
+            ),
+            pytest.param(
+                "'" + json.dumps({"type": "service_account"}) + "'",
+                "is not valid JSON: .* Remove the quotes or byte-order mark before the opening",
+                id="single-quoted",
+            ),
+            pytest.param(
+                "\ufeff" + json.dumps({"type": "service_account"}),
+                "is not valid JSON: .* Remove the quotes or byte-order mark before the opening",
+                id="byte-order-mark",
+            ),
+        ],
+    )
+    def test_wrapped_inline_json_is_reported_as_inline_not_as_a_file(self, wrapped, expected):
+        with pytest.raises(ValueError, match=expected):
+            VertexBase().load_auth(credentials=wrapped, project_id="p")
+
+    @pytest.mark.parametrize("empty", ["", "  \n"])
+    def test_an_empty_value_is_named_as_empty(self, empty):
+        with pytest.raises(ValueError, match="The `vertex_credentials` value is empty"):
+            VertexBase().load_auth(credentials=empty, project_id="p")
+
+    def test_a_malformed_file_named_like_json_is_reported_as_a_bad_file(self, tmp_path, monkeypatch, caplog):
+        (tmp_path / "{vertex}.json").write_text('{"type": "service_account",')
+        monkeypatch.chdir(tmp_path)
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials="{vertex}.json", project_id="p")
+
+        assert "'{vertex}.json' is not valid JSON" in caplog.text
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
+    def test_an_unreadable_file_named_like_json_is_reported_as_a_bad_file(self, tmp_path, monkeypatch, caplog):
+        braced = tmp_path / "{vertex}.json"
+        braced.write_text(json.dumps({"type": "service_account"}))
+        braced.chmod(0)
+        monkeypatch.chdir(tmp_path)
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials="{vertex}.json", project_id="p")
+
+        assert "cannot read the credentials file at '{vertex}.json': Permission denied" in caplog.text
+
+    def test_a_credentials_file_that_is_not_text_is_reported_as_such(self, tmp_path, caplog):
+        not_text = tmp_path / "vertexai.json"
+        not_text.write_bytes(bytes([0xFF, 0xFE, 0x00, 0x01]))
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=str(not_text), project_id="p")
+
+        assert "is not UTF-8 text" in caplog.text
+
+
+def test_get_access_token_reraises_malformed_service_account_credentials_without_caching(caplog):
+    vertex_base: Final = VertexBase()
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        with pytest.raises(google.auth.exceptions.MalformedError):
+            vertex_base.get_access_token(
+                credentials=json.dumps({"type": "service_account", "project_id": "project-1"}),
+                project_id="project-1",
+            )
+
+    assert vertex_base._credentials_project_mapping == {}
+    assert [record.getMessage().split(". Error: ")[0] for record in caplog.records] == [
+        "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information"
+    ]

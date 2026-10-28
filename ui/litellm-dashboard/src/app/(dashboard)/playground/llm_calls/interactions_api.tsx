@@ -1,5 +1,12 @@
+import type { ResponseHeadersListener } from "@/lib/http/observeResponseHeaders";
 import { toast } from "@/lib/toast";
-import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import { streamErrorMessage } from "@/utils/streamErrorMessage";
+import {
+  buildPlaygroundHeaders,
+  type CustomHeaders,
+  withRequiredHeaders,
+} from "@/components/llm_calls/request_headers";
 
 export async function makeInteractionsRequest(
   input: string,
@@ -10,6 +17,8 @@ export async function makeInteractionsRequest(
   signal?: AbortSignal,
   customBaseUrl?: string,
   previousInteractionId?: string,
+  customHeaders?: CustomHeaders,
+  onResponseHeaders?: ResponseHeadersListener,
 ): Promise<void> {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -20,17 +29,14 @@ export async function makeInteractionsRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getGatewayBaseUrl();
   const normalizedBaseUrl = proxyBaseUrl.endsWith("/") ? proxyBaseUrl.slice(0, -1) : proxyBaseUrl;
   const requestUrl = `${normalizedBaseUrl}/v1beta/interactions`;
 
-  const headers: Record<string, string> = {
+  const headers: Record<string, string> = withRequiredHeaders(buildPlaygroundHeaders(tags, customHeaders), {
     "Content-Type": "application/json",
     [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
-  };
-  if (tags && tags.length > 0) {
-    headers["x-litellm-tags"] = tags.join(",");
-  }
+  });
 
   const body: Record<string, unknown> = {
     model: selectedModel,
@@ -48,6 +54,7 @@ export async function makeInteractionsRequest(
       body: JSON.stringify(body),
       signal,
     });
+    onResponseHeaders?.(response.headers);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -89,26 +96,26 @@ export async function makeInteractionsRequest(
           continue;
         }
 
+        const errorMessage = streamErrorMessage(event);
+        if (errorMessage !== null) {
+          throw new Error(errorMessage);
+        }
+
         const eventType = event.event_type as string | undefined;
 
-        if (eventType === "interaction.start" || eventType === "interaction.complete") {
-          // Capture model from either the native Gemini shape (nested under
-          // `interaction`) or the bridge shape (top-level `model` field).
+        if (eventType === "interaction.created" || eventType === "interaction.completed") {
           const interaction = event.interaction as Record<string, unknown> | undefined;
           if (typeof interaction?.model === "string" && interaction.model) {
             responseModel = interaction.model;
           } else if (typeof event.model === "string" && event.model) {
             responseModel = event.model;
           }
-        } else if (eventType === "content.delta" || eventType === "content.start") {
+        } else if (eventType === "step.delta") {
           const delta = event.delta as Record<string, unknown> | undefined;
-          // Accept both native Gemini format {"type":"text","text":"..."} and bridge
-          // format {"text":"..."} (no type discriminator)
           if (typeof delta?.text === "string" && delta.text) {
             updateUI(delta.text, responseModel ?? selectedModel);
           }
         }
-        // content.start, content.stop, interaction.status_update — no UI action needed
       }
     }
   } catch (error: unknown) {

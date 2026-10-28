@@ -1,11 +1,14 @@
 import os
 from collections.abc import Callable
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
 )
+
+if TYPE_CHECKING:
+    from azure.core.credentials import TokenProvider
 
 
 def infer_credential_type_from_environment() -> AzureCredentialType:
@@ -74,9 +77,7 @@ def get_azure_ad_token_provider(
         else None or os.environ.get("AZURE_CREDENTIAL") or infer_credential_type_from_environment()
     )
     verbose_logger.info("For Azure AD Token Provider, choosing credential type: %s", cred)
-    credential: (
-        ClientSecretCredential | ManagedIdentityCredential | CertificateCredential | DefaultAzureCredential | Any | None
-    ) = None
+    credential: TokenProvider | None = None
     if cred == AzureCredentialType.ClientSecretCredential:
         credential = ClientSecretCredential(
             client_id=os.environ["AZURE_CLIENT_ID"],
