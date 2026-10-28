@@ -26,9 +26,7 @@ def langfuse_preset(
     mappers: Final = ensure_mappers(base.mapper_names, "langfuse")
     try:
         cfg: Final = _V1Langfuse.get_langfuse_otel_config()
-    except Exception:
-        if not allow_missing_credentials:
-            raise
+    except ValueError:
         return base.model_copy(
             update={
                 "exporters": credential_gated_exporters(base.exporters, ExporterOwner.LANGFUSE_OTEL),
