@@ -5248,6 +5248,23 @@
         "a2a": false,
         "generateContent": false
       }
+    },
+    "gisoo": {
+      "display_name": "Gisoo (`gisoo`)",
+      "url": "https://gisoo.pro/docs/litellm",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
     }
   },
   "endpoints": {
