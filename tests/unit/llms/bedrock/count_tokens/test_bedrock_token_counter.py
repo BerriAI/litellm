@@ -265,6 +265,33 @@ async def test_claude_chat_tool_use_is_counted_in_the_shape_claude_inference_sen
     ]
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool",
+    (
+        {"type": "mcp", "server_label": "wiki", "server_url": "https://mcp.example/mcp"},
+        {"type": "computer_use_preview", "display_width": 1024, "display_height": 768, "environment": "browser"},
+    ),
+    ids=("mcp", "computer_use_preview"),
+)
+async def test_claude_count_rejects_a_lone_responses_tool_without_calling_bedrock(tool: dict[str, JsonValue]) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=[{"role": "user", "content": "Ask the wiki"}],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-4-8",
+        tools=[tool],
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert bedrock.posted_hosts() == ()
+
+
+@pytest.mark.asyncio
 async def test_claude_chat_tool_use_counted_on_mantle_metadata_route_is_translated_too() -> None:
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
     schema: Final = {"type": "object", "properties": {"city": {"type": "string"}}}

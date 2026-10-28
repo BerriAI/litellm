@@ -569,6 +569,7 @@ _ANTHROPIC_TOOL_USE: Final[list[dict[str, JsonValue]]] = [
     ("messages", "tool", "messages_format"),
     (
         (_ANTHROPIC_TOOL_USE, {"name": "get_weather", "input_schema": _WEATHER_SCHEMA}, "openai"),
+        ([{"role": "user", "content": "Open example.com"}], {"type": "computer_toolset_20260801"}, "openai"),
         (
             [{"role": "user", "content": "Weather in SF?"}],
             {"type": "function", "name": "get_weather", "parameters": _WEATHER_SCHEMA},

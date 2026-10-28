@@ -1707,17 +1707,45 @@ def test_responses_input_tokens_sends_mantle_the_tool_use_invoke_inference_sends
 _RUNTIME_COUNTED_OPTIONS: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyType(
     {**RESPONSES_REQUEST_OPTIONS, "forced-tool-choice": _FORCED_TOOL_CHOICE}
 )
-_RUNTIME_REFUSED_FIELDS: Final = ("thinking", "tool_choice", "toolChoice", "output_config", "output_format")
+_CONVERSE_WEATHER_TOOLS: Final[dict[str, JsonValue]] = {
+    "tools": [
+        {
+            "toolSpec": {
+                "name": "get_weather",
+                "description": "Look up the current weather for a city",
+                "inputSchema": {"json": WEATHER_SCHEMA},
+            }
+        }
+    ]
+}
+_INVOKE_WEATHER_TOOLS: Final[list[JsonValue]] = [
+    {
+        "type": "custom",
+        "name": "get_weather",
+        "description": "Look up the current weather for a city",
+        "input_schema": WEATHER_SCHEMA,
+    }
+]
+_RUNTIME_COUNTED_SHAPES: Final[Mapping[str, tuple[frozenset[str], str, JsonValue]]] = MappingProxyType(
+    {
+        "converse": (frozenset({"messages", "system", "toolConfig"}), "toolConfig", _CONVERSE_WEATHER_TOOLS),
+        "invokeModel": (
+            frozenset({"anthropic_version", "max_tokens", "messages", "system", "tools"}),
+            "tools",
+            _INVOKE_WEATHER_TOOLS,
+        ),
+    }
+)
 
 
-def _runtime_counted_request(count_body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+def _runtime_counted_request(count_body: Mapping[str, JsonValue]) -> tuple[str, dict[str, JsonValue]]:
     count_input: Final = _JSON_OBJECT.validate_python(count_body["input"])
     invoke: Final = count_input.get("invokeModel")
     if invoke is None:
-        return _JSON_OBJECT.validate_python(count_input["converse"])
+        return "converse", _JSON_OBJECT.validate_python(count_input["converse"])
     encoded: Final = _JSON_OBJECT.validate_python(invoke)["body"]
     assert isinstance(encoded, str), invoke
-    return _JSON_OBJECT.validate_json(base64.b64decode(encoded))
+    return "invokeModel", _JSON_OBJECT.validate_json(base64.b64decode(encoded))
 
 
 @pytest.mark.parametrize("request_body", _RUNTIME_COUNTED_OPTIONS.values(), ids=_RUNTIME_COUNTED_OPTIONS.keys())
@@ -1735,9 +1763,10 @@ def test_responses_input_tokens_sends_the_runtime_the_tools_without_the_options_
         assert _payload(response)["input_tokens"] == _RUNTIME_COUNT, response.text
         ((target, count_body),) = _runtime_count_requests(runtime)
         assert target == f"/model/{_SONNET}/count-tokens", target
-        counted: Final = json.dumps(_runtime_counted_request(count_body))
-        assert [field for field in _RUNTIME_REFUSED_FIELDS if f'"{field}"' in counted] == [], counted
-        assert ('"get_weather"' in counted) is ("tools" in request_body), counted
+        shape, counted = _runtime_counted_request(count_body)
+        allowed_fields, tools_field, weather_tools = _RUNTIME_COUNTED_SHAPES[shape]
+        assert set(counted) <= allowed_fields, counted
+        assert counted.get(tools_field) == (weather_tools if "tools" in request_body else None), counted
         assert mantle.drain() == ()
 
 

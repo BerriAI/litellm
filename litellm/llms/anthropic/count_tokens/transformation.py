@@ -161,6 +161,30 @@ def _has_non_chat_user_block(message: Mapping[str, object]) -> bool:
     return any(isinstance(block, dict) and block.get("type") not in ValidUserMessageContentTypes for block in blocks)
 
 
+_OPENAI_RESPONSES_BUILT_IN_TOOL_TYPES: Final = frozenset(
+    (
+        "apply_patch",
+        "code_interpreter",
+        "computer",
+        "computer_use_preview",
+        "file_search",
+        "image_generation",
+        "local_shell",
+        "mcp",
+        "shell",
+        "tool_search",
+        "web_search",
+        "web_search_2025_08_26",
+        "web_search_preview",
+        "web_search_preview_2025_03_11",
+    )
+)
+
+
+def _is_responses_built_in_tool(tool: Mapping[str, object]) -> bool:
+    return tool.get("type") in _OPENAI_RESPONSES_BUILT_IN_TOOL_TYPES
+
+
 def _gets_placeholder_name(tool: Mapping[str, object]) -> bool:
     from litellm.llms.anthropic.messages.adapters.transformation import is_provider_native_tool_dict
 
@@ -182,8 +206,8 @@ def _untranslatable_input(
     unnamed_tool: Final = next(filter(_gets_placeholder_name, tools), None)
     if unnamed_tool is not None:
         return ChatCountTranslationError(
-            message=f"Invalid request for token counting: tool type {unnamed_tool.get('type')!r} "
-            "has no Chat Completions equivalent"
+            message=f"Invalid request for token counting: LiteLLM cannot count a tool of type "
+            f"{unnamed_tool.get('type')!r} for this model"
         )
     return None
 
@@ -257,7 +281,7 @@ def anthropic_fields_for_chat_tool_use(
         not chat_params
         and not any(map(_is_chat_tool, counted_tools))
         and not any(map(_needs_chat_translation, messages))
-        and not any(map(_gets_placeholder_name, counted_tools))
+        and not any(map(_is_responses_built_in_tool, counted_tools))
     ):
         return None
     untranslatable: Final = _untranslatable_input(messages, counted_tools)
