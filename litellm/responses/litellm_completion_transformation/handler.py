@@ -73,6 +73,13 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
+        if previous_response_client_ids:
+            raise litellm.BadRequestError(
+                message="previous_response_id on the chat completions bridge is only supported by litellm.aresponses()",
+                model=model,
+                llm_provider=custom_llm_provider or "",
+            )
+
         completion_args: Final = {}
         completion_args.update(kwargs)
         completion_args.update(litellm_completion_request)

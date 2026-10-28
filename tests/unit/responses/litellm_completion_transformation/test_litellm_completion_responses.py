@@ -6853,6 +6853,7 @@ def test_compaction_replay_invents_no_call_for_an_output_whose_call_was_never_st
             litellm_completion_request=chat_request,
             instructions=None,
             session_lookup=no_stored_turns,
+            input_replaces_history=True,
         )
     )
 

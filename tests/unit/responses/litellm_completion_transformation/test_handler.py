@@ -22,7 +22,7 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
@@ -209,15 +209,19 @@ async def test_bridged_follow_up_turn_keeps_the_addressed_response_id_off_the_pr
     client: Final = AsyncHTTPHandler()
     client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
 
-    response = await litellm.aresponses(
-        model="azure_ai/claude-sonnet-4-6",
-        api_base="https://fake-foundry-resource.services.ai.azure.com",
-        api_key="fake-api-key",
-        input="Double it",
-        previous_response_id="resp_turn_one",
-        client=client,
-        **{ADDRESSED_RESPONSE_ID_FIELD: "resp_turn_one"},
-    )
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        SimpleNamespace(db=_StoredTurns((_stored_mcp_turn("resp_turn_one"),))),
+    ):
+        response = await litellm.aresponses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input="Double it",
+            previous_response_id="resp_turn_one",
+            client=client,
+            **{ADDRESSED_RESPONSE_ID_FIELD: "resp_turn_one"},
+        )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
     assert ADDRESSED_RESPONSE_ID_FIELD not in provider.request_body, (
@@ -309,4 +313,95 @@ async def test_bridged_next_turn_replays_a_turn_stored_under_the_id_the_client_h
         ("user", json.dumps([{"type": "text", "text": "My favorite number is 7."}])),
         ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
         ("user", json.dumps([{"type": "text", "text": "Double it"}])),
+    ]
+
+
+def _turn_stored_without_prompts(request_id: str) -> Mapping[str, object]:
+    return {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "turn-one-session",
+        "proxy_server_request": "{}",
+        "response": "{}",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prisma_client",
+    [
+        pytest.param(None, id="no_database"),
+        pytest.param(
+            SimpleNamespace(db=_StoredTurns((_turn_stored_without_prompts("resp_turn_one"),))),
+            id="prompts_not_stored",
+        ),
+    ],
+)
+async def test_bridged_follow_up_to_a_response_it_cannot_replay_is_rejected(prisma_client: SimpleNamespace | None):
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        pytest.raises(litellm.BadRequestError, match="previous_response_id was not found"),
+    ):
+        await litellm.aresponses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input="Double it",
+            previous_response_id="resp_turn_one",
+            client=client,
+        )
+
+    assert provider.request_body is None
+
+
+def test_sync_bridged_follow_up_is_rejected_instead_of_dropping_the_history():
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = HTTPHandler()
+    client.client = httpx.Client(transport=httpx.MockTransport(provider))
+
+    with pytest.raises(litellm.BadRequestError, match=r"only supported by litellm\.aresponses\(\)"):
+        litellm.responses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input="Double it",
+            previous_response_id="resp_turn_one",
+            client=client,
+        )
+
+    assert provider.request_body is None
+
+
+@pytest.mark.asyncio
+async def test_bridged_compaction_turn_without_stored_history_sends_only_its_own_input():
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    summary: Final = {"type": "compaction", "content": "My favorite number is 7."}
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        await litellm.aresponses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input=[
+                {"type": "compaction", "id": "cmp_turn_one", "encrypted_content": json.dumps(summary)},
+                {"role": "user", "content": "Double it"},
+            ],
+            previous_response_id="resp_turn_one",
+            client=client,
+        )
+
+    assert provider.request_body is not None, "the compaction turn never reached the provider"
+    assert [
+        (message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]
+    ] == [
+        (
+            "user",
+            json.dumps([{"type": "text", "text": "My favorite number is 7."}, {"type": "text", "text": "Double it"}]),
+        ),
     ]
