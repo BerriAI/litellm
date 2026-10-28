@@ -5,25 +5,27 @@ use litellm_cache_response::{CachePolicy, CacheScope, ScopedCache};
 use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host::{call::HostedMachine, protocol::Protocol};
-use litellm_host_python::{PythonBinding, PythonHostCalls, from_py, present};
-use litellm_http::transport::Error as TransportError;
-use litellm_inference::RouteError;
+use litellm_host_python::{PythonBinding, PythonHostCalls, from_py};
+use litellm_inference::Error;
 use litellm_secrets::source::SecretSource;
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use pyo3::{
+    gc::{PyTraverseError, PyVisit},
+    prelude::*,
+    types::PyDict,
+};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use super::NativeCall;
+use super::{NativeCall, RequestView};
 use crate::{
-    errors::{RustUpstreamError, route_error_to_pyerr},
+    errors::{RequestMarker, route_failure},
     marshal::{
-        RouteOptions, optional_timeout, project_optional_fields, public_response,
-        python_timeout_seconds,
+        ArgumentError, RouteOptions, optional_timeout, public_response, python_timeout_seconds,
     },
 };
 
 pub(super) struct InferenceHost {
-    pub request: Py<PyDict>,
+    view: RequestView,
     module: &'static str,
 }
 
@@ -34,16 +36,17 @@ pub(super) struct ProjectedCall {
 }
 
 impl InferenceHost {
-    pub fn new(request: Py<PyDict>, module: &'static str) -> Self {
-        Self { request, module }
+    pub fn new(view: RequestView, module: &'static str) -> Self {
+        Self { view, module }
     }
 
     pub fn project(
-        &self,
+        &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-        input: &str,
+        input: &'static str,
     ) -> PyResult<ProjectedCall> {
+        self.view.resolve(py, arguments)?;
         let argument = |name: &str| self.argument(py, arguments, name);
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
@@ -54,7 +57,7 @@ impl InferenceHost {
             .map(|value| python_timeout_seconds(py, value.unbind()))
             .transpose()?
             .flatten();
-        let model = string("model")?.ok_or_else(|| PyValueError::new_err("model is required"))?;
+        let model = string("model")?.ok_or(ArgumentError::Required("model"))?;
         let custom_llm_provider = string("custom_llm_provider")?;
         let provider = get_custom_llm_provider(&model, custom_llm_provider.as_deref())
             .map_or("", |resolved| resolved.custom_llm_provider);
@@ -79,10 +82,7 @@ impl InferenceHost {
                     .transpose()?,
                 timeout: optional_timeout(timeout),
             },
-            input: from_py(
-                &argument(input)?
-                    .ok_or_else(|| PyValueError::new_err(format!("{input} is required")))?,
-            )?,
+            input: from_py(&argument(input)?.ok_or(ArgumentError::Required(input))?)?,
             params,
         })
     }
@@ -93,7 +93,15 @@ impl InferenceHost {
         arguments: &Bound<'py, PyDict>,
         name: &str,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        present(arguments, self.request.bind(py), name)
+        self.view.argument(py, arguments, name)
+    }
+
+    pub fn close(&mut self) {
+        self.view.close();
+    }
+
+    pub fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        self.view.traverse(visit)
     }
 
     pub fn parameters(
@@ -101,42 +109,30 @@ impl InferenceHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Map<String, Value>> {
-        let names: Vec<String> = py.import(self.module)?.getattr("PARAMETERS")?.extract()?;
-        project_optional_fields(names.iter().map(String::as_str), |name| {
-            self.argument(py, arguments, name)
-        })
+        self.view.body_params(py, arguments, self.module)
     }
 
     pub fn response(&self, py: Python<'_>, response: &impl Serialize) -> PyResult<Py<PyAny>> {
         public_response(py, self.module, response)
     }
 
-    pub fn error(&self, py: Python<'_>, error: RouteError) -> PyResult<PyErr> {
-        if let RouteError::Secret(source) = &error
-            && let Some(original) = crate::secrets::python_error(py, source.source_error())
-        {
-            return Ok(original);
-        }
-        let native = match error {
-            RouteError::Transport(TransportError::Http { status, body }) => {
-                let error = RustUpstreamError::new_err((status, body));
-                error
-                    .value(py)
-                    .setattr("headers", Vec::<(String, String)>::new())?;
-                error
-            }
-            other => route_error_to_pyerr(other),
-        };
-        let mapped = py
-            .import(self.module)?
-            .getattr("map_failure")?
-            .call1((native.value(py), self.request.bind(py)))?;
-        Ok(PyErr::from_value(mapped))
+    pub fn error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
+        route_failure(py, error, RequestMarker::Unmarked, |native| {
+            let mapped = py
+                .import(self.module)?
+                .getattr("map_failure")?
+                .call1((native.value(py), self.view.request(py)?))?;
+            Ok(PyErr::from_value(mapped))
+        })
     }
 }
 
+pub(super) fn host_call_error(_: &PyErr) -> Error {
+    Error::invalid_request(litellm_llms::ErrorDetail::HostCall)
+}
+
 pub(super) trait InferenceRoute: Sized + 'static {
-    type Protocol: Protocol<Error = RouteError>;
+    type Protocol: Protocol<Error = Error>;
     const OPERATION: LoggingOperation;
     const SYNC_CALL_TYPE: &'static str;
     const ASYNC_CALL_TYPE: &'static str;
@@ -169,7 +165,6 @@ where
     } else {
         R::SYNC_CALL_TYPE
     };
-    crate::cache::admit_native(py, &call.kwargs, call_type)?;
     let (arguments, hooks) = super::call_hooks(py, R::OPERATION, &call, asynchronous)?;
     super::run_public_call(
         py,

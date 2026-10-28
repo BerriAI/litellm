@@ -9,12 +9,14 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIError,
+    VertexAIModelRoute,
     convert_vertex_datetime_to_openai_datetime,
+    get_vertex_ai_model_route,
 )
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
 from litellm.types.llms.openai import BatchJobStatus, CreateBatchRequest
 from litellm.types.llms.vertex_ai import *
-from litellm.types.llms.vertex_ai import GenerateContentResponseBody
+from litellm.types.llms.vertex_ai import GenerateContentResponseBody, VertexPartnerProvider
 from litellm.types.utils import LiteLLMBatch, ModelInfo, Usage
 
 _NATIVE_VERTEX_RESPONSE: Final = TypeAdapter(GenerateContentResponseBody)
@@ -25,10 +27,15 @@ _ANTHROPIC_PUBLISHER_MODEL_PATH: Final = "publishers/anthropic/models/"
 
 def is_vertex_anthropic_batch_model(model: str) -> bool:
     """
-    Whether a Vertex batch model (bare, `vertex_ai/`-prefixed or a publisher path) is a Claude model. Vertex
-    batches Claude only as `publishers/anthropic/models/<model>` with rows in Anthropic's Messages shape
+    Whether a Vertex batch model (bare, `vertex_ai/`-prefixed or a publisher path) is a Claude model, decided the
+    way Vertex chat routes Claude. Vertex batches Claude only as `publishers/anthropic/models/<model>` with rows in
+    Anthropic's Messages shape
     """
-    return _ANTHROPIC_PUBLISHER_MODEL_PATH in model or model.rsplit("/", 1)[-1].lower().startswith("claude")
+    bare_model: Final = model.rsplit("/", 1)[-1]
+    return _ANTHROPIC_PUBLISHER_MODEL_PATH in model or (
+        get_vertex_ai_model_route(bare_model) is VertexAIModelRoute.PARTNER_MODELS
+        and VertexPartnerProvider.claude.value in bare_model
+    )
 
 
 def as_json_object(value: object) -> Mapping[str, object] | None:
@@ -74,6 +81,8 @@ class NativeVertexBatchCostCalculator(Protocol):
         model: str,
         custom_llm_provider: str | None = None,
         model_info: ModelInfo | None = None,
+        *,
+        vertex_location: str | None = None,
     ) -> tuple[float, float]: ...
 
 
@@ -113,6 +122,7 @@ def native_vertex_batch_row_stats(
     model_info: ModelInfo | None,
     calculate_usage: Callable[[GenerateContentResponseBody], Usage],
     cost_calculator: NativeVertexBatchCostCalculator,
+    vertex_location: str | None = None,
 ) -> NativeVertexBatchRowStats | None:
     """
     Usage and cost of one native Vertex predictions.jsonl row, a
@@ -147,7 +157,11 @@ def native_vertex_batch_row_stats(
         )
     try:
         prompt_cost, completion_cost = cost_calculator(
-            usage=usage, model=model, custom_llm_provider="vertex_ai", model_info=model_info
+            usage=usage,
+            model=model,
+            custom_llm_provider="vertex_ai",
+            model_info=model_info,
+            vertex_location=vertex_location,
         )
     except Exception as e:  # noqa: BLE001  # one unpriceable row must not abort the batch's cost accounting
         verbose_logger.warning(
@@ -191,14 +205,6 @@ class VertexAIBatchTransformation:
             vertex_project=vertex_project,
             vertex_location=vertex_location,
         )
-        if vertex_location == "global" and is_vertex_anthropic_batch_model(model):
-            raise VertexAIError(
-                status_code=400,
-                message=(
-                    f"Vertex AI does not run Claude batch jobs ('{model}') on the global endpoint. "
-                    "Set `vertex_location` on the deployment to a region that serves the model, e.g. us-east5"
-                ),
-            )
         output_config: Final[OutputConfig] = OutputConfig(
             predictionsFormat="jsonl",
             gcsDestination=GcsDestination(outputUriPrefix=cls._get_gcs_uri_prefix_from_file(input_file_id)),
@@ -229,7 +235,7 @@ class VertexAIBatchTransformation:
     @classmethod
     def transform_vertex_ai_batch_list_response_to_openai_list_response(
         cls, response: dict[str, Any]
-    ) -> dict[str, Any]:
+    ) -> Mapping[str, object]:
         """
         Transforms Vertex AI batch list response into OpenAI-compatible list response.
         """

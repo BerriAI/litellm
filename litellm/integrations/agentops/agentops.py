@@ -4,10 +4,15 @@ AgentOps integration for LiteLLM - Provides OpenTelemetry tracing for LLM calls
 
 import os
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Final
+
+from pydantic import TypeAdapter
 
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 @dataclass
@@ -58,9 +63,10 @@ class AgentOps(OpenTelemetry):
         project_id = None
         if config.api_key:
             try:
-                response: Final = self._fetch_auth_token(config.api_key, config.auth_endpoint)
-                jwt_token = response.get("token")
-                project_id = response.get("project_id")
+                response: Final = as_str_mapping(self._fetch_auth_token(config.api_key, config.auth_endpoint))
+                if response is not None:
+                    jwt_token = response.get("token")
+                    project_id = response.get("project_id")
             except Exception:
                 pass
 
@@ -78,12 +84,9 @@ class AgentOps(OpenTelemetry):
             "telemetry.sdk.name": "agentops",
         }
 
-        if project_id:
-            resource_attrs["project.id"] = project_id
+        self.resource_attributes = {**resource_attrs, "project.id": project_id} if project_id else resource_attrs
 
-        self.resource_attributes = resource_attrs
-
-    def _fetch_auth_token(self, api_key: str, auth_endpoint: str) -> dict[str, Any]:
+    def _fetch_auth_token(self, api_key: str, auth_endpoint: str) -> object:
         """
         Fetch JWT authentication token from AgentOps API
 
@@ -111,6 +114,6 @@ class AgentOps(OpenTelemetry):
             if response.status_code != 200:
                 raise Exception(f"Failed to fetch auth token: {response.text}")
 
-            return response.json()
+            return _DECODED_JSON.validate_python(response.json())
         finally:
             client.close()

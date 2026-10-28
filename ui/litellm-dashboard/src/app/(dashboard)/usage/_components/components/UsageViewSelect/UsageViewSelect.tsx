@@ -1,3 +1,4 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { BarChart3, Bot, Building2, Globe, LineChart, ShoppingCart, Tags, User, Users } from "lucide-react";
 import React from "react";
 import { Badge } from "@/components/ui/badge";
@@ -104,6 +105,27 @@ const OPTIONS: OptionConfig[] = [
     adminOnly: true,
   },
 ];
+const visibleOptions = (userRole: string | null, canViewTagUsage: boolean, isOrgAdmin: boolean): OptionConfig[] => {
+  const isAdmin = all_admin_roles.includes(userRole ?? "");
+  return OPTIONS.filter((option) => {
+    if (option.capability) {
+      return hasCapability(userRole, option.capability, isOrgAdmin);
+    }
+    if (option.value === "tag" && canViewTagUsage) {
+      return true;
+    }
+    return !(option.adminOnly && !isAdmin);
+  });
+};
+
+export const USAGE_OPTIONS: readonly UsageOption[] = OPTIONS.map((option) => option.value);
+
+export const allowedUsageOptions = (
+  userRole: string | null,
+  canViewTagUsage: boolean,
+  isOrgAdmin: boolean,
+): readonly UsageOption[] => visibleOptions(userRole, canViewTagUsage, isOrgAdmin).map((option) => option.value);
+
 export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   value,
   onChange,
@@ -114,20 +136,10 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   description = "Select the usage data you want to view",
   "data-id": dataId,
 }) => {
+  const term = useTerminology();
   const isAdmin = all_admin_roles.includes(userRole ?? "");
   const getFilteredOptions = () => {
-    return OPTIONS.filter((option) => {
-      if (option.capability) {
-        return hasCapability(userRole, option.capability, isOrgAdmin);
-      }
-      if (option.value === "tag" && canViewTagUsage) {
-        return true;
-      }
-      if (option.adminOnly && !isAdmin) {
-        return false;
-      }
-      return true;
-    }).map((option) => {
+    return visibleOptions(userRole, canViewTagUsage, isOrgAdmin).map((option) => {
       let label = option.label;
       let desc = option.description;
       if (option.showForAdmin && option.showForNonAdmin) {
@@ -139,7 +151,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
       return {
         value: option.value,
         label,
-        description: desc,
+        description: term(desc),
         icon: option.icon,
         badgeText: option.badgeText,
       };

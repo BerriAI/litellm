@@ -6,13 +6,16 @@ Includes tests for Vertex AI batch output transformation to OpenAI format.
 import json
 import urllib.parse
 from collections.abc import Mapping
+from typing import Final
 from types import MappingProxyType
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 from unittest.mock import MagicMock
 
+import litellm
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
     _get_litellm_batch_custom_id_from_labels,
@@ -1638,6 +1641,45 @@ class TestVertexResponsesBatchInputTranslation:
         assert request["contents"] == [{"role": "user", "parts": [{"text": "ping"}]}]
 
 
+_PRIORITY_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "level": {"type": "integer", "enum": [1, 2, 5]},
+        "mode": {"type": "string", "enum": ["fast", "slow"]},
+    },
+}
+
+
+class TestVertexBatchIntegerEnums:
+    """
+    Vertex batch reads each row's string enum values back as numbers and then fails the
+    row, so batch rows drop integer enums on every model, as before Gemini 3 sent them.
+    """
+
+    @pytest.mark.parametrize("model", ["gemini-3.8-flash", "vertex-batch-alias"])
+    def test_tool_rows_drop_integer_enums_and_keep_string_enums(self, model: str):
+        (row,) = _wrap_entries(
+            [
+                {
+                    "custom_id": "enum-1",
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "model": model,
+                        "messages": [{"role": "user", "content": "Set priority 3"}],
+                        "tools": [
+                            {"type": "function", "function": {"name": "set_priority", "parameters": _PRIORITY_SCHEMA}}
+                        ],
+                    },
+                }
+            ]
+        )
+
+        properties: Final = row["request"]["tools"][0]["function_declarations"][0]["parameters"]["properties"]
+        assert "enum" not in properties["level"]
+        assert properties["mode"]["enum"] == ["fast", "slow"]
+
+
 class TestVertexEmbeddingsBatchOutputTranslation:
     """Vertex Gemini Embedding batch output rows must come back as OpenAI batch rows."""
 
@@ -1979,7 +2021,8 @@ def _uploaded_rows(config: VertexAIFilesConfig, litellm_params: Mapping[str, obj
 def _claude_output_row(custom_id: str, text: str) -> dict:
     return {
         "custom_id": custom_id,
-        "request": {"messages": [{"role": "user", "content": "hi"}], "anthropic_version": "vertex-2023-10-16"},
+        "status": "",
+        "processed_time": "2026-10-28T20:37:47.634+00:00",
         "response": {
             "id": "msg_vrtx_01",
             "type": "message",
@@ -2054,6 +2097,29 @@ class TestVertexClaudeBatch:
         assert row["request"]["system"] == [{"type": "text", "text": "be brief"}]
         assert [message["role"] for message in row["request"]["messages"]] == ["user"]
 
+    def test_claude_row_drops_an_unsupported_param_under_deployment_drop_params(self, config, monkeypatch):
+        monkeypatch.setitem(litellm.model_cost, "claude-zeta-9", {"supports_sampling_params": False})
+        monkeypatch.setattr(litellm, "drop_params", False)
+        entry = _claude_chat_entry("r1", "hi", max_tokens=10, top_p=0.5)
+
+        (row,) = _uploaded_rows(
+            config, {**CLAUDE_DEPLOYMENT, "model": "vertex_ai/claude-zeta-9", "drop_params": True}, [entry]
+        )
+
+        assert row["request"]["max_tokens"] == 10
+        assert "top_p" not in row["request"]
+
+    def test_claude_row_with_an_unsupported_param_is_refused_without_drop_params(self, config, monkeypatch):
+        from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+        monkeypatch.setitem(litellm.model_cost, "claude-zeta-9", {"supports_sampling_params": False})
+        monkeypatch.setattr(litellm, "drop_params", False)
+        entry = _claude_chat_entry("r1", "hi", max_tokens=10, top_p=0.5)
+
+        with pytest.raises(VertexAIError, match=r"line 1 .*top_p=0.5.*drop_params") as exc_info:
+            _uploaded_rows(config, {**CLAUDE_DEPLOYMENT, "model": "vertex_ai/claude-zeta-9"}, [entry])
+        assert exc_info.value.status_code == 400
+
     def test_claude_deployment_wins_over_a_gemini_body_model(self, config):
         entry = _claude_chat_entry("r1", "hi", max_tokens=10)
         entry["body"]["model"] = "gemini-2.5-flash"
@@ -2098,33 +2164,32 @@ class TestVertexClaudeBatch:
         ]
         assert {body["model"] for body in bodies} == {"claude-sonnet-4-6"}
 
-    @pytest.mark.parametrize(
-        "failed_row",
-        [
-            {
-                "custom_id": "bad",
-                "request": {"messages": [], "anthropic_version": "vertex-2023-10-16"},
-                "response": {"type": "error", "error": {"type": "invalid_request_error", "message": "too long"}},
-            },
-            {
-                "custom_id": "bad",
-                "request": {"messages": [], "anthropic_version": "vertex-2023-10-16"},
-                "status": "invalid_request_error: too long",
-            },
-        ],
-    )
-    def test_failed_claude_output_row_is_an_openai_error_row(self, config, failed_row):
-        content = json.dumps(_claude_output_row("ok", "fine")).encode() + b"\n" + json.dumps(failed_row).encode()
+    @pytest.mark.parametrize("failed_first", [False, True])
+    def test_failed_claude_output_row_is_an_openai_error_row(self, config, failed_first):
+        failed_row = {
+            "custom_id": "bad",
+            "status": 'Bad Request: {"type": "error", "error": {"type": "invalid_request_error", "message": "too long"}}',
+            "processed_time": "2026-10-28T20:37:48.413+00:00",
+            "response": {},
+        }
+        rows_in = (failed_row, _claude_output_row("ok", "fine"))
+        content = b"\n".join(json.dumps(row).encode() for row in (rows_in if failed_first else rows_in[::-1]))
 
-        ok_row, bad_row = (
-            json.loads(line) for line in config._try_transform_vertex_batch_output_to_openai(content).splitlines()
-        )
+        rows_out = {
+            row["custom_id"]: row
+            for row in (json.loads(line) for line in config._try_transform_vertex_batch_output_to_openai(content).splitlines())
+        }
 
-        assert ok_row["response"]["body"]["choices"][0]["message"]["content"] == "fine"
-        assert bad_row["custom_id"] == "bad"
-        assert bad_row["response"] is None
-        assert bad_row["error"]["code"] == "vertex_ai_error"
-        assert "too long" in bad_row["error"]["message"]
+        assert rows_out["ok"]["response"]["body"]["choices"][0]["message"]["content"] == "fine"
+        assert rows_out["bad"]["response"] is None
+        assert rows_out["bad"]["error"]["code"] == "vertex_ai_error"
+        assert "too long" in rows_out["bad"]["error"]["message"]
+
+    def test_claude_input_file_read_back_is_returned_unchanged(self, config):
+        (row,) = _uploaded_rows(config, CLAUDE_DEPLOYMENT, [_claude_chat_entry("r1", "hi", max_tokens=10)])
+        content = json.dumps(row).encode()
+
+        assert config._try_transform_vertex_batch_output_to_openai(content) == content
 
     def test_malformed_claude_message_fails_only_its_own_row(self, config):
         malformed = _claude_output_row("bad", "unused")
@@ -2166,3 +2231,58 @@ class TestVertexClaudeBatch:
         (row,) = (json.loads(line) for line in body.splitlines())
         assert row["custom_id"] == "a"
         assert row["response"]["body"]["choices"][0]["message"]["content"] == "first"
+
+
+_SAMPLING_KNOBS: Final = MappingProxyType({"temperature": 0, "top_p": 0.5, "top_k": 3})
+
+
+def _chat_entry(model: str, knobs: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "custom_id": "request-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5, **knobs},
+        }
+    )
+
+
+def _generation_config(row: Mapping[str, object]) -> object:
+    request: Final = TypeAdapter(dict[str, object]).validate_python(row["request"])
+    return request["generationConfig"]
+
+
+def _flag_model_as_no_sampling(monkeypatch: pytest.MonkeyPatch, model: str) -> None:
+    monkeypatch.setitem(litellm.model_cost, model, {"supports_sampling_params": False})
+
+
+def test_batch_row_for_a_flagged_gemini_model_raises_a_400_naming_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A batch file row gets the same contract as a real-time call: the knobs Google ignores are refused
+    with a 400 that names drop_params instead of silently vanishing from the uploaded row"""
+    _flag_model_as_no_sampling(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"temperature, top_p, top_k.*drop_params"):
+        _wrap_entries([_chat_entry("gemini-zeta-9", _SAMPLING_KNOBS)])
+
+
+def test_batch_row_with_null_knobs_for_a_flagged_gemini_model_is_not_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A null knob means no override, the same as on a real-time call, so it must not fail the upload"""
+    _flag_model_as_no_sampling(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    (row,) = _wrap_entries([_chat_entry("gemini-zeta-9", {"temperature": None, "top_p": None, "top_k": None})])
+    assert _generation_config(row) == {"max_output_tokens": 5}
+
+
+def test_batch_row_for_a_flagged_gemini_model_drops_the_knobs_under_global_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _flag_model_as_no_sampling(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", True)
+    (row,) = _wrap_entries([_chat_entry("gemini-zeta-9", _SAMPLING_KNOBS)])
+    assert _generation_config(row) == {"max_output_tokens": 5}
+
+
+def test_batch_row_for_an_unflagged_gemini_model_keeps_the_knobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    (row,) = _wrap_entries([_chat_entry("gemini-2.5-flash", _SAMPLING_KNOBS)])
+    assert _generation_config(row) == {"max_output_tokens": 5, **_SAMPLING_KNOBS}

@@ -15,10 +15,6 @@ def mock_credentials_client(monkeypatch):
     """Patch the CredentialsManagementClient used by the CLI commands."""
     mock_client = MagicMock()
     monkeypatch.setattr(
-        "litellm.proxy.client.credentials.CredentialsManagementClient",
-        mock_client,
-    )
-    monkeypatch.setattr(
         "litellm.proxy.client.cli.commands.credentials.CredentialsManagementClient",
         mock_client,
     )

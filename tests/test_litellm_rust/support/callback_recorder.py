@@ -3,6 +3,7 @@ import copy
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Final
 
 from litellm.integrations.custom_logger import CustomLogger
@@ -99,3 +100,63 @@ class RecordingLogger(CustomLogger):
     def logging_hook(self, kwargs, result, call_type):
         self._record("logging_hook", kwargs, result)
         return kwargs, result
+
+
+class HookRecorder(RecordingLogger):
+    def log_post_api_call(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self._record("log_post_api_call", kwargs, response_obj)
+
+    async def async_logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
+        self._record("async_logging_hook", kwargs, result)
+        return kwargs, result
+
+    def redact_standard_logging_payload_from_model_call_details(
+        self, model_call_details: dict[str, object]
+    ) -> dict[str, object]:
+        self._record("redact_standard_logging_payload_from_model_call_details", model_call_details)
+        return model_call_details
+
+    async def async_pre_call_deployment_hook(self, kwargs: dict[str, object], call_type: object) -> dict[str, object]:
+        self._record("async_pre_call_deployment_hook", kwargs)
+        return kwargs
+
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: object, call_type: object
+    ) -> object:
+        self._record("async_post_call_success_deployment_hook", request_data, response)
+        return response
+
+    async def async_post_call_failure_deployment_hook(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        call_type: object,
+        *,
+        fallback_depth: int | None = None,
+    ) -> None:
+        self._record("async_post_call_failure_deployment_hook", request_data, original_exception)
+
+    async def log_model_group_rate_limit_error(
+        self, exception: Exception, original_model_group: str | None, kwargs: dict[str, object]
+    ) -> None:
+        self._record("log_model_group_rate_limit_error", kwargs, exception)
+
+
+def request_body(kwargs: dict[str, object]) -> dict[str, object]:
+    additional_args = kwargs["additional_args"]
+    assert isinstance(additional_args, dict)
+    body = additional_args["complete_input_dict"]
+    assert isinstance(body, dict)
+    return body
+
+
+def request_headers(kwargs: dict[str, object]) -> dict[str, object]:
+    additional_args = kwargs["additional_args"]
+    assert isinstance(additional_args, dict)
+    headers = additional_args["headers"]
+    assert isinstance(headers, dict)
+    return headers

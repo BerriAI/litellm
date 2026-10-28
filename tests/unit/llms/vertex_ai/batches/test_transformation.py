@@ -24,10 +24,7 @@ from litellm.llms.vertex_ai.batches.transformation import (  # noqa: E402
     is_vertex_anthropic_batch_model,
     native_vertex_batch_row_stats,
 )
-from litellm.llms.vertex_ai.common_utils import (  # noqa: E402
-    VertexAIError,
-    convert_vertex_datetime_to_openai_datetime,
-)
+from litellm.llms.vertex_ai.common_utils import VertexAIError  # noqa: E402
 from litellm.types.utils import LiteLLMBatch  # noqa: E402
 
 T = VertexAIBatchTransformation
@@ -144,10 +141,7 @@ def test_transform_vertex_response_full_mapping():
     assert isinstance(batch, LiteLLMBatch)
     assert batch.id == "3814889423749775360"
     assert batch.completion_window == "24h"
-    # created_at is parsed via the shared helper (uses local tz); assert the
-    # transform forwards createTime through that helper rather than a hardcoded
-    # epoch that would be tz-dependent
-    assert batch.created_at == convert_vertex_datetime_to_openai_datetime("2024-12-04T21:53:12.120184Z")
+    assert batch.created_at == 1733349192
     assert batch.endpoint == ""
     assert batch.object == "batch"
     assert batch.input_file_id == "gs://bucket/in.jsonl"
@@ -515,22 +509,6 @@ def test_claude_batch_job_targets_the_anthropic_publisher_model():
     assert job["model"] == "publishers/anthropic/models/claude-sonnet-4-6"
 
 
-def test_claude_batch_job_on_the_global_location_fails_fast_with_400():
-    with pytest.raises(VertexAIError) as exc_info:
-        T.transform_openai_batch_request_to_vertex_ai_batch_request(
-            {"input_file_id": CLAUDE_INPUT_FILE}, vertex_project="p", vertex_location="global"
-        )
-    assert exc_info.value.status_code == 400
-    assert "vertex_location" in exc_info.value.message
-
-
-def test_gemini_batch_job_on_the_global_location_is_still_allowed():
-    job = T.transform_openai_batch_request_to_vertex_ai_batch_request(
-        {"input_file_id": INPUT_FILE}, vertex_project="p", vertex_location="global"
-    )
-    assert job["model"] == "publishers/google/models/gemini-1.5-flash-001"
-
-
 @pytest.mark.parametrize(
     ("model", "expected"),
     [
@@ -548,7 +526,7 @@ def test_is_vertex_anthropic_batch_model(model: str, expected: bool):
 def test_claude_output_row_is_costed_from_anthropic_usage_and_its_own_model():
     priced_models: Final[list[str]] = []
 
-    def cost_calculator(usage, model, custom_llm_provider=None, model_info=None) -> tuple[float, float]:
+    def cost_calculator(usage, model, custom_llm_provider=None, model_info=None, vertex_location=None) -> tuple[float, float]:
         priced_models.append(model)
         return usage.prompt_tokens * 0.001, usage.completion_tokens * 0.002
 
