@@ -30,6 +30,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.dual_cache import DualCache
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -65,6 +66,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.utils import ProxyLogging
 from litellm.types import utils as types_utils
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -442,7 +444,7 @@ async def test_pass_through_request_failure_handler():
 
     assert failure["user_api_key_dict"] is user_api_key_dict
     assert failure["original_exception"] is request_failure
-    assert "traceback_str" in failure
+    assert "Request failed" in failure["traceback_str"]
     assert failure["request_data"]["contents"] == "not a list"
     assert failure["request_data"]["model"] == ""
 
@@ -8528,6 +8530,24 @@ _RELAYED_VERTEX_COUNT_TOKENS_TARGET = (
 )
 
 
+class _FailureHookRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.failures = []
+
+    async def async_post_call_failure_hook(
+        self, request_data, original_exception, user_api_key_dict, traceback_str=None
+    ):
+        self.failures.append(
+            {
+                "request_data": request_data,
+                "original_exception": original_exception,
+                "user_api_key_dict": user_api_key_dict,
+                "traceback_str": traceback_str,
+            }
+        )
+
+
 async def _run_passthrough_failure(
     target: str,
     custom_llm_provider: str | None,
@@ -8535,21 +8555,22 @@ async def _run_passthrough_failure(
     stream: bool = False,
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ) -> dict:
+    recorder = _FailureHookRecorder()
     with (
-        pytest.MonkeyPatch.context() as transport_patch,
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        pytest.MonkeyPatch.context() as litellm_patch,
+        patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside pass_through_request; there is no injection seam
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+        ),
         respx.mock(assert_all_called=False) as upstream_mock,
     ):
-        transport_patch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm_patch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm_patch.setattr(litellm, "callbacks", [recorder])
         litellm.in_memory_llm_clients_cache.flush_cache()
         upstream_route = upstream_mock.route(method="POST")
         if isinstance(upstream, Exception):
             upstream_route.mock(side_effect=upstream)
         else:
             upstream_route.mock(return_value=upstream)
-        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
-        mock_proxy_logging.post_call_failure_hook = AsyncMock()
-        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
         proxy_url = httpx.URL(target.replace("https://", "http://test-proxy.com/"))
@@ -8574,8 +8595,8 @@ async def _run_passthrough_failure(
             pass
         await asyncio.sleep(0)
         litellm.in_memory_llm_clients_cache.flush_cache()
-        mock_proxy_logging.post_call_failure_hook.assert_called_once()
-        return mock_proxy_logging.post_call_failure_hook.call_args.kwargs
+    assert len(recorder.failures) == 1
+    return recorder.failures[0]
 
 
 def _upstream_400(target: str) -> httpx.Response:
