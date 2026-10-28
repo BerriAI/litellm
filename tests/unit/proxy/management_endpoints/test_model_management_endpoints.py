@@ -1734,7 +1734,13 @@ class TestUpdateModel:
 
     @pytest.mark.asyncio
     async def test_update_model_persists_sent_model_info_over_stored_fields(self):
-        stored: Final = {"id": "m1", "db_model": True, "base_model": "my-deployment", "tier": "paid", "team_id": "team-a"}
+        stored: Final = {
+            "id": "m1",
+            "db_model": True,
+            "base_model": "my-deployment",
+            "tier": "paid",
+            "team_id": "team-a",
+        }
 
         db: Final = await self._update_model(
             stored,
@@ -1905,7 +1911,9 @@ class TestUpdateModel:
                 access_via_team_ids=["team-a"],
             ),
             litellm_params=_LOCAL_DEPLOYMENT_PARAMS,
-            upstream_model_card=MappingProxyType({"id": "local-model", "max_model_len": 128000, "max_output_tokens": 32000}),
+            upstream_model_card=MappingProxyType(
+                {"id": "local-model", "max_model_len": 128000, "max_output_tokens": 32000}
+            ),
         )
 
         persisted: Final = db.row.model_info
