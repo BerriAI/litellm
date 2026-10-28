@@ -2,6 +2,7 @@ import itertools
 import json
 import uuid
 from collections.abc import Generator, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
@@ -23,7 +24,7 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows, scratch_database, write_rows
 from integration._support.database_relay import dropped_connection_relay, plaintext_database_url
-from integration._support.process import graceful_stop_seconds, owned_proxy
+from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 from websockets.exceptions import InvalidStatus
@@ -780,6 +781,31 @@ def _worker_statuses(rig: Rig, key: str) -> tuple[int, ...]:
     return tuple(_chat(rig, key, None, Connection="close").status_code for _ in range(WORKER_PROBES))
 
 
+def _mappings_on_a_worker(proxy: Gateway) -> tuple[int, JsonValue]:
+    response: Final = proxy.request(
+        "GET",
+        "/health/integration-general-setting",
+        params={"name": "request_tag_mappings"},
+        headers={"connection": "close"},
+    )
+    assert response.status_code == 200, response.text
+    return int(response.headers["x-integration-worker-pid"]), JSON_OBJECT.validate_json(response.content)["value"]
+
+
+def _mappings_settled_on_every_worker(owned: OwnedProxy, mappings: JsonValue) -> None:
+    def answers() -> tuple[tuple[int, JsonValue], ...]:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            return tuple(pool.map(lambda _: _mappings_on_a_worker(owned.gateway), range(16)))
+
+    eventually(
+        answers,
+        lambda found: (
+            frozenset(pid for pid, _ in found) >= owned.worker_pids() and all(value == mappings for _, value in found)
+        ),
+        seconds=70,
+    )
+
+
 def test_mappings_saved_through_the_settings_endpoint_apply_on_every_worker_and_an_invalid_stored_value_is_ignored(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -788,7 +814,8 @@ def test_mappings_saved_through_the_settings_endpoint_apply_on_every_worker_and_
     with ExitStack() as stack:
         provider: Final = stack.enter_context(wire_server(_provider))
         config: Final = _write_config(tmp_path, [_deployment(f"chat-{marker}", provider)], {}, {})
-        proxy: Final = stack.enter_context(owned_proxy(gateway, tmp_path, {}, config=config, workers=2))
+        owned: Final = stack.enter_context(owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2))
+        proxy: Final = owned.gateway
         database_url: Final = proxy.database_url
         assert database_url is not None
         scenario: Final = stack.enter_context(proxy.scenario())
@@ -807,7 +834,8 @@ def test_mappings_saved_through_the_settings_endpoint_apply_on_every_worker_and_
         assert _general_settings_mappings(database_url) is None
         saved: Final = save([rule])
         assert saved.status_code == 200, saved.text
-        eventually(lambda: _worker_statuses(rig, key), lambda statuses: statuses == (400,) * WORKER_PROBES, seconds=70)
+        _mappings_settled_on_every_worker(owned, [rule])
+        assert _worker_statuses(rig, key) == (400,) * WORKER_PROBES
         tagged_key: Final = scenario.key()
         provider.drain()
         admitted: Final = _chat(rig, tagged_key, f"tenant={marker}")
@@ -821,7 +849,8 @@ def test_mappings_saved_through_the_settings_endpoint_apply_on_every_worker_and_
             ("{request_tag_mappings}", json.dumps([{"key": "tenant", "required": True}]), "general_settings"),
             database_url=database_url,
         )
-        eventually(lambda: _worker_statuses(rig, key), lambda statuses: statuses == (200,) * WORKER_PROBES, seconds=70)
+        _mappings_settled_on_every_worker(owned, None)
+        assert _worker_statuses(rig, key) == (200,) * WORKER_PROBES
 
 
 def _rejected_client_tag(client_tag: RejectedClientTag, tag: str) -> tuple[Mapping[str, JsonValue], Mapping[str, str]]:
