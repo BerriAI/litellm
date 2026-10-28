@@ -6456,6 +6456,9 @@ class Router:
         hop_kwargs: Final = mid_stream_fallback_hop_kwargs(
             model=model, original_generic_function=original_generic_function, controls=controls, kwargs=kwargs
         )
+        shared_logging: Final = kwargs.get("litellm_logging_obj")
+        if isinstance(shared_logging, LiteLLMLogging):
+            shared_logging.carry_failed_attempt_usage()
         response: Final = await self._ageneric_api_call_with_fallbacks_helper(
             model=model, original_generic_function=original_generic_function, **kwargs
         )
@@ -11846,6 +11849,11 @@ class Router:
         with self._deployment_index_lock:
             indices: Final = self.model_name_to_deployment_indices.get(model_name)
             return None if indices is None else tuple(self.model_list[idx] for idx in indices)
+
+    def team_public_model_names_of(self, team_id: str) -> frozenset[str]:
+        """The public names `team_id` serves its own deployments under."""
+        with self._deployment_index_lock:
+            return frozenset(name for owner, name in self.team_model_to_deployment_indices if owner == team_id)
 
     def _team_deployments_named(self, team_id: str, public_model_name: str) -> tuple[DeploymentTypedDict, ...] | None:
         """The deployments `team_id` serves under `public_model_name`, or None when that pair is not indexed."""

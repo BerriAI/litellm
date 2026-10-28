@@ -1126,6 +1126,36 @@ def test_arouter_test_team_model():
     assert result is not None
 
 
+def test_team_public_model_names_of_lists_only_that_teams_live_public_names():
+    def team_deployment(deployment_id: str, team_id: str, public_model_name: str) -> DeploymentTypedDict:
+        return {
+            "model_name": f"model_name_{team_id}_{deployment_id}",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+            "model_info": {"id": deployment_id, "team_id": team_id, "team_public_model_name": public_model_name},
+        }
+
+    router: Final = litellm.Router(
+        model_list=[
+            team_deployment("team-a-1", "team-a", "shared-model"),
+            team_deployment("team-a-2", "team-a", "shared-model"),
+            team_deployment("team-a-solo", "team-a", "solo-model"),
+            team_deployment("team-b-1", "team-b", "team-b-model"),
+            {
+                "model_name": "plain-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                "model_info": {"id": "plain-1"},
+            },
+        ],
+    )
+
+    assert router.team_public_model_names_of("team-a") == frozenset({"shared-model", "solo-model"})
+    assert router.team_public_model_names_of("team-c") == frozenset()
+
+    router.delete_deployment(id="team-a-solo")
+
+    assert router.team_public_model_names_of("team-a") == frozenset({"shared-model"})
+
+
 def test_team_model_has_alternatives():
     def team_deployment(
         deployment_id: str, team_id: str, public_model_name: str, blocked: bool = False
@@ -3771,6 +3801,132 @@ async def test_continued_stream_sharing_the_proxy_logging_object_bills_the_cut_t
     )
     assert recorder.successes[-1]["response_cost"] == pytest.approx(
         failure["response_cost"] + backup_prompt_cost + backup_completion_cost
+    )
+
+
+def _responses_sse(*events: Mapping[str, object]) -> str:
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+
+def _responses_envelope(response_id: str, model: str, status: str, **fields: object) -> dict[str, object]:
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": 1700000000,
+        "status": status,
+        "model": model,
+        "output": [],
+        **fields,
+    }
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_sharing_the_proxy_logging_object_logs_the_fallback_usage(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post("https://primary.example/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_responses_sse(
+                {"type": "response.created", "response": _responses_envelope("resp_primary", "gpt-4o", "in_progress")},
+                *(
+                    {
+                        "type": "response.output_text.delta",
+                        "item_id": "msg_primary",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "delta": word,
+                    }
+                    for word in ("Once ", "upon ", "a ", "time ", "there")
+                ),
+                {
+                    "type": "response.failed",
+                    "response": _responses_envelope(
+                        "resp_primary",
+                        "gpt-4o",
+                        "failed",
+                        error={"code": "server_error", "message": "The model had an internal error"},
+                    ),
+                },
+            ),
+        )
+    )
+    respx_mock.post("https://backup.example/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_responses_sse(
+                {"type": "response.created", "response": _responses_envelope("resp_backup", "gpt-4o-mini", "in_progress")},
+                {
+                    "type": "response.completed",
+                    "response": _responses_envelope(
+                        "resp_backup",
+                        "gpt-4o-mini",
+                        "completed",
+                        output=[
+                            {
+                                "type": "message",
+                                "id": "msg_backup",
+                                "status": "completed",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": "Once upon a time", "annotations": []}],
+                            }
+                        ],
+                        usage={"input_tokens": 1000, "output_tokens": 700, "total_tokens": 1700},
+                    ),
+                },
+            ),
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k1", "api_base": "https://primary.example/v1"},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "k2",
+                    "api_base": "https://backup.example/v1",
+                },
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    shared_logging, _ = litellm.utils.function_setup(
+        original_function="aresponses",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+    )
+
+    response: Final = await router.aresponses(
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+        litellm_logging_obj=shared_logging,
+    )
+    _ = [event async for event in response]
+    await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
+
+    success: Final = recorder.successes[-1]
+    assert (success["prompt_tokens"], success["completion_tokens"]) == (1000, 700)
+    spend_row: Final = recorder.spend_rows[-1]
+    assert (spend_row["prompt_tokens"], spend_row["completion_tokens"], spend_row["spend"]) == (
+        1000,
+        700,
+        success["response_cost"],
     )
 
 
