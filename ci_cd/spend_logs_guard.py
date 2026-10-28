@@ -4,7 +4,9 @@ needs an approving review from the spend-log owner before it can merge.
 CODEOWNERS can only match file paths, and every schema change edits the same schema.prisma copies,
 so a path rule would put every migration on the owner. This gate reads the diff instead: when no
 added line in the watched files mentions the table it passes at once, otherwise it passes only once
-the owner's latest review on the pull request is an approval. The workflow re-runs on every review.
+the owner's latest review on the pull request is an approval that still covers every spend-log line
+in the head (approvals survive pushes, so a later commit may not add spend-log lines the owner never
+saw). The workflow re-runs on every review.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import argparse
 import re
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Final
 
@@ -37,6 +39,7 @@ class Review(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
     state: str
     user: Reviewer
+    commit_id: str | None = None
 
 
 _REVIEWS: Final = TypeAdapter(list[Review])
@@ -69,10 +72,22 @@ def _path_of(section: str) -> str:
     return match.group(1) if match else ""
 
 
-def approved_by(reviews: Sequence[Review], login: str) -> bool:
-    """True when `login`'s most recent review on the pull request is an approval."""
-    states: Final = tuple(review.state for review in reviews if review.user.login == login)
-    return bool(states) and states[-1] == "APPROVED"
+def latest_approval(reviews: Sequence[Review], login: str) -> Review | None:
+    """`login`'s most recent review on the pull request when it is an approval."""
+    own: Final = tuple(review for review in reviews if review.user.login == login)
+    return own[-1] if own and own[-1].state == "APPROVED" else None
+
+
+def approval_covers(
+    approval: Review, head: str, hits: Sequence[str], hits_at: Callable[[str], Sequence[str] | None]
+) -> bool:
+    """True when the approval is on the head, or the head adds no spend-log line the approved commit did not."""
+    if approval.commit_id is None:
+        return False
+    if approval.commit_id == head:
+        return True
+    reviewed: Final = hits_at(approval.commit_id)
+    return reviewed is not None and set(hits) <= set(reviewed)
 
 
 def added_diff(base: str, head: str) -> str:
@@ -83,6 +98,15 @@ def added_diff(base: str, head: str) -> str:
         text=True,
     )
     return result.stdout
+
+
+def fetched(commit: str) -> bool:
+    result: Final = subprocess.run(("git", "fetch", "--no-tags", "--depth=1", "origin", commit), check=False)
+    return result.returncode == 0
+
+
+def reviewed_hits(base: str, commit: str) -> tuple[str, ...] | None:
+    return spend_log_hits(added_diff(base, commit)) if fetched(commit) else None
 
 
 class Arguments(BaseModel):
@@ -104,14 +128,20 @@ def main(argv: Sequence[str]) -> int:
     if not hits:
         sys.stdout.write("No added line in schema.prisma or a migration names LiteLLM_SpendLogs; nothing to review.\n")
         return 0
-    if approved_by(_REVIEWS.validate_json(args.reviews.read_bytes()), args.approver):
+    approval: Final = latest_approval(_REVIEWS.validate_json(args.reviews.read_bytes()), args.approver)
+    if approval is not None and approval_covers(
+        approval, args.head, hits, lambda commit: reviewed_hits(args.base, commit)
+    ):
         sys.stdout.write(f"LiteLLM_SpendLogs change approved by {args.approver}: {', '.join(hits)}\n")
         return 0
     listed: Final = "".join(f"  {hit}\n" for hit in hits)
-    sys.stdout.write(
+    reason: Final = (
         f"This pull request changes LiteLLM_SpendLogs and needs an approving review from @{args.approver}:\n"
-        f"{listed}The check re-runs when a review is submitted.\n"
+        if approval is None
+        else f"LiteLLM_SpendLogs lines changed after @{args.approver} approved {approval.commit_id}, "
+        f"a new approving review is needed:\n"
     )
+    sys.stdout.write(f"{reason}{listed}The check re-runs when a review is submitted.\n")
     return 1
 
 

@@ -42,23 +42,45 @@ class TestSpendLogHits:
         assert guard.spend_log_hits(diff) == ("litellm/proxy/schema.prisma: a LiteLLM_SpendLogs",)
 
 
-class TestApprovedBy:
+def _review(login: str, state: str, commit_id: str | None = "head") -> "guard.Review":
+    return guard.Review(state=state, user=guard.Reviewer(login=login), commit_id=commit_id)
+
+
+class TestLatestApproval:
     def test_the_latest_review_of_the_approver_decides(self):
-        reviews: Final = tuple(
-            guard.Review(state=state, user=guard.Reviewer(login=login))
-            for login, state in (
-                ("kerry-berri", "CHANGES_REQUESTED"),
-                ("someone-else", "APPROVED"),
-                ("kerry-berri", "APPROVED"),
-            )
+        reviews: Final = (
+            _review("kerry-berri", "CHANGES_REQUESTED", "old"),
+            _review("someone-else", "APPROVED"),
+            _review("kerry-berri", "APPROVED"),
         )
-        assert guard.approved_by(reviews, "kerry-berri") is True
-        assert guard.approved_by(reviews[::-1], "kerry-berri") is False
+        assert guard.latest_approval(reviews, "kerry-berri") is reviews[-1]
+        assert guard.latest_approval(reviews[::-1], "kerry-berri") is None
 
     def test_no_review_from_the_approver_is_not_an_approval(self):
-        other: Final = guard.Review(state="APPROVED", user=guard.Reviewer(login="someone-else"))
-        assert guard.approved_by((other,), "kerry-berri") is False
-        assert guard.approved_by((), "kerry-berri") is False
+        assert guard.latest_approval((_review("someone-else", "APPROVED"),), "kerry-berri") is None
+        assert guard.latest_approval((), "kerry-berri") is None
+
+
+class TestApprovalCovers:
+    _HITS: Final = ("schema.prisma: a LiteLLM_SpendLogs", "schema.prisma: b LiteLLM_SpendLogs")
+
+    def test_an_approval_on_the_head_covers_it_without_reading_the_approved_commit(self):
+        def unreadable(commit: str) -> None:
+            raise AssertionError(f"read {commit}")
+
+        assert guard.approval_covers(_review("kerry-berri", "APPROVED", "head"), "head", self._HITS, unreadable) is True
+
+    def test_an_older_approval_covers_the_head_only_when_it_saw_every_spend_log_line(self):
+        approval: Final = _review("kerry-berri", "APPROVED", "old")
+        assert guard.approval_covers(approval, "head", self._HITS, lambda commit: self._HITS) is True
+        assert guard.approval_covers(approval, "head", self._HITS[:1], lambda commit: self._HITS) is True
+        assert guard.approval_covers(approval, "head", self._HITS, lambda commit: self._HITS[:1]) is False
+
+    def test_an_approval_whose_commit_cannot_be_read_does_not_cover_the_head(self):
+        gone: Final = _review("kerry-berri", "APPROVED", "gone")
+        assert guard.approval_covers(gone, "head", self._HITS, lambda commit: None) is False
+        without_commit: Final = _review("kerry-berri", "APPROVED", None)
+        assert guard.approval_covers(without_commit, "head", self._HITS, lambda commit: self._HITS) is False
 
 
 class TestExitCode:
@@ -75,5 +97,15 @@ class TestExitCode:
         reviews.write_text('[{"user": {"login": "someone-else"}, "state": "APPROVED"}]')
         assert guard.main(["--base", "a", "--head", "b", "--approver", "kerry-berri", "--reviews", str(reviews)]) == 1
         assert "schema.prisma: x LiteLLM_SpendLogs" in capsys.readouterr().out
-        reviews.write_text('[{"user": {"login": "kerry-berri"}, "state": "APPROVED"}]')
+        reviews.write_text('[{"user": {"login": "kerry-berri"}, "state": "APPROVED", "commit_id": "b"}]')
         assert guard.main(["--base", "a", "--head", "b", "--approver", "kerry-berri", "--reviews", str(reviews)]) == 0
+
+    def test_an_approval_before_a_new_spend_log_line_was_pushed_fails(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(guard, "added_diff", lambda base, head: _diff("schema.prisma", "  x LiteLLM_SpendLogs", 7))
+        monkeypatch.setattr(guard, "reviewed_hits", lambda base, commit: () if commit == "old" else None, raising=False)
+        reviews: Final = tmp_path / "r.json"
+        reviews.write_text('[{"user": {"login": "kerry-berri"}, "state": "APPROVED", "commit_id": "old"}]')
+        assert guard.main(["--base", "a", "--head", "b", "--approver", "kerry-berri", "--reviews", str(reviews)]) == 1
+        assert "changed after @kerry-berri approved old" in capsys.readouterr().out
+        reviews.write_text('[{"user": {"login": "kerry-berri"}, "state": "APPROVED", "commit_id": "gone"}]')
+        assert guard.main(["--base", "a", "--head", "b", "--approver", "kerry-berri", "--reviews", str(reviews)]) == 1
