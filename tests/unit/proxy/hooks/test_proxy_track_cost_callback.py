@@ -1,34 +1,43 @@
 import asyncio
 import json
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
-from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
-    _get_budget_reservation_from_metadata,
     ProxyDBLogger,
+    _get_budget_reservation_from_metadata,
     _should_track_cost_callback,
     _update_database_and_spend_counters,
+    is_pre_routing_rejection,
     run_spend_event,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
-from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.utils import (
+    REJECTED_BEFORE_REQUEST_SETUP,
+    REJECTED_BEFORE_REQUEST_SETUP_KEY,
+    ProxyUpdateSpend,
+)
+from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 
 
@@ -152,6 +161,127 @@ async def test_each_earlier_billed_attempt_gets_its_own_spend_row():
         assert row["token"] == "test_api_key"
         assert row["user_id"] == "u1"
         assert row["team_id"] == "t1"
+
+
+def _deployment(model_name: str, model_id: str, model: str, api_base: str | None) -> Deployment:
+    return Deployment(
+        model_name=model_name,
+        litellm_params=LiteLLM_Params(model=model, api_base=api_base),
+        model_info={"id": model_id},
+    )
+
+
+_TIMED_OUT_AT: Final = datetime(2026, 10, 20, 21, 24, 48, tzinfo=timezone.utc)
+
+
+async def _spend_log_payloads_of_a_retried_timeout_across_a_fallback() -> list[SpendLogsPayload]:
+    """The spend-log payloads a timed-out request writes when attempt 0 and 1 ran on the anthropic
+    deployment of group ``essay`` and the request then fell back to the openai deployment of group
+    ``essay-fallback``: the final row first, then one row per earlier billed attempt."""
+    from litellm.proxy.utils import BilledFailedAttempt
+
+    deployments = {
+        "dep-anthropic": _deployment("essay", "dep-anthropic", "anthropic/claude-sonnet-4-6", None),
+        "dep-openai": _deployment("essay-fallback", "dep-openai", "openai/gpt-4.1", "https://api.openai.com/v1"),
+    }
+    usage = litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
+    request_data = {
+        "model": "anthropic/claude-sonnet-4-6",
+        "custom_llm_provider": "anthropic",
+        "litellm_call_id": "call-1",
+        "litellm_params": {"api_base": "https://api.anthropic.com/v1/messages"},
+        "standard_logging_object": {
+            "id": "call-1",
+            "model": "anthropic/claude-sonnet-4-6",
+            "custom_llm_provider": "anthropic",
+            "api_base": "https://api.anthropic.com/v1/messages",
+            "model_id": "dep-anthropic",
+            "model_group": "essay",
+            "metadata": {},
+            "hidden_params": {},
+            "model_map_information": {},
+        },
+        "metadata": {"attempted_retries": 1, "model_group": "essay", "model_info": {"id": "dep-anthropic"}},
+        "combined_usage_object": usage,
+        "response_cost": 7.2e-05,
+        "billed_failed_attempts": (
+            BilledFailedAttempt(attempted_retries=1, deployment_id="dep-anthropic", usage=usage, response_cost=7.2e-05),
+            BilledFailedAttempt(attempted_retries=0, deployment_id="dep-openai", usage=usage, response_cost=4.8e-05),
+        ),
+    }
+    exception = litellm.Timeout("Request timed out.", model="gpt-4.1", llm_provider="openai")
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await ProxyDBLogger(deployment_lookup=deployments.get).async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=exception,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", user_id="u1"),
+        )
+    return [
+        get_logging_payload(
+            kwargs=call.kwargs["kwargs"],
+            response_obj=exception,
+            start_time=_TIMED_OUT_AT,
+            end_time=_TIMED_OUT_AT + timedelta(seconds=11),
+        )
+        for call in mock_update_database.call_args_list
+    ]
+
+
+@pytest.mark.asyncio
+async def test_attempt_rows_are_attributed_to_the_deployment_that_billed_them():
+    """Regression since #47416: an earlier attempt that ran on another deployment was written with the
+    final row's model, provider and api_base. Each attempt row names the deployment it ran on."""
+    final_row, attempt_0, attempt_1 = await _spend_log_payloads_of_a_retried_timeout_across_a_fallback()
+
+    assert (final_row["model"], final_row["custom_llm_provider"], final_row["model_id"]) == (
+        "anthropic/claude-sonnet-4-6",
+        "anthropic",
+        "dep-anthropic",
+    )
+    assert final_row["api_base"] == "https://api.anthropic.com/v1/messages"
+    assert (attempt_0["model"], attempt_0["custom_llm_provider"], attempt_0["model_id"], attempt_0["model_group"]) == (
+        "anthropic/claude-sonnet-4-6",
+        "anthropic",
+        "dep-anthropic",
+        "essay",
+    )
+    assert (attempt_1["model"], attempt_1["custom_llm_provider"], attempt_1["model_id"], attempt_1["model_group"]) == (
+        "openai/gpt-4.1",
+        "openai",
+        "dep-openai",
+        "essay-fallback",
+    )
+    assert attempt_1["api_base"] == "https://api.openai.com/v1"
+    assert attempt_1["request_id"] == "call-1-attempt-1"
+    assert attempt_1["spend"] == 4.8e-05
+
+
+@pytest.mark.asyncio
+async def test_attempt_rows_add_spend_but_not_requests_to_daily_spend():
+    """Regression since #47416: one caller request with N billed earlier attempts counted N+1 requests in
+    the daily spend tables. The attempt rows keep their spend, tokens and model usage and count zero requests."""
+    payloads = await _spend_log_payloads_of_a_retried_timeout_across_a_fallback()
+    prisma = MagicMock()
+    prisma.get_request_status = MagicMock(return_value="failure")
+
+    daily = [
+        await DBSpendUpdateWriter()._common_add_spend_log_transaction_to_daily_transaction(
+            payload=payload, prisma_client=prisma, type="user"
+        )
+        for payload in payloads
+    ]
+
+    assert all(row is not None for row in daily)
+    assert [row["api_requests"] for row in daily if row is not None] == [1, 0, 0]
+    assert [row["failed_requests"] for row in daily if row is not None] == [1, 0, 0]
+    assert [row["spend"] for row in daily if row is not None] == [7.2e-05, 7.2e-05, 4.8e-05]
+    assert [row["prompt_tokens"] for row in daily if row is not None] == [24, 24, 24]
+    model_usage = [build_model_usage_transaction(payload) for payload in payloads]
+    assert all(usage is not None for usage in model_usage), "attempt spend must still reach daily model usage"
+    assert [usage.spend for usage in model_usage if usage is not None] == [7.2e-05, 7.2e-05, 4.8e-05]
 
 
 @pytest.mark.asyncio
@@ -290,6 +420,74 @@ async def test_async_post_call_failure_hook_does_not_clobber_guardrail_info_in_m
 
         metadata = mock_update_database.call_args[1]["kwargs"]["litellm_params"]["metadata"]
         assert metadata["standard_logging_guardrail_information"] == metadata_bucket_info
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_headers, caller_metadata, redaction_is_global, code_word_is_stored",
+    [
+        ({"x-litellm-enable-message-redaction": "true"}, {"user_id": "claude-code-session"}, False, False),
+        ({"litellm-enable-message-redaction": "true"}, {}, False, False),
+        ({"user-agent": "claude-cli"}, {"user_id": "claude-code-session"}, False, True),
+        ({"user-agent": "claude-cli"}, {"headers": {"x-litellm-enable-message-redaction": "true"}}, False, False),
+        ({"litellm-disable-message-redaction": "true"}, {"user_id": "claude-code-session"}, True, False),
+    ],
+    ids=[
+        "enable_header_redacts",
+        "legacy_enable_header_redacts",
+        "no_header_stores_prompt",
+        "caller_metadata_headers_still_apply",
+        "disable_header_never_loosens_global_redaction",
+    ],
+)
+async def test_async_post_call_failure_hook_honors_the_redaction_header_on_a_litellm_metadata_route(
+    monkeypatch: pytest.MonkeyPatch,
+    request_headers: dict[str, str],
+    caller_metadata: dict[str, object],
+    redaction_is_global: bool,
+    code_word_is_stored: bool,
+):
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redaction_is_global)
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+    logger: Final = ProxyDBLogger(spend_writer=lambda: writer)
+    request_input: Final = "The code word is VERMILION-42. Reply OK."
+    body_metadata: Final = dict(caller_metadata)
+    litellm_metadata_headers: Final = dict(request_headers)
+
+    await logger.async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-5.6",
+            "input": request_input,
+            "metadata": body_metadata,
+            "litellm_metadata": {"headers": litellm_metadata_headers},
+            "proxy_server_request": {
+                "url": "http://localhost/v1/responses",
+                "body": {
+                    "model": "gpt-5.6",
+                    "input": request_input,
+                    "temperature": 7,
+                    "metadata": body_metadata,
+                    "litellm_metadata": {"headers": litellm_metadata_headers},
+                },
+            },
+        },
+        original_exception=Exception("temperature must be at most 2"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    stored_request: Final = json.loads(row["proxy_server_request"])
+    assert stored_request["temperature"] == 7
+    assert ("VERMILION-42" in row["proxy_server_request"]) is code_word_is_stored
+    assert stored_request["metadata"].get("headers") == caller_metadata.get("headers")
+    assert stored_request["litellm_metadata"]["headers"] == request_headers
 
 
 @pytest.mark.asyncio
@@ -3202,6 +3400,7 @@ def _grounded_gemini_kwargs(response_cost: float) -> dict:
             "response_cost": response_cost,
             "request_tags": None,
             "cache_hit": None,
+            "custom_llm_provider": "vertex_ai",
             "cost_breakdown": {
                 "input_cost": 0.0,
                 "output_cost": 0.0,
@@ -3270,3 +3469,200 @@ async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when
     else:
         assert kwargs["response_cost"] == 1.0 and "discount_amount" not in breakdown
         assert counter.totals == {}
+
+
+@pytest.mark.asyncio
+async def test_batch_accounting_failures_stay_with_their_originating_call() -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
+
+    logger: Final = ProxyDBLogger()
+    dependency: Final = SimpleNamespace(failed_tracking_alert=AsyncMock())
+
+    async def fail_before_accounting(call_id: str) -> None:
+        await logger.async_log_success_event(
+            kwargs={
+                "litellm_call_id": call_id,
+                "call_type": "aretrieve_batch",
+                "model": "batch-model",
+                "stream": False,
+                "response_cost": None,
+            },
+            response_obj=None,
+            start_time=_CALL_START,
+            end_time=_CALL_START,
+        )
+
+    async def independent_batch() -> bool:
+        with track_batch_accounting("independent") as outcome:
+            await fail_before_accounting("independent")
+        return outcome.retryable_failure
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", dependency):
+        with track_batch_accounting("outer") as outer:
+            await fail_before_accounting("unrelated")
+            assert outer.retryable_failure is False
+            with track_batch_accounting("inner") as inner:
+                await fail_before_accounting("inner")
+            assert inner.retryable_failure is True
+            assert outer.retryable_failure is False
+            independent, _ = await asyncio.gather(independent_batch(), fail_before_accounting("outer"))
+            assert independent is True
+            assert outer.retryable_failure is True
+            with pytest.raises(asyncio.CancelledError):
+                with track_batch_accounting("cancelled") as cancelled:
+                    raise asyncio.CancelledError
+            await fail_before_accounting("cancelled")
+            assert cancelled.retryable_failure is False
+
+
+@pytest.mark.asyncio
+async def test_batch_accounting_does_not_retry_after_settling_a_budget_reservation() -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
+
+    reservation: Final[dict[str, object]] = {"reserved_cost": 0.5, "entries": ()}
+    dependency: Final = SimpleNamespace(failed_tracking_alert=AsyncMock())
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", dependency):
+        with track_batch_accounting("reserved") as outcome:
+            await ProxyDBLogger().async_log_success_event(
+                kwargs={
+                    "litellm_call_id": "reserved",
+                    "call_type": "aretrieve_batch",
+                    "model": "batch-model",
+                    "stream": False,
+                    "response_cost": None,
+                    "litellm_params": {"metadata": {"user_api_key_budget_reservation": reservation}},
+                },
+                response_obj=None,
+                start_time=_CALL_START,
+                end_time=_CALL_START,
+            )
+    assert reservation["finalized"] is True
+    assert outcome.retryable_failure is False
+
+
+@pytest.mark.asyncio
+async def test_batch_accounting_does_not_retry_after_a_search_allowance_update(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
+
+    monkeypatch.setattr(litellm, "apply_search_free_tier", True)
+    counter: Final = _SharedCounter()
+    dependency: Final = SimpleNamespace(
+        failed_tracking_alert=AsyncMock(),
+        internal_usage_cache=SimpleNamespace(dual_cache=SimpleNamespace(redis_cache=counter)),
+    )
+    kwargs: Final = {**_grounded_gemini_kwargs(response_cost=1.0), "litellm_call_id": "grounded-batch"}
+    response: Final = ModelResponse(
+        usage=Usage(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=5),
+        )
+    )
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", dependency):
+        with track_batch_accounting("grounded-batch") as outcome:
+            await ProxyDBLogger().async_log_success_event(kwargs, response, _CALL_START, _CALL_START)
+
+    assert sum(counter.totals.values()) == 5
+    assert outcome.failed is True
+    assert outcome.retryable_failure is False
+
+
+_ROUTED_REQUEST: Final[Mapping[str, object]] = {
+    "model": "anthropic-haiku-4-5",
+    "messages": [{"role": "user", "content": "hi"}],
+    "proxy_server_request": {"request_id": "req-1"},
+    "litellm_call_id": "call-1",
+}
+_PRE_ROUTING_REQUEST: Final[Mapping[str, object]] = {
+    **_ROUTED_REQUEST,
+    REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP,
+}
+_SPOOFED_REQUEST: Final[Mapping[str, object]] = {**_ROUTED_REQUEST, REJECTED_BEFORE_REQUEST_SETUP_KEY: True}
+_INVALID_REQUEST_400: Final = ProxyException(
+    message="Violated guardrail policy", type="invalid_request_error", param=None, code=400
+)
+_PROVIDER_AUTH_ERROR: Final = litellm.AuthenticationError(
+    message="bad key", llm_provider="anthropic", model="claude-haiku-4-5"
+)
+
+
+@pytest.mark.parametrize(
+    ("exception", "request_data", "expected"),
+    [
+        (_INVALID_REQUEST_400, _PRE_ROUTING_REQUEST, True),
+        (litellm.BudgetExceededError(current_cost=1.0, max_budget=0.0), _PRE_ROUTING_REQUEST, True),
+        (ProxyModelNotFoundError(route="/chat/completions", model_name="4.6"), _ROUTED_REQUEST, True),
+        (_INVALID_REQUEST_400, _ROUTED_REQUEST, False),
+        (_INVALID_REQUEST_400, _SPOOFED_REQUEST, False),
+        (_PROVIDER_AUTH_ERROR, _ROUTED_REQUEST, False),
+        (
+            litellm.RateLimitError(message="slow down", llm_provider="anthropic", model="claude-haiku-4-5"),
+            _ROUTED_REQUEST,
+            False,
+        ),
+        (HTTPException(status_code=429, detail="Max parallel request limit reached"), _ROUTED_REQUEST, False),
+    ],
+    ids=[
+        "bad-body",
+        "budget",
+        "unknown-model",
+        "guardrail-block",
+        "guardrail-block-with-client-spoofed-marker",
+        "provider-auth",
+        "provider-429",
+        "proxy-429",
+    ],
+)
+def test_is_pre_routing_rejection_is_decided_by_pipeline_stage_not_exception_type(
+    exception: Exception, request_data: Mapping[str, object], expected: bool
+) -> None:
+    assert is_pre_routing_rejection(exception, request_data) is expected
+
+
+class _RecordingSpendWriter:
+    def __init__(self) -> None:
+        self.rows: list[Mapping[str, object]] = []  # mutable-ok: test double records the spend rows written
+
+    async def update_database(self, **kwargs: object) -> None:
+        self.rows.append(kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("flag_enabled", "exception", "request_data", "rows_written"),
+    [
+        (True, _INVALID_REQUEST_400, _PRE_ROUTING_REQUEST, 0),
+        (True, litellm.BudgetExceededError(current_cost=1.0, max_budget=0.0), _PRE_ROUTING_REQUEST, 0),
+        (True, ProxyModelNotFoundError(route="/chat/completions", model_name="4.6"), _ROUTED_REQUEST, 0),
+        (True, _INVALID_REQUEST_400, _ROUTED_REQUEST, 1),
+        (True, _INVALID_REQUEST_400, _SPOOFED_REQUEST, 1),
+        (True, _PROVIDER_AUTH_ERROR, _ROUTED_REQUEST, 1),
+        (False, _INVALID_REQUEST_400, _PRE_ROUTING_REQUEST, 1),
+        (False, litellm.BudgetExceededError(current_cost=1.0, max_budget=0.0), _PRE_ROUTING_REQUEST, 1),
+    ],
+    ids=[
+        "flag-bad-body",
+        "flag-budget",
+        "flag-unknown-model",
+        "flag-guardrail-block-kept",
+        "flag-guardrail-block-with-spoofed-marker-kept",
+        "flag-provider-error-kept",
+        "off-bad-body",
+        "off-budget",
+    ],
+)
+async def test_async_post_call_failure_hook_disable_pre_routing_error_logs(
+    flag_enabled: bool, exception: Exception, request_data: Mapping[str, object], rows_written: int
+) -> None:
+    writer: Final = _RecordingSpendWriter()
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key="test_api_key", user_id="u", team_id="t", request_route="/chat/completions"
+    )
+    with patch("litellm.proxy.proxy_server.general_settings", {"disable_pre_routing_error_logs": flag_enabled}):
+        await ProxyDBLogger(spend_writer=lambda: cast(DBSpendUpdateWriter, writer)).async_post_call_failure_hook(
+            request_data={**request_data, "metadata": dict[str, object]()},
+            original_exception=exception,
+            user_api_key_dict=user_api_key_dict,
+        )
+    assert len(writer.rows) == rows_written

@@ -1,7 +1,9 @@
+import builtins
+from collections.abc import Mapping
 from enum import Enum
-from typing import Any, Literal
+from typing import Literal
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 
 class VectorStoreFileStatus(str, Enum):
@@ -33,7 +35,7 @@ class VectorStoreFileObject(TypedDict, total=False):
     usage_bytes: int | None
     vector_store_id: str
     status: VectorStoreFileStatus
-    last_error: dict[str, Any] | None
+    last_error: ReadOnly[Mapping[str, builtins.object] | None]
     chunking_strategy: VectorStoreFileChunkingStrategy | None
     attributes: dict[str, str | int | float | bool] | None
 
@@ -83,5 +85,5 @@ class VectorStoreFileContentResponse(TypedDict, total=False):
 
 
 class VectorStoreFileAuthCredentials(TypedDict, total=False):
-    headers: dict[str, Any]
-    query_params: dict[str, Any]
+    headers: ReadOnly[Mapping[str, object]]
+    query_params: ReadOnly[Mapping[str, object]]

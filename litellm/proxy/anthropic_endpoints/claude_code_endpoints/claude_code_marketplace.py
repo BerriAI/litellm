@@ -21,6 +21,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Annotated, Final, Protocol, TypedDict, get_args
 from urllib.parse import urlsplit
 
@@ -299,7 +300,7 @@ def _validate_installation_preference(spec: PluginSpec) -> None:
 
 def _build_plugin_manifest(name: str, spec: PluginSpec) -> Mapping[str, object]:
     """Build the stored manifest dict shared by plugin create and update."""
-    dumped: Final[Mapping[str, object]] = spec.model_dump(exclude_none=True)
+    dumped: Final[Mapping[str, object]] = MappingProxyType(spec.model_dump(exclude_none=True))
     return {"name": name, **{key: value for key, value in dumped.items() if value and key != "name"}}
 
 

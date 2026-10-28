@@ -19,6 +19,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     GITHUB_COPILOT_AUTH_TYPE_KEY,
+    GITHUB_COPILOT_HOST_KEY,
     GITHUB_COPILOT_PER_USER_AUTH_TYPE,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -82,6 +83,22 @@ _CREDENTIAL_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _GITHUB_COPILOT_PROVIDER: Final = "github_copilot"
 _DISPLAY_NAME_MAX_LENGTH: Final = 255
 _DISPLAY_NAME_FORBIDDEN_CATEGORIES: Final = frozenset({"Cc", "Cf", "Cs", "Zl", "Zp"})
+
+
+def _normalized_github_copilot_values(
+    credential_values: Mapping[str, object],
+    credential_info: Mapping[str, object],
+) -> Mapping[str, object]:
+    provider: Final = stored_credential_provider(credential_info.get("custom_llm_provider"))
+    if provider != _GITHUB_COPILOT_PROVIDER or GITHUB_COPILOT_HOST_KEY not in credential_values:
+        return credential_values
+
+    from litellm.llms.github_copilot.github_host import normalized_github_host
+
+    host: Final = normalized_github_host(credential_values[GITHUB_COPILOT_HOST_KEY])
+    if host is None:
+        raise HTTPException(status_code=400, detail=f"Invalid {GITHUB_COPILOT_HOST_KEY}")
+    return {**credential_values, GITHUB_COPILOT_HOST_KEY: host}
 
 
 def _reject_non_admin_wif_fields(
@@ -318,7 +335,14 @@ async def create_credential(
                 status_code=400,
                 detail="Credential values are required. Unable to infer credential values from model ID.",
             )
-        _reject_non_admin_wif_fields(server_owned_wif_fields_written(credential_values), user_api_key_dict)
+        credential_info: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
+            credential.credential_info  # pyright: ignore[reportUnknownMemberType]  # untyped credential field
+        )
+        normalized_values: Final = _normalized_github_copilot_values(
+            _CREDENTIAL_DICT_ADAPTER.validate_python(credential_values),
+            credential_info,
+        )
+        _reject_non_admin_wif_fields(server_owned_wif_fields_written(normalized_values), user_api_key_dict)
         _reject_non_admin_wif_fields(
             await named_credential_wif_fields(credential.credential_name, prisma_client), user_api_key_dict
         )
@@ -326,8 +350,8 @@ async def create_credential(
         processed_credential: Final = CredentialItem(
             credential_name=credential.credential_name,
             display_name=_normalized_display_name(credential.display_name),
-            credential_values=_without_null_values(_CREDENTIAL_DICT_ADAPTER.validate_python(credential_values)),
-            credential_info=credential.credential_info,
+            credential_values=_without_null_values(normalized_values),
+            credential_info=credential_info,
         )
         encrypted_credential: Final = CredentialHelperUtils.encrypt_credential_values(processed_credential)
         credentials_dict: Final = encrypted_credential.model_dump(exclude_none=True)
@@ -614,22 +638,24 @@ async def start_user_connection(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
 ) -> UserConnectionStartResponse:
     """Begin a GitHub device flow for the calling user's connection to a per-user credential."""
-    from litellm.llms.github_copilot.per_user_auth import astart_device_flow
+    from litellm.llms.github_copilot.per_user_auth import astart_device_flow, github_copilot_host_endpoints
     from litellm.proxy.proxy_server import prisma_client
 
     try:
         user_id: Final = _authenticated_user_id(user_api_key_dict)
         _per_user_credential_or_404(credential_name)
+        endpoints: Final = github_copilot_host_endpoints(credential_name)
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
-        flow: Final = await astart_device_flow()
+        flow: Final = await astart_device_flow(endpoints)
         handle: Final = encrypt_value_helper(
             UserConnectionFlowHandle(
                 user_id=user_id,
                 credential_name=credential_name,
+                github_host=endpoints.host,
                 device_code=flow.device_code,
                 interval=flow.interval,
                 expires_at=time.time() + flow.expires_in,
@@ -665,12 +691,14 @@ async def poll_user_connection(
         acheck_copilot_seat,
         afetch_github_login,
         apoll_device_flow,
+        github_copilot_host_endpoints,
     )
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     try:
         user_id: Final = _authenticated_user_id(user_api_key_dict)
         _per_user_credential_or_404(credential_name)
+        endpoints: Final = github_copilot_host_endpoints(credential_name)
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
@@ -681,11 +709,12 @@ async def poll_user_connection(
             handle is None
             or handle.user_id != user_id
             or handle.credential_name != credential_name
+            or handle.github_host != endpoints.host
             or handle.expires_at <= time.time()
         ):
             raise HTTPException(status_code=400, detail="invalid or expired flow_handle")
 
-        poll: Final = await apoll_device_flow(handle.device_code)
+        poll: Final = await apoll_device_flow(handle.device_code, endpoints)
         if poll.status in ("expired", "denied", "pending", "slow_down"):
             return UserConnectionPollResponse(status=poll.status, interval=poll.interval)
 
@@ -693,12 +722,19 @@ async def poll_user_connection(
         if not github_token:
             raise HTTPException(status_code=502, detail="GitHub device flow completed without a token")
         try:
-            await acheck_copilot_seat(user_id=user_id, github_token=github_token, credential_name=credential_name)
+            await acheck_copilot_seat(
+                user_id=user_id,
+                github_token=github_token,
+                credential_name=credential_name,
+                endpoints=endpoints,
+            )
         except litellm.CallerCredentialAuthenticationError:
             return UserConnectionPollResponse(status="no_copilot_seat")
-        github_login: Final = await afetch_github_login(github_token)
+        github_login: Final = await afetch_github_login(github_token, endpoints)
         connection_payload: Final = GithubCopilotUserConnectionPayload(
-            access_token=github_token, github_login=github_login
+            access_token=github_token,
+            github_login=github_login,
+            github_host=handle.github_host,
         )
         await upsert_user_provider_credential(
             prisma_client,
@@ -760,7 +796,7 @@ async def delete_user_connection(
             )
         prior: Final = await delete_user_provider_credential(prisma_client, user_id, credential_name)
         if prior is not None:
-            evict_copilot_user_session(user_id, prior.access_token)
+            evict_copilot_user_session(user_id, credential_name, prior.github_host)
         return UserConnectionDeleteResponse(status="disconnected")
     except Exception as e:  # noqa: BLE001  # endpoint boundary: every failure becomes the proxy error contract
         raise handle_exception_on_proxy(e)
@@ -785,16 +821,15 @@ async def _purge_user_connections_for_credential(credential_name: str) -> None:
             "_purge_user_connections_for_credential: failed to drop user connections for %s", credential_name
         )
         return
-    access_tokens: Final[dict[str, str]] = {}  # mutable-ok: accumulates one entry per deleted row
-    for row in prior_rows:
-        decoded = decode_user_provider_credential(row.credential_b64)
-        if decoded is not None:
-            access_tokens[row.user_id] = decoded.access_token
+    github_hosts: Final = {
+        row.user_id: decoded.github_host
+        for row in prior_rows
+        if (decoded := decode_user_provider_credential(row.credential_b64)) is not None
+    }
     for user_id in user_ids:
         await invalidate_user_provider_credential_cache(user_api_key_cache, user_id, credential_name)
-        token = access_tokens.get(user_id)
-        if token:
-            evict_copilot_user_session(user_id, token)
+        if user_id in github_hosts:
+            evict_copilot_user_session(user_id, credential_name, github_hosts[user_id])
 
 
 @router.delete(
@@ -926,7 +961,25 @@ async def update_credential(
             credential_values=incoming_values,
             credential_values_to_delete=credential.credential_values_to_delete,
         )
-        merged_credential: Final = update_db_credential(db_credential, patch)
+        decrypted_stored_credential: Final = decrypted_credential(db_credential)
+        decrypted_values: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
+            decrypted_stored_credential.credential_values
+        )
+        stored_info: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
+            db_credential.credential_info  # pyright: ignore[reportUnknownMemberType]  # untyped credential field
+        )
+        patch_info: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
+            patch.credential_info  # pyright: ignore[reportUnknownMemberType]  # untyped credential field
+        )
+        effective_info: Final = {**stored_info, **patch_info}
+        normalized_patch: Final = (
+            patch.model_copy(
+                update={"credential_values": _normalized_github_copilot_values(incoming_values, effective_info)}
+            )
+            if incoming_values.get(GITHUB_COPILOT_HOST_KEY) is not None
+            else patch
+        )
+        merged_credential: Final = update_db_credential(db_credential, normalized_patch)
         credential_object_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
             "dict[str, object]", jsonify_object(merged_credential.model_dump(exclude_none=True))
         )
@@ -940,13 +993,20 @@ async def update_credential(
         )
 
         # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
-        _sync_in_memory_credential(patch, credential_name)
+        _sync_in_memory_credential(normalized_patch, credential_name)
 
-        merged_values: Final = cast(  # cast-ok: credential_values is a plain dict at runtime
-            Mapping[object, object], merged_credential.credential_values
+        from litellm.llms.github_copilot.github_host import normalized_github_host
+
+        new_decrypted_values: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
+            decrypted_credential(merged_credential).credential_values
         )
-        still_per_user: Final = merged_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
-        if not still_per_user:
+        still_per_user: Final = (
+            new_decrypted_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        )
+        old_host: Final = normalized_github_host(decrypted_values.get(GITHUB_COPILOT_HOST_KEY))
+        new_host: Final = normalized_github_host(new_decrypted_values.get(GITHUB_COPILOT_HOST_KEY))
+        host_changed: Final = old_host is None or old_host != new_host
+        if not still_per_user or host_changed:
             await _purge_user_connections_for_credential(credential_name)
 
         return {"success": True, "message": "Credential updated successfully"}

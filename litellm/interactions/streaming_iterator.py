@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_DONE_STRING
@@ -24,6 +25,10 @@ from litellm.types.interactions import (
     InteractionsAPIStreamingResponse,
 )
 from litellm.utils import CustomStreamWrapper
+
+_INTERACTIONS_STREAMING_CHUNK_ADAPTER: Final = TypeAdapter(
+    object, config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 class BaseInteractionsAPIStreamingIterator:
@@ -83,7 +88,7 @@ class BaseInteractionsAPIStreamingIterator:
 
         try:
             # Parse the JSON chunk
-            parsed_chunk: Final = json.loads(stripped_chunk)
+            parsed_chunk: Final = _INTERACTIONS_STREAMING_CHUNK_ADAPTER.validate_python(json.loads(stripped_chunk))
 
             # Format as InteractionsAPIStreamingResponse
             if isinstance(parsed_chunk, dict):

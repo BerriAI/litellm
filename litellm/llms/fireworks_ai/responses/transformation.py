@@ -5,6 +5,7 @@ from urllib.parse import unquote
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.fireworks_ai.common_utils import (
     FIREWORKS_FORWARD_USER_ID_PARAM,
     get_fireworks_forwarded_user_id,
@@ -67,8 +68,8 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return dict(pinned)
 
     def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
-        base: Final = (api_base or get_secret_str("FIREWORKS_API_BASE") or FIREWORKS_AI_DEFAULT_API_BASE).rstrip("/")
-        return f"{base}/responses"
+        base: Final = api_base or get_secret_str("FIREWORKS_API_BASE") or FIREWORKS_AI_DEFAULT_API_BASE
+        return join_api_base(base, "responses")
 
     def transform_responses_api_request(
         self,

@@ -1,7 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, Dict, Final, List, Optional, Union
+from typing import Any, Dict, Final, List, Optional, TypeAlias, Union
 from unittest.mock import Mock
 
 import pytest
@@ -24,6 +24,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     get_dynamic_logging_metadata,
     add_litellm_data_to_request,
 )
+from litellm.router import Router
 from pydantic import ValidationError
 
 pytestmark = pytest.mark.xdist_group("proxy_heavy")
@@ -1602,6 +1603,109 @@ def test_get_model_group_info():
     assert len(model_list) == 1
 
 
+def _custom_metadata_router(*model_infos: dict[object, object]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": f"fake-{index}"},
+                "model_info": model_info,
+            }
+            for index, model_info in enumerate(model_infos)
+        ]
+    )
+
+
+_CustomFieldsCase: TypeAlias = tuple[
+    tuple[dict[object, object], ...], tuple[str, ...] | None, dict[str, str | int | float | bool] | None
+]
+_CUSTOM_FIELDS_CASES: Final[tuple[_CustomFieldsCase, ...]] = (
+    ((), None, None),
+    (({},), None, None),
+    (
+        ({"custom_tags": ["deprecated", "ptu"], "custom_metadata": {"retirement_date": "2027-03-01"}},),
+        ("deprecated", "ptu"),
+        {"retirement_date": "2027-03-01"},
+    ),
+    (
+        ({}, {"custom_tags": ["ptu"], "custom_metadata": {"provisioned_ptu": 100, "gsu": False}}),
+        ("ptu",),
+        {"provisioned_ptu": 100, "gsu": False},
+    ),
+    (
+        (
+            {"custom_tags": ["ptu", "eu"], "custom_metadata": {"provisioned_ptu": 100, "region": "eu"}},
+            {"custom_tags": ["eu", "deprecated"], "custom_metadata": {"provisioned_ptu": 50, "max_tpm": 1.5}},
+        ),
+        ("ptu", "eu", "deprecated"),
+        {"provisioned_ptu": 100, "region": "eu", "max_tpm": 1.5},
+    ),
+    (
+        ({"custom_tags": ["ok", 7, None, {"x": 1}], "custom_metadata": {"owner": "ml", "nested": {"a": 1}}},),
+        ("ok",),
+        {"owner": "ml"},
+    ),
+    (({"custom_tags": "ptu", "custom_metadata": ["not", "a", "map"]},), None, None),
+    (
+        (
+            {
+                "custom_metadata": {
+                    2027: "retirement",
+                    "nan": float("nan"),
+                    "inf": float("inf"),
+                    "neg_inf": float("-inf"),
+                    "max_tpm": 1.5,
+                }
+            },
+        ),
+        None,
+        {"max_tpm": 1.5},
+    ),
+)
+
+
+@pytest.mark.parametrize(("model_infos", "expected_tags", "expected_metadata"), _CUSTOM_FIELDS_CASES)
+def test_get_model_group_info_merges_custom_tags_and_metadata_across_deployments(
+    model_infos: tuple[dict[object, object], ...],
+    expected_tags: tuple[str, ...] | None,
+    expected_metadata: dict[str, str | int | float | bool] | None,
+) -> None:
+    from litellm.proxy.proxy_server import get_model_group_info
+
+    router: Final = _custom_metadata_router({"description": "first"}, *model_infos)
+
+    (group,) = get_model_group_info(llm_router=router, all_models_str=["gpt-4"], model_group="gpt-4")
+
+    assert (group.custom_tags, group.custom_metadata) == (expected_tags, expected_metadata)
+
+
+@pytest.mark.parametrize(
+    "alias_target",
+    [pytest.param("gpt-4", id="string"), pytest.param({"model": "gpt-4", "hidden": False}, id="item")],
+)
+def test_get_model_group_info_serves_the_target_groups_custom_fields_on_an_alias_row(
+    alias_target: str | dict[str, object],
+) -> None:
+    from litellm.proxy.proxy_server import get_model_group_info
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake"},
+                "model_info": {"custom_tags": ["deprecated"], "custom_metadata": {"retirement_date": "2027-03-01"}},
+            }
+        ],
+        model_group_alias={"gpt-alias": alias_target},
+    )
+
+    groups: Final = get_model_group_info(llm_router=router, all_models_str=["gpt-4", "gpt-alias"], model_group=None)
+
+    assert {group.model_group: (group.custom_tags, group.custom_metadata) for group in groups} == {
+        model_group: (("deprecated",), {"retirement_date": "2027-03-01"}) for model_group in ("gpt-4", "gpt-alias")
+    }
+
+
 @pytest.fixture
 def mock_team_data():
     return [
@@ -2650,6 +2754,58 @@ async def test_post_call_failure_hook_auth_error_llm_api_route():
         # Assert that _handle_logging_proxy_only_error WAS called
         # because /v1/chat/completions is an LLM API route
         mock_handle_logging.assert_called_once()
+
+
+class _InlineThread:
+    def __init__(self, target, args=(), kwargs=None, daemon=None) -> None:
+        self._run = lambda: target(*args, **(kwargs or {}))
+
+    def start(self) -> None:
+        self._run()
+
+
+@pytest.mark.asyncio
+async def test_proxy_only_failure_gives_a_logger_with_both_failure_hooks_only_the_async_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import types
+
+    import litellm.proxy.utils as proxy_utils
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    hooks: Final[list[str]] = []
+
+    class Recorder(CustomLogger):
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            hooks.append("sync_failure")
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            hooks.append("async_failure")
+
+    for name in ("failure_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(proxy_utils, "threading", types.SimpleNamespace(Thread=_InlineThread))
+    recorder: Final = Recorder()
+    logging_obj: Final = Logging(
+        model="gpt-4o-mini-tts",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="aspeech",
+        start_time=datetime.now(),
+        litellm_call_id="proxy-only-failure",
+        function_id="proxy-only-failure",
+        dynamic_failure_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+
+    await proxy_utils.ProxyLogging._dispatch_proxy_only_failure_handlers(
+        litellm_logging_obj=logging_obj,
+        original_exception=HTTPException(status_code=401, detail="Authentication Error: invalid user key"),
+    )
+
+    assert hooks == ["async_failure"]
 
 
 @pytest.mark.asyncio

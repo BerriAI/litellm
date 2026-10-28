@@ -8,6 +8,7 @@ the chat completions → responses conversion pipeline.
 
 from typing import Final
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.responses.instruction_items import instruction_items_folded
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -67,9 +68,9 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # If api_base already ends with /v1, append /responses
         # Otherwise append /v1/responses
         if api_base.endswith("/v1"):
-            return f"{api_base}/responses"
+            return join_api_base(api_base, "responses")
 
-        return f"{api_base}/v1/responses"
+        return join_api_base(api_base, "v1/responses")
 
     def transform_responses_api_request(
         self,

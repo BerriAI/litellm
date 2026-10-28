@@ -1,5 +1,6 @@
 /* eslint-disable react/no-unescaped-entities */
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useId, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
@@ -131,6 +132,7 @@ interface MCPConnectProps {
 }
 
 const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] }) => {
+  const term = useTerminology();
   const proxyBaseUrl = getProxyBaseUrl();
   const gatewayBaseUrl = getGatewayBaseUrl();
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
@@ -355,8 +357,9 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           <h4 className="mb-0 text-xl font-semibold text-purple-900 dark:text-purple-100">Cursor IDE Integration</h4>
         </div>
         <span className="text-purple-700 dark:text-purple-300">
-          Use tools directly from Cursor IDE with LiteLLM MCP. Enable your AI assistant to perform real-world tasks
-          without leaving your coding environment.
+          {term(
+            "Use tools directly from Cursor IDE with LiteLLM MCP. Enable your AI assistant to perform real-world tasks without leaving your coding environment.",
+          )}
         </span>
       </div>
 
@@ -475,8 +478,9 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         <div>
           <h2 className="text-3xl font-bold text-foreground mb-3">Connect to your MCP client</h2>
           <p className="text-lg text-muted-foreground">
-            Use tools directly from any MCP client with LiteLLM MCP. Enable your AI assistant to perform real-world
-            tasks through a simple, secure connection.
+            {term(
+              "Use tools directly from any MCP client with LiteLLM MCP. Enable your AI assistant to perform real-world tasks through a simple, secure connection.",
+            )}
           </p>
         </div>
 

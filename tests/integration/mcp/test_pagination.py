@@ -6,14 +6,14 @@ from typing import Final, Literal
 import httpx
 import pytest
 import yaml
+from integration._support.client import Gateway
+from integration._support.mcp import McpPeer, paginated_mcp_peer
+from integration._support.process import owned_proxy
 from mcp import ClientSession, MCPError
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolRequest, CallToolRequestParams, CallToolResult, DiscoverResult, PaginatedRequestParams
 
-from integration._support.client import Gateway
-from integration._support.mcp import McpPeer, paginated_mcp_peer
-from integration._support.process import owned_proxy
-from litellm.experimental_mcp_client.client import MCPClient
+from litellm.mcp_client.client import MCPClient
 from litellm.types.mcp import MCPTransport
 
 
@@ -422,7 +422,7 @@ def test_failed_upstream_continuation_requires_restart_for_every_catalog(tmp_pat
 
 @pytest.mark.parametrize("foreign", [{"foreign": {"status": "error", "message": "foreign outcome"}}, "malformed"])
 def test_optional_catalog_ignores_upstream_gateway_outcomes(tmp_path: Path, foreign):
-    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
+    from litellm.proxy.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
 
     async def exercise(gateway):
         async with catalog_session(gateway) as session:
@@ -577,7 +577,8 @@ def test_aggregate_freshness_matches_real_upstream() -> None:
         ListToolsRequest,
         ListToolsResult,
     )
-    from litellm.proxy._experimental.mcp_server.catalog import combine_optional_catalog, list_tools_page
+
+    from litellm.proxy.mcp_server.catalog import combine_optional_catalog, list_tools_page
 
     async def exercise(peer: McpPeer) -> None:
         client: Final = MCPClient(server_url=peer.url, transport_type=MCPTransport.http, protocol_version="2026-07-28")
@@ -604,8 +605,8 @@ def test_aggregate_freshness_matches_real_upstream() -> None:
 
 @pytest.mark.parametrize("ttl_ms", [0, 9000])
 def test_discovery_cache_freshness_and_caller_isolation_over_http(ttl_ms: int) -> None:
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     async def exercise(peer: McpPeer) -> None:
