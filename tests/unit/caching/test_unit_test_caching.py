@@ -278,7 +278,7 @@ def test_get_model_param_value_reads_model_group_from_litellm_metadata():
     )
 
 
-def test_get_model_param_value_ignores_a_caller_model_group_outside_the_router_bucket():
+def test_get_model_param_value_prefers_the_router_group_over_a_caller_model_group():
     cache = Cache()
     request = {"model": "openai/gpt-5.6", "input": "search this text"}
 
@@ -289,22 +289,22 @@ def test_get_model_param_value_ignores_a_caller_model_group_outside_the_router_b
         == "caller"
     )
     assert (
-        cache._get_model_param_value({**request, "metadata": {"model_group": "target"}, "litellm_metadata": {}})
-        == "openai/gpt-5.6"
-    )
-    assert (
         cache._get_model_param_value(
             {
                 **request,
-                "metadata": {"model_group": "target"},
-                "litellm_metadata": {"user_api_key": "hashed"},
                 "litellm_params": {
                     "metadata": {"model_group": "target"},
-                    "litellm_metadata": {"user_api_key": "hashed"},
+                    "litellm_metadata": {"model_group": "caller"},
                 },
             }
         )
-        == "openai/gpt-5.6"
+        == "caller"
+    )
+    assert (
+        cache._get_model_param_value(
+            {**request, "metadata": {"model_group": "group-a"}, "litellm_metadata": {"attempted_retries": 0}}
+        )
+        == "group-a"
     )
 
 def test_preset_cache_key():
