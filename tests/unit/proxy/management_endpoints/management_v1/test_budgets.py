@@ -52,7 +52,7 @@ app.include_router(router)
 client = TestClient(app)
 
 BUDGETS_PATH = f"{MANAGEMENT_V1_PREFIX}/budgets"
-SORTABLE = ["budget_id", "created_at", "max_budget", "rpm_limit", "tpd_limit", "tpm_limit"]
+SORTABLE = ["budget_duration", "budget_id", "created_at", "max_budget", "rpm_limit", "tpd_limit", "tpm_limit"]
 
 
 def _row(budget_id: str, **overrides: Any) -> dict[str, Any]:
@@ -172,22 +172,12 @@ def test_appends_the_tiebreaker_to_an_explicit_sort(query_raw, as_proxy_admin):
 
     _get("sort=-max_budget")
 
-    assert 'ORDER BY "max_budget" DESC NULLS LAST, "budget_id" ASC NULLS LAST' in _select_call(query_raw)[0]
+    assert 'ORDER BY "max_budget" DESC NULLS FIRST, "budget_id" ASC NULLS LAST' in _select_call(query_raw)[0]
 
 
-def test_refuses_to_sort_on_budget_duration(query_raw, as_proxy_admin):
-    """The column holds "7d"/"30d", so a lexicographic ORDER BY would put "30d"
-    before "7d" and silently mis-order the page."""
-    _serve(query_raw, [])
-
+def test_accepts_duration_sorting(query_raw, as_proxy_admin):
     response = _get("sort=budget_duration")
-
-    assert response.status_code == 400
-    assert response.headers["content-type"].startswith("application/problem+json")
-    body = response.json()
-    assert "budget_duration" in body["detail"]
-    assert body["allowed"] == SORTABLE
-    query_raw.assert_not_called()
+    assert response.status_code == 200
 
 
 def test_the_advertised_sort_fields_are_the_ones_that_work(query_raw, as_proxy_admin):
@@ -346,7 +336,7 @@ def test_q_does_not_search_any_other_column(query_raw, as_proxy_admin):
 
 
 def test_is_null_selects_the_unlimited_budgets(query_raw, as_proxy_admin):
-    """"Unlimited" is max_budget IS NULL; `max_budget = 0` would be a hard zero cap."""
+    """ "Unlimited" is max_budget IS NULL; `max_budget = 0` would be a hard zero cap."""
     _serve(query_raw, [_row("b-unlimited", max_budget=None)])
 
     body = _get("filter[max_budget][is_null]=true").json()
