@@ -4372,7 +4372,7 @@ export interface paths {
         };
         /**
          * List End User
-         * @description [Admin-only] List all available customers
+         * @description [Admin-only] List customers in pages of up to 100, ordered by user ID. Defaults to 50 customers per page.
          *
          *     Example curl:
          *     ```
@@ -5050,7 +5050,7 @@ export interface paths {
         };
         /**
          * List End User
-         * @description [Admin-only] List all available customers
+         * @description [Admin-only] List customers in pages of up to 100, ordered by user ID. Defaults to 50 customers per page.
          *
          *     Example curl:
          *     ```
@@ -57720,7 +57720,14 @@ export interface operations {
     };
     list_end_user_customer_list_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Page number */
+                page?: number;
+                /** @description Number of customers per page */
+                page_size?: number;
+                /** @description Case-insensitive search by customer ID or alias */
+                search?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -57734,6 +57741,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustomerResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -58755,7 +58771,14 @@ export interface operations {
     };
     list_end_user_end_user_list_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Page number */
+                page?: number;
+                /** @description Number of customers per page */
+                page_size?: number;
+                /** @description Case-insensitive search by customer ID or alias */
+                search?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -58769,6 +58792,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustomerResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
