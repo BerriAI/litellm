@@ -1763,8 +1763,6 @@ def completion_cost(
                             )
                         )
                         region_name = hidden_params.get("region_name", region_name)
-                    elif candidate_pricing_provider or candidate_custom_llm_provider:
-                        custom_llm_provider = candidate_pricing_provider or candidate_custom_llm_provider
 
                 else:
                     if model is None:

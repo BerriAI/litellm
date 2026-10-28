@@ -150,14 +150,14 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        resolved_custom_llm_provider = (
+        resolved_custom_llm_provider: Final = (
             litellm_params.get("custom_llm_provider") if isinstance(litellm_params, dict) else None
         ) or (
             model_response._hidden_params.get("custom_llm_provider")
             if isinstance(model_response._hidden_params, dict)
             else None
         )
-        transformed_response = OpenAILikeChatConfig._transform_response(
+        transformed_response: Final = OpenAILikeChatConfig._transform_response(
             model=model,
             response=raw_response,
             model_response=model_response,
