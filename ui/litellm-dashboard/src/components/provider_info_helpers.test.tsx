@@ -96,6 +96,17 @@ describe("provider_info_helpers", () => {
       expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.SCX_AI]);
     });
 
+    it("should map opencheap slug and OPENCHEAP enum key to the OpenCheap display name and logo", () => {
+      const fromSlug = getProviderLogoAndName("opencheap");
+      expect(fromSlug.displayName).toBe(Providers.OPENCHEAP);
+      expect(fromSlug.logo).toBe(providerLogoMap[Providers.OPENCHEAP]);
+      expect(fromSlug.logo).toBeTruthy();
+
+      const fromEnumKey = getProviderLogoAndName("OPENCHEAP");
+      expect(fromEnumKey.displayName).toBe(Providers.OPENCHEAP);
+      expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.OPENCHEAP]);
+    });
+
     it("should map bedrock_mantle slug to Bedrock Mantle display name and logo", () => {
       const result = getProviderLogoAndName("bedrock_mantle");
       expect(result.displayName).toBe(Providers.BedrockMantle);
@@ -270,6 +281,10 @@ describe("provider_info_helpers", () => {
 
     it("should return gemini-pro placeholder for Vertex_AI provider", () => {
       expect(getPlaceholder(Providers.Vertex_AI)).toBe("gemini-pro");
+    });
+
+    it("should return an opencheap model placeholder for OPENCHEAP provider", () => {
+      expect(getPlaceholder(Providers.OPENCHEAP)).toBe("opencheap/glm-5.3-flash");
     });
 
     it("should return an scx-ai model placeholder for SCX_AI provider", () => {

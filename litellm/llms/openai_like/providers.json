@@ -263,5 +263,11 @@
       "/v1/chat/completions",
       "/v1/responses"
     ]
+  },
+  "opencheap": {
+    "base_url": "https://api.opencheap.si/v1",
+    "api_key_env": "OPENCHEAP_API_KEY",
+    "api_base_env": "OPENCHEAP_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   }
 }

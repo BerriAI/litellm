@@ -44,6 +44,7 @@ import novitaLogo from "../../public/assets/logos/novita.svg";
 import nvidiaNimLogo from "../../public/assets/logos/nvidia_nim.svg";
 import nvidiaTritonLogo from "../../public/assets/logos/nvidia_triton.png";
 import ollamaLogo from "../../public/assets/logos/ollama.svg";
+import opencheapLogo from "../../public/assets/logos/opencheap.svg";
 import openaiSmallLogo from "../../public/assets/logos/openai_small.svg";
 import openrouterLogo from "../../public/assets/logos/openrouter.svg";
 import oracleLogo from "../../public/assets/logos/oracle.svg";
@@ -157,6 +158,7 @@ export enum Providers {
   OpenAI_Compatible = "OpenAI-Compatible Chat Completions (Together AI, vLLM, etc.)",
   OpenAI_Text = "OpenAI Text Completion",
   OpenAI_Text_Compatible = "OpenAI-Compatible Completions (legacy /v1/completions)",
+  OPENCHEAP = "OpenCheap",
   Openrouter = "Openrouter",
   Oracle = "Oracle Cloud Infrastructure (OCI)",
   OVHCLOUD = "Ovhcloud",
@@ -284,6 +286,7 @@ export const provider_map: Record<string, string> = {
   OpenAI_Compatible: "openai",
   OpenAI_Text: "text-completion-openai",
   OpenAI_Text_Compatible: "text-completion-openai",
+  OPENCHEAP: "opencheap",
   Openrouter: "openrouter",
   Oracle: "oci",
   OVHCLOUD: "ovhcloud",
@@ -398,6 +401,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.OpenAI_Text]: openaiSmallLogo.src,
   [Providers.OpenAI_Text_Compatible]: openaiSmallLogo.src,
   [Providers.OpenAI_Compatible]: openaiSmallLogo.src,
+  [Providers.OPENCHEAP]: opencheapLogo.src,
   [Providers.Openrouter]: openrouterLogo.src,
   [Providers.Oracle]: oracleLogo.src,
   [Providers.Perplexity]: perplexityAiLogo.src,
@@ -480,6 +484,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.JinaAI]: "jina_ai/",
   [Providers.MICROSOFT_365_COPILOT]: "microsoft_365_copilot/chat",
   [Providers.NVIDIA_RIVA]: "nvidia_riva/nvidia/parakeet-ctc-1_1b-asr",
+  [Providers.OPENCHEAP]: "opencheap/glm-5.3-flash",
   [Providers.Oracle]: "oci/xai.grok-4",
   [Providers.RunwayML]: "runwayml/gen4_turbo",
   [Providers.SageMaker]: "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
