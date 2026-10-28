@@ -7,6 +7,7 @@ with guardrail transformations.
 
 import copy
 import json
+import uuid
 from collections.abc import Callable
 from typing import Any, Final, List, Literal, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -33,6 +34,7 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
+from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.responses.litellm_completion_transformation.compaction_items import compaction_summary
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -655,17 +657,137 @@ class TestToolResultItemsReachTextsGuardrails:
         ]
 
     @pytest.mark.asyncio
-    async def test_text_only_parts_are_scanned_as_one_text_and_rewritten_into_one_part(self) -> None:
+    @pytest.mark.parametrize("part_type", ["input_text", "output_text"])
+    async def test_text_only_parts_are_scanned_as_one_text_and_rewritten_into_the_first_part(
+        self, part_type: str
+    ) -> None:
         guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
         call_item, output_type = _TOOL_TURNS[0]
-        parts: Final = [{"type": "input_text", "text": "SECRET forecast: "}, {"type": "input_text", "text": "sunny"}]
+        parts: Final = [
+            {"type": part_type, "text": "SECRET forecast: ", "annotations": []},
+            {"type": part_type, "text": "sunny"},
+        ]
 
         result: Final = await OpenAIResponsesHandler().process_input_messages(
             _tool_result_request(call_item, output_type, parts), guardrail
         )
 
         assert guardrail.seen_texts == [["Weather?", "SECRET forecast: sunny"]]
-        assert result["input"][2]["output"] == [{"type": "input_text", "text": "SECRET forecast: sunny [GUARDRAILED]"}]
+        assert result["input"][2]["output"] == [
+            {"type": part_type, "text": "SECRET forecast: sunny [GUARDRAILED]", "annotations": []}
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("empty_output", ["", None], ids=["empty_string", "null"])
+    async def test_empty_tool_output_sends_no_text_and_stays_as_sent(self, empty_output: str | None) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        call_item, output_type = _TOOL_TURNS[0]
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            _tool_result_request(call_item, output_type, empty_output), guardrail
+        )
+
+        assert guardrail.seen_texts == [["Weather?"]]
+        assert result["input"][2] == {"type": output_type, "call_id": "call_1", "output": empty_output}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("empty_output", ["", None], ids=["empty_string", "null"])
+    async def test_bedrock_masking_applies_to_a_request_with_an_empty_tool_output(
+        self, empty_output: str | None
+    ) -> None:
+        guardrail: Final = BedrockGuardrail(
+            guardrail_name="bedrock-pre", guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+        )
+        credentials: Final = MagicMock(access_key="test-access-key", secret_key="test-secret-key", token=None)
+        sent_texts: Final[list[list[str]]] = []
+
+        async def bedrock_echoing_masked_blocks(*, data: bytes, **_: object) -> MagicMock:
+            texts: Final = [block["text"]["text"] for block in json.loads(data)["content"]]
+            sent_texts.append(texts)
+            outputs: Final = [{"text": text.replace("jane@example.com", "{EMAIL}")} for text in texts]
+            return MagicMock(
+                status_code=200, json=MagicMock(return_value={"action": "GUARDRAIL_INTERVENED", "outputs": outputs})
+            )
+
+        request: Final = {
+            "model": "gpt-5.4-mini",
+            "input": [
+                {"role": "user", "content": "Email jane@example.com the result."},
+                {"type": "function_call", "call_id": "call_1", "name": "send", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": empty_output},
+                {"role": "user", "content": "Done?"},
+            ],
+        }
+
+        with (
+            patch.object(guardrail, "_load_credentials", return_value=(credentials, "us-east-1")),
+            patch.object(guardrail.async_handler, "post", side_effect=bedrock_echoing_masked_blocks),
+        ):
+            result: Final = await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+
+        assert sent_texts == [["Email jane@example.com the result.", "Done?"]]
+        assert result["input"][0]["content"] == "Email {EMAIL} the result."
+        assert result["input"][2]["output"] == empty_output
+
+    @pytest.mark.asyncio
+    async def test_bedrock_only_scan_new_messages_scans_only_the_new_tool_result(self) -> None:
+        guardrail: Final = BedrockGuardrail(
+            guardrail_name="bedrock-incremental",
+            guardrailIdentifier="test-guardrail",
+            guardrailVersion="DRAFT",
+            only_scan_new_messages=True,
+        )
+        credentials: Final = MagicMock(access_key="test-access-key", secret_key="test-secret-key", token=None)
+        sent_texts: Final[list[list[str]]] = []
+
+        async def bedrock_allowing(*, data: bytes, **_: object) -> MagicMock:
+            sent_texts.append([block["text"]["text"] for block in json.loads(data)["content"]])
+            return MagicMock(status_code=200, json=MagicMock(return_value={"action": "NONE", "outputs": []}))
+
+        first_turn: Final = [
+            {"role": "user", "content": "Weather in Paris and Rome?"},
+            {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "Paris"}'},
+            {"type": "function_call_output", "call_id": "call_1", "output": "Paris: sunny"},
+        ]
+        second_turn: Final = [
+            *first_turn,
+            {"type": "function_call", "call_id": "call_2", "name": "get_weather", "arguments": '{"city": "Rome"}'},
+            {"type": "function_call_output", "call_id": "call_2", "output": "Rome: rain"},
+        ]
+        session: Final = {"litellm_session_id": f"session-{uuid.uuid4()}"}
+
+        with (
+            patch.object(guardrail, "_load_credentials", return_value=(credentials, "us-east-1")),
+            patch.object(guardrail.async_handler, "post", side_effect=bedrock_allowing),
+        ):
+            for turn in (first_turn, second_turn):
+                await OpenAIResponsesHandler().process_input_messages(
+                    {"model": "gpt-5.4-mini", "input": copy.deepcopy(turn), **session}, guardrail
+                )
+
+        assert sent_texts == [["Weather in Paris and Rome?", "Paris: sunny"], ["Rome: rain"]]
+
+    @pytest.mark.asyncio
+    async def test_file_id_screenshot_is_not_scanned_as_text_or_rewritten(self) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        screenshot_output: Final = {
+            "type": "computer_call_output",
+            "call_id": "cu_1",
+            "output": {"type": "computer_screenshot", "file_id": "file-SECRET-screen"},
+        }
+        request: Final = {
+            "model": "gpt-5.4-mini",
+            "input": [
+                {"role": "user", "content": "Open the page"},
+                {"type": "computer_call", "call_id": "cu_1", "id": "cu_1", "action": {"type": "screenshot"}},
+                copy.deepcopy(screenshot_output),
+            ],
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+
+        assert guardrail.seen_texts == [["Open the page"]]
+        assert result["input"][2] == screenshot_output
 
     @pytest.mark.asyncio
     async def test_joined_text_parts_rewrite_keeps_parts_that_are_not_text(self) -> None:
@@ -872,9 +994,9 @@ class TestToolResultItemsReachTextsGuardrails:
             async def apply_guardrail(
                 self,
                 inputs: GenericGuardrailAPIInputs,
-                request_data: dict,
+                request_data: dict[str, object],
                 input_type: Literal["request", "response"],
-                logging_obj: Optional[Any] = None,
+                logging_obj: LiteLLMLoggingObj | None = None,
             ) -> GenericGuardrailAPIInputs:
                 masked: Final = await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
                 return {**masked, "tools": [renamed_original, added_tool]}

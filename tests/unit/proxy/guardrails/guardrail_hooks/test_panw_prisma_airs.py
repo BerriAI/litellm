@@ -4892,6 +4892,26 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
                 id="computer_call_output",
             ),
             pytest.param(
+                (
+                    {"type": "computer_call", "call_id": "cu_1", "id": "cu_1", "action": {"type": "screenshot"}},
+                    {
+                        "type": "computer_call_output",
+                        "call_id": "cu_1",
+                        "output": {"type": "computer_screenshot", "file_id": "file-screen"},
+                    },
+                ),
+                None,
+                id="computer_call_output_file_id",
+            ),
+            pytest.param(
+                (
+                    {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                    {"type": "function_call_output", "call_id": "call_1", "output": ""},
+                ),
+                None,
+                id="function_call_output_empty",
+            ),
+            pytest.param(
                 ({"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "thinking"}]},),
                 None,
                 id="reasoning",

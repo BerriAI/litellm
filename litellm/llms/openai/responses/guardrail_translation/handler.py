@@ -550,11 +550,11 @@ def _text_part_indices(parts: Sequence[object]) -> tuple[int, ...]:
 
 
 def tool_output_texts(item: object) -> tuple[tuple[int | None, str], ...]:
-    if not stream_item_field(item, "call_id"):
+    if not stream_item_field(item, "call_id") or stream_item_field(item, "type") == "computer_call_output":
         return ()
     tool_content: Final = tool_output_to_chat_content(stream_item_field(item, "output"))
     if isinstance(tool_content, str):
-        return ((None, tool_content),)
+        return ((None, tool_content),) if tool_content else ()
     parts: Final = stream_item_items(item, "output")
     return tuple((index, text) for index, part in enumerate(parts) if (text := _tool_output_part_text(part)))
 
@@ -568,10 +568,13 @@ def _rewritten_whole_text(item: object, field: str, guardrail_response: str) -> 
     text_indices: Final = _text_part_indices(parts)
     if not text_indices:
         return guardrail_response
+    first_text_index: Final = text_indices[0]
     return [
-        {"type": "input_text", "text": guardrail_response} if index == text_indices[0] else part
+        {**_item_fields_adapter.validate_python(part), "text": guardrail_response}
+        if index == first_text_index
+        else part
         for index, part in enumerate(parts)
-        if index == text_indices[0] or index not in text_indices
+        if index == first_text_index or index not in text_indices
     ]
 
 
