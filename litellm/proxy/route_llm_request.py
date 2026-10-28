@@ -720,6 +720,21 @@ async def route_request(
     """
     Common helper to route the request
     """
+    # Enforce the key and team allowlist on the model that will actually be routed,
+    # not only the body model auth read. Routes that bind the model from the URL
+    # resolve it into data["model"] before dispatch, so this is the single place
+    # that covers every route, including ones added later.
+    dispatched_model: Final = data.get("model")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # route_request takes an untyped dict body
+    if user_api_key_dict is not None and llm_router is not None and isinstance(dispatched_model, str):
+        from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+        await can_key_call_resolved_model(
+            model=dispatched_model,
+            llm_model_list=llm_router.model_list,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Router.model_list is an untyped list
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+        )
+
     router_only_settings_from_override: Final = _merge_router_settings_override(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
     try:
         return await _route_request_single_attempt(

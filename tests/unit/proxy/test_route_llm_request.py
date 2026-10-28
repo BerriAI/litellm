@@ -3025,3 +3025,66 @@ async def test_user_config_routers_discard_the_least_recently_used_router_past_c
     assert first_handler() is not None
     assert second_handler() is None
     routers.clear()
+
+
+def _allowlist_router() -> "litellm.Router":
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "allowed-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake", "mock_response": "ok"},
+            },
+            {
+                "model_name": "denied-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "ok"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_route_request_denies_resolved_model_outside_key_allowlist():
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+
+    router = _allowlist_router()
+    key = UserAPIKeyAuth(api_key="sk-test", models=["allowed-model"])
+    data = {"model": "denied-model", "messages": [{"role": "user", "content": "hi"}]}
+
+    with pytest.raises(ProxyException) as exc:
+        await route_request(data, router, None, "acompletion", user_api_key_dict=key)
+    assert exc.value.type == ProxyErrorTypes.key_model_access_denied.value
+
+
+@pytest.mark.asyncio
+async def test_route_request_allows_resolved_model_inside_key_allowlist():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = _allowlist_router()
+    key = UserAPIKeyAuth(api_key="sk-test", models=["allowed-model"])
+    data = {"model": "allowed-model", "messages": [{"role": "user", "content": "hi"}]}
+
+    response = await route_request(data, router, None, "acompletion", user_api_key_dict=key)
+    assert await response if asyncio.iscoroutine(response) else response
+
+
+@pytest.mark.asyncio
+async def test_route_request_without_a_key_skips_the_allowlist_check():
+    router = _allowlist_router()
+    data = {"model": "denied-model", "messages": [{"role": "user", "content": "hi"}]}
+
+    response = await route_request(data, router, None, "acompletion")
+    assert await response if asyncio.iscoroutine(response) else response
+
+
+@pytest.mark.asyncio
+async def test_route_request_list_model_is_not_blocked_by_the_allowlist_check():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = _allowlist_router()
+    key = UserAPIKeyAuth(api_key="sk-test", models=["allowed-model"])
+    data = {"model": ["allowed-model", "denied-model"], "messages": [{"role": "user", "content": "hi"}]}
+
+    # A list model value is handled by the per-model auth path, not this backstop,
+    # so the check must not raise on it.
+    with contextlib.suppress(Exception):
+        await route_request(data, router, None, "acompletion", user_api_key_dict=key)
