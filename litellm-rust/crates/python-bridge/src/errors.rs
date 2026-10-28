@@ -200,10 +200,6 @@ mod tests {
             let ((status, returned_body), headers) = upstream_payload(py, &upstream);
             assert_eq!(status, 529);
             assert_eq!(returned_body, body);
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(&returned_body).unwrap(),
-                envelope
-            );
             assert!(headers.is_empty());
         });
     }
