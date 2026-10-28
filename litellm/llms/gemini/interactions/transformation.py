@@ -105,6 +105,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         return [
             "model",
             "agent",
+            "agent_config",
             "input",
             "tools",
             "system_instruction",
@@ -188,6 +189,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             request_body["input"] = input
 
         optional_keys: Final = [
+            "agent_config",
             "tools",
             "system_instruction",
             "stream",

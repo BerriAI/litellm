@@ -236,6 +236,30 @@ class TestGoogleInteractionsCreate:
         assert json.loads(route.calls.last.request.content) == expected_body
         assert response.status == "completed"
 
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_create_with_agent_config_sends_it_to_gemini(self, respx_mock: MockRouter) -> None:
+        route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            return_value=httpx.Response(
+                200,
+                json={"id": "interaction-agent", "object": "interaction", "status": "completed"},
+            )
+        )
+
+        interactions.create(
+            agent="antigravity-preview-09-2026",
+            agent_config={"type": "antigravity", "model": "gemini-3.8-flash"},
+            input="Say hi in one word.",
+            environment="remote",
+            api_key="gemini-offline",
+        )
+
+        assert json.loads(route.calls.last.request.content) == {
+            "agent": "antigravity-preview-09-2026",
+            "agent_config": {"type": "antigravity", "model": "gemini-3.8-flash"},
+            "input": "Say hi in one word.",
+            "environment": "remote",
+        }
+
     @pytest.mark.parametrize(
         ("model", "api_key", "url", "expected_body", "sse_body", "expected_chunks"),
         [

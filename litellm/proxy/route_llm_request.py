@@ -256,7 +256,6 @@ REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = Ma
         "avideo_create_character": ("name", "video"),
         "acreate_container": ("name",),
         "aupload_container_file": ("file",),
-        "acreate_agent": ("name",),
         "acreate_interaction": ("input",),
         "acreate_eval": ("data_source_config", "testing_criteria"),
         "acreate_run": ("data_source",),
@@ -264,7 +263,7 @@ REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = Ma
 )
 
 REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
-    {"acreate_interaction": ("model", "agent")}
+    {"acreate_interaction": ("model", "agent"), "acreate_agent": ("id", "name")}
 )
 
 JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])

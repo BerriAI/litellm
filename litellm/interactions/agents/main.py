@@ -6,11 +6,12 @@ Usage:
 
     # Create
     response = litellm.interactions.agents.create(
-        name="waverunner",
+        id="waverunner",
         custom_llm_provider="gemini",
         api_key="...",
-        base_agent="gemini-2.5-flash",
-        instructions="You are a helpful assistant.",
+        base_agent="antigravity-preview-09-2026",
+        system_instruction="You are a helpful assistant.",
+        agent_config={"type": "antigravity", "model": "gemini-3.8-flash"},
     )
 
     # List
@@ -30,17 +31,19 @@ Usage:
 
 import asyncio
 import contextvars
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
 from functools import partial
 from typing import Any, Final
 
 import httpx
+from pydantic import ValidationError
 
 import litellm
 from litellm.interactions.agents.http_handler import agents_http_handler
 from litellm.interactions.agents.utils import get_provider_agents_api_config
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.agents import (
+    AgentCreateRequest,
     AgentCreateResponse,
     AgentDeleteResult,
     AgentListResponse,
@@ -94,9 +97,48 @@ def _make_logging_obj(
 # ================================================================== #
 
 
+def _alias_conflict(field: str, value: str | None, alias: str, alias_value: str | None) -> str | None:
+    if value is None or alias_value is None or value == alias_value:
+        return None
+    return f"'{alias}' is an alias of '{field}', but the request gives them different values. Pass only '{field}'."
+
+
+def _create_request_or_error(
+    id: str | None,
+    name: str | None,
+    base_agent: str | None,
+    agent_config: Mapping[str, object] | None,
+    system_instruction: str | None,
+    instructions: str | None,
+    base_environment: InteractionEnvironment | None,
+    description: str | None,
+    tools: Sequence[Mapping[str, object]] | None,
+) -> AgentCreateRequest | str:
+    conflict: Final = _alias_conflict("id", id, "name", name) or _alias_conflict(
+        "system_instruction", system_instruction, "instructions", instructions
+    )
+    if conflict is not None:
+        return conflict
+    agent_id: Final = id if id is not None else name
+    if agent_id is None:
+        return "Missing required parameter: 'id' (or its alias 'name')."
+    try:
+        return AgentCreateRequest(
+            id=agent_id,
+            base_agent=base_agent,
+            agent_config=agent_config,
+            system_instruction=system_instruction if system_instruction is not None else instructions,
+            base_environment=base_environment,
+            description=description,
+            tools=tools,
+        )
+    except ValidationError as e:
+        return str(e)
+
+
 @client
 async def acreate(
-    name: str,
+    id: str | None = None,
     base_agent: str | None = None,
     instructions: str | None = None,
     base_environment: InteractionEnvironment | None = None,
@@ -104,6 +146,12 @@ async def acreate(
     extra_headers: dict[str, str] | None = None,
     extra_body: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
+    *,
+    name: str | None = None,
+    agent_config: Mapping[str, object] | None = None,
+    system_instruction: str | None = None,
+    description: str | None = None,
+    tools: Sequence[Mapping[str, object]] | None = None,
     **kwargs,
 ) -> AgentCreateResponse:
     """Async: Create a managed agent on the provider side."""
@@ -113,7 +161,7 @@ async def acreate(
         kwargs["acreate_agent"] = True
         func: Final = partial(
             create,
-            name=name,
+            id=id,
             base_agent=base_agent,
             instructions=instructions,
             base_environment=base_environment,
@@ -121,6 +169,11 @@ async def acreate(
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout,
+            name=name,
+            agent_config=agent_config,
+            system_instruction=system_instruction,
+            description=description,
+            tools=tools,
             **kwargs,
         )
         ctx: Final = contextvars.copy_context()
@@ -130,7 +183,7 @@ async def acreate(
         return init_response
     except Exception as e:
         raise litellm.exception_type(
-            model=name,
+            model=id or name or "",
             custom_llm_provider=custom_llm_provider or "gemini",
             original_exception=e,
             completion_kwargs=local_vars,
@@ -140,7 +193,7 @@ async def acreate(
 
 @client
 def create(
-    name: str,
+    id: str | None = None,
     base_agent: str | None = None,
     instructions: str | None = None,
     base_environment: InteractionEnvironment | None = None,
@@ -148,40 +201,60 @@ def create(
     extra_headers: dict[str, str] | None = None,
     extra_body: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
+    *,
+    name: str | None = None,
+    agent_config: Mapping[str, object] | None = None,
+    system_instruction: str | None = None,
+    description: str | None = None,
+    tools: Sequence[Mapping[str, object]] | None = None,
     **kwargs,
 ) -> AgentCreateResponse | Coroutine[object, object, AgentCreateResponse]:
     """
     Sync: Create a managed agent on the provider side.
 
     Args:
-        name: Name for the agent (required).
-        base_agent: Base agent to derive from (e.g. "waverunner").
-        instructions: System instructions for the agent.
+        id: Identifier for the agent. Exactly one of ``id`` or its alias ``name`` is required.
+        base_agent: Base agent to derive from (e.g. "antigravity-preview-09-2026").
+        instructions: Alias of ``system_instruction``.
         base_environment: Environment to fork from — an env_id string or a
             dict like ``{"type": "remote", "sources": [...]}``.
         custom_llm_provider: Provider to use, e.g. "gemini".
         extra_headers: Additional HTTP headers.
         extra_body: Additional request body fields.
         timeout: Request timeout.
+        name: Alias of ``id``.
+        agent_config: Agent runtime config, e.g. ``{"type": "antigravity", "model": "gemini-3.8-flash"}``.
+        system_instruction: System instruction for the agent.
+        description: Description of the agent for developers.
+        tools: Tools available to the agent, e.g. ``[{"type": "code_execution"}]``.
         **kwargs: Forwarded to GenericLiteLLMParams (api_key, api_base, etc.).
     """
     local_vars: Final = locals()
     custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
     try:
         _is_async: Final = kwargs.pop("acreate_agent", False) is True
-        if base_agent is not None:
-            kwargs["base_agent"] = base_agent
-        if instructions is not None:
-            kwargs["instructions"] = instructions
-        if base_environment is not None:
-            kwargs["base_environment"] = base_environment
+        create_request: Final = _create_request_or_error(
+            id=id,
+            name=name,
+            base_agent=base_agent,
+            agent_config=agent_config,
+            system_instruction=system_instruction,
+            instructions=instructions,
+            base_environment=base_environment,
+            description=description,
+            tools=tools,
+        )
+        if isinstance(create_request, str):
+            raise litellm.BadRequestError(
+                message=create_request, model=id or name or "", llm_provider=custom_llm_provider
+            )
         kwargs.setdefault("custom_llm_provider", custom_llm_provider)
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
-        logging_obj: Final = _make_logging_obj(kwargs, name, custom_llm_provider, "create_agent", {})
+        logging_obj: Final = _make_logging_obj(kwargs, create_request.id, custom_llm_provider, "create_agent", {})
         config: Final = _get_agents_api_config(custom_llm_provider)
         return agents_http_handler.create_agent(
             agents_api_config=config,
-            name=name,
+            create_request=create_request,
             litellm_params=litellm_params,
             logging_obj=logging_obj,
             extra_headers=extra_headers,
@@ -191,7 +264,7 @@ def create(
         )
     except Exception as e:
         raise litellm.exception_type(
-            model=name,
+            model=id or name or "",
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,

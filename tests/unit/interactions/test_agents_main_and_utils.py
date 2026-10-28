@@ -9,9 +9,14 @@ small helper utilities without touching the network.
 """
 
 import asyncio
+import json
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 
 import litellm
@@ -137,7 +142,7 @@ class TestSyncEntryPoints:
         assert response is sentinel
         handler.create_agent.assert_called_once()
         kw = handler.create_agent.call_args.kwargs
-        assert kw["name"] == "waverunner"
+        assert kw["create_request"].id == "waverunner"
         assert kw["_is_async"] is False
         assert kw["extra_headers"] == {"X-Test": "1"}
         assert kw["extra_body"] == {"foo": "bar"}
@@ -205,7 +210,7 @@ class TestAsyncEntryPoints:
 
         def fake_create_agent(**kwargs):
             assert kwargs["_is_async"] is True
-            assert kwargs["name"] == "waverunner"
+            assert kwargs["create_request"].id == "waverunner"
             return sentinel
 
         handler = MagicMock()
@@ -349,3 +354,115 @@ class TestAsyncErrorWrapping:
         with patch(_HANDLER_PATH, handler):
             with pytest.raises(litellm.APIConnectionError):
                 await alist_versions(name="waverunner", api_key="AIza")
+
+
+_GEMINI_AGENTS_URL: Final = "https://generativelanguage.googleapis.com/v1beta/agents"
+
+
+def _sent_json(route: respx.Route) -> object:
+    return json.loads(route.calls.last.request.content)
+
+
+class TestCreateRequestBody:
+    def test_create_sends_every_current_field_verbatim(self, respx_mock: respx.MockRouter) -> None:
+        route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(
+            return_value=httpx.Response(200, json={"id": "sentinel", "base_agent": "antigravity-preview-09-2026"})
+        )
+
+        response: Final = create(
+            id="sentinel",
+            base_agent="antigravity-preview-09-2026",
+            agent_config={"type": "antigravity", "model": "gemini-3.8-flash", "max_total_tokens": None},
+            system_instruction="Always answer in exactly three words.",
+            base_environment={"type": "remote", "sources": [{"type": "gcs", "source": "gs://bucket/skill"}]},
+            description="Watches the queue.",
+            tools=[{"type": "code_execution"}],
+            api_key="AIza-test",
+        )
+
+        assert _sent_json(route) == {
+            "id": "sentinel",
+            "base_agent": "antigravity-preview-09-2026",
+            "agent_config": {"type": "antigravity", "model": "gemini-3.8-flash", "max_total_tokens": None},
+            "system_instruction": "Always answer in exactly three words.",
+            "base_environment": {"type": "remote", "sources": [{"type": "gcs", "source": "gs://bucket/skill"}]},
+            "description": "Watches the queue.",
+            "tools": [{"type": "code_execution"}],
+        }
+        assert (response.id, response.name) == ("sentinel", "sentinel")
+
+    @pytest.mark.parametrize(
+        ("identifier", "instruction", "expected"),
+        [
+            pytest.param(
+                {"name": "slides"},
+                {"instructions": "Make slides."},
+                {"id": "slides", "system_instruction": "Make slides."},
+                id="preview-aliases",
+            ),
+            pytest.param(
+                {"id": "slides", "name": "slides"},
+                {"system_instruction": "Make slides.", "instructions": "Make slides."},
+                {"id": "slides", "system_instruction": "Make slides."},
+                id="same-value-under-both-names",
+            ),
+        ],
+    )
+    def test_create_sends_preview_aliases_under_current_names(
+        self,
+        respx_mock: respx.MockRouter,
+        identifier: Mapping[str, str],
+        instruction: Mapping[str, str],
+        expected: Mapping[str, str],
+    ) -> None:
+        route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(
+            return_value=httpx.Response(200, json={"id": "slides"})
+        )
+
+        create(**identifier, **instruction, base_agent="antigravity-preview-09-2026", api_key="AIza-test")
+
+        assert _sent_json(route) == {**expected, "base_agent": "antigravity-preview-09-2026"}
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            pytest.param({"base_agent": "antigravity-preview-09-2026"}, id="no-identifier"),
+            pytest.param({"id": "slides", "name": "decks"}, id="different-id-and-name"),
+            pytest.param(
+                {"id": "slides", "system_instruction": "Make slides.", "instructions": "Make decks."},
+                id="different-system-instruction-and-instructions",
+            ),
+            pytest.param({"id": "slides", "agent_config": "antigravity"}, id="agent-config-not-an-object"),
+        ],
+    )
+    def test_create_rejects_a_malformed_identifier_or_instruction(
+        self, respx_mock: respx.MockRouter, fields: Mapping[str, str]
+    ) -> None:
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            create(**fields, api_key="AIza-test")
+
+        assert exc_info.value.status_code == 400
+        assert not respx_mock.calls
+
+    @pytest.mark.asyncio
+    async def test_acreate_sends_every_current_field_verbatim(
+        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(
+            return_value=httpx.Response(200, json={"id": "sentinel"})
+        )
+
+        response: Final = await acreate(
+            id="sentinel",
+            agent_config={"type": "antigravity", "model": "gemini-3.8-flash"},
+            system_instruction="Always answer in exactly three words.",
+            api_key="AIza-test",
+        )
+
+        assert _sent_json(route) == {
+            "id": "sentinel",
+            "agent_config": {"type": "antigravity", "model": "gemini-3.8-flash"},
+            "system_instruction": "Always answer in exactly three words.",
+        }
+        assert response.id == "sentinel"

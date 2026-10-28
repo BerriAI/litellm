@@ -88,6 +88,7 @@ async def acreate(
     background: bool | None = None,
     # Agent execution environment ("remote", env id, or remote config object)
     environment: InteractionEnvironment | None = None,
+    agent_config: Mapping[str, object] | None = None,
     # Response format
     response_modalities: list[str] | None = None,
     response_format: Mapping[str, object] | None = None,
@@ -121,6 +122,7 @@ async def acreate(
             string, or a config object such as
             ``{"type": "remote", "sources": [...]}`` /
             ``{"type": "remote", "network": {...}}``
+        agent_config: Agent runtime config, e.g. ``{"type": "antigravity", "model": "gemini-3.8-flash"}``
         response_modalities: Requested response modalities (TEXT, IMAGE, AUDIO)
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
@@ -155,6 +157,7 @@ async def acreate(
             store=store,
             background=background,
             environment=environment,
+            agent_config=agent_config,
             response_modalities=response_modalities,
             response_format=response_format,
             response_mime_type=response_mime_type,
@@ -213,6 +216,7 @@ def create(
     background: bool | None = None,
     # Agent execution environment ("remote", env id, or remote config object)
     environment: InteractionEnvironment | None = None,
+    agent_config: Mapping[str, object] | None = None,
     # Response format
     response_modalities: list[str] | None = None,
     response_format: Mapping[str, object] | None = None,
@@ -250,6 +254,7 @@ def create(
             string, or a config object such as
             ``{"type": "remote", "sources": [...]}`` /
             ``{"type": "remote", "network": {...}}``
+        agent_config: Agent runtime config, e.g. ``{"type": "antigravity", "model": "gemini-3.8-flash"}``
         response_modalities: Requested response modalities (TEXT, IMAGE, AUDIO)
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
