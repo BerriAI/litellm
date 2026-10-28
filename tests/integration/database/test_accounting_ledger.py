@@ -155,7 +155,7 @@ _TARGETS = (DeliveryTarget.USER_SPEND, DeliveryTarget.TEAM_SPEND)
 
 
 def _usage(event_id: str = "usage", *, inbound: bool = False) -> InboundUsageEvent | OutboundUsageEvent:
-    fields = dict(
+    fields: Final = dict(
         event_id=event_id,
         request_id="request",
         call_type=CallTypes.completion,
@@ -199,7 +199,7 @@ async def _insert(
 
 def _rows(database_url: str, statement: str, parameters: tuple[object, ...] = ()) -> list[tuple[object, ...]]:
     with psycopg.connect(database_url) as connection:
-        cursor = connection.execute(statement, parameters)
+        cursor: Final = connection.execute(statement, parameters)
         return cursor.fetchall() if cursor.description is not None else []
 
 
@@ -221,23 +221,25 @@ async def writer(ledger_database, monkeypatch):
 @pytest.mark.asyncio
 async def test_event_and_complete_delivery_set_commit_together(writer, ledger_database):
     _, store = writer
-    event = _usage()
+    event: Final = _usage()
     assert await _insert(store, event, requested_region="eu", quantity="1.25") == "inserted"
-    rows = _rows(ledger_database, 'SELECT kind::text, source_event_id, payload FROM "LiteLLM_AccountingEvent"')
+    rows: Final = _rows(ledger_database, 'SELECT kind::text, source_event_id, payload FROM "LiteLLM_AccountingEvent"')
     assert rows == [("outbound_usage", None, json.loads(_envelope(event, requested_region="eu", quantity="1.25")))]
-    deliveries = _rows(ledger_database, 'SELECT target::text, state::text, attempts FROM "LiteLLM_AccountingDelivery"')
+    deliveries: Final = _rows(
+        ledger_database, 'SELECT target::text, state::text, attempts FROM "LiteLLM_AccountingDelivery"'
+    )
     assert set(deliveries) == {(target.value, "pending", 0) for target in _TARGETS}
 
 
 @pytest.mark.asyncio
 async def test_concurrent_duplicates_preserve_completed_deliveries(writer, ledger_database):
     _, store = writer
-    event = _usage(inbound=True)
-    results = await asyncio.gather(*(_insert(store, event) for _ in range(8)))
+    event: Final = _usage(inbound=True)
+    results: Final = await asyncio.gather(*(_insert(store, event) for _ in range(8)))
     assert results.count("inserted") == 1 and results.count("duplicate") == 7
     _complete_and_age(ledger_database)
-    before = _rows(ledger_database, 'SELECT * FROM "LiteLLM_AccountingDelivery" ORDER BY target')
-    reordered = json.dumps(json.loads(_envelope(event)), sort_keys=True, indent=2)
+    before: Final = _rows(ledger_database, 'SELECT * FROM "LiteLLM_AccountingDelivery" ORDER BY target')
+    reordered: Final = json.dumps(json.loads(_envelope(event)), sort_keys=True, indent=2)
     assert await store.insert_event(event, tuple(reversed(_TARGETS)) + _TARGETS, envelope=reordered) == "duplicate"
     assert _rows(ledger_database, 'SELECT * FROM "LiteLLM_AccountingDelivery" ORDER BY target') == before
     assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingEvent"') == [(1,)]
@@ -247,12 +249,12 @@ async def test_concurrent_duplicates_preserve_completed_deliveries(writer, ledge
 @pytest.mark.parametrize("change", ["payload", "context", "targets", "schema_version", "version"])
 async def test_conflicting_acceptance_cannot_overwrite_or_add_work(writer, ledger_database, change):
     _, store = writer
-    event = _usage()
+    event: Final = _usage()
     await _insert(store, event)
-    altered = event.model_copy(update={"outcome": Outcome.FAILED}) if change == "payload" else event
-    targets = (DeliveryTarget.KEY_SPEND,) if change == "targets" else _TARGETS
-    context = {"override": "0.5"} if change == "context" else {}
-    options = {change: 2} if change in ("schema_version", "version") else {}
+    altered: Final = event.model_copy(update={"outcome": Outcome.FAILED}) if change == "payload" else event
+    targets: Final = (DeliveryTarget.KEY_SPEND,) if change == "targets" else _TARGETS
+    context: Final = {"override": "0.5"} if change == "context" else {}
+    options: Final = {change: 2} if change in ("schema_version", "version") else {}
     with pytest.raises(AccountingConflictError, match="conflicts"):
         await store.insert_event(altered, targets, envelope=_envelope(altered, **context), **options)
     assert _rows(ledger_database, 'SELECT payload FROM "LiteLLM_AccountingEvent"') == [(json.loads(_envelope(event)),)]
@@ -265,14 +267,16 @@ async def test_conflicting_acceptance_cannot_overwrite_or_add_work(writer, ledge
 async def test_competing_cost_identities_accept_only_one_authoritative_charge(writer, ledger_database):
     _, store = writer
     await _insert(store, _usage())
-    results = await asyncio.gather(
+    results: Final = await asyncio.gather(
         _insert(store, _cost()), _insert(store, _cost(event_id="other-cost")), return_exceptions=True
     )
     assert sum(result == "inserted" for result in results) == 1
     assert sum(isinstance(result, AccountingConflictError) for result in results) == 1
-    accepted = _rows(ledger_database, "SELECT event_id, payload FROM \"LiteLLM_AccountingEvent\" WHERE kind = 'cost'")
+    accepted: Final = _rows(
+        ledger_database, "SELECT event_id, payload FROM \"LiteLLM_AccountingEvent\" WHERE kind = 'cost'"
+    )
     assert len(accepted) == 1
-    event = CostEvent.model_validate_json(json.dumps(accepted[0][1]["event"]))
+    event: Final = CostEvent.model_validate_json(json.dumps(accepted[0][1]["event"]))
     assert await _insert(store, event) == "duplicate"
     assert event.snapshot.total_cost == Decimal("0.125")
     with pytest.raises(AccountingConflictError):
@@ -310,10 +314,10 @@ async def test_interruption_rolls_back_or_retry_recognizes_commit(writer, ledger
                 raise asyncio.CancelledError
         raise RuntimeError("injected lost acknowledgement")
 
-    error = asyncio.CancelledError if failure == "cancellation" else RuntimeError
+    error: Final = asyncio.CancelledError if failure == "cancellation" else RuntimeError
     with pytest.raises(error):
         await _insert(AccountingLedger(interrupted), _usage())
-    expected = 1 if failure == "after_commit" else 0
+    expected: Final = 1 if failure == "after_commit" else 0
     assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingEvent"') == [(expected,)]
     assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingDelivery"') == [(expected * len(_TARGETS),)]
     assert await _insert(store, _usage()) == ("duplicate" if expected else "inserted")
@@ -354,7 +358,7 @@ async def test_retention_preserves_incomplete_or_recovery_needed_families(writer
             connection.execute(
                 "UPDATE \"LiteLLM_AccountingEvent\" SET recorded_at = %s WHERE event_id = 'cost'", (_CUTOFF,)
             )
-    before = _rows(ledger_database, 'SELECT event_id FROM "LiteLLM_AccountingEvent" ORDER BY event_id')
+    before: Final = _rows(ledger_database, 'SELECT event_id FROM "LiteLLM_AccountingEvent" ORDER BY event_id')
     assert (
         await store.purge_completed(
             redelivery_before=_CUTOFF, recovery_before=_AT if blocked == "recovery" else _CUTOFF
@@ -410,7 +414,7 @@ async def test_retention_makes_progress_past_pending_and_unpriced_events(writer,
 async def test_zero_cost_and_empty_delivery_sets_are_durable(writer, ledger_database):
     _, store = writer
     await _insert(store, _usage(), targets=())
-    event = _cost(amount="0")
+    event: Final = _cost(amount="0")
     assert await _insert(store, event, targets=()) == "inserted"
     assert await _insert(store, event, targets=()) == "duplicate"
     assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingDelivery"') == [(0,)]
@@ -423,8 +427,8 @@ async def test_retention_cannot_delete_source_while_cost_acceptance_is_uncommitt
     client, store = writer
     await _insert(store, _usage())
     _complete_and_age(ledger_database)
-    inserted = asyncio.Event()
-    release = asyncio.Event()
+    inserted: Final = asyncio.Event()
+    release: Final = asyncio.Event()
 
     @asynccontextmanager
     async def paused_commit():
@@ -433,7 +437,7 @@ async def test_retention_cannot_delete_source_while_cost_acceptance_is_uncommitt
             inserted.set()
             await release.wait()
 
-    task = asyncio.create_task(_insert(AccountingLedger(paused_commit), _cost()))
+    task: Final = asyncio.create_task(_insert(AccountingLedger(paused_commit), _cost()))
     try:
         await asyncio.wait_for(inserted.wait(), timeout=5)
         assert await store.purge_completed(redelivery_before=_CUTOFF, recovery_before=_CUTOFF) == 0
@@ -470,7 +474,7 @@ async def test_ledger_reads_and_writes_use_primary_when_replica_is_configured(wr
     with scratch_database("replica") as replica_url:
         monkeypatch.setenv("DATABASE_URL_READ_REPLICA", replica_url)
         async with connected_proxy_prisma(ledger_database) as client:
-            store = AccountingLedger.for_client(client)
+            store: Final = AccountingLedger.for_client(client)
             await _insert(store, _usage())
             assert await _insert(store, _usage()) == "duplicate"
             assert await _insert(store, _cost()) == "inserted"
@@ -481,20 +485,20 @@ async def test_ledger_reads_and_writes_use_primary_when_replica_is_configured(wr
 
 def _index_conditions(plan: object) -> list[tuple[object, object]]:
     if isinstance(plan, dict):
-        own = [(plan.get("Index Name"), plan.get("Index Cond"))] if "Index Name" in plan else []
-        children = [plan.get("Plan"), *plan.get("Plans", [])]
+        own: Final = [(plan.get("Index Name"), plan.get("Index Cond"))] if "Index Name" in plan else []
+        children: Final = [plan.get("Plan"), *plan.get("Plans", [])]
         return own + [pair for child in children if child is not None for pair in _index_conditions(child)]
     return [pair for item in plan for pair in _index_conditions(item)] if isinstance(plan, list) else []
 
 
 @pytest.mark.parametrize("statement", [accounting_ledger._DELETE_EVENTS, accounting_ledger._DELETE_DELIVERIES])
 def test_family_cleanup_lookups_use_the_kind_source_index(ledger_database: str, statement: str) -> None:
-    explained = "EXPLAIN (FORMAT JSON) " + statement.replace("$1", "%s")
+    explained: Final = "EXPLAIN (FORMAT JSON) " + statement.replace("$1", "%s")
     with psycopg.connect(ledger_database) as connection:
         connection.execute("SET enable_seqscan = off")
-        plan = connection.execute(explained, ("usage",) * statement.count("$1")).fetchone()
+        plan: Final = connection.execute(explained, ("usage",) * statement.count("$1")).fetchone()
     assert plan is not None
-    conditions = _index_conditions(plan[0])
+    conditions: Final = _index_conditions(plan[0])
     assert any(
         name == "LiteLLM_AccountingEvent_kind_source_event_id_idx" and "source_event_id" in str(condition)
         for name, condition in conditions
