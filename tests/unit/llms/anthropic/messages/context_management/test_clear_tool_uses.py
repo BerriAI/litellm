@@ -724,8 +724,9 @@ def test_input_tokens_trigger_counts_the_system_prompt(system: str | list[dict[s
     assert with_system["cleared_input_tokens"] == met_without_system["cleared_input_tokens"] > 0
 
 
-async def test_input_tokens_trigger_counts_a_client_compaction_summary() -> None:
-    """A client compaction summary moves into the system prompt, so the trigger counts it too."""
+@pytest.mark.parametrize("compact_position", [None, "after", "before"], ids=["alone", "before_compact", "after_compact"])
+async def test_input_tokens_trigger_counts_a_client_compaction_summary(compact_position: str | None) -> None:
+    """A client compaction summary moves into the system prompt, so the trigger counts it too, in any edit order."""
     tail: Final = _make_history(n_pairs=3)
     edit_spec: Final = {
         "type": "clear_tool_uses_20250919",
@@ -733,6 +734,10 @@ async def test_input_tokens_trigger_counts_a_client_compaction_summary() -> None
         "keep": {"type": "tool_uses", "value": 1},
     }
     compacted_turn: Final = {"role": "assistant", "content": [{"type": "compaction", "content": "Earlier work. " * 400}]}
+    compact_spec: Final = {"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 50_000}}
+    edits: Final = {None: [edit_spec], "after": [edit_spec, compact_spec], "before": [compact_spec, edit_spec]}[
+        compact_position
+    ]
 
     async def prepare(messages: list[dict[str, object]]) -> PolyfillResult | None:
         return await prepare_context_managed_request(
@@ -740,18 +745,21 @@ async def test_input_tokens_trigger_counts_a_client_compaction_summary() -> None
             messages=messages,
             tools=None,
             system=None,
-            context_management_spec={"edits": [edit_spec]},
+            context_management_spec={"edits": edits},
             litellm_metadata=None,
             additional_drop_params=None,
             llm_router=None,
         )
 
+    def cleared(result: PolyfillResult | None) -> list[object]:
+        applied: Final = result.applied_edits if result is not None else []
+        return [edit.get("cleared_tool_uses") for edit in applied if edit.get("type") == "clear_tool_uses_20250919"]
+
     without_summary: Final = await prepare(deepcopy(tail))
     with_summary: Final = await prepare([compacted_turn, *deepcopy(tail)])
 
-    assert without_summary is None or not without_summary.applied_edits
-    assert with_summary is not None
-    assert [edit.get("cleared_tool_uses") for edit in with_summary.applied_edits] == [2]
+    assert cleared(without_summary) == []
+    assert cleared(with_summary) == [2]
 
 
 @pytest.mark.parametrize(("clear_tool_inputs", "triggers"), [(False, False), (True, True)])
