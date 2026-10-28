@@ -499,6 +499,4 @@ def suppressed_backends() -> frozenset[str]:
     """
     if tenant_destinations_are_additive():
         return frozenset()
-    return frozenset(
-        d.callback_name for d in _request_destinations.get() if d.callback_name and not d.failure_only
-    )
+    return frozenset(d.callback_name for d in _request_destinations.get() if d.callback_name and not d.failure_only)
