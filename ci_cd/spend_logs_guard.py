@@ -6,7 +6,7 @@ so a path rule would put every migration on the owner. This gate reads the diff 
 added line in the watched files mentions the table it passes at once, otherwise it passes only once
 the owner's latest review on the pull request is an approval that still covers every spend-log line
 in the head (approvals survive pushes, so a later commit may not add spend-log lines the owner never
-saw). The workflow re-runs on every review.
+saw). Reviews do not trigger the workflow, so the check is re-run by hand after approving.
 """
 
 from __future__ import annotations
@@ -27,7 +27,8 @@ WATCHED: Final = (
     "litellm-proxy-extras/litellm_proxy_extras/schema.prisma",
 )
 MIGRATIONS_PREFIX: Final = "litellm-proxy-extras/litellm_proxy_extras/migrations/"
-TABLE: Final = re.compile(r"(?<![A-Za-z0-9])LiteLLM_SpendLogs", re.IGNORECASE)
+TABLE: Final = re.compile(r"(?<![A-Za-z0-9])LiteLLM_SpendLogs(?![A-Za-z0-9])", re.IGNORECASE)
+DECIDING_STATES: Final = frozenset({"APPROVED", "CHANGES_REQUESTED", "DISMISSED"})
 
 
 class Reviewer(BaseModel):
@@ -73,8 +74,12 @@ def _path_of(section: str) -> str:
 
 
 def approved_by(reviews: Sequence[Review], login: str) -> bool:
-    """True when `login`'s most recent review on the pull request is an approval."""
-    states: Final = tuple(review.state for review in reviews if review.user.login == login)
+    """True when `login`'s most recent review that changes GitHub's approval state is an approval.
+
+    COMMENTED and PENDING reviews leave an earlier approval in force on GitHub, so they are skipped here too.
+    """
+    own: Final = tuple(review.state for review in reviews if review.user.login == login)
+    states: Final = tuple(state for state in own if state in DECIDING_STATES)
     return bool(states) and states[-1] == "APPROVED"
 
 
@@ -148,7 +153,7 @@ def main(argv: Sequence[str]) -> int:
         else f"LiteLLM_SpendLogs lines changed after @{args.approver} approved {approval.commit_id}, "
         f"a new approving review is needed:\n"
     )
-    sys.stdout.write(f"{reason}{listed}The check re-runs when a review is submitted.\n")
+    sys.stdout.write(f"{reason}{listed}After approving, re-run this job.\n")
     return 1
 
 
