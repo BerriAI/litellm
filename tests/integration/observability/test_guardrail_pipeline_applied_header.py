@@ -756,6 +756,7 @@ def agent(rig: _Rig) -> Iterator[str]:
         pytest.param(
             _RESPONSE_MOVES_PAST_FIRST, [_RESPONSE_BLOCKER, _RESPONSE_SECOND], id="first-step-flags-and-moves-on"
         ),
+        pytest.param(_RESPONSE_STOPS_AFTER_FIRST, [_RESPONSE_FIRST], id="first-step-allows"),
     ],
 )
 def test_an_agent_message_names_every_response_step_that_ran_in_the_spend_log_and_the_trace(

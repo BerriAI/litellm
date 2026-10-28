@@ -7542,10 +7542,12 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         processor = ProxyBaseLLMRequestProcessing(data={"model": primary_model})
 
         call_count = 0
+        deferred_per_call = []
 
         async def mock_pre_call_logic(**kwargs):
             nonlocal call_count
             call_count += 1
+            deferred_per_call.append(kwargs["defer_async_logging"])
             model_in_data = processor.data.get("model")
             if model_in_data == primary_model:
                 raise ProxyRateLimitError(
@@ -7578,10 +7580,12 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 model=primary_model,
                 route_type="acompletion",
                 llm_router=mock_router,
+                defer_async_logging=True,
             )
 
         assert processor.data["model"] == fallback_model
         assert call_count == 2
+        assert deferred_per_call == [True, True]
 
     @pytest.mark.asyncio
     async def test_raises_when_no_fallbacks_configured(self):
