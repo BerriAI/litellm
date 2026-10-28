@@ -15,14 +15,16 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.token_counter import is_listed_openai_model
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     billable_input_since_newest_compaction,
     holds_compaction_summary,
 )
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.token_counter import (
@@ -32,6 +34,9 @@ from litellm.rust_bridge.token_counter import (
     native_count,
     rust_tokenizer,
 )
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
 
@@ -45,6 +50,23 @@ def _approximate_input_size(request_body: Mapping[str, object]) -> int:
     and rendering rather than walking keeps mapping keys in the total, which a
     tool schema's property names are."""
     return sum(len(str(request_body.get(field, ""))) for field in _INPUT_SIZE_FIELDS)
+
+
+def tokenizer_models(model: str, llm_router: Router | None) -> tuple[str, ...]:
+    """The names to count a request for `model` with, so the largest count covers every deployment that may serve it.
+
+    An alias counts as its target group. A group served only by listed OpenAI models counts as those models, so it
+    gets their tokenizer, and a group that also serves other models counts as each of them and as its own name. Any
+    other group counts as its own name."""
+    if llm_router is None:
+        return (model,)
+    group: Final = resolve_model_group_alias(llm_router.model_group_alias, model) or model
+    listing: Final = llm_router.get_model_listing_info(group)
+    served: Final = listing.cost_map_keys if listing is not None else ()
+    openai_served: Final = tuple(filter(is_listed_openai_model, served))
+    if not openai_served:
+        return (group,)
+    return served if openai_served == served else (group, *served)
 
 
 async def count_input_tokens(

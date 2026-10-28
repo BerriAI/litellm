@@ -31,6 +31,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     count_request_input_tokens,
     reserve_budget_for_request,
 )
+from litellm.proxy.spend_tracking.input_tokens import count_input_tokens
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
@@ -460,15 +461,28 @@ async def test_alias_group_of_an_openai_model_reserves_on_that_models_token_coun
 
 
 @pytest.mark.asyncio
-async def test_group_mixing_in_a_non_openai_model_keeps_counting_by_its_own_name():
-    router: Final = _router_with_groups(
-        ("mixed", "openai/gpt-6.1-sol"),
-        ("mixed", "anthropic/claude-sonnet-5-5"),
-        ("claude", "anthropic/claude-sonnet-5-5"),
-        ("gpt-6.1-sol", "openai/gpt-6.1-sol"),
+async def test_model_group_alias_of_an_openai_group_reserves_on_that_groups_token_count():
+    router: Final = Router(
+        model_list=[
+            {"model_name": "gpt-6.1-sol", "litellm_params": {"model": "openai/gpt-6.1-sol", "api_key": "sk-test"}}
+        ],
+        model_group_alias={"prod": "gpt-6.1-sol"},
     )
 
-    mixed: Final = (await _input_tokens(router, "mixed"))["mixed"]
+    by_name: Final = await _input_tokens(router, "gpt-6.1-sol")
 
-    assert mixed == (await _input_tokens(router, "claude"))["claude"]
-    assert mixed != (await _input_tokens(router, "gpt-6.1-sol"))["gpt-6.1-sol"]
+    assert await _input_tokens(router, "prod") == {"prod": by_name["gpt-6.1-sol"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("group", ["gpt-6.1-sol", "mixed"])
+async def test_group_mixing_in_a_non_openai_model_reserves_at_least_each_served_models_count(group: str):
+    served: Final = ("openai/gpt-6.1-sol", "anthropic/claude-sonnet-5-5")
+    router: Final = _router_with_groups(*((group, model) for model in served))
+
+    reserved: Final = (await _input_tokens(router, group))[group]
+    per_model: Final = await count_input_tokens(
+        request_body={"model": group, "messages": _MULTILINGUAL_MESSAGES}, raw_body=None, models=served
+    )
+
+    assert all(reserved >= per_model[model] for model in served)

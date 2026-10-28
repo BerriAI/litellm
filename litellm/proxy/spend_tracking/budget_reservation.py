@@ -19,7 +19,6 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
-from litellm.litellm_core_utils.token_counter import is_listed_openai_model
 from litellm.proxy._types import (
     Litellm_EntityType,
     LiteLLM_TeamMembership,
@@ -41,7 +40,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
-from litellm.proxy.spend_tracking.input_tokens import count_input_tokens, count_input_tokens_for_model
+from litellm.proxy.spend_tracking.input_tokens import count_input_tokens, count_input_tokens_for_model, tokenizer_models
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
@@ -1601,28 +1600,19 @@ async def count_request_input_tokens(
     models: Final = _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
     if not models:
         return MappingProxyType({})
-    tokenizer_models: Final = MappingProxyType({model: _tokenizer_models(model, llm_router) for model in models})
+    counted_as: Final = MappingProxyType({model: tokenizer_models(model, llm_router) for model in models})
     counts: Final = await count_input_tokens(
         request_body=request_body,
         raw_body=raw_body,
-        models=tuple(dict.fromkeys(chain.from_iterable(tokenizer_models.values()))),
+        models=tuple(dict.fromkeys(chain.from_iterable(counted_as.values()))),
     )
     return MappingProxyType(
         {
             model: count
-            for model, names in tokenizer_models.items()
+            for model, names in counted_as.items()
             if (count := max((counts[name] for name in names if name in counts), default=None)) is not None
         }
     )
-
-
-def _tokenizer_models(model: str, llm_router: Router | None) -> tuple[str, ...]:
-    """The names to count `model`'s input with: an alias group served only by listed OpenAI models counts as
-    those models, so it gets their tokenizer, and every other name counts as itself."""
-    listing: Final = llm_router.get_model_listing_info(model) if llm_router is not None else None
-    if listing is None or not listing.cost_map_keys:
-        return (model,)
-    return listing.cost_map_keys if all(map(is_listed_openai_model, listing.cost_map_keys)) else (model,)
 
 
 def _estimate_input_tokens(

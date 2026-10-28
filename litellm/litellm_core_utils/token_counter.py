@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import get_httpx_client, header_value
+from litellm.router_utils.deployment_pricing import deployment_pricing_models
 from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
     AnthropicContentParamSource,
@@ -792,8 +793,8 @@ def openai_tokenizer_encoding_name(model: str) -> str:
 
     A listed OpenAI or Azure model that tiktoken does not know is either a suffixed variant of a model it does
     know (`text-embedding-ada-002-v2`) or a newer release than its table, which gets o200k_base, the encoding every
-    OpenAI model since gpt-4o uses. Provider and region prefixes (`azure/eu/`) are dropped, and a bare Azure
-    deployment model (`gpt-41`) counts as listed through its `azure/` cost-map key."""
+    OpenAI model since gpt-4o uses. Provider and region prefixes (`azure/eu/`, `azure_ai/`) are dropped, and a
+    name listed only under Azure (`gpt-41`, `openai/o1-mini`) counts as listed through its `azure/` cost-map key."""
     model_to_use: Final = _listed_openai_model_name(model) or _fix_model_name(model)
     if "gpt-4o" in model_to_use:
         return "o200k_base"
@@ -808,10 +809,20 @@ def is_listed_openai_model(model: str) -> bool:
     return _listed_openai_model_name(model) is not None
 
 
+def deployment_openai_model(deployment: object) -> str | None:
+    """The listed OpenAI model a router deployment serves, read from its base model first, since a custom deployment
+    name (`azure/my-gpt-5`) says nothing about its tokenizer, or None when it serves no listed OpenAI model."""
+    served: Final = next(iter(deployment_pricing_models(deployment)), None)
+    return served if served is not None and is_listed_openai_model(served) else None
+
+
 def _listed_openai_model_name(model: str) -> str | None:
-    provider, separator, name = model.partition("/")
-    candidates: Final = (model, name) if separator and provider in ("openai", "azure") else (model, f"azure/{model}")
-    return model.rsplit("/", 1)[-1] if any(_is_openai_cost_map_model(candidate) for candidate in candidates) else None
+    segments: Final = model.split("/")
+    suffixes: Final = ("/".join(segments[start:]) for start in range(len(segments)))
+    listed: Final = any(
+        _is_openai_cost_map_model(suffix) or _is_openai_cost_map_model(f"azure/{suffix}") for suffix in suffixes
+    )
+    return segments[-1] if listed else None
 
 
 def _is_openai_cost_map_model(model: str) -> bool:

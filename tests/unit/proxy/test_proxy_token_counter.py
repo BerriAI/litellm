@@ -3892,3 +3892,29 @@ async def test_responses_count_on_claude_counts_the_turns_previous_response_id_r
     ]
     assert [sorted(message) for message in messages if isinstance(message, dict)] == [["content", "role"]] * 3
     spend_logs.assert_awaited_once_with("chatcmpl-stored", ("chatcmpl-stored", "resp_client_form"))
+
+
+@pytest.mark.asyncio
+async def test_token_counter_counts_a_custom_azure_deployment_name_with_its_base_models_tokenizer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    azure_params: Final = {"api_key": "sk-test", "api_base": "https://example.openai.azure.com"}
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "named",
+                    "litellm_params": {"model": "azure/my-gpt-6", "base_model": "azure/gpt-6.1-sol", **azure_params},
+                },
+                {"model_name": "served", "litellm_params": {"model": "azure/gpt-6.1-sol", **azure_params}},
+            ]
+        ),
+    )
+    messages: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+
+    named: Final = await token_counter(request=TokenCountRequest(model="named", messages=messages))
+    served: Final = await token_counter(request=TokenCountRequest(model="served", messages=messages))
+
+    assert named.total_tokens == served.total_tokens

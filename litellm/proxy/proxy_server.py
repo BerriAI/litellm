@@ -100,7 +100,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.litellm_core_utils.token_counter import deployment_openai_model, offload_token_count
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     HUGGING_FACE_SOURCE,
     KimiK3Encodings,
@@ -15444,7 +15444,7 @@ async def count_request_tokens(
             count_source="local_estimate",
         )
     estimate: Final = await _local_token_estimate(
-        model=model_to_use,
+        model=deployment_openai_model(deployment_view) or model_to_use,
         prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
         tools=counted_tools,

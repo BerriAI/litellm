@@ -1039,3 +1039,33 @@ class TestContextSlotRetention:
         assert deployment is not None
         router._update_kwargs_with_deployment(deployment=deployment.model_dump(), kwargs=kwargs)
         assert get_io_token_rate_limit_request_kwargs() is kwargs
+
+
+@pytest.mark.asyncio
+async def test_custom_azure_deployment_name_reserves_itpm_on_its_base_models_token_count():
+    async def reserved_input(deployment: dict) -> int:
+        request_kwargs = {
+            "messages": [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}],
+            "max_tokens": 5,
+            "metadata": {},
+        }
+        set_io_token_rate_limit_request_kwargs(request_kwargs)
+        await async_io_token_pre_call_check(DualCache(), deployment)
+        return request_kwargs["metadata"][ITPM_RESERVED_KEY]
+
+    named = await reserved_input(
+        {
+            "litellm_params": {"model": "azure/my-gpt-6", "base_model": "azure/gpt-6.1-sol", "itpm": 100_000},
+            "model_info": {"id": "named-deployment"},
+            "model_name": "named",
+        }
+    )
+    served = await reserved_input(
+        {
+            "litellm_params": {"model": "azure/gpt-6.1-sol", "itpm": 100_000},
+            "model_info": {"id": "served-deployment"},
+            "model_name": "served",
+        }
+    )
+
+    assert named == served

@@ -2489,6 +2489,10 @@ _MULTILINGUAL_SAMPLE: Final = "日本語のテキストとहिन्दी प
         "azure/eu/gpt-6.1-sol",
         "azure/gpt-5.1-chat",
         "azure/gpt-6.1-sol-2026-09-29",
+        "openai/gpt-6.1-sol-2026-09-29",
+        "azure_ai/gpt-6.1-sol",
+        "chatgpt/gpt-6.1-sol",
+        "perplexity/openai/gpt-5",
     ],
 )
 def test_token_counter_counts_openai_models_newer_than_tiktokens_table_with_o200k(model: str):
@@ -2502,7 +2506,17 @@ def test_token_counter_counts_openai_models_newer_than_tiktokens_table_with_o200
 
 
 @pytest.mark.parametrize(
-    "model", ["groq/qwen3-32b", "text-embedding-ada-002-v2", "azure/gpt-4", "azure/my-deployment", "azure/ada"]
+    "model",
+    [
+        "groq/qwen3-32b",
+        "text-embedding-ada-002-v2",
+        "azure/gpt-4",
+        "azure/my-deployment",
+        "azure/ada",
+        "azure/mistral-large-latest",
+        "azure/command-r-plus",
+        "azure_ai/mistral-large-latest",
+    ],
 )
 def test_token_counter_keeps_cl100k_for_non_openai_models_and_variants_of_cl100k_models(model: str):
     assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == len(
