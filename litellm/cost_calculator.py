@@ -22,7 +22,7 @@ from litellm.constants import (
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, billed_usage_cost
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
@@ -2292,6 +2292,9 @@ def response_cost_calculator(
                     provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
                     if provider_response_cost is not None and not custom_pricing:
                         return provider_response_cost
+            usage_cost: Final = billed_usage_cost(response_object, custom_llm_provider)
+            if usage_cost is not None and not custom_pricing:
+                return usage_cost
 
             response_cost = completion_cost(
                 completion_response=response_object,

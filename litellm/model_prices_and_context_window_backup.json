@@ -76192,8 +76192,7 @@
         "supports_response_schema": true,
         "supports_pdf_input": true,
         "supports_adaptive_thinking": true,
-        "thinking_always_on": true,
-        "supports_sampling_params": false
+        "thinking_always_on": true
     },
     "kyma/claude-fable-5.1": {
         "max_input_tokens": 1000000,
@@ -76209,8 +76208,7 @@
         "supports_response_schema": true,
         "supports_pdf_input": true,
         "supports_adaptive_thinking": true,
-        "thinking_always_on": true,
-        "supports_sampling_params": false
+        "thinking_always_on": true
     },
     "kyma/claude-haiku-4-5": {
         "max_input_tokens": 200000,
@@ -76244,7 +76242,6 @@
         "supports_pdf_input": true,
         "supports_adaptive_thinking": true,
         "thinking_always_on": false,
-        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 512
     },
     "kyma/claude-opus-4-7": {
@@ -76262,7 +76259,6 @@
         "supports_response_schema": true,
         "supports_pdf_input": false,
         "supports_adaptive_thinking": true,
-        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 2048
     },
     "kyma/claude-opus-5": {
@@ -76280,7 +76276,6 @@
         "supports_response_schema": true,
         "supports_pdf_input": true,
         "supports_adaptive_thinking": true,
-        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 512
     },
     "kyma/claude-opus-5.5": {
@@ -76299,7 +76294,6 @@
         "supports_pdf_input": true,
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
-        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 512
     },
     "kyma/claude-sonnet-4-6": {
@@ -76334,7 +76328,6 @@
         "supports_response_schema": true,
         "supports_pdf_input": true,
         "supports_adaptive_thinking": true,
-        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 1024
     },
     "kyma/claude-sonnet-5.5": {
@@ -76353,7 +76346,6 @@
         "supports_pdf_input": true,
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
-        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 512
     },
     "kyma/deepseek-r1": {

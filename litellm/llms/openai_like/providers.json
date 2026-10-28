@@ -260,6 +260,9 @@
   },
   "kyma": {
     "base_url": "https://kymaapi.com/v1",
-    "api_key_env": "KYMA_API_KEY"
+    "api_key_env": "KYMA_API_KEY",
+    "provider_info": {
+      "supports_function_calling": true
+    }
   }
 }

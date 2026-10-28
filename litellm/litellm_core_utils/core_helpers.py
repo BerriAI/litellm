@@ -972,6 +972,15 @@ def chunk_usage(chunk: object) -> object:
     return getattr(chunk, "usage", None)
 
 
+_USAGE_COST_BILLED_PROVIDERS: Final = frozenset({"kyma"})
+
+
+def billed_usage_cost(response: object, custom_llm_provider: str | None) -> float | None:
+    if custom_llm_provider not in _USAGE_COST_BILLED_PROVIDERS:
+        return None
+    return provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
+
+
 _MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})
 
 

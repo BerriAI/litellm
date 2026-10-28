@@ -1,5 +1,7 @@
+import contextlib
 import json
 import re
+from collections.abc import Callable
 from itertools import chain
 from pathlib import Path
 from typing import Final
@@ -9,6 +11,7 @@ import respx
 
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 
 _REPO_ROOT: Final = Path(__file__).resolve().parents[4]
 _PRIMARY_PRICES: Final = json.loads((_REPO_ROOT / "model_prices_and_context_window.json").read_text())
@@ -26,6 +29,18 @@ def _long_prompt_tiers(model: str) -> tuple[tuple[str, int], ...]:
 
 _LONG_PROMPT_TIERS: Final = tuple(chain.from_iterable(map(_long_prompt_tiers, _CATALOG_MODELS)))
 _CHAT_URL: Final = "https://kymaapi.com/v1/chat/completions"
+_UNLISTED_MODEL: Final = "kyma/model-added-after-this-release"
+
+
+def _kyma_chat_body(usage: dict[str, object]) -> dict[str, object]:
+    return {
+        "id": "chatcmpl_kyma",
+        "object": "chat.completion",
+        "created": 1_792_000_000,
+        "model": "sonar",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+        "usage": usage,
+    }
 
 
 def test_kyma_provider_resolution(monkeypatch: pytest.MonkeyPatch):
@@ -157,3 +172,64 @@ def test_long_prompt_is_priced_at_its_tier(model: str, threshold_k: int):
         prompt_tokens * row[f"input_cost_per_token_above_{threshold_k}k_tokens"]
         + 200 * row[f"output_cost_per_token_above_{threshold_k}k_tokens"]
     )
+
+
+@pytest.mark.parametrize("model", ("kyma/sonar", _UNLISTED_MODEL))
+def test_kyma_response_is_billed_at_the_cost_kyma_reports(model: str):
+    reported_cost: Final = 0.00721
+    with respx.mock() as upstream:
+        upstream.post(_CHAT_URL).respond(
+            200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": reported_cost})
+        )
+        response: Final = litellm.completion(model=model, messages=[{"role": "user", "content": "ping"}], api_key="k")
+
+    assert response._hidden_params["response_cost"] == pytest.approx(reported_cost)
+
+
+def test_deployment_pricing_overrides_the_cost_kyma_reports():
+    with respx.mock() as upstream:
+        upstream.post(_CHAT_URL).respond(
+            200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": 0.00721})
+        )
+        response: Final = litellm.completion(
+            model="kyma/sonar",
+            messages=[{"role": "user", "content": "ping"}],
+            api_key="k",
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+        )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(4 * 0.001 + 3 * 0.002)
+
+
+def test_kyma_model_missing_from_the_catalog_keeps_its_tools():
+    tools: Final = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
+    with respx.mock() as upstream:
+        route: Final = upstream.post(_CHAT_URL).respond(
+            200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7})
+        )
+        litellm.completion(model=_UNLISTED_MODEL, messages=[{"role": "user", "content": "ping"}], api_key="k", tools=tools)
+
+    assert json.loads(route.calls.last.request.content)["tools"] == tools
+
+
+def test_kyma_wildcard_lists_every_catalog_model():
+    assert sorted(get_known_models_from_wildcard("kyma/*")) == sorted(_CATALOG_MODELS)
+
+
+def _generate_image() -> object:
+    return litellm.image_generation(model="kyma/flux-2", prompt="a cat", api_key="k")
+
+
+def _transcribe() -> object:
+    return litellm.transcription(model="kyma/whisper-1", file=("a.wav", b"RIFF0000WAVE", "audio/wav"), api_key="k")
+
+
+@pytest.mark.parametrize("call", (_generate_image, _transcribe))
+def test_unpriced_kyma_media_calls_are_never_sent_to_kyma(call: Callable[[], object]):
+    with respx.mock(assert_all_called=False) as upstream:
+        kyma: Final = upstream.route(host="kymaapi.com").respond(202, json={"id": "job_kyma"})
+        with contextlib.suppress(Exception):
+            call()
+
+    assert kyma.call_count == 0
