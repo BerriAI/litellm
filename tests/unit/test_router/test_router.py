@@ -20630,6 +20630,37 @@ def test_resolved_litellm_models_answers_through_every_channel_a_request_uses(
     assert set(_resolution_router().resolved_litellm_models(model_name)) == set(expected)
 
 
+def test_resolved_litellm_models_base_model_precedence_is_opt_in() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "pooled",
+                "litellm_params": {"model": "openai/deployment-a", "api_key": "sk-test", "base_model": "gpt-5.5"},
+                "model_info": {"base_model": "gpt-6-astra"},
+            },
+            {
+                "model_name": "pooled",
+                "litellm_params": {"model": "openai/deployment-b", "api_key": "sk-test", "base_model": "gpt-5.6-sol"},
+            },
+            {
+                "model_name": "team-deployment",
+                "litellm_params": {"model": "openai/deployment-c", "api_key": "sk-test"},
+                "model_info": {
+                    "base_model": "gpt-6-astra",
+                    "team_id": "test-team",
+                    "team_public_model_name": "team-model",
+                },
+            },
+        ],
+        model_group_alias={"nickname": "pooled"},
+    )
+    assert router.resolved_litellm_models("nickname") == ("openai/deployment-a", "openai/deployment-b")
+    assert router.resolved_litellm_models("nickname", use_base_model=True) == ("gpt-6-astra", "gpt-5.6-sol")
+    assert router.resolved_litellm_models("team-model", "test-team") == ("openai/deployment-c",)
+    assert router.resolved_litellm_models("team-model", "test-team", use_base_model=True) == ("gpt-6-astra",)
+    assert router.resolved_litellm_models("never-configured", use_base_model=True) == ()
+
+
 class TestTierParamsTheTargetAccepts:
     """A tier's litellm_params are applied to every request that tier routes, so one the target
     cannot take raised UnsupportedParamsError before the request left the proxy, turning the whole

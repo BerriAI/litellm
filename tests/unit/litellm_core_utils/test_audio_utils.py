@@ -2,21 +2,85 @@
 Test the audio utils functionality in litellm_core_utils/audio_utils/utils.py
 """
 
+import base64
 import io
 import os
 import tempfile
+from typing import Final
 from unittest.mock import mock_open, patch
 
 import pytest
+import soundfile as sf
 
 from litellm.litellm_core_utils.audio_utils.utils import (
+    AUDIO_BYTES_PER_TOKEN,
+    AUDIO_TOKENS_PER_SECOND,
+    DEFAULT_AUDIO_TOKEN_ESTIMATE,
     ProcessedAudioFile,
     calculate_request_duration,
+    estimate_audio_tokens,
     get_audio_file_content_hash,
     get_audio_file_for_health_check,
     get_audio_file_name,
     process_audio_file,
 )
+
+
+def _encoded_audio(seconds: int, sample_rate: int, channels: int, container: str) -> str:
+    buffer: Final = io.BytesIO()
+    with sf.SoundFile(buffer, "w", samplerate=sample_rate, channels=channels, format=container) as audio:
+        audio.buffer_write(b"\0" * (seconds * sample_rate * channels * 2), dtype="int16")
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+@pytest.mark.parametrize(
+    ("sample_rate", "channels", "container"), [(8000, 1, "WAV"), (48000, 2, "WAV"), (24000, 1, "FLAC")]
+)
+def test_audio_estimate_uses_duration_independent_of_sample_rate_channels_and_compression(
+    sample_rate: int, channels: int, container: str
+) -> None:
+    assert estimate_audio_tokens(_encoded_audio(1, sample_rate, channels, container)) == AUDIO_TOKENS_PER_SECOND
+    assert estimate_audio_tokens(_encoded_audio(31, sample_rate, channels, container)) == 31 * AUDIO_TOKENS_PER_SECOND
+
+
+# Audio rates verified 2026-10-28: https://ai.google.dev/gemini-api/docs/generate-content/media-resolution and
+# https://developers.openai.com/api/docs/guides/voice-latency-cost
+@pytest.mark.parametrize(
+    ("models", "fallback", "expected"),
+    [
+        (("openai/gpt-audio-1.5",), "gemini-3.8-flash", 10),
+        (("gpt-audio-1.5", "gemini/gemini-3.8-flash"), None, 25),
+        (("vertex_ai/gemini-3.8-flash",), None, 25),
+        (("openrouter/google/gemini-3.8-flash",), None, 25),
+        (("azure/audio-deployment",), "gpt-audio-1.5", 10),
+        (("opaque-deployment",), "gemini-3.8-flash", 25),
+        ((), "gemini-3.8-flash", 25),
+        (("gemini/gemini-2.5-flash", "gemini/gemini-3-pro-preview"), None, 32),
+        (("other/gemini-3.8-flash",), None, 10),
+    ],
+)
+def test_audio_estimate_prefers_each_backend_rate_over_the_requested_model(
+    models: tuple[str, ...], fallback: str | None, expected: int
+) -> None:
+    assert estimate_audio_tokens(_encoded_audio(1, 8000, 1, "WAV"), models, fallback) == expected
+
+
+@pytest.mark.parametrize("data", [None, "", "invalid-base64!", base64.b64encode(b"unreadable audio").decode()])
+def test_audio_estimate_retains_nonzero_fallback_for_unreadable_audio(data: str | None) -> None:
+    assert estimate_audio_tokens(data) == DEFAULT_AUDIO_TOKEN_ESTIMATE
+
+
+def test_audio_estimate_retains_size_based_fallback_for_large_unreadable_audio() -> None:
+    data: Final = base64.b64encode(b"\0" * (AUDIO_BYTES_PER_TOKEN * 400)).decode()
+    assert estimate_audio_tokens(data) == 400
+
+
+def test_audio_estimate_bounds_base64_allocation_before_decoding() -> None:
+    data: Final = base64.b64encode(b"\0" * (16 * 1024 * 1024 + 1)).decode()
+    with patch("base64.b64decode", side_effect=AssertionError("oversized audio must not be decoded")) as decode:
+        estimate: Final = estimate_audio_tokens(data)
+    assert estimate == len(data) * 3 // 4 // AUDIO_BYTES_PER_TOKEN
+    decode.assert_not_called()
 
 
 class TestProcessAudioFile:

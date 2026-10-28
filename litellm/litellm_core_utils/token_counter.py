@@ -3,9 +3,12 @@
 import base64
 import io
 import math
+import re
 import struct
+from bisect import bisect_right
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from itertools import accumulate
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 import anyio
@@ -35,6 +38,7 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
     ChatTemplateToolSection,
     chat_template_tool_section,
@@ -188,22 +192,23 @@ def resize_image_high_res(
 
 # Test the function with the given example
 def calculate_tiles_needed(
-    resized_width,
-    resized_height,
-    tile_width=MAX_TILE_WIDTH,
-    tile_height=MAX_TILE_HEIGHT,
-):
+    resized_width: int,
+    resized_height: int,
+    tile_width: int = MAX_TILE_WIDTH,
+    tile_height: int = MAX_TILE_HEIGHT,
+) -> int:
     tiles_across: Final = (resized_width + tile_width - 1) // tile_width
     tiles_down: Final = (resized_height + tile_height - 1) // tile_height
     total_tiles: Final = tiles_across * tiles_down
     return total_tiles
 
 
-def high_detail_image_token_upper_bound(base_tokens: int = 85) -> int:
+def high_detail_image_token_upper_bound(base_tokens: int = 85, tile_tokens: int | None = None) -> int:
     largest_tile_count: Final = calculate_tiles_needed(
         MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES, MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES
     )
-    return base_tokens + (base_tokens * 2) * largest_tile_count
+    per_tile: Final = base_tokens * 2 if tile_tokens is None else tile_tokens
+    return base_tokens + per_tile * largest_tile_count
 
 
 def _unpack_ints(fmt: str, buffer: bytes) -> tuple[int, ...]:
@@ -379,6 +384,219 @@ def calculate_img_tokens(
     tile_tokens: Final = (base_tokens * 2) * tiles_needed_high_res
     total_tokens: Final = base_tokens + tile_tokens
     return total_tokens
+
+
+_IMAGE_HEADER_BASE64_CHARS: Final = 65_536
+_MAX_IMAGE_PATCHES: Final = 30_000
+_ANTHROPIC_IMAGE_LIMITS: Final = MappingProxyType(
+    {"claude-standard": (ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX, 1568), "claude-high": (2576, 4784)}
+)
+_TILE_IMAGE_TOKEN_COSTS: Final = MappingProxyType(
+    {
+        "gpt-4o": (85, 170),
+        "gpt-4.1": (85, 170),
+        "gpt-4o-mini": (2833, 5667),
+        "gpt-5": (70, 140),
+        "gpt-5.1": (70, 140),
+        "o1": (75, 150),
+        "o1-pro": (75, 150),
+        "o3": (75, 150),
+    }
+)
+_PATCH_IMAGE_MULTIPLIERS: Final = MappingProxyType(
+    {
+        "gpt-6-astra": 1.2,
+        "gpt-5.6-sol": 1.2,
+        "gpt-5.6-terra": 1.2,
+        "gpt-5.6-luna": 1.2,
+        "gpt-5.5": 1.2,
+        "gpt-5.4": 1.2,
+        "gpt-5.4-mini": 1.2,
+        "gpt-5.4-nano": 1.2,
+        "gpt-5.2": 1.2,
+        "gpt-4.1-mini": 1.62,
+    }
+)
+
+
+def _inline_image_dimensions(data: str) -> tuple[int, int] | None:
+    separator: Final = data.find(",", 0, 256)
+    if not data.startswith("data:") or separator < 0 or not data[:separator].endswith(";base64"):
+        return None
+    encoded_header: Final = data[separator + 1 : separator + 1 + _IMAGE_HEADER_BASE64_CHARS]
+    try:
+        header: Final = base64.b64decode(encoded_header, validate=True)
+        image_type: Final = get_image_type(header)
+        if image_type not in ("png", "gif", "jpeg", "webp"):
+            return None
+        if image_type == "webp" and header[12:16] not in (b"VP8X", b"VP8 ", b"VP8L"):
+            return None
+        dimensions: Final = _image_dimensions_from_bytes(header)
+    except (ValueError, TypeError, struct.error):
+        return None
+    width, height = dimensions
+    return (width, height) if width > 0 and height > 0 else None
+
+
+def _patch_image_limits(model: str, detail: str) -> tuple[int, int | None] | None:
+    if model in ("gpt-5.2", "gpt-4.1-mini"):
+        return None if detail == "original" else (2048, 6144)
+    original_default: Final = model in ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5")
+    effective_detail: Final = ("original" if original_default else "high") if detail == "auto" else detail
+    if effective_detail == "low":
+        return (2048, 6144) if model in ("gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano") else (512, None)
+    if effective_detail == "high":
+        return (65_535 if model == "gpt-6-astra" else 2048, 2500)
+    return (
+        (65_535, None) if model in ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna") else (6000, 10_000)
+    )
+
+
+def _image_patch_count(width: int, height: int, max_dimension: int, budget: int | None) -> int:
+    dimension_scale: Final = min(1.0, max_dimension / max(width, height))
+    fitted_width: Final = max(1, round(width * dimension_scale))
+    fitted_height: Final = max(1, round(height * dimension_scale))
+    patches: Final = math.ceil(fitted_width / 32) * math.ceil(fitted_height / 32)
+    if budget is None or patches <= budget:
+        return patches
+    shrink: Final = math.sqrt(32**2 * budget / (fitted_width * fitted_height))
+    width_patches: Final = fitted_width * shrink / 32
+    height_patches: Final = fitted_height * shrink / 32
+    aligned_shrink: Final = shrink * min(
+        math.floor(width_patches) / width_patches, math.floor(height_patches) / height_patches
+    )
+    resized_width: Final = max(1, math.floor(fitted_width * aligned_shrink))
+    resized_height: Final = max(1, math.floor(fitted_height * aligned_shrink))
+    return math.ceil(resized_width / 32) * math.ceil(resized_height / 32)
+
+
+def _image_policy_model_name(model: str) -> str | None:
+    provider, separator, provider_model = model.partition("/")
+    if not separator:
+        return model
+    if provider == "openai":
+        return provider_model
+    if provider == "openrouter":
+        return provider_model.removeprefix("openai/") if provider_model.startswith("openai/") else None
+    if provider not in ("azure", "azure_ai"):
+        return None
+    catalog_entry: Final = as_str_mapping(
+        cast(  # cast-ok: read-only view of the legacy string-keyed registry; as_str_mapping checks the entry
+            Mapping[str, object], litellm.model_cost
+        ).get(model)
+    )
+    if catalog_entry is not None and catalog_entry.get("litellm_provider") in ("azure", "azure_ai"):
+        return provider_model.rsplit("/", 1)[-1]
+    return provider_model.removeprefix("responses/").removeprefix("o_series/").removeprefix("openai/")
+
+
+def _anthropic_image_family(model: str) -> str | None:
+    from litellm.utils import get_potential_model_names
+
+    provider, separator, _ = model.partition("/")
+    if separator and provider not in (
+        "anthropic",
+        "bedrock",
+        "bedrock_converse",
+        "bedrock_mantle",
+        "vertex_ai",
+        "vertex_ai_beta",
+        "azure_ai",
+        "openrouter",
+    ):
+        return None
+    candidates: Final = get_potential_model_names(model, provider if separator else "anthropic")
+    catalog: Final = cast(Mapping[str, object], litellm.model_cost)  # cast-ok: read-only view of the legacy registry
+    for candidate in dict.fromkeys(candidates.values()):
+        if not isinstance(candidate, str):
+            continue
+        if (entry := as_str_mapping(catalog.get(candidate))) is None or entry.get("supports_vision") is not True:
+            continue
+        if (
+            version := re.search(
+                r"(?:^|[./])claude-(?:(?:haiku|sonnet|opus)-)?(\d+)(?:[-.](\d{1,2})(?!\d))?", candidate
+            )
+        ) is None:
+            continue
+        major, minor = int(version[1]), int(version[2] or 0)
+        return "claude-high" if (major, minor) >= (4, 7) else "claude-standard"
+    return None
+
+
+def _anthropic_image_tokens(dimensions: tuple[int, int] | None, limits: tuple[int, int]) -> int:
+    max_edge, token_budget = limits
+    if dimensions is None:
+        return token_budget
+    long_edge, short_edge = max(dimensions), min(dimensions)
+    aspect_ratio: Final = long_edge / short_edge
+
+    def tokens_at_edge(edge: int) -> int:
+        return math.ceil(edge / 28) * math.ceil(max(round(edge / aspect_ratio), 1) / 28)
+
+    fitted_edge: Final = bisect_right(range(1, min(long_edge, max_edge) + 1), token_budget, key=tokens_at_edge)
+    return tokens_at_edge(max(fitted_edge, 1))
+
+
+def _image_model_family(model: str) -> str | None:
+    provider_model: Final = _image_policy_model_name(model)
+    if provider_model is None:
+        return _anthropic_image_family(model)
+    family: Final = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", provider_model)
+    canonical: Final = litellm.azure_llms.get(f"azure/{family}", family) if model.startswith("azure/") else family
+    return (
+        canonical
+        if canonical in _TILE_IMAGE_TOKEN_COSTS or canonical in _PATCH_IMAGE_MULTIPLIERS
+        else _anthropic_image_family(model)
+    )
+
+
+def _image_policy_tokens(family: str | None, dimensions: tuple[int, int] | None, detail: str) -> int:
+    if family is None:
+        return DEFAULT_IMAGE_TOKEN_COUNT
+    anthropic_limits: Final = _ANTHROPIC_IMAGE_LIMITS.get(family)
+    if anthropic_limits is not None:
+        return _anthropic_image_tokens(dimensions, anthropic_limits)
+    tile_costs: Final = _TILE_IMAGE_TOKEN_COSTS.get(family)
+    multiplier: Final = _PATCH_IMAGE_MULTIPLIERS.get(family)
+    if tile_costs is not None:
+        base_tokens, tile_tokens = tile_costs
+        if detail == "original":
+            return DEFAULT_IMAGE_TOKEN_COUNT
+        if detail == "low":
+            return base_tokens
+        if dimensions is None:
+            return high_detail_image_token_upper_bound(base_tokens, tile_tokens)
+        width, height = dimensions
+        scale: Final = min(1.0, 2048 / max(width, height), 768 / min(width, height))
+        tiles: Final = calculate_tiles_needed(max(1, math.floor(width * scale)), max(1, math.floor(height * scale)))
+        return base_tokens + tiles * tile_tokens
+    limits: Final = _patch_image_limits(family, detail)
+    if limits is None or multiplier is None:
+        return DEFAULT_IMAGE_TOKEN_COUNT
+    max_dimension, patch_budget = limits
+    patches: Final = (
+        min(math.ceil(max_dimension / 32) ** 2, patch_budget if patch_budget is not None else _MAX_IMAGE_PATCHES)
+        if dimensions is None
+        else _image_patch_count(*dimensions, max_dimension, patch_budget)
+    )
+    return math.ceil(patches * multiplier)
+
+
+def estimate_image_tokens(
+    model: str | Sequence[str], data: str, detail: str = "auto", *, fallback_model: str | None = None
+) -> int:
+    """Estimate image policies from at most 48 KiB of inline headers, without fetching media."""
+    if detail not in ("low", "high", "auto", "original"):
+        return DEFAULT_IMAGE_TOKEN_COUNT
+    models: Final = (model,) if isinstance(model, str) else model
+    fallback_family: Final = _image_model_family(fallback_model) if fallback_model is not None else None
+    families: Final = tuple(
+        dict.fromkeys(_image_model_family(candidate) or fallback_family for candidate in models or ("",))
+    )
+    if all(family is None for family in families):
+        return DEFAULT_IMAGE_TOKEN_COUNT
+    dimensions: Final = _inline_image_dimensions(data)
+    return max(_image_policy_tokens(family, dimensions, detail) for family in families)
 
 
 TokenCounterFunction = Callable[[str], int]

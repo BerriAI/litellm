@@ -45,11 +45,14 @@ from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.cost_calculator import get_usage_object
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.audio_utils.utils import estimate_audio_tokens
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
+    split_media_for_tpm,
 )
 from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabled
-from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.litellm_core_utils.token_counter import estimate_image_tokens, offload_token_count
 from litellm.llms.azure.ptu_capacity import normalized_tokens
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -98,6 +101,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
+    from litellm.router import Router
     from litellm.types.agents import AgentResponse
     from litellm.types.caching import RedisPipelineIncrementOperation
 
@@ -133,6 +137,18 @@ class RateLimitedModel:
             return None
         requested_limit: Final = limits.get(self.requested)
         return requested_limit if requested_limit is not None else limits.get(self.group)
+
+
+def _resolve_media_models(router: "Router | None", model: str, team_id: str | None) -> tuple[str, ...]:
+    if router is None:
+        return (model,)
+    return tuple(dict.fromkeys(router.resolved_litellm_models(model, team_id, use_base_model=True))) or (model,)
+
+
+def _resolve_media_models_via_proxy_router(model: str, team_id: str | None) -> tuple[str, ...]:
+    from litellm.proxy.proxy_server import llm_router
+
+    return _resolve_media_models(llm_router, model, team_id)
 
 
 def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
@@ -862,6 +878,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         time_provider: Callable[[], datetime] | None = None,
         tag_rate_limit_resolver: TagRateLimitResolver = resolve_tag_rate_limits_from_db,
         model_group_resolver: Callable[[str], str | None] = _resolve_model_group_alias_via_proxy_router,
+        media_model_resolver: Callable[[str, str | None], tuple[str, ...]] = _resolve_media_models_via_proxy_router,
         ptu_team_ceiling_resolver: Callable[
             [str, str], PTUTeamCeiling | None
         ] = _resolve_ptu_team_ceiling_via_proxy_router,
@@ -872,6 +889,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self._time_provider = time_provider or datetime.now
         self._tag_rate_limit_resolver = tag_rate_limit_resolver
         self._model_group_resolver = model_group_resolver
+        self._media_model_resolver = media_model_resolver
         self._ptu_team_ceiling_resolver = ptu_team_ceiling_resolver
         self._fail_closed_resolver = fail_closed_resolver
         self._force_hash_tag_grouping_resolver = force_hash_tag_grouping_resolver
@@ -1133,11 +1151,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _estimate_tokens_for_request(
         self,
-        data: dict,
+        data: object,
         model: str | None = None,
         min_configured_tpm_limit: int | None = None,
         call_type: str | None = None,
         configured_output_tokens: int | None = None,
+        team_id: str | None = None,
     ) -> int:
         """
         Estimate total tokens this request will consume so we can reserve them
@@ -1164,6 +1183,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             min_configured_tpm_limit=min_configured_tpm_limit,
             call_type=call_type,
             configured_output_tokens=configured_output_tokens,
+            team_id=team_id,
+            media_model_resolver=self._media_model_resolver,
         )
         total_estimated: Final = estimated_input_tokens + max_tokens_estimate
 
@@ -1184,6 +1205,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         call_type: str | None,
         configured_output_tokens: int | None,
         raw_estimate: int,
+        team_id: str | None = None,
     ) -> int:
         """The team PTU ceiling counts Azure normalized tokens, so its reservation weighs the
         output budget the way the ceiling does instead of the raw sum the other scopes reserve."""
@@ -1194,6 +1216,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             min_configured_tpm_limit=min_configured_tpm_limit,
             call_type=call_type,
             configured_output_tokens=configured_output_tokens,
+            team_id=team_id,
+            media_model_resolver=self._media_model_resolver,
         )
         normalized: Final = normalized_tokens(
             ceiling, prompt_tokens=estimated_input_tokens, completion_tokens=max_tokens_estimate
@@ -1206,6 +1230,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         min_configured_tpm_limit: int | None = None,
         call_type: str | None = None,
         configured_output_tokens: int | None = None,
+        include_media: bool = True,
+        team_id: str | None = None,
+        media_model_resolver: Callable[[str, str | None], tuple[str, ...]] | None = None,
     ) -> tuple[int, int]:
         """
         Estimate input tokens and output (max_tokens) budget separately, so
@@ -1229,10 +1256,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         floor entirely, so the reservation reflects what this tenant's model
         actually emits rather than one constant shared by every tenant.
         """
-        if not isinstance(data, dict):
+        request_data: Final = as_str_mapping(data)
+        if not isinstance(data, dict) or request_data is None:
             return 0, 0
+        request_model: Final = request_data.get("model")
         translated_data: Final = self._translate_google_genai_native_request(data, call_type)
-        estimable_data: Final = translated_data if translated_data is not None else data
+        estimable_data: Final = translated_data if translated_data is not None else request_data
         selected_fields: Final[tuple[object | None, object | None, object | None]] = (
             (None, None, estimable_data.get("input"))
             if call_type in RESPONSES_API_CALL_TYPES or call_type in EMBEDDING_API_CALL_TYPES
@@ -1249,8 +1278,25 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         )
         messages, prompt, raw_input = selected_fields
-        input_text: Final = (
+        original_input: Final = (
             billable_input_since_newest_compaction(raw_input) if call_type in RESPONSES_API_CALL_TYPES else raw_input
+        )
+
+        media_source: Final = messages if messages is not None else original_input
+        projected, media = (
+            split_media_for_tpm(media_source)
+            if include_media and (isinstance(messages, list) or call_type in RESPONSES_API_CALL_TYPES)
+            else (original_input, ())
+        )
+        input_text: Final = projected if call_type in RESPONSES_API_CALL_TYPES else original_input
+        fallback_model: Final = request_model if isinstance(request_model, str) else None
+        resolved_models: Final = (
+            media_model_resolver(fallback_model or "", team_id)
+            if media and media_model_resolver is not None
+            else (fallback_model or "",)
+        )
+        media_tokens: Final = sum(
+            self._estimate_media_block_tokens(block, resolved_models, fallback_model) for block in media
         )
 
         total_chars: Final = (
@@ -1267,7 +1313,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             else 0
         )
 
-        estimated_input_tokens: Final = max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
+        estimated_input_tokens: Final = (
+            max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
+        ) + media_tokens
 
         explicit_max_tokens: Final = self._get_explicit_output_cap(data, call_type)
         generates_no_output: Final = (
@@ -1283,7 +1331,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         max_tokens_estimate: Final = (
             0
             if generates_no_output
-            or (explicit_max_tokens is None and total_chars == 0 and configured_output_tokens is None)
+            or (explicit_max_tokens is None and estimated_input_tokens == 0 and configured_output_tokens is None)
             else explicit_max_tokens
             if explicit_max_tokens is not None
             else configured_output_tokens
@@ -1292,6 +1340,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
         return estimated_input_tokens, max_tokens_estimate * self.get_output_candidate_count(data, call_type)
+
+    @staticmethod
+    def _estimate_media_block_tokens(
+        block: Mapping[str, object], models: tuple[str, ...], fallback_model: str | None
+    ) -> int:
+        if block.get("type") == "input_audio":
+            audio: Final = _callback_kwargs_mapping(block.get("input_audio"))
+            data: Final = audio.get("data")
+            return estimate_audio_tokens(data if isinstance(data, str) else None, models, fallback_model=fallback_model)
+        image: Final = _callback_kwargs_mapping(block.get("image_url"))
+        url: Final = image.get("url")
+        detail: Final = image.get("detail")
+        return estimate_image_tokens(
+            models,
+            url if isinstance(url, str) else "",
+            detail if isinstance(detail, str) else "auto",
+            fallback_model=fallback_model,
+        )
 
     def _is_redis_cluster(self) -> bool:
         """
@@ -3958,7 +4024,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception:  # noqa: BLE001  # tokenizer failures degrade to the cheap estimate
             if call_type in RERANK_API_CALL_TYPES and isinstance(selected_text, str):
                 return max(0, len(selected_text) // DEFAULT_CHARS_PER_TOKEN)
-            estimated_input_tokens, _ = self._estimate_input_and_output_tokens(data=data, call_type=call_type)
+            estimated_input_tokens, _ = self._estimate_input_and_output_tokens(
+                data=data, call_type=call_type, include_media=False
+            )
             return estimated_input_tokens + audio_token_estimate
 
     async def _reserve_project_io_tokens_or_raise(
@@ -4003,6 +4071,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             data=data,
             min_configured_tpm_limit=min_configured_otpm_limit,
             call_type=call_type,
+            include_media=False,
         )
         raw_estimated_input_tokens: Final = await offload_token_count(self._estimate_precise_input_tokens)(
             data=data, model=requested_model, call_type=call_type
@@ -4360,12 +4429,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 # Post-call reconciliation refunds the over-reservation
                 # delta when actual usage comes in below the floor.
                 estimated_tokens: Final = max(
-                    self._estimate_tokens_for_request(
+                    await offload_token_count(self._estimate_tokens_for_request)(
                         data=data,
                         model=requested_model,
                         min_configured_tpm_limit=min_configured_tpm_limit,
                         call_type=call_type,
                         configured_output_tokens=configured_output_tokens,
+                        team_id=user_api_key_dict.team_id,
                     ),
                     1,
                 )
@@ -4383,13 +4453,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
 
                 capped_request: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(data)
-                ptu_estimated_tokens: Final = self._estimate_ptu_tokens_for_request(
+                ptu_estimated_tokens: Final = await offload_token_count(self._estimate_ptu_tokens_for_request)(
                     ceiling=stash.ptu_ceiling,
                     data=capped_request,
                     min_configured_tpm_limit=min_configured_tpm_limit,
                     call_type=call_type,
                     configured_output_tokens=configured_output_tokens,
                     raw_estimate=estimated_tokens,
+                    team_id=user_api_key_dict.team_id,
                 )
                 if stash.ptu_ceiling is not None and ptu_estimated_tokens > stash.ptu_ceiling.tpm_limit:
                     if not reuses_request_slot:
