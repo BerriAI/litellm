@@ -16,9 +16,9 @@ either, so the migration keeps today's behavior for it.
 import os
 import re
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import reduce
-from itertools import accumulate, chain
+from itertools import accumulate
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
@@ -126,11 +126,11 @@ _PLAIN_COLUMN: Final = re.compile(rf"^{_IDENT}(?:\s+(?:ASC|DESC|NULLS\s+(?:FIRST
 _COMMENT: Final = re.compile(r"--[^\n]*")
 _NOT_NULL: Final = re.compile(r"\bNOT\s+NULL\b", re.IGNORECASE)
 _HAS_DEFAULT: Final = re.compile(r"\bDEFAULT\b|\bGENERATED\b", re.IGNORECASE)
-_UPDATE: Final = re.compile(
-    rf"^\s*UPDATE\s+(?:ONLY\s+)?{_QUALIFIED}\s+SET\s+(.*?)(?:\s+(FROM|WHERE)\s+(.*))?$", re.IGNORECASE | re.DOTALL
-)
+_UPDATE: Final = re.compile(rf"^\s*UPDATE\s+(?:ONLY\s+)?{_QUALIFIED}\s+SET\s+(.*)$", re.IGNORECASE | re.DOTALL)
+_CLAUSE: Final = re.compile(r"\s(FROM|WHERE)\s", re.IGNORECASE)
 _ASSIGNMENT: Final = re.compile(rf"^{_IDENT}\s*=\s*(.*)$", re.DOTALL)
 _IS_NULL: Final = re.compile(rf"^{_IDENT}\s+IS\s+NULL$", re.IGNORECASE)
+_STRING_LITERAL: Final = re.compile(r"'[^']*'")
 
 
 def migration_data_check_timeout_seconds() -> float:
@@ -156,11 +156,23 @@ def statements(migration_sql: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in parts if part.strip())
 
 
+def _mask_strings(text: str) -> str:
+    """The text with the inside of every single quoted literal blanked, same length, so a scan
+    for commas or keywords never matches inside a value."""
+    return _STRING_LITERAL.sub(lambda match: f"'{'_' * (len(match.group()) - 2)}'", text)
+
+
+def _paren_depth(text: str) -> tuple[int, ...]:
+    return tuple(accumulate((1 if char == "(" else -1 if char == ")" else 0) for char in text))
+
+
 def _split_top_level(text: str) -> tuple[str, ...]:
-    """Split on the commas outside parentheses."""
-    depth: Final = accumulate((1 if char == "(" else -1 if char == ")" else 0) for char in text)
+    """Split on the commas outside parentheses and string literals."""
+    masked: Final = _mask_strings(text)
     cuts: Final = tuple(
-        position for position, (char, level) in enumerate(zip(text, depth, strict=True)) if char == "," and level == 0
+        position
+        for position, (char, level) in enumerate(zip(masked, _paren_depth(masked), strict=True))
+        if char == "," and level == 0
     )
     starts: Final = (0, *(cut + 1 for cut in cuts))
     stops: Final = (*cuts, len(text))
@@ -253,44 +265,85 @@ def checks_for_statement(statement_text: str, source: str) -> tuple[Check, ...]:
     return ()
 
 
-def backfilled_columns(statement_text: str) -> frozenset[tuple[str, str]]:
-    """The (table, column) pairs an UPDATE leaves without a NULL: every column it sets to
-    something other than NULL when it has no WHERE, or that one column when its WHERE is
-    `<column> IS NULL`. Any other shape, including an UPDATE ... FROM, fills nothing for sure."""
+@dataclass(frozen=True, slots=True)
+class Update:
+    """One UPDATE as the derivation reads it. `left_null` maps each assigned column to the
+    predicate selecting the rows still NULL once the UPDATE ran, or to None when the shape
+    (a FROM, a WHERE other than that column IS NULL) can leave NULLs it cannot count. It is
+    None itself when the SET list cannot be read, so nothing is known about the table."""
+
+    table: str
+    left_null: MappingProxyType[str, str | None] | None
+
+
+Fills = MappingProxyType[tuple[str, str], str]
+
+
+def _clause_start(text: str) -> int | None:
+    """Offset of the first FROM or WHERE outside parentheses and string literals, if any."""
+    masked: Final = _mask_strings(text)
+    depth: Final = _paren_depth(masked)
+    return next((match.start() for match in _CLAUSE.finditer(masked) if depth[match.start()] == 0), None)
+
+
+def parse_update(statement_text: str) -> Update | None:
     update: Final = _UPDATE.match(statement_text)
     if update is None:
-        return frozenset()
-    table, assignments, clause, condition = update.groups()
-    matches: Final = tuple(_ASSIGNMENT.match(assignment) for assignment in _split_top_level(assignments))
-    filled: Final = frozenset(
-        match.group(1) for match in matches if match is not None and match.group(2).strip().upper() != "NULL"
+        return None
+    table, rest = update.groups()
+    cut: Final = _clause_start(rest)
+    matches: Final = tuple(_ASSIGNMENT.match(piece) for piece in _split_top_level(rest if cut is None else rest[:cut]))
+    if any(match is None for match in matches):
+        return Update(table, None)
+    assigned: Final = MappingProxyType({m.group(1): m.group(2).strip() for m in matches if m is not None})
+    if cut is None:
+        return Update(table, MappingProxyType({column: f"({value}) IS NULL" for column, value in assigned.items()}))
+    clause: Final = rest[cut:].strip()
+    is_null: Final = _IS_NULL.match(clause[5:].strip()) if clause[:5].upper() == "WHERE" else None
+    filled: Final = is_null.group(1) if is_null is not None and is_null.group(1) in assigned else None
+    return Update(
+        table,
+        MappingProxyType(
+            {
+                column: f'"{column}" IS NULL AND ({value}) IS NULL' if column == filled else None
+                for column, value in assigned.items()
+            }
+        ),
     )
-    if clause is None:
-        return frozenset((table, column) for column in filled)
-    is_null: Final = _IS_NULL.match(condition.strip()) if clause.upper() == "WHERE" else None
-    if is_null is None or is_null.group(1) not in filled:
-        return frozenset()
-    return frozenset({(table, is_null.group(1))})
 
 
-def _filled_before(ordered: tuple[str, ...], position: int) -> frozenset[tuple[str, str]]:
-    return frozenset(chain.from_iterable(backfilled_columns(statement_text) for statement_text in ordered[:position]))
+def _survives(key: tuple[str, str], update: Update) -> bool:
+    table, column = key
+    return table != update.table or (update.left_null is not None and column not in update.left_null)
 
 
-def _checks_still_needed(statement_text: str, source: str, filled: frozenset[tuple[str, str]]) -> Iterator[Check]:
-    for check in checks_for_statement(statement_text, source):
-        if check.kind != "nulls" or (check.table, check.columns[0]) not in filled:
-            yield check
+def _after(fills: Fills, update: Update | None) -> Fills:
+    """The fills still standing once `update` ran: what it leaves replaces the earlier entries
+    of the columns it writes, and an unreadable SET list drops every entry of its table."""
+    if update is None:
+        return fills
+    kept: Final = {key: fill for key, fill in fills.items() if _survives(key, update)}
+    added: Final = {
+        (update.table, column): fill for column, fill in (update.left_null or {}).items() if fill is not None
+    }
+    return MappingProxyType({**kept, **added})
+
+
+def _counting_what_is_left(check: Check, fills: Fills) -> Check:
+    if check.kind != "nulls" or (check.table, check.columns[0]) not in fills:
+        return check
+    return replace(check, expression=fills[(check.table, check.columns[0])])
 
 
 def checks_for_migration(name: str, migration_sql: str) -> tuple[Check, ...]:
-    """The checks of every statement, minus the `nulls` check of a column that an earlier
-    UPDATE in the same migration fills, since `prisma migrate deploy` runs that UPDATE first."""
+    """The checks of every statement in order. A `nulls` check counts the rows an earlier UPDATE
+    of the same migration still leaves NULL, since `prisma migrate deploy` runs that UPDATE first."""
     ordered: Final = statements(migration_sql)
+    fills: Final = tuple(accumulate((parse_update(text) for text in ordered), _after, initial=MappingProxyType({})))
     return tuple(
-        check
+        _counting_what_is_left(check, fills[position])
         for position, statement_text in enumerate(ordered)
-        for check in _checks_still_needed(statement_text, f"migration {name}", _filled_before(ordered, position))
+        for check in checks_for_statement(statement_text, f"migration {name}")
     )  # comprehension-ok: flattening the per-statement checks of one migration
 
 
@@ -472,9 +525,12 @@ def _count_query(check: Check, schema: str, types: tuple[ColumnType, ...], limit
                 "SELECT count(*) FROM (SELECT 1 FROM {t} WHERE {nn} GROUP BY {cols} HAVING count(*) > 1) AS d"
             ).format(t=table, nn=not_null, cols=columns)
         case "nulls":
-            return sql.SQL("SELECT count(*) FROM {t} WHERE {col} IS NULL").format(
-                t=table, col=sql.Identifier(check.columns[0])
+            left_null: Final = (
+                sql.SQL(check.expression)  # pyright: ignore[reportArgumentType]  # copied from our own migration file
+                if check.expression is not None
+                else sql.SQL("{} IS NULL").format(sql.Identifier(check.columns[0]))
             )
+            return sql.SQL("SELECT count(*) FROM {t} WHERE {left_null}").format(t=table, left_null=left_null)
         case "any_row":
             return sql.SQL("SELECT count(*) FROM {t}").format(t=table)
         case "orphans":
@@ -544,6 +600,10 @@ def _run_check(
         row: Final = connection.execute(_count_query(check, schema, types, limit_bytes)).fetchone()
     except psycopg.errors.QueryCanceled:
         return CouldNotVerify(check, timeout_seconds)
+    except psycopg.errors.UndefinedColumn:
+        if check.kind != "nulls" or check.expression is None:
+            raise
+        return _run_check(connection, schema, replace(check, expression=None), types, limit_bytes, timeout_seconds)
     values: Final[tuple[object, ...]] = row if row is not None else ()
     rows: Final = _int(values[0], 0) if values else 0
     if rows == 0:
@@ -554,7 +614,9 @@ def _run_check(
         case "duplicates":
             return BlockedChange(check, rows, "duplicated value groups")
         case "nulls":
-            return BlockedChange(check, rows, "NULL")
+            return BlockedChange(
+                check, rows, "NULL" if check.expression is None else "still NULL once its UPDATE has run"
+            )
         case "any_row":
             return BlockedChange(
                 check, rows, "rows, and a NOT NULL column with no DEFAULT cannot be added to a table with rows"

@@ -8,12 +8,12 @@ from litellm_proxy_extras.migration_data_checks import (
     BlockedChange,
     Check,
     CouldNotVerify,
-    backfilled_columns,
     btree_max_entry_bytes,
     checks_for_index,
     checks_for_migration,
     checks_for_statement,
     migration_data_check_timeout_seconds,
+    parse_update,
     report,
     statements,
 )
@@ -93,47 +93,114 @@ BACKFILL_THEN_SET_NOT_NULL: Final = (
     'UPDATE "T" SET "c" = \'x\' WHERE "c" IS NULL; -- data-migration-ok: bounded by the rows of a small table\n'
     'ALTER TABLE "T" ALTER COLUMN "c" SET NOT NULL;\n'
 )
+SET_NOT_NULL: Final = 'ALTER TABLE "T" ALTER COLUMN "c" SET NOT NULL;'
 
 
-def test_a_column_an_earlier_update_in_the_migration_fills_gets_no_nulls_check() -> None:
-    assert _shape(checks_for_migration("x", BACKFILL_THEN_SET_NOT_NULL)) == ()
+def _left_null(migration_sql: str) -> tuple[str | None, ...]:
+    checks: Final = checks_for_migration("x", migration_sql)
+    assert _shape(checks) == (("nulls", "T", ("c",)),)
+    return tuple(check.expression for check in checks)
+
+
+@pytest.mark.parametrize(
+    ("migration_sql", "left_null"),
+    (
+        (BACKFILL_THEN_SET_NOT_NULL, "\"c\" IS NULL AND ('x') IS NULL"),
+        ('UPDATE "T" SET "c" = "d" WHERE "c" IS NULL; ' + SET_NOT_NULL, '"c" IS NULL AND ("d") IS NULL'),
+        ('UPDATE "T" SET "c" = COALESCE("d", \'x\'), "e" = 1; ' + SET_NOT_NULL, "(COALESCE(\"d\", 'x')) IS NULL"),
+        ('UPDATE "T" SET "c" = NULL; ' + SET_NOT_NULL, "(NULL) IS NULL"),
+        ('UPDATE "T" SET "c" = \'x\'; UPDATE "T" SET "c" = NULL; ' + SET_NOT_NULL, "(NULL) IS NULL"),
+        (
+            'UPDATE "T" SET "c" = \'a, b WHERE 1\', "d" = 2 WHERE "c" IS NULL; ' + SET_NOT_NULL,
+            "\"c\" IS NULL AND ('a, b WHERE 1') IS NULL",
+        ),
+        (
+            'UPDATE "T" SET "c" = (SELECT max("v") FROM "O" WHERE "O"."k" = "T"."k"); ' + SET_NOT_NULL,
+            '((SELECT max("v") FROM "O" WHERE "O"."k" = "T"."k")) IS NULL',
+        ),
+    ),
+    ids=(
+        "where is null",
+        "nullable column",
+        "coalesce no where",
+        "set to null",
+        "later write wins",
+        "quoted value",
+        "subquery",
+    ),
+)
+def test_a_nulls_check_after_a_backfill_counts_the_rows_the_update_leaves_null(
+    migration_sql: str, left_null: str
+) -> None:
+    assert _left_null(migration_sql) == (left_null,)
 
 
 @pytest.mark.parametrize(
     "migration_sql",
     (
-        'ALTER TABLE "T" ALTER COLUMN "c" SET NOT NULL; UPDATE "T" SET "c" = \'x\' WHERE "c" IS NULL;',
-        'UPDATE "T" SET "c" = \'x\' WHERE "d" IS NULL; ALTER TABLE "T" ALTER COLUMN "c" SET NOT NULL;',
-        'UPDATE "T" SET "c" = \'x\' WHERE "c" IS NULL AND "d" = 1; ALTER TABLE "T" ALTER COLUMN "c" SET NOT NULL;',
-        'UPDATE "T" SET "c" = NULL; ALTER TABLE "T" ALTER COLUMN "c" SET NOT NULL;',
-        'UPDATE "U" SET "c" = \'x\'; ALTER TABLE "T" ALTER COLUMN "c" SET NOT NULL;',
-        'UPDATE "T" SET "c" = "O"."v" FROM "O" WHERE "O"."i" = "T"."i"; ALTER TABLE "T" ALTER COLUMN "c" SET NOT NULL;',
+        SET_NOT_NULL + ' UPDATE "T" SET "c" = \'x\' WHERE "c" IS NULL;',
+        'UPDATE "T" SET "c" = \'x\' WHERE "d" IS NULL; ' + SET_NOT_NULL,
+        'UPDATE "T" SET "c" = \'x\' WHERE "c" IS NULL AND "d" = 1; ' + SET_NOT_NULL,
+        'UPDATE "T" SET "c" = \'x\', "d" = 2 WHERE "d" IS NULL; ' + SET_NOT_NULL,
+        'UPDATE "U" SET "c" = \'x\'; ' + SET_NOT_NULL,
+        'UPDATE "T" SET "c" = "O"."v" FROM "O" WHERE "O"."i" = "T"."i"; ' + SET_NOT_NULL,
+        'UPDATE "T" SET "c" = \'x\'; UPDATE "T" SET "c" = "d" WHERE "e" = 1; ' + SET_NOT_NULL,
+        'UPDATE "T" SET "c" = \'x\'; UPDATE "T" SET ("c", "d") = (1, 2); ' + SET_NOT_NULL,
     ),
-    ids=("update after", "other column", "narrower where", "set to null", "other table", "update from"),
+    ids=(
+        "update after",
+        "other column",
+        "narrower where",
+        "other column filled",
+        "other table",
+        "update from",
+        "later unreadable write",
+        "later unreadable set list",
+    ),
 )
-def test_an_update_that_may_leave_a_null_behind_keeps_the_nulls_check(migration_sql: str) -> None:
-    assert _shape(checks_for_migration("x", migration_sql)) == (("nulls", "T", ("c",)),)
+def test_an_update_that_may_leave_nulls_it_cannot_count_keeps_the_plain_nulls_check(migration_sql: str) -> None:
+    assert _left_null(migration_sql) == (None,)
 
 
 @pytest.mark.parametrize(
-    ("statement", "expected"),
+    ("statement", "table", "left_null"),
     (
-        ('UPDATE "T" SET "c" = \'x\' WHERE "c" IS NULL', frozenset({("T", "c")})),
-        ('UPDATE public."T" SET c = 1, d = now(), e = NULL', frozenset({("T", "c"), ("T", "d")})),
-        ('UPDATE "T" SET "c" = \'x\', "d" = 1 WHERE "c" IS NULL', frozenset({("T", "c")})),
-        ('UPDATE "T" SET ("c", "d") = (1, 2)', frozenset()),
-        ("SELECT 1", frozenset()),
+        (
+            'UPDATE public."T" SET c = 1, d = now(), e = NULL',
+            "T",
+            {"c": "(1) IS NULL", "d": "(now()) IS NULL", "e": "(NULL) IS NULL"},
+        ),
+        (
+            'UPDATE "T" SET "c" = \'x\', "d" = 1 WHERE "c" IS NULL',
+            "T",
+            {"c": "\"c\" IS NULL AND ('x') IS NULL", "d": None},
+        ),
+        ('UPDATE ONLY "T" SET "c" = 1 WHERE "d" > 1', "T", {"c": None}),
+        ('UPDATE "T" SET ("c", "d") = (1, 2)', "T", None),
     ),
+    ids=("no where", "where is null", "other where", "unreadable set list"),
 )
-def test_an_update_names_the_columns_it_leaves_without_nulls(
-    statement: str, expected: frozenset[tuple[str, str]]
+def test_an_update_names_what_it_leaves_null_per_column(
+    statement: str, table: str, left_null: dict[str, str | None] | None
 ) -> None:
-    assert backfilled_columns(statement) == expected
+    update: Final = parse_update(statement)
+    assert update is not None
+    assert update.table == table
+    assert (None if update.left_null is None else dict(update.left_null)) == left_null
 
 
-def test_the_shipped_shadow_eval_backfill_keeps_only_its_index_check() -> None:
+def test_a_statement_that_is_not_an_update_parses_to_nothing() -> None:
+    assert parse_update(SET_NOT_NULL.rstrip(";")) is None
+
+
+def test_the_shipped_shadow_eval_backfill_counts_rows_its_update_leaves_null() -> None:
     migration_sql: Final = (MIGRATIONS / "20260817000000_shadow_eval_multi_key" / "migration.sql").read_text()
-    assert _shape(checks_for_migration("x", migration_sql)) == (("too_long", "LiteLLM_ShadowEvalJob", ("group_id",)),)
+    checks: Final = checks_for_migration("x", migration_sql)
+    assert _shape(checks) == (
+        ("nulls", "LiteLLM_ShadowEvalJob", ("group_id",)),
+        ("too_long", "LiteLLM_ShadowEvalJob", ("group_id",)),
+    )
+    assert checks[0].expression == '"group_id" IS NULL AND ("id") IS NULL'
 
 
 def test_every_shipped_migration_is_readable_and_the_later_indexes_on_text_columns_get_a_check() -> None:

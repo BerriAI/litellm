@@ -1058,27 +1058,42 @@ def test_each_check_kind_counts_exactly_the_rows_postgres_would_reject(scratch_d
     }
 
 
-_BACKFILL_THEN_SET_NOT_NULL: Final = (
-    'UPDATE "preflight_backfill" SET "c" = \'filled\' WHERE "c" IS NULL; -- data-migration-ok: small table\n'
-    'ALTER TABLE "preflight_backfill" ALTER COLUMN "c" SET NOT NULL;\n'
-)
-
-
 @requires_db
-def test_a_migration_that_fills_a_column_before_setting_it_not_null_passes_the_check_and_applies(
-    scratch_database: str,
+@pytest.mark.parametrize(
+    ("fill", "rows_still_null"),
+    (("COALESCE(\"d\", 'filled')", 0), ('"d"', 1)),
+    ids=("coalesce fills every row", "a nullable column leaves one row"),
+)
+def test_a_nulls_check_after_a_backfill_counts_exactly_the_rows_postgres_rejects(
+    scratch_database: str, fill: str, rows_still_null: int
 ) -> None:
+    migration_sql: Final = (
+        f'UPDATE "preflight_backfill" SET "c" = {fill} WHERE "c" IS NULL; -- data-migration-ok: small table\n'
+        'ALTER TABLE "preflight_backfill" ALTER COLUMN "c" SET NOT NULL;\n'
+    )
     with psycopg.connect(scratch_database, autocommit=True) as conn:
-        conn.execute('CREATE TABLE "preflight_backfill" ("id" INTEGER PRIMARY KEY, "c" TEXT)')
-        conn.execute("INSERT INTO \"preflight_backfill\" VALUES (1, NULL), (2, 'kept')")
-        checks: Final = migration_data_checks.checks_for_migration("probe", _BACKFILL_THEN_SET_NOT_NULL)
+        conn.execute('CREATE TABLE "preflight_backfill" ("id" INTEGER PRIMARY KEY, "c" TEXT, "d" TEXT)')
+        conn.execute(
+            "INSERT INTO \"preflight_backfill\" VALUES (1, NULL, NULL), (2, NULL, 'from d'), (3, 'kept', NULL)"
+        )
+        checks: Final = migration_data_checks.checks_for_migration("probe", migration_sql)
         findings: Final = migration_data_checks.find_blockers(conn, "public", checks)
-        for statement in migration_data_checks.statements(_BACKFILL_THEN_SET_NOT_NULL):
-            conn.execute(statement)  # pyright: ignore[reportArgumentType]  # test SQL
-        values: Final = conn.execute('SELECT "c" FROM "preflight_backfill" ORDER BY "id"').fetchall()
+        outcomes: Final = tuple(
+            _apply(conn, statement) for statement in migration_data_checks.statements(migration_sql)
+        )
 
-    assert findings == (), migration_data_checks.report(findings)
-    assert values == [("filled",), ("kept",)]
+    assert tuple(finding.rows for finding in findings if isinstance(finding, migration_data_checks.BlockedChange)) == (
+        () if rows_still_null == 0 else (rows_still_null,)
+    )
+    assert outcomes == (None, None if rows_still_null == 0 else "NotNullViolation")
+
+
+def _apply(conn: "psycopg.Connection[tuple[object, ...]]", statement: str) -> str | None:
+    try:
+        conn.execute(statement)  # pyright: ignore[reportArgumentType]  # test SQL
+    except psycopg.Error as error:
+        return type(error).__name__
+    return None
 
 
 @requires_db
