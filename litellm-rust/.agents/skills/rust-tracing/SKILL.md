@@ -1,6 +1,8 @@
 ---
 name: rust-tracing
 description: Add or change Rust diagnostic tracing in litellm-rust, including route spans, subscriber layers, and Python logger delivery
+metadata:
+  internal: true
 ---
 
 # Rust tracing

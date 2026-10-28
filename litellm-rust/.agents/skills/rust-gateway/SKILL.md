@@ -1,6 +1,8 @@
 ---
 name: rust-gateway
 description: Add or change an HTTP route, extractor, response envelope, stream or router mount in the litellm-rust gateway crates (crates/gateway and crates/gateway-*). Use when adding an endpoint, parsing a request body, choosing an error envelope for an API surface, relaying SSE, or writing a router-level test
+metadata:
+  internal: true
 ---
 
 # Rust gateway

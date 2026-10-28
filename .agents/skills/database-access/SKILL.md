@@ -1,6 +1,8 @@
 ---
 name: database-access
 description: Add database queries, extract existing Prisma calls into repositories, or explicitly port queries to Rust and SQLx without expanding migration scope
+metadata:
+  internal: true
 ---
 
 # Database access
