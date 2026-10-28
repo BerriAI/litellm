@@ -11,7 +11,7 @@ use litellm_http::transport::Error as TransportError;
 use litellm_llms::Error as LlmError;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum RouteError {
+pub enum Error {
     #[error("expected {expected}, got {actual}")]
     InvalidType {
         expected: &'static str,
@@ -38,10 +38,10 @@ pub enum RouteError {
     #[error(transparent)]
     Secret(#[from] SecretError),
     #[error("post-call hook failed: {0}")]
-    PostCallHook(#[source] Arc<RouteError>),
+    PostCallHook(#[source] Arc<Error>),
 }
 
-impl From<litellm_host::machine::MachineFault> for RouteError {
+impl From<litellm_host::machine::MachineFault> for Error {
     fn from(fault: litellm_host::machine::MachineFault) -> Self {
         use litellm_host::machine::MachineFault;
         Self::InvalidRequest(match fault {
@@ -51,7 +51,7 @@ impl From<litellm_host::machine::MachineFault> for RouteError {
     }
 }
 
-impl RouteError {
+impl Error {
     pub fn post_call(error: Self) -> Self {
         Self::PostCallHook(Arc::new(error))
     }
@@ -76,7 +76,7 @@ impl RouteError {
     }
 }
 
-impl From<LlmError> for RouteError {
+impl From<LlmError> for Error {
     fn from(error: LlmError) -> Self {
         match error {
             LlmError::InvalidType { expected, actual } => Self::InvalidType { expected, actual },
@@ -99,7 +99,7 @@ impl SecretError {
     }
 }
 
-impl From<litellm_secrets::Error> for RouteError {
+impl From<litellm_secrets::Error> for Error {
     fn from(error: litellm_secrets::Error) -> Self {
         Self::Secret(SecretError(Arc::new(error)))
     }
@@ -115,22 +115,22 @@ impl Eq for SecretError {}
 
 #[cfg(test)]
 mod tests {
-    use super::RouteError;
+    use super::Error;
     use litellm_llms::{Error as LlmError, ErrorDetail};
     use rstest::rstest;
 
     #[test]
     fn a_missing_api_key_is_the_environment_not_the_request() {
         assert!(
-            !RouteError::Auth(litellm_auth::Error::MissingApiKey {
+            !Error::Auth(litellm_auth::Error::MissingApiKey {
                 provider: "Anthropic",
                 environment_variable: "ANTHROPIC_API_KEY",
             })
             .is_request()
         );
-        assert!(RouteError::Auth(litellm_auth::Error::InvalidHeader).is_request());
-        assert!(RouteError::InvalidRequest("top_k".into()).is_request());
-        assert!(!RouteError::InvalidResponse("bad json".into()).is_request());
+        assert!(Error::Auth(litellm_auth::Error::InvalidHeader).is_request());
+        assert!(Error::InvalidRequest("top_k".into()).is_request());
+        assert!(!Error::InvalidResponse("bad json".into()).is_request());
     }
     #[rstest]
     #[case::request(true)]
@@ -139,7 +139,7 @@ mod tests {
         let source = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
         let source_message = source.to_string();
         let detail = ErrorDetail::invalid("test payload", source);
-        let error = RouteError::from(if request {
+        let error = Error::from(if request {
             LlmError::InvalidRequest(detail)
         } else {
             LlmError::InvalidResponse(detail)

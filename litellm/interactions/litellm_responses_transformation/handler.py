@@ -116,10 +116,7 @@ class LiteLLMResponsesInteractionsHandler:
         """Async handler for interactions API requests."""
         # Call litellm.aresponses()
         # Note: litellm.aresponses() returns Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]
-        aresponses_fn: Final[
-            Callable[..., Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]]
-        ] = vars(litellm)["aresponses"]
-        responses_response: Final = await aresponses_fn(
+        responses_response: Final = await litellm.aresponses(
             **responses_request,
         )
 
