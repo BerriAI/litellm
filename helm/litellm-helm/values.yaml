@@ -5,6 +5,10 @@
 replicaCount: 1
 liteadmin:
   enabled: false
+  image:
+    repository: ghcr.io/berriai/litellm-admin-agent
+    tag: ""
+    pullPolicy: IfNotPresent
   existingSecret: ""
   gatewayUrl: ""
   model: ""

@@ -518,3 +518,64 @@ tests:
       - equal:
           path: spec.template.metadata.annotations["example.com/literal"]
           value: "plain-string-value"
+  - it: leaves admin MCP opt-in when no Slack worker is deployed
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_ENABLE_ADMIN_MCP
+          any: true
+  - it: enables the hosted endpoint required by the native Slack worker
+    template: deployment.yaml
+    set:
+      liteadmin.enabled: true
+      liteadmin.existingSecret: worker-secret
+      liteadmin.gatewayUrl: https://gateway.example
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_ENABLE_ADMIN_MCP
+            value: "true"
+          count: 1
+  - it: preserves one explicitly enabled MCP flag with the Slack worker
+    template: deployment.yaml
+    set:
+      liteadmin.enabled: true
+      liteadmin.existingSecret: worker-secret
+      liteadmin.gatewayUrl: https://gateway.example
+      envVars.LITELLM_ENABLE_ADMIN_MCP: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_ENABLE_ADMIN_MCP
+            value: "true"
+          count: 1
+  - it: rejects disabling the endpoint required by the Slack worker
+    template: deployment.yaml
+    set:
+      liteadmin.enabled: true
+      envVars.LITELLM_ENABLE_ADMIN_MCP: false
+    asserts:
+      - failedTemplate:
+          errorMessage: liteadmin.enabled=true requires envVars.LITELLM_ENABLE_ADMIN_MCP to be enabled
+  - it: rejects an invalid MCP flag before starting the Slack worker
+    template: deployment.yaml
+    set:
+      liteadmin.enabled: true
+      envVars.LITELLM_ENABLE_ADMIN_MCP: invalid
+    asserts:
+      - failedTemplate:
+          errorMessage: liteadmin.enabled=true requires envVars.LITELLM_ENABLE_ADMIN_MCP to be enabled
+  - it: prevents a second MCP flag from overriding native worker enablement
+    template: deployment.yaml
+    set:
+      liteadmin.enabled: true
+      extraEnvVars:
+        - name: LITELLM_ENABLE_ADMIN_MCP
+          value: "false"
+    asserts:
+      - failedTemplate:
+          errorMessage: Configure LITELLM_ENABLE_ADMIN_MCP through envVars, not extraEnvVars, when liteadmin.enabled=true

@@ -533,6 +533,7 @@ jobs:
 
           - shard: proxy-feature-endpoints
             test-path: |-
+              tests/unit/proxy/admin_mcp
               tests/unit/proxy/guardrails
               --ignore=tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py
               --ignore=tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py

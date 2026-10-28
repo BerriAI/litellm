@@ -56,7 +56,9 @@ _RESERVED_KEY_HEADERS: Final = (
     | frozenset(name.decode("ascii") for name in _REQUEST_HEADERS - {b"authorization"})
 )
 _SETTINGS: Final = TypeAdapter(Mapping[str, object])
-_IDENTITY_MAPPINGS: Final = TypeAdapter(tuple[dict[str, object], ...] | dict[str, object] | None)
+_IDENTITY_MAPPINGS: Final = TypeAdapter[tuple[Mapping[str, object], ...] | Mapping[str, object] | None](
+    tuple[Mapping[str, object], ...] | Mapping[str, object] | None
+)
 _OAUTH_MAPPINGS: Final = TypeAdapter(dict[str, str])
 
 
@@ -68,7 +70,7 @@ def _configured_key_header() -> bytes | None:
     if name is not None and (not isinstance(name, str) or re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+", name) is None):
         raise ValueError("Hosted admin MCP requires a valid litellm_key_header_name")
     raw_mappings: Final = _IDENTITY_MAPPINGS.validate_python(settings.get("user_header_mappings"))
-    mappings: Final = (raw_mappings,) if isinstance(raw_mappings, dict) else raw_mappings or ()
+    mappings: Final = (raw_mappings,) if isinstance(raw_mappings, Mapping) else raw_mappings or ()
     mapped_names: Final = tuple(mapping.get("header_name") for mapping in mappings)
     oauth_names: Final = (
         tuple(_OAUTH_MAPPINGS.validate_python(settings.get("oauth2_config_mappings") or {}).values())
@@ -129,20 +131,21 @@ async def admin_mcp_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     try:
         import httpx2
-        from litellm_admin_mcp.config import (  # pyright: ignore[reportMissingTypeStubs]  # upstream has no py.typed marker
+
+        from litellm.proxy.admin_mcp.config import (
             Config,
             env_bool,
         )
-        from litellm_admin_mcp.gateway import (  # pyright: ignore[reportMissingTypeStubs]  # upstream has no py.typed marker
+        from litellm.proxy.admin_mcp.gateway import (
             Gateway,
         )
-        from litellm_admin_mcp.server import (  # pyright: ignore[reportMissingTypeStubs]  # upstream has no py.typed marker
+        from litellm.proxy.admin_mcp.server import (
             create_http_app,
         )
     except ImportError as exc:
         raise RuntimeError(
-            "Admin MCP requires Python 3.12+ and the admin-mcp dependency group. "
-            "Use a LiteLLM image that bundles it, or run uv sync --extra proxy --group admin-mcp."
+            "Admin MCP requires Python 3.12+ and the proxy dependencies. "
+            "Use a LiteLLM image that bundles them, or run uv sync --extra proxy."
         ) from exc
 
     configured_url: Final = os.environ.get("LITELLM_MCP_PUBLIC_URL") or os.environ.get("PROXY_BASE_URL", "")

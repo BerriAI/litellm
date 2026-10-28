@@ -15,7 +15,9 @@ dependencies = [
     # When changing a floor, verify it installs + imports on every supported
     # Python with: `uv pip install --resolution=lowest-direct .`
     "fastuuid>=0.14.0,<1.0; python_version < '3.15'",
-    "filelock>=3.16.1,<4.0",
+    # TODO: Drop the 3.10 cap when a compatible release fixes the APIs introduced in 3.20.4 (GHSA-v4x8-3wr5-3wq8)
+    "filelock>=3.20.3,<3.20.4; python_version < '3.11'",
+    "filelock>=4.2.1,<5.0; python_version >= '3.11'",
     "httpx[http2]>=0.28.0,<1.0",
     "openai>=2.20.0,<4.0.0",
     "python-dotenv>=1.0.0,<2.0",
@@ -36,7 +38,7 @@ dependencies = [
     "pydantic>=2.12.0,<3.0.0; python_version == '3.14'",
     "pydantic>=2.14.0,<3.0.0; python_version >= '3.15'",
     "pydantic-settings>=2.14.1,<3.0",
-    "jsonschema>=4.0.0,<5.0",
+    "jsonschema>=4.22.0,<5.0",
     "boto3>=1.43.117,<2.0",
     "certifi>=2026.10.19",
     "typing-extensions>=4.13.0,<5.0",
@@ -251,11 +253,7 @@ e2e-dev = [
     "psutil==7.2.2",
     "mcp>=2.3.0,<3",
 ]
-admin-mcp = [
-    "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz#sha256=86b930f6706fb2da10d53d1798ee7fd14e44fb0afdef0da122cf0e6bb88fa2c3 ; python_version >= '3.12'",
-]
 proxy-dev = [
-    { include-group = "admin-mcp" },
     "prisma==0.11.0",
     "hypercorn==0.17.3",
     "prometheus-client==0.20.0",
@@ -332,6 +330,8 @@ include = [
     "litellm/router_strategy/complexity_router/artifacts/*.json",
     "litellm/router_strategy/complexity_router/fuse_presets.json",
     "litellm/proxy/model_insights_tasks.json",
+    "litellm/proxy/admin_mcp/operations.json",
+    "litellm/proxy/admin_mcp/LICENSE",
     "litellm/proxy/public_endpoints/whats_new.json",
     "litellm/proxy/common_utils/codex_base_instructions.md",
     "litellm/proxy/common_utils/codex_bundled_models_0.159.3.json",

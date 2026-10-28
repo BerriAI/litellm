@@ -259,3 +259,15 @@ itself.
 `lensWorker.mode` selects `disabled`, `bundled` or `external`. Bundled mode generates separate service and identity-signing credentials. External mode requires `lensWorker.gateway.secretName` and `lensWorker.serviceTokenSecret.name`; their keys default to `gateway-secret` and `service-token`. Provision distinct values matching the external Lens deployment
 
 Follow the [Lens Helm connection guide](https://github.com/BerriAI/lens/blob/main/helm/lens/README.md#connect-a-gateway) for complete values, verification, GitOps credential requirements and existing-data migration. Source-chart installation requires a built Lens image until the first signed Lens release is published
+
+### Slack worker
+
+`/admin/mcp` is served inside LiteLLM. To use MCP without Slack, set `envVars.LITELLM_ENABLE_ADMIN_MCP=true` and supply a valid Enterprise license to the gateway. `liteadmin.enabled` deploys the separate Slack worker and enables the gateway's MCP endpoint automatically. It requires the same gateway license. An explicitly disabled MCP flag fails rendering. Configure this flag through `envVars`, not `extraEnvVars`, when the worker is enabled
+
+Set `liteadmin.image.repository` to the worker repository and `liteadmin.image.tag` to an independently published version. A worker tag is required when the worker is enabled. `liteadmin.image.pullPolicy` defaults to `IfNotPresent`
+
+The `slack-worker.yaml` template runs the `slack-worker` container and labels its resources with `app.kubernetes.io/component: slack-worker`. Existing `liteadmin.*` settings, resource names, selectors, and persistent volume names remain stable for upgrades. Use `kubectl get deployments,pods,services,pvc -l app.kubernetes.io/component=slack-worker` to find the worker resources
+
+For an existing Slack deployment, publish or build the worker image before upgrading this chart. Preserve `liteadmin.existingSecret`, the encryption key, and the persistent volume. The chart starts the worker with `litellm-admin-agent --web` and `CONNECTION_AUTH_MODE=native`. See the [worker deployment guide](https://github.com/BerriAI/litellm-admin-agent/blob/main/docs/compatibility.md#native-enterprise-deployment)
+
+Keep the worker resources in the existing Helm release during this upgrade. Removing the template or disabling `liteadmin.enabled` removes its Deployment, Service, and PVC from the release. Moving to a separate worker chart requires an explicit state and resource ownership migration first

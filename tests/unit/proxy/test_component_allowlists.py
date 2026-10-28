@@ -450,9 +450,9 @@ def test_admin_mcp_survives_only_management_component_lifespans(
 
     application: Final = FastAPI(lifespan=lifespan)
 
-    @application.get("/user/info")
+    @application.get("/v2/user/info")
     async def user_info() -> dict[str, object]:
-        return {"user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"}}
+        return {"user_id": "admin", "user_role": "proxy_admin"}
 
     if component_lifespan is not None:
         application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)

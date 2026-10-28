@@ -23,7 +23,7 @@ import httpx2
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from fastapi import HTTPException
-from litellm_admin_mcp.server import create_http_app
+from litellm.proxy.admin_mcp.server import create_http_app
 from litellm.proxy import proxy_server
 
 module_name: Final = {
