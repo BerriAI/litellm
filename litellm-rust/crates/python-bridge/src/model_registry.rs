@@ -17,7 +17,7 @@ use serde::Serialize;
 use sha1::{Digest, Sha1};
 
 use install::BoundDict;
-pub(crate) use row_error::{RowError, RowErrorKind, row_error};
+pub(crate) use row_error::{RowError, row_error};
 
 static BUNDLED: LazyLock<Arc<Contents>> = LazyLock::new(|| {
     let loaded = Catalog::parse(BUNDLED_REGISTRY).expect("the bundled model registry parses");

@@ -42,6 +42,8 @@ RowErrorKind = Literal[
     "no_off_peak_hours",
     "empty_list",
     "invalid_date",
+    "unread_field",
+    "no_fallback_rules",
 ]
 
 @final

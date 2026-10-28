@@ -79,7 +79,7 @@ mod _native {
         let literal = typing.getattr("Literal")?;
         let row_error_kinds = PyTuple::new(
             py,
-            <crate::model_registry::RowErrorKind as strum::VariantArray>::VARIANTS
+            <litellm_model_catalog::ErrorKind as strum::VariantArray>::VARIANTS
                 .iter()
                 .map(|kind| literal.get_item(<&'static str>::from(*kind)))
                 .collect::<PyResult<Vec<_>>>()?,
@@ -227,6 +227,8 @@ mod tests {
                     "no_off_peak_hours".to_owned(),
                     "empty_list".to_owned(),
                     "invalid_date".to_owned(),
+                    "unread_field".to_owned(),
+                    "no_fallback_rules".to_owned(),
                 ])
             );
         });
