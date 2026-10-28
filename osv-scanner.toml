@@ -1,32 +1,27 @@
 [[IgnoredVulns]]
 id = "GHSA-w8v5-vhqr-4h9v"
-ignoreUntil = 2026-11-01
-reason = "diskcache has no fixed release published; remove this entry once one exists"
+ignoreUntil = 2026-11-27
+reason = "diskcache still has no fixed release published (checked 2026-10-28), and it is reached only through the optional caching extra; remove this entry once one exists"
 
 [[IgnoredVulns]]
 id = "GHSA-v4x8-3wr5-3wq8"
 ignoreUntil = 2026-11-20
-reason = "the only fixed filelock is 4.2.1, a new major that requires Python >= 3.11 while litellm still supports 3.10, and the advisory is in ReadWriteLock, which litellm never uses (only FileLock); bump filelock and remove this entry once 3.10 is dropped or a 3.x fix ships"
+reason = "the only fixed filelock is 4.2.1, a new major that requires Python >= 3.11 while litellm still supports 3.10, and litellm pins filelock<4.0 on every Python, so 3.11+ also stays on 3.32.7 until that cap is lifted; the advisory is in ReadWriteLock, which litellm never uses (only FileLock); bump filelock and remove this entry once 3.10 is dropped or a 3.x fix ships"
 
 [[IgnoredVulns]]
 id = "GHSA-567q-5qvw-pf92"
 ignoreUntil = 2026-11-20
-reason = "Windows-only local DoS (CVSS 2.5) in filelock soft locks, fixed only in 4.2.1, a new major that requires Python >= 3.11 while litellm still supports 3.10 and pins filelock<4.0; litellm only uses FileLock, which takes an OS lock rather than a soft lock; bump filelock and remove this entry once 3.10 is dropped or a 3.x fix ships"
+reason = "Windows-only local DoS (CVSS 2.5) in filelock soft locks, fixed only in 4.2.1, a new major that requires Python >= 3.11 while litellm still supports 3.10, and litellm pins filelock<4.0 on every Python, so 3.11+ also stays on 3.32.7 until that cap is lifted; litellm only uses FileLock, which takes an OS lock rather than a soft lock; bump filelock and remove this entry once 3.10 is dropped or a 3.x fix ships"
 
 [[IgnoredVulns]]
 id = "GHSA-9vhv-jxww-xfm5"
 ignoreUntil = 2026-11-20
-reason = "Windows-only local DoS (CVSS 3.3) in filelock ReadWriteLock, fixed only in 4.2.1, a new major that requires Python >= 3.11 while litellm still supports 3.10 and pins filelock<4.0; litellm never uses ReadWriteLock (only FileLock); bump filelock and remove this entry once 3.10 is dropped or a 3.x fix ships"
+reason = "Windows-only local DoS (CVSS 3.3) in filelock ReadWriteLock, fixed only in 4.2.1, a new major that requires Python >= 3.11 while litellm still supports 3.10, and litellm pins filelock<4.0 on every Python, so 3.11+ also stays on 3.32.7 until that cap is lifted; litellm never uses ReadWriteLock (only FileLock); bump filelock and remove this entry once 3.10 is dropped or a 3.x fix ships"
 
 [[IgnoredVulns]]
 id = "GHSA-45c3-73f7-pv4m"
 ignoreUntil = 2026-11-27
 reason = "dnspython 2.9.0 (published 2026-10-09) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 2.8.0 while 3.11+ locks 2.9.0; the advisory is CPU use in dns.name.from_wire_parser and litellm only reaches dnspython through pydantic EmailStr, which never does DNS lookups; remove this entry once 3.10 is dropped or a 3.10-compatible fix ships"
-
-[[IgnoredVulns]]
-id = "GHSA-vfj7-8cjw-p6xm"
-ignoreUntil = 2026-11-03
-reason = "braces has no fixed release published (3.0.3, 2024-05-21, is latest and last_affected); dev-only via knip > fast-glob > micromatch; remove this entry once one exists"
 
 [[IgnoredVulns]]
 id = "GHSA-xcx6-jx8p-x3h5"
@@ -39,4 +34,4 @@ version = "12.3.0"
 ecosystem = "PyPI"
 vulnerability.ignore = true
 effectiveUntil = 2026-11-27
-reason = "pillow 13.0.0 requires Python >= 3.11, so the Python 3.10 resolution of the ci and dev groups stays on 12.3.0; 3.11+ is on 13.0.0; extended to 2026-11-27 with maintainer approval, same date as the dnspython 3.10 entry; remove once 3.10 is dropped or a 12.x fix ships"
+reason = "pillow 13.0.0 requires Python >= 3.11, so the Python 3.10 resolution of the ci and dev groups and of the mlflow extra stays on 12.3.0; 3.11+ is on 13.0.0; extended to 2026-11-27 with maintainer approval, same date as the dnspython 3.10 entry; remove once 3.10 is dropped or a 12.x fix ships"
