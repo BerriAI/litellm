@@ -1615,3 +1615,68 @@ async def test_delete_organization_is_refused_while_one_of_its_teams_holds_a_ptu
     prisma_client.db.litellm_teamtable.delete_many.assert_not_called()
     prisma_client.db.litellm_verificationtoken.delete_many.assert_not_called()
     prisma_client.db.litellm_organizationtable.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget_duration", ["30d", None])
+async def test_new_organization_schedules_budget_reset_from_duration(monkeypatch, budget_duration):
+    """/organization/new with an inline budget_duration must write budget_reset_at on the auto-created
+    budget row, the way team create and /budget/new do, or the org budget never resets and the UI
+    cannot show the current budget period."""
+    from datetime import datetime
+
+    from litellm.proxy._types import LitellmUserRoles, NewOrganizationRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import new_organization
+    from litellm.proxy.utils import PrismaClient
+
+    prisma_client = MagicMock()
+    prisma_client.jsonify_object = MagicMock(side_effect=lambda data: PrismaClient.jsonify_object(prisma_client, data))
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=MagicMock(budget_id="budget-1"))
+    prisma_client.db.litellm_organizationtable.create = AsyncMock(return_value={"organization_id": "org-1"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+
+    await new_organization(
+        data=NewOrganizationRequest(organization_alias="org", max_budget=100, budget_duration=budget_duration),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    budget_write = prisma_client.db.litellm_budgettable.create.await_args.kwargs["data"]
+    if budget_duration is None:
+        assert "budget_reset_at" not in budget_write, budget_write
+        return
+    reset_at = budget_write["budget_reset_at"]
+    assert isinstance(reset_at, datetime) and reset_at.tzinfo is not None, budget_write
+    assert budget_write["budget_duration"] == budget_duration
+
+
+def test_organization_info_response_keeps_budget_reset_at():
+    """/organization/info must return the budget row's budget_reset_at so the dashboard can show
+    which budget period the org's spend covers."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy._types import LiteLLM_OrganizationTableWithMembers
+
+    reset_at = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    created_at = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    response = LiteLLM_OrganizationTableWithMembers(
+        organization_id="org-1",
+        organization_alias="org",
+        budget_id="budget-1",
+        models=[],
+        created_by="admin",
+        updated_by="admin",
+        created_at=created_at,
+        updated_at=created_at,
+        litellm_budget_table={
+            "budget_id": "budget-1",
+            "max_budget": 100.0,
+            "budget_duration": "30d",
+            "budget_reset_at": reset_at,
+            "created_at": created_at,
+        },
+    )
+
+    assert response.model_dump()["litellm_budget_table"]["budget_reset_at"] == reset_at

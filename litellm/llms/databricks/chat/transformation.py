@@ -822,6 +822,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         sync_stream: bool,
         json_mode: bool | None,
         optional_params: Mapping[str, object],
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> "DatabricksChatResponseIterator":
         return self.get_model_response_iterator(
             streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode

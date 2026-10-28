@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import ItemsView, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import Any, Final
@@ -28,6 +28,10 @@ _DEFAULT_SENSITIVE_PATTERNS: Final = frozenset(
         "tenancy",
     )
 )
+
+
+def _object_items(data: Mapping[str, object]) -> ItemsView[str, object]:
+    return data.items()
 
 
 class SensitiveDataMasker:
@@ -127,7 +131,7 @@ class SensitiveDataMasker:
             return data
 
         masked_data: Final[dict[str, object]] = {}
-        for k, v in data.items():
+        for k, v in _object_items(data):
             try:
                 key_is_sensitive = self.is_sensitive_key(k, excluded_keys)
                 if isinstance(v, Mapping):

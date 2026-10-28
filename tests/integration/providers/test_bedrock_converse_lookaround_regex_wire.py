@@ -577,10 +577,10 @@ def test_a_deployment_flag_never_reaches_its_sibling_on_the_same_model(
 
 @pytest.mark.parametrize(
     ("model_id", "body_base_model", "expected"),
-    ((_NOVA, f"bedrock/{_KIMI}", _WIRE_LOOKAROUND_FREE), (_KIMI, f"bedrock/{_NOVA}", _WIRE_LOOKAROUND_FREE)),
-    ids=("client-base-model-can-loosen-an-unflagged-deployment", "client-base-model-cannot-restore-a-flagged-one"),
+    ((_NOVA, f"bedrock/{_KIMI}", _WIRE_AS_SENT), (_KIMI, f"bedrock/{_NOVA}", _WIRE_LOOKAROUND_FREE)),
+    ids=("client-base-model-cannot-flag-an-unflagged-deployment", "client-base-model-cannot-restore-a-flagged-one"),
 )
-def test_a_base_model_in_the_request_body_only_ever_loosens(
+def test_a_base_model_in_the_request_body_leaves_the_deployment_decision(
     gateway: Gateway, model_id: str, body_base_model: str, expected: Mapping[str, JsonValue]
 ) -> None:
     with wire_server(_bedrock_peer) as wire, gateway.scenario() as scenario:
