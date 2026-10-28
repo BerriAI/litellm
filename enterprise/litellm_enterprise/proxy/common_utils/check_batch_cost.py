@@ -5,10 +5,9 @@ Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if t
 import asyncio
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace as dataclasses_replace
-from datetime import datetime, timedelta, timezone
-from enum import Enum
+from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Protocol, Tuple, cast
 
@@ -29,6 +28,7 @@ from litellm.constants import (
 from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
+from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -43,18 +43,13 @@ if TYPE_CHECKING:
 
 
 def _error_names_resource(error: Exception, resource_id: str) -> bool:
-    tokens: Final = re.findall(r"""[^\s"'`<>(]+""", str(error))
+    tokens: Final[list[str]] = re.findall(r"""[^\s"'`<>(]+""", str(error))
     return any(token.rstrip(".,:;)") == resource_id for token in tokens)
 
 
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
 RECENT_BATCH_POLL_WINDOW: Final = timedelta(hours=48)
-UNSETTLED_POLLS_BEFORE_EXPIRY: Final = 3
-
-
-class UnsettledPoll(Enum):
-    REFUSED_RETRIEVE = "refused retrieve"
-    OUTPUT_ID_PENDING = "output id pending"
+GIVE_UP_POLLING_AFTER: Final = timedelta(days=2 * MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
 
 
 PROVIDER_TERMINAL_BATCH_STATUSES: Final[Tuple[str, ...]] = (
@@ -111,6 +106,7 @@ class CheckBatchCost:
         prisma_client: "PrismaClient",
         llm_router: "Router",
         track_unmanaged_batch_cost: bool = False,
+        clock: Callable[[], datetime] = get_utc_datetime,
     ):
         from litellm.proxy.utils import PrismaClient, ProxyLogging
         from litellm.router import Router
@@ -119,17 +115,17 @@ class CheckBatchCost:
         self.prisma_client: PrismaClient = prisma_client
         self.llm_router: Router = llm_router
         self._track_unmanaged_batch_cost = track_unmanaged_batch_cost
+        self._clock: Final = clock
         self._creator_attribution: Final = ManagedObjectCreatorAttribution(prisma_client, "CheckBatchCost")
         # Cached after the first poll cycle. Once we know the column is absent we skip
         # the guaranteed-failing primary query on every subsequent cycle.
         self._has_batch_processed_column: bool = True
         self.batch_processed_support_confirmed: bool = False
         self._poll_cursor: tuple[datetime, str] | None = None
-        self._poll_before: datetime = datetime.now(timezone.utc)
+        self._poll_before: datetime = clock()
         self._arrival_cursor: tuple[datetime, str] | None = None
         self._arrival_before: datetime = self._poll_before
         self._poll_arrivals: bool = False
-        self._unsettled_polls: Mapping[str, tuple[UnsettledPoll, int]] = MappingProxyType({})
         self._line_item_stores: Final[set[asyncio.Task[None]]] = set()
         self._line_item_store_turn: Final = asyncio.Lock()
         self._poll_idle: Final = asyncio.Event()
@@ -214,9 +210,9 @@ class CheckBatchCost:
         cursor: Final = self._arrival_cursor if arrivals else self._poll_cursor
         if cursor is None:
             if arrivals:
-                self._arrival_before = datetime.now(timezone.utc)
+                self._arrival_before = self._clock()
             else:
-                self._poll_before = datetime.now(timezone.utc) - RECENT_BATCH_POLL_WINDOW
+                self._poll_before = self._clock() - RECENT_BATCH_POLL_WINDOW
         before: Final = self._arrival_before if arrivals else self._poll_before
         page: Final = await _managed_object_table(self.prisma_client).find_many(
             where={
@@ -251,41 +247,19 @@ class CheckBatchCost:
             return {"id": job.id, "batch_processed": False}
         return {"id": job.id, "updated_at": job.updated_at}
 
-    @staticmethod
-    def _is_past_staleness_cutoff(job: ManagedObjectRow) -> bool:
-        return job.created_at < datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+    def _is_past_give_up_age(self, job: ManagedObjectRow) -> bool:
+        return job.created_at < self._clock() - GIVE_UP_POLLING_AFTER
 
     def _unchanged_snapshot(self, job: ManagedObjectRow) -> Mapping[str, object]:
         return {**self._unprocessed_snapshot(job), "updated_at": job.updated_at}
 
-    async def _expire_if_stale(self, job: ManagedObjectRow, snapshot: Mapping[str, object]) -> None:
-        if not self._is_past_staleness_cutoff(job):
+    async def _give_up_if_old(self, job: ManagedObjectRow, snapshot: Mapping[str, object]) -> None:
+        if not self._is_past_give_up_age(job):
             return
         if job.status in TERMINAL_MANAGED_OBJECT_STATUSES:
-            await self._retire_job(
-                job, f"unbilled {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days after it was created", snapshot
-            )
+            await self._retire_job(job, f"unbilled {GIVE_UP_POLLING_AFTER.days} days after it was created", snapshot)
             return
         await self._expire_unfinished(job, snapshot)
-
-    async def _expire_after_repeated_unsettled_polls(self, job: ManagedObjectRow, kind: UnsettledPoll) -> None:
-        streak: Final = self._unsettled_polls.get(job.id)
-        unsettled: Final = streak[1] + 1 if streak is not None and streak[0] is kind else 1
-        if unsettled < UNSETTLED_POLLS_BEFORE_EXPIRY:
-            self._unsettled_polls = MappingProxyType({**self._unsettled_polls, job.id: (kind, unsettled)})
-            return
-        self._forget_unsettled_polls(job)
-        match kind:
-            case UnsettledPoll.REFUSED_RETRIEVE:
-                await self._expire_if_stale(job, self._unprocessed_snapshot(job))
-            case UnsettledPoll.OUTPUT_ID_PENDING:
-                await self._expire_if_stale(job, self._unchanged_snapshot(job))
-
-    def _forget_unsettled_polls(self, job: ManagedObjectRow) -> None:
-        if job.id in self._unsettled_polls:
-            self._unsettled_polls = MappingProxyType(
-                {job_id: streak for job_id, streak in self._unsettled_polls.items() if job_id != job.id}
-            )
 
     @staticmethod
     def _is_completed_with_output_id_pending(response: "LiteLLMBatch") -> bool:
@@ -313,7 +287,7 @@ class CheckBatchCost:
             return
         if expired > 0:
             verbose_proxy_logger.warning(
-                f"CheckBatchCost: job {job.id} is older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days "
+                f"CheckBatchCost: job {job.id} is older than {GIVE_UP_POLLING_AFTER.days} days "
                 "and still not finished, so it is marked stale_expired and no longer polled"
             )
 
@@ -426,16 +400,6 @@ class CheckBatchCost:
         from litellm.exceptions import NotFoundError
 
         return isinstance(error, (NotFoundError, openai.NotFoundError)) and _error_names_resource(error, batch_id)
-
-    @staticmethod
-    def _is_lasting_provider_failure(error: Exception) -> bool:
-        import openai
-
-        from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
-        return isinstance(error, (BaseLLMException, openai.APIStatusError)) and not litellm.should_retry(
-            error.status_code
-        )
 
     def _batch_deployment_exists(self, model_id: str) -> bool:
         """A 404 only proves the batch is gone when it came from the batch's own
@@ -1234,7 +1198,7 @@ class CheckBatchCost:
                 if self._has_unified_id_without_model(job):
                     await self._retire_job(job, "unified object id has no model id")
                 else:
-                    await self._expire_if_stale(job, self._unprocessed_snapshot(job))
+                    await self._give_up_if_old(job, self._unprocessed_snapshot(job))
                 continue
             model_id, batch_id = routing
 
@@ -1259,22 +1223,16 @@ class CheckBatchCost:
                     prom_logger.record_check_batch_cost_error("provider_retrieval_error")
                 if self._is_batch_gone_at_provider(e, batch_id) and self._batch_deployment_exists(model_id):
                     await self._retire_job(job, f"batch {batch_id} no longer exists at the provider")
-                elif (
-                    self._is_past_staleness_cutoff(job)
-                    and job.status not in TERMINAL_MANAGED_OBJECT_STATUSES
-                    and self._is_lasting_provider_failure(e)
-                ):
-                    await self._expire_after_repeated_unsettled_polls(job, UnsettledPoll.REFUSED_RETRIEVE)
+                else:
+                    await self._give_up_if_old(job, self._unprocessed_snapshot(job))
                 continue
             if self._is_completed_with_output_id_pending(response):
                 verbose_proxy_logger.info(
                     f"CheckBatchCost: batch {batch_id} is completed but its output file id "
                     f"has not appeared yet; leaving job {job.id} for the next poll cycle"
                 )
-                if self._is_past_staleness_cutoff(job):
-                    await self._expire_after_repeated_unsettled_polls(job, UnsettledPoll.OUTPUT_ID_PENDING)
+                await self._give_up_if_old(job, self._unchanged_snapshot(job))
                 continue
-            self._forget_unsettled_polls(job)
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
             if response.status in PROVIDER_TERMINAL_BATCH_STATUSES and response.output_file_id is not None:
@@ -1326,6 +1284,8 @@ class CheckBatchCost:
 
             elif response.status in PROVIDER_TERMINAL_BATCH_STATUSES:
                 await self._retire_unbilled_terminal_job(job, response, model_id, batch_id)
+            else:
+                await self._give_up_if_old(job, self._unprocessed_snapshot(job))
 
         # Record polling run metrics (always, even if nothing was processed)
         if prom_logger:

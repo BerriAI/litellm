@@ -6,7 +6,7 @@ import base64
 import json
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from itertools import chain
 from types import MappingProxyType
 from typing import (
@@ -115,6 +115,7 @@ from litellm.types.utils import (
     LLMResponseTypes,
     SpecialEnums,
 )
+from litellm.utils import get_utc_datetime
 
 
 class _ManagedFileRetrieve(Protocol):
@@ -509,10 +510,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         prisma_client: PrismaClient,
         *,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        clock: Callable[[], datetime] = get_utc_datetime,
     ):
         self.internal_usage_cache = internal_usage_cache
         self.prisma_client = prisma_client
         self._sleep = sleep
+        self._clock = clock
 
     @staticmethod
     def _get_prometheus_logger():
@@ -2395,7 +2398,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             order={"created_at": "desc"},
         )
 
-        input_file_cutoff: Final = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+        input_file_cutoff: Final = self._clock() - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
         referencing_batches: Final[list[dict[str, object]]] = []
         for batch in batches:
             try:
