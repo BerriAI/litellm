@@ -243,6 +243,7 @@ jobs:
               tests/unit/llms/chatgpt
               tests/unit/llms/clarifai
               tests/unit/llms/claude_code
+              tests/unit/llms/clf_ai_gateway
               tests/unit/llms/cloudflare
               tests/unit/llms/codex
               tests/unit/llms/cohere
