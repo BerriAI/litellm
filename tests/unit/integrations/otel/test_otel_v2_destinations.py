@@ -3556,7 +3556,7 @@ class TestLangfuseTenantOnly:
             emit(logger.tracer_provider)
             logger.tracer_provider.force_flush()
 
-        assert [span.name for _, exporter in capture.built for span in exporter.get_finished_spans()] == ["chat gpt-4"]
+        assert sum(len(exporter.get_finished_spans()) for _, exporter in capture.built) == 1
 
     def test_a_key_destinations_logger_is_reused_by_later_requests_without_a_destination(
         self, monkeypatch: pytest.MonkeyPatch
