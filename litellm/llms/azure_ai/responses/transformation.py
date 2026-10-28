@@ -46,16 +46,19 @@ def _responses_url(api_base: str) -> str:
 
 
 def _without_agent_instructions(response: ResponsesAPIResponse) -> ResponsesAPIResponse:
-    if "agent_reference" not in (response.model_extra or {}):
+    if (response.model_extra or {}).get("agent_reference") is None:
         return response
     return response.model_copy(update={"instructions": None})
 
 
 def _event_without_agent_instructions(event: Mapping[str, object]) -> Mapping[str, object]:
     response: Final = event.get("response")
-    if not (isinstance(response, Mapping) and "agent_reference" in response):
+    if not isinstance(response, Mapping):
         return event
-    return {**event, "response": {**_RESPONSE_FIELDS.validate_python(response), "instructions": None}}
+    fields: Final = _RESPONSE_FIELDS.validate_python(response)
+    if fields.get("agent_reference") is None:
+        return event
+    return {**event, "response": {**fields, "instructions": None}}
 
 
 class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
