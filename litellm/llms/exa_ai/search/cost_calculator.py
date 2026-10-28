@@ -6,6 +6,7 @@ from pydantic import TypeAdapter
 EXA_AI_INCLUDED_RESULTS: Final = 10
 EXA_AI_ADDITIONAL_RESULT_COST: Final = 0.001
 EXA_AI_SUMMARY_COST_PER_PAGE: Final = 0.001
+EXA_AI_TYPES_WITHOUT_SUMMARIES: Final = frozenset({"lite"})
 _CONTENTS: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -24,6 +25,8 @@ def _requested_results(optional_params: Mapping[str, object]) -> int:
 
 
 def _requests_summaries(optional_params: Mapping[str, object]) -> bool:
+    if optional_params.get("type") in EXA_AI_TYPES_WITHOUT_SUMMARIES:
+        return False
     contents: Final = optional_params.get("contents")
     return isinstance(contents, Mapping) and _CONTENTS.validate_python(contents).get("summary") not in (None, False)
 
@@ -34,7 +37,7 @@ def exa_ai_list_price(base_price: float, optional_params: Mapping[str, object]) 
 
     Multi-query searches are joined into a single request, so this prices one request:
     the search type's base price, a per-result charge above the results that price includes,
-    and a per-page charge for each requested result when summaries are requested.
+    and a per-page charge for each requested result when summaries are requested on a type that offers them.
     """
     results: Final = _requested_results(optional_params)
     additional_results: Final = max(results - EXA_AI_INCLUDED_RESULTS, 0)

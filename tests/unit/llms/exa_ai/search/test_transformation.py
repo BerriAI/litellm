@@ -560,6 +560,17 @@ def test_exa_estimate_adds_each_summarized_page(contents: object, summarized_pag
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
+def test_exa_estimate_adds_no_summary_charge_on_lite() -> None:
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    lite: Final = {"type": "lite", "max_results": 12}
+    # https://exa.ai/docs/reference/pricing (2026-10-28) lists no AI page summary price for Lite
+    assert search_provider_cost_per_query(
+        "exa_ai/search", "exa_ai", optional_params={**lite, "contents": {"summary": True}}
+    ) == search_provider_cost_per_query("exa_ai/search", "exa_ai", optional_params=lite)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
 def test_exa_estimate_prices_one_request_however_many_queries_it_joins() -> None:
     from litellm.search.cost_calculator import search_provider_cost_per_query
 

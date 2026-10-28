@@ -2,9 +2,12 @@
 Cost calculation for search providers.
 """
 
+import base64
 import functools
+import hashlib
 import math
 from collections.abc import Mapping
+from importlib.metadata import PackageNotFoundError, distribution
 from types import MappingProxyType
 from typing import Final
 
@@ -30,6 +33,7 @@ SEARCH_MODE_PARAM_BY_PROVIDER: Final[Mapping[str, str]] = MappingProxyType(
 )
 SEARCH_PRICE_FIELDS: Final = ("input_cost_per_query", "tiered_pricing")
 FLAT_PRICE_ONLY: Final = frozenset({"input_cost_per_query"})
+BUNDLED_COST_MAP_PATH: Final = "litellm/model_prices_and_context_window_backup.json"
 
 
 def _provider_usage(
@@ -84,15 +88,32 @@ def _shipped_search_prices() -> Mapping[str, Mapping[str, object]]:
     )
 
 
+@functools.cache
+def _bundled_cost_map_edited() -> bool:
+    """Whether the bundled map's bytes differ from the sha256 its installer recorded, as when an image overwrites the
+    file. An install that recorded no hash for it, like an editable one, counts as unedited."""
+    try:
+        installed: Final = distribution("litellm").files or ()
+    except PackageNotFoundError:
+        return False
+    recorded: Final = next((path.hash for path in installed if str(path) == BUNDLED_COST_MAP_PATH), None)
+    if recorded is None or recorded.mode != "sha256":
+        return False
+    digest: Final = hashlib.sha256(GetModelCostMap.read_local_model_cost_map_bytes()).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode() != recorded.value
+
+
 def _own_cost_map_price_fields(entry: str) -> frozenset[str]:
-    """Price fields a cost map served from the operator's own URL sets differently from the map LiteLLM ships, so a
-    mirror of LiteLLM's map prices nothing."""
+    """Price fields the operator's own cost map sets. A map served from their own URL counts only where it differs
+    from the map LiteLLM ships, so a mirror of LiteLLM's map prices nothing, and a bundled map their image edited
+    counts in full, since nothing is left to compare it with."""
     source: Final = get_model_cost_map_source_info()
-    if source["source"] != "remote" or source["url"] == DEFAULT_MODEL_COST_MAP_URL:
+    loaded: Final = GetModelCostMap.loaded_model_cost_map().get(entry)
+    if source["source"] != "remote":
+        return _changed_price_fields(loaded, None) if _bundled_cost_map_edited() else frozenset()
+    if source["url"] == DEFAULT_MODEL_COST_MAP_URL:
         return frozenset()
-    return _changed_price_fields(
-        GetModelCostMap.loaded_model_cost_map().get(entry), _shipped_search_prices().get(entry)
-    )
+    return _changed_price_fields(loaded, _shipped_search_prices().get(entry))
 
 
 def _operator_price_fields(entry: str) -> frozenset[str]:
@@ -104,13 +125,14 @@ def _registered_at_runtime(entry: str) -> bool:
 
 
 def _operator_priced(entry: str) -> bool:
-    """Whether an operator set a price on `entry`, with `register_model` or a cost map served from their own URL."""
+    """Whether an operator set a price on `entry`, with `register_model` or their own cost map."""
     return bool(_operator_price_fields(entry))
 
 
 def _operator_flat_price_replaces_tiers(entry: str) -> bool:
-    """Whether the operator set `entry`'s flat price but not its tiers, so the tiers LiteLLM ships stop applying."""
-    return _operator_price_fields(entry) == FLAT_PRICE_ONLY
+    """Whether the operator's latest price on `entry` is a flat price without tiers, so the tiers already on the entry
+    stop applying. `register_model` runs after the cost map loads, so its prices outrank the operator's own map."""
+    return (_runtime_price_fields(entry) or _own_cost_map_price_fields(entry)) == FLAT_PRICE_ONLY
 
 
 def _exa_reported_total(response: object) -> float | None:
@@ -155,7 +177,7 @@ def search_provider_cost_per_query(
     Supports tiered pricing based on max_results parameter, and per-mode price entries selected by the
     provider's mode parameter (Tavily `search_depth`, Linkup `depth`, Exa `type`). Exa bills one request at the
     `costDollars.total` it reports, else at its list price, unless an operator priced the entry. A flat price
-    an operator set over the tiers LiteLLM ships replaces them.
+    an operator set last, over tiers LiteLLM or their own cost map ships, replaces those tiers.
 
     Args:
         model: Model name (e.g., "exa_ai/search", "tavily/search")

@@ -1,5 +1,8 @@
+import base64
 import datetime
+import hashlib
 import json
+from pathlib import Path
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Final
@@ -12,7 +15,7 @@ import litellm
 from litellm.constants import DEFAULT_MODEL_COST_MAP_URL
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.search.cost_calculator import search_provider_cost_per_query
+from litellm.search.cost_calculator import _bundled_cost_map_edited, search_provider_cost_per_query
 
 EXA_SEARCH_URL: Final = "https://api.exa.ai/search"
 TAVILY_SEARCH_URL: Final = "https://api.tavily.com/search"
@@ -419,7 +422,87 @@ def test_an_exa_price_from_the_operators_own_cost_map_wins_over_the_cost_exa_rep
     assert response._hidden_params["response_cost"] == pytest.approx(expected)
 
 
+def _sha256_record(body: bytes) -> str:
+    return base64.urlsafe_b64encode(hashlib.sha256(body).digest()).rstrip(b"=").decode()
+
+
+@pytest.fixture
+def _installed_litellm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str], None]]:
+    def install(recorded_sha256: str) -> None:
+        dist_info: Final = tmp_path / "litellm-0.0.0.dist-info"
+        dist_info.mkdir()
+        (dist_info / "METADATA").write_text("Metadata-Version: 2.1\nName: litellm\nVersion: 0.0.0\n")
+        (dist_info / "RECORD").write_text(
+            f"litellm/model_prices_and_context_window_backup.json,sha256={recorded_sha256},1\n"
+        )
+        (tmp_path / "litellm").mkdir()
+        (tmp_path / "litellm" / "model_prices_and_context_window_backup.json").touch()
+        monkeypatch.syspath_prepend(str(tmp_path))
+        _bundled_cost_map_edited.cache_clear()
+
+    yield install
+    _bundled_cost_map_edited.cache_clear()
+
+
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+@pytest.mark.parametrize("bundled_map_edited", [False, True], ids=["bundled-map-as-installed", "bundled-map-edited"])
+def test_a_bundled_cost_map_edited_after_install_prices_exa_from_the_map(
+    respx_mock: respx.MockRouter, _installed_litellm: Callable[[str], None], bundled_map_edited: bool
+) -> None:
+    bundled: Final = GetModelCostMap.read_local_model_cost_map_bytes()
+    _installed_litellm(_sha256_record(bundled + b" " if bundled_map_edited else bundled))
+    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [], "costDollars": {"total": EXA_REPORTED_TOTAL}})
+    tiers: Final = GetModelCostMap.loaded_model_cost_map()["exa_ai/search"]["tiered_pricing"]
+    assert isinstance(tiers, list) and tiers
+    map_price: Final = next(
+        tier["input_cost_per_query"]
+        for tier in tiers
+        if tier["max_results_range"][0] <= 10 <= tier["max_results_range"][1]
+    )
+
+    response: Final = litellm.search(query="litellm release notes", search_provider="exa_ai", api_key="test-exa-key")
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        map_price if bundled_map_edited else EXA_REPORTED_TOTAL
+    )
+
+
 REGISTERED_TIER_PRICE: Final = 0.0456
+
+
+@pytest.mark.parametrize(
+    ("own_map_price", "registration", "expected"),
+    [
+        pytest.param(
+            {"tiered_pricing": [{"input_cost_per_query": OPERATOR_TIER_PRICE, "max_results_range": [0, 100]}]},
+            {"input_cost_per_query": EXA_REGISTERED_PRICE},
+            EXA_REGISTERED_PRICE,
+            id="flat-registered-over-own-map-tiers",
+        ),
+        pytest.param(
+            {"input_cost_per_query": OPERATOR_FLAT_PRICE},
+            {"tiered_pricing": [{"input_cost_per_query": REGISTERED_TIER_PRICE, "max_results_range": [0, 100]}]},
+            REGISTERED_TIER_PRICE,
+            id="tiers-registered-over-own-map-flat-price",
+        ),
+    ],
+)
+def test_a_price_registered_over_the_operators_own_cost_map_bills_the_registered_price(
+    respx_mock: respx.MockRouter,
+    _remote_cost_map: Callable[[str, ServedExaEntry], None],
+    own_map_price: Mapping[str, object],
+    registration: Mapping[str, object],
+    expected: float,
+) -> None:
+    _remote_cost_map(
+        OPERATOR_COST_MAP_URL, lambda _: {**own_map_price, "litellm_provider": "exa_ai", "mode": "search"}
+    )
+    litellm.register_model({"exa_ai/search": dict(registration)})
+    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [], "costDollars": {"total": EXA_REPORTED_TOTAL}})
+
+    response: Final = litellm.search(query="litellm release notes", search_provider="exa_ai", api_key="test-exa-key")
+
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)
 
 
 @pytest.mark.usefixtures("_loaded_catalog_prices")
