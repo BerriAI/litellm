@@ -3551,6 +3551,9 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     }
     """
 
+    choice_index: ReadOnly[int | None]
+    """Which choice of an n > 1 response this entry inspected, when the guardrail ran per choice."""
+
     guardrail_id: str | None
     """Unique identifier for the guardrail configuration, e.g. 'gd-eu-pii-001'"""
 

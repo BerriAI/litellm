@@ -1414,6 +1414,9 @@ class CustomGuardrail(CustomLogger):
             end_time=end_time,
             duration=duration,
             masked_entity_count=masked_entity_count,
+            # Set by callers that inspect one choice at a time, so the per-choice entries of an
+            # n > 1 response can be told apart.
+            choice_index=request_data.get("guardrail_choice_index"),
             **(tracing_detail or {}),
         )
 

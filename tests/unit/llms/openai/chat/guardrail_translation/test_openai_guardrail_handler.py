@@ -1683,6 +1683,36 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
             assert rebuilds == [2]
 
     @pytest.mark.asyncio
+    async def test_per_choice_inspection_labels_its_log_entries_with_the_choice_index(self) -> None:
+        """Without a label the per-choice entries of an n > 1 response cannot be told apart."""
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class IndexRecorder(CustomGuardrail):
+            seen: list[object] = []
+
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                type(self).seen.append(request_data.get("guardrail_choice_index"))
+                return inputs
+
+        IndexRecorder.seen = []
+        chunks: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=index, delta=Delta(content=text, tool_calls=[{
+                "index": 0, "id": f"call_{index}", "type": "function",
+                "function": {"name": "contact", "arguments": "{}"},
+            }]), finish_reason="tool_calls",
+        ) for index, text in enumerate(("first", "second"))])]
+        request_data: Final = {}
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=chunks, guardrail_to_apply=IndexRecorder(guardrail_name="indexed"),
+            request_data=request_data, deliver_ended_stream_rewrites=True,
+        )
+        assert IndexRecorder.seen == [0, 1]
+        assert "guardrail_choice_index" not in request_data
+
+    @pytest.mark.asyncio
     async def test_deliver_ended_stream_tool_rewrites_keep_choice_indices(self) -> None:
         handler: Final = OpenAIChatCompletionsHandler()
         chunks: Final = self._two_choice_tool_call_stream_chunks()
