@@ -1,9 +1,4 @@
-"""Access control on realtime client secrets.
-
-The mint at ``/v1/realtime/client_secrets`` is the only point where the virtual key is checked, because the
-encrypted token it returns is the whole credential at ``/v1/realtime/calls``. Every refusal here asserts the
-scripted OpenAI deployment saw nothing, which is what keeps a refused caller off the proxy's provider account.
-"""
+"""Access control on realtime credential issuance and call redemption."""
 
 from __future__ import annotations
 
@@ -234,3 +229,26 @@ def test_calls_refuses_token_past_upstream_expiry_and_accepts_a_fresh_one(gatewa
             ("client_secrets", f"Bearer {DEPLOYMENT_KEY}"),
             ("calls", f"Bearer {fresh_raw}"),
         ]
+
+
+@pytest.mark.parametrize("change", ["block", "delete", "models", "budget"])
+def test_calls_rechecks_original_key_after_client_secret_was_issued(gateway: Gateway, change: str) -> None:
+    raw: Final = f"ek_raw_{uuid.uuid4().hex}"
+    with wire_server(_scripted_openai(_endless_client_secrets(raw))) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, "openai/gpt-realtime")
+        key: Final = scenario.key(models=[model])
+        minted: Final = _mint(gateway, {"model": model}, key)
+        assert minted.status_code == 200, minted.text
+        token: Final = ClientSecretCreateResponse.model_validate_json(minted.content).value
+        assert len(wire.drain()) == 1
+        if change == "block":
+            gateway.post("/key/block", {"key": key})
+        elif change == "delete":
+            gateway.post("/key/delete", {"keys": [key]})
+        elif change == "models":
+            gateway.post("/key/update", {"key": key, "models": ["another-model"]})
+        else:
+            gateway.post("/key/update", {"key": key, "max_budget": 0.0, "spend": 1.0})
+        refused: Final = _redeem(gateway, {"Authorization": f"Bearer {token}"})
+        assert refused.status_code in (401, 403, 422), refused.text
+        assert wire.drain() == (), refused.text

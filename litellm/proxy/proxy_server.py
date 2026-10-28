@@ -1887,6 +1887,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                 except Exception as e:
                     verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
+            from litellm.llms.azure.realtime.webrtc import azure_webrtc_observers
+
+            await azure_webrtc_observers.stop()
             await _flush_spend_around_logging_drain_on_shutdown()
 
             await proxy_config.stop_config_sync_subscriber()

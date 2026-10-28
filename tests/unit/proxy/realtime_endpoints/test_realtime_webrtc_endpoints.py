@@ -4,18 +4,19 @@ Tests for LiteLLM proxy realtime WebRTC HTTP endpoints:
 - POST /v1/realtime/calls
 """
 
+import hashlib
 import json
 import time
 from collections.abc import Awaitable
-from typing import Protocol
+from typing import Final, Protocol
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
-
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -23,8 +24,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.realtime_endpoints.endpoints import (
+    _authorize_realtime_call_owner,
     _decode_realtime_token_payload,
     _encode_realtime_token_payload,
+    _realtime_key_binding,
 )
 
 # --- Unit tests: token encode/decode helpers ---
@@ -109,6 +112,36 @@ def test_decode_realtime_token_payload_ephemeral_key_not_string():
     assert _decode_realtime_token_payload(payload) is None
 
 
+def test_realtime_credentials_keep_two_keys_in_the_same_team_distinct() -> None:
+    hashes: Final = tuple(hashlib.sha256(key.encode()).hexdigest() for key in ("sk-first", "sk-second"))
+    auths: Final = tuple(UserAPIKeyAuth(api_key=key_hash, user_id="user", team_id="team") for key_hash in hashes)
+    for auth in auths:
+        auth.via_virtual_key = True
+    bindings: Final = tuple(_realtime_key_binding(auth) for auth in auths)
+    assert bindings == tuple((key_hash, "virtual_key") for key_hash in hashes)
+    assert bindings[0] != bindings[1]
+
+
+@pytest.mark.asyncio
+async def test_master_key_rotation_refuses_previously_issued_realtime_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-original")
+    auth: Final = UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS)
+    auth.via_virtual_key = True
+    key_hash, auth_kind = _realtime_key_binding(auth)
+    monkeypatch.setattr(proxy_server, "master_key", "sk-rotated")
+    request: Final = Request({"type": "http", "method": "POST", "path": "/v1/realtime/calls", "headers": []})
+    with pytest.raises(HTTPException) as refused:
+        await _authorize_realtime_call_owner(
+            request,
+            {"key_hash": key_hash, "auth_kind": auth_kind},
+            {"model": "realtime"},
+            UserAPIKeyAuth(),
+        )
+    assert refused.value.status_code == 401
+
+
 # --- Integration tests: proxy endpoints (mocked upstream) ---
 
 
@@ -124,17 +157,9 @@ def proxy_app(monkeypatch):
 def mock_route_request_client_secrets():
     """Mock route_request to return a fake upstream client_secrets response."""
     future_expires_at = int(time.time()) + 3600
-    mock_resp = MagicMock(spec=httpx.Response)
-    mock_resp.status_code = 200
-    mock_resp.text = (
-        f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
+    mock_resp: Final = httpx.Response(
+        200, json={"value": "upstream_ephemeral_key", "expires_at": future_expires_at}
     )
-    mock_resp.content = f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'.encode()
-    mock_resp.headers = {}
-    mock_resp.json.return_value = {
-        "value": "upstream_ephemeral_key",
-        "expires_at": future_expires_at,
-    }
 
     async def _mock_route(*args, **kwargs):
         async def _inner():
@@ -310,20 +335,9 @@ async def test_client_secrets_transcription_routes_on_nested_model(
         captured["data"] = kwargs.get("data")
 
         async def _inner():
-            resp = MagicMock(spec=httpx.Response)
-            resp.status_code = 200
-            resp.text = (
-                f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
+            return httpx.Response(
+                200, json={"value": "upstream_ephemeral_key", "expires_at": future_expires_at}
             )
-            resp.content = (
-                f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
-            ).encode()
-            resp.headers = {}
-            resp.json.return_value = {
-                "value": "upstream_ephemeral_key",
-                "expires_at": future_expires_at,
-            }
-            return resp
 
         return _inner()
 

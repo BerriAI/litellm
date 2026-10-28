@@ -156,6 +156,7 @@ async def acreate_realtime_client_secret(
     session: Mapping[str, object] | None = None,
     expires_after: Mapping[str, object] | None = None,
     timeout: float | None = None,
+    realtime_webrtc_accounting: bool = False,
     **kwargs,
 ):
     req: Final = RealtimeClientSecretRequest(
@@ -199,7 +200,7 @@ async def acreate_realtime_client_secret(
     resolved_session: Final = _resolved_request_session(request_data, model_name)
     if resolved_session is not None:
         request_data["session"] = resolved_session
-    return await base_llm_http_handler.async_realtime_client_secret_handler(
+    response: Final = await base_llm_http_handler.async_realtime_client_secret_handler(
         api_base=resolved_api_base,
         api_key=await _realtime_http_bearer_token(
             custom_llm_provider, resolved_api_key, resolved_api_base, litellm_params
@@ -213,6 +214,12 @@ async def acreate_realtime_client_secret(
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
     )
+    if realtime_webrtc_accounting and custom_llm_provider == LlmProviders.AZURE.value:
+        response.extensions = {
+            **response.extensions,
+            "litellm_realtime_deployment_id": litellm_logging_obj.get_router_model_id(),
+        }
+    return response
 
 
 @wrapper_client
@@ -297,6 +304,7 @@ async def arealtime_calls(
     model: str | None = None,
     session: dict[str, object] | None = None,
     timeout: float | None = None,
+    realtime_webrtc_accounting: bool = False,
     **kwargs,
 ):
     model_name = model or "gpt-4o-realtime-preview"
@@ -314,7 +322,7 @@ async def arealtime_calls(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
-    provider_config, resolved_api_base, _ = _get_realtime_http_provider_config(
+    provider_config, resolved_api_base, resolved_api_key = _get_realtime_http_provider_config(
         custom_llm_provider=custom_llm_provider,
         dynamic_api_base=dynamic_api_base,
         dynamic_api_key=dynamic_api_key,
@@ -329,7 +337,7 @@ async def arealtime_calls(
         litellm_params={"api_base": resolved_api_base},
         custom_llm_provider=custom_llm_provider,
     )
-    return await base_llm_http_handler.async_realtime_calls_handler(
+    response: Final = await base_llm_http_handler.async_realtime_calls_handler(
         api_base=resolved_api_base,
         openai_ephemeral_key=openai_ephemeral_key,
         sdp_body=sdp_body,
@@ -342,6 +350,21 @@ async def arealtime_calls(
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
     )
+    if realtime_webrtc_accounting and custom_llm_provider == LlmProviders.AZURE.value and response.is_success:
+        from litellm.llms.azure.realtime.webrtc import azure_webrtc_observers
+
+        azure_ad_token: Final = (
+            None if resolved_api_key else await asyncio.to_thread(get_azure_ad_token, litellm_params)
+        )
+        await azure_webrtc_observers.attach(
+            response=response,
+            api_base=resolved_api_base,
+            auth_headers=AzureOpenAIRealtime.get_auth_headers(resolved_api_key, azure_ad_token),
+            model=model_name,
+            session=session or {},
+            logging_obj=litellm_logging_obj,
+        )
+    return response
 
 
 async def vertex_access_token_resolver(
