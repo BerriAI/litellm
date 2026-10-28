@@ -1156,22 +1156,10 @@ def test_partial_bedrock_wildcard_lists_nothing_when_no_discovered_id_carries_it
         (
             "openrouter/*",
             "openrouter/*",
-            [
-                "openrouter/openai/gpt-5.4-mini",
-                "openrouter/anthropic/claude-haiku-5-5",
-                "openrouter/openai/text-embedding-3-small",
-            ],
+            ["openrouter/openai/gpt-5.4-mini", "openrouter/anthropic/claude-haiku-5-5"],
         ),
-        (
-            "or-team/*",
-            "openrouter/*",
-            ["or-team/openai/gpt-5.4-mini", "or-team/anthropic/claude-haiku-5-5", "or-team/openai/text-embedding-3-small"],
-        ),
-        (
-            "openrouter/openai/*",
-            "openrouter/openai/*",
-            ["openrouter/openai/gpt-5.4-mini", "openrouter/openai/text-embedding-3-small"],
-        ),
+        ("or-team/*", "openrouter/*", ["or-team/openai/gpt-5.4-mini", "or-team/anthropic/claude-haiku-5-5"]),
+        ("openrouter/openai/*", "openrouter/openai/*", ["openrouter/openai/gpt-5.4-mini"]),
     ],
 )
 @respx.mock
@@ -1188,9 +1176,6 @@ def test_openrouter_wildcard_lists_the_live_catalog_with_each_vendor_namespace(
         return_value=httpx.Response(
             200, json={"data": [{"id": "openai/gpt-5.4-mini"}, {"id": "anthropic/claude-haiku-5-5"}]}
         )
-    )
-    respx.get("https://openrouter.ai/api/v1/embeddings/models").mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "openai/text-embedding-3-small"}]})
     )
 
     assert (

@@ -1,4 +1,3 @@
-import itertools
 from collections.abc import Mapping, Sequence
 from typing import Final
 
@@ -13,7 +12,9 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
 _DEFAULT_API_BASE: Final = "https://openrouter.ai/api/v1"
-_CATALOG_ROUTES: Final = ("models/user", "embeddings/models")
+_CHAT_CATALOG_ROUTE: Final = "models/user"
+_CHAT_COMPLETIONS_PATH: Final = "/chat/completions"
+_BATCH_ONLY_SUFFIX: Final = ":batch"
 _CATALOG_TIMEOUT: Final = httpx.Timeout(10.0)
 
 
@@ -33,12 +34,8 @@ class _Catalog(BaseModel):
     data: tuple[_CatalogModel, ...]
 
 
-def _catalog_ids(url: str, headers: Mapping[str, str]) -> tuple[str, ...]:
-    response: Final = litellm.module_level_client.get(  # pyright: ignore[reportUnknownMemberType]  # legacy HTTP wrapper has untyped query parameters
-        url=url, headers=headers, timeout=_CATALOG_TIMEOUT
-    )
-    response.raise_for_status()
-    return tuple(model.id for model in _Catalog.model_validate_json(response.content).data)
+def _chat_catalog_url(api_base: str) -> str:
+    return join_api_base(api_base.rstrip("/").removesuffix(_CHAT_COMPLETIONS_PATH), _CHAT_CATALOG_ROUTE)
 
 
 class OpenRouterModelInfo(BaseLLMModelInfo):
@@ -84,8 +81,12 @@ class OpenRouterModelInfo(BaseLLMModelInfo):
         headers: Final = self.validate_environment(
             headers={}, model="", messages=(), optional_params={}, litellm_params={}, api_key=resolved_key
         )
-        base: Final = self.get_api_base(api_base)
-        model_ids: Final = itertools.chain.from_iterable(
-            _catalog_ids(join_api_base(base, route), headers) for route in _CATALOG_ROUTES
+        response: Final = litellm.module_level_client.get(  # pyright: ignore[reportUnknownMemberType]  # legacy HTTP wrapper has untyped query parameters
+            url=_chat_catalog_url(self.get_api_base(api_base)), headers=headers, timeout=_CATALOG_TIMEOUT
         )
-        return list(dict.fromkeys(f"openrouter/{model_id}" for model_id in model_ids))
+        response.raise_for_status()
+        return [
+            f"openrouter/{model.id}"
+            for model in _Catalog.model_validate_json(response.content).data
+            if not model.id.endswith(_BATCH_ONLY_SUFFIX)
+        ]

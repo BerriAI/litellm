@@ -9,12 +9,19 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import asyncio
+import threading
+from dataclasses import dataclass, field
+from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.proxy import proxy_server
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy import utils as proxy_utils
 from litellm.proxy.utils import create_model_info_response
 from litellm.types.router import DeploymentModelListingInfo
@@ -514,3 +521,65 @@ def test_codex_service_tiers_resolved_via_internal_team_key(client, auth_as, pat
     assert response.status_code == 200
     (entry,) = response.json()["models"]
     assert (entry["slug"], [tier["id"] for tier in entry["service_tiers"]]) == ("gpt-4-team", ["ultrafast"])
+
+
+OPENROUTER_BASE: Final = "https://openrouter.ai/api/v1"
+
+
+@dataclass(frozen=True, slots=True)
+class _CatalogHeldUntilTheLoopRuns:
+    requested: threading.Event = field(default_factory=threading.Event)
+    released: threading.Event = field(default_factory=threading.Event)
+
+    def answer(self, _request: httpx.Request) -> httpx.Response:
+        self.requested.set()
+        if not self.released.wait(timeout=2):
+            return httpx.Response(504)
+        return httpx.Response(200, json={"data": [{"id": "openai/gpt-5.4-mini"}]})
+
+    async def release_from_the_loop(self) -> None:
+        assert await asyncio.to_thread(self.requested.wait, 5)
+        self.released.set()
+
+
+@pytest.mark.parametrize("scope", [None, "expand"])
+async def test_v1_models_fetches_a_live_openrouter_catalog_without_blocking_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch, scope: str | None
+):
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "openrouter/*",
+                    "litellm_params": {
+                        "model": "openrouter/*",
+                        "api_key": f"sk-or-v1-models-off-loop-{scope}",
+                        "api_base": OPENROUTER_BASE,
+                    },
+                }
+            ]
+        ),
+    )
+    catalog: Final = _CatalogHeldUntilTheLoopRuns()
+
+    with respx.mock() as respx_mock:
+        catalog_route: Final = respx_mock.get(f"{OPENROUTER_BASE}/models/user").mock(side_effect=catalog.answer)
+        listing: Final = asyncio.ensure_future(
+            proxy_server.model_list(
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="sk-test-key", user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+                ),
+                scope=scope,
+            )
+        )
+        await catalog.release_from_the_loop()
+        response: Final = await listing
+
+    assert catalog_route.calls.last.response.status_code == 200
+    assert [model["id"] for model in response["data"]] == ["openrouter/openai/gpt-5.4-mini"]

@@ -204,6 +204,7 @@ def get_complete_model_list(
     include_model_access_groups: bool | None = False,
     only_model_access_groups: bool | None = False,
     team_id: str | None = None,
+    expand_deployed_wildcard_routes: bool = True,
 ) -> list[str]:
     """Logic for returning complete model list for a given key + team pair"""
 
@@ -249,6 +250,7 @@ def get_complete_model_list(
         return_wildcard_routes=return_wildcard_routes,
         llm_router=llm_router,
         team_id=team_id,
+        expand_deployed_wildcard_routes=expand_deployed_wildcard_routes,
     )
 
     complete_model_list: Final = unique_models + all_wildcard_models
@@ -539,6 +541,7 @@ def _get_wildcard_models(
     return_wildcard_routes: bool | None = False,
     llm_router: Router | None = None,
     team_id: str | None = None,
+    expand_deployed_wildcard_routes: bool = True,
 ) -> list[str]:
     models_to_remove: Final = set()
     routes_to_model: Final = _routes_to_model(_cached_wildcard_routing(llm_router), team_id)
@@ -551,6 +554,8 @@ def _get_wildcard_models(
             models_to_remove.add(model)
 
             model_list = llm_router.get_model_list(model_name=model, team_id=team_id) if llm_router else None
+            if model_list and not expand_deployed_wildcard_routes:
+                continue
             if model_list:
                 for router_model in model_list:
                     all_wildcard_models.extend(

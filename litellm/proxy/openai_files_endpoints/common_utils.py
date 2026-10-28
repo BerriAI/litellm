@@ -657,6 +657,7 @@ def get_team_provider_credentials(
                 model_access_groups=model_access_groups,
                 include_model_access_groups=True,
                 team_id=team_id,
+                expand_deployed_wildcard_routes=False,
             )
         )
     )

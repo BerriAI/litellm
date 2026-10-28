@@ -32,38 +32,49 @@ def _configure(monkeypatch: pytest.MonkeyPatch, source: str, value: str) -> None
         monkeypatch.setenv(source, value)
 
 
+def test_get_models_lists_only_the_chat_catalog_under_openrouter_keeping_the_org_namespace():
+    with respx.mock() as respx_mock:
+        respx_mock.get(f"{DEFAULT_BASE}/models/user").mock(
+            return_value=_catalog("openai/gpt-5.4-mini", "anthropic/claude-haiku-5-5")
+        )
+
+        assert OpenRouterModelInfo().get_models(api_key="sk-or-test") == [
+            "openrouter/openai/gpt-5.4-mini",
+            "openrouter/anthropic/claude-haiku-5-5",
+        ]
+        assert [call.request.url.path for call in respx_mock.calls] == ["/api/v1/models/user"]
+
+
 @respx.mock
-def test_get_models_lists_both_catalogs_once_each_under_openrouter_keeping_the_org_namespace():
+def test_get_models_drops_batch_only_ids_and_keeps_every_other_variant():
     respx.get(f"{DEFAULT_BASE}/models/user").mock(
-        return_value=_catalog("openai/gpt-5.4-mini", "anthropic/claude-haiku-5-5")
-    )
-    respx.get(f"{DEFAULT_BASE}/embeddings/models").mock(
-        return_value=_catalog("openai/text-embedding-3-small", "openai/gpt-5.4-mini")
+        return_value=_catalog("openai/gpt-5.4-mini:batch", "openai/gpt-5.4-mini", "qwen/qwen3-coder:free")
     )
 
     assert OpenRouterModelInfo().get_models(api_key="sk-or-test") == [
         "openrouter/openai/gpt-5.4-mini",
-        "openrouter/anthropic/claude-haiku-5-5",
-        "openrouter/openai/text-embedding-3-small",
+        "openrouter/qwen/qwen3-coder:free",
     ]
 
 
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example/openrouter/api/v1/",
+        "https://gateway.example/openrouter/api/v1/chat/completions",
+        "https://gateway.example/openrouter/api/v1/chat/completions/",
+    ],
+)
 @respx.mock
-def test_get_models_keeps_the_api_base_path_and_sends_the_deployment_key():
+def test_get_models_keeps_the_api_base_path_and_sends_the_deployment_key(api_base: str):
     chat_route: Final = respx.get("https://gateway.example/openrouter/api/v1/models/user").mock(
         return_value=_catalog("openai/gpt-5.4-mini")
     )
-    embeddings_route: Final = respx.get("https://gateway.example/openrouter/api/v1/embeddings/models").mock(
-        return_value=_catalog()
-    )
 
-    assert OpenRouterModelInfo().get_models(
-        api_key="sk-or-deployment", api_base="https://gateway.example/openrouter/api/v1/"
-    ) == ["openrouter/openai/gpt-5.4-mini"]
-    assert [route.calls.last.request.headers["authorization"] for route in (chat_route, embeddings_route)] == [
-        "Bearer sk-or-deployment",
-        "Bearer sk-or-deployment",
+    assert OpenRouterModelInfo().get_models(api_key="sk-or-deployment", api_base=api_base) == [
+        "openrouter/openai/gpt-5.4-mini"
     ]
+    assert chat_route.calls.last.request.headers["authorization"] == "Bearer sk-or-deployment"
 
 
 @pytest.mark.parametrize("winner", range(len(KEY_SOURCES)), ids=KEY_SOURCES)
@@ -76,7 +87,6 @@ def test_get_models_sends_the_first_configured_key_in_the_chat_paths_order(
     if winner > 0:
         _configure(monkeypatch, KEY_SOURCES[winner], "sk-or-winner")
     chat_route: Final = respx.get(f"{DEFAULT_BASE}/models/user").mock(return_value=_catalog("qwen/qwen3-coder"))
-    respx.get(f"{DEFAULT_BASE}/embeddings/models").mock(return_value=_catalog())
 
     assert OpenRouterModelInfo().get_models(api_key="sk-or-winner" if winner == 0 else None) == [
         "openrouter/qwen/qwen3-coder"
@@ -95,7 +105,6 @@ def test_get_models_calls_the_first_configured_base_in_the_chat_paths_order(
         _configure(monkeypatch, BASE_SOURCES[winner], "https://winner.example/api/v1")
     expected_base: Final = "https://winner.example/api/v1" if winner < len(BASE_SOURCES) else DEFAULT_BASE
     respx.get(f"{expected_base}/models/user").mock(return_value=_catalog("qwen/qwen3-coder"))
-    respx.get(f"{expected_base}/embeddings/models").mock(return_value=_catalog())
 
     assert OpenRouterModelInfo().get_models(
         api_key="sk-or-test", api_base="https://winner.example/api/v1" if winner == 0 else None
@@ -114,17 +123,12 @@ def test_get_models_without_any_key_raises_before_calling_openrouter():
     assert not chat_route.called
 
 
-@pytest.mark.parametrize("failing_route", ["models/user", "embeddings/models"])
-def test_get_models_raises_when_either_catalog_answers_an_error(failing_route: str):
-    with respx.mock(assert_all_called=False) as respx_mock:
-        respx_mock.get(f"{DEFAULT_BASE}/models/user").mock(return_value=_catalog("openai/gpt-5.4-mini"))
-        respx_mock.get(f"{DEFAULT_BASE}/embeddings/models").mock(return_value=_catalog())
-        respx_mock.get(f"{DEFAULT_BASE}/{failing_route}").mock(
-            return_value=httpx.Response(401, json={"error": {"code": 401}})
-        )
+@respx.mock
+def test_get_models_raises_when_the_catalog_answers_an_error():
+    respx.get(f"{DEFAULT_BASE}/models/user").mock(return_value=httpx.Response(401, json={"error": {"code": 401}}))
 
-        with pytest.raises(httpx.HTTPStatusError):
-            OpenRouterModelInfo().get_models(api_key="sk-or-revoked")
+    with pytest.raises(httpx.HTTPStatusError):
+        OpenRouterModelInfo().get_models(api_key="sk-or-revoked")
 
 
 def test_validate_environment_adds_the_resolved_key_and_keeps_the_callers_headers(monkeypatch: pytest.MonkeyPatch):
