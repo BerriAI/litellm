@@ -7660,7 +7660,10 @@ def _media_team_db(public_name: str, project_metadata: Mapping[str, object]) -> 
                 team_id="media-team",
                 models=[public_name],
                 metadata=dict(project_metadata),
-            )
+            ),
+            LiteLLM_ProjectTable(
+                project_id="p-2", project_alias="chat-only", team_id="media-team", models=["chat-only-model"]
+            ),
         ]
     )
     return prisma
@@ -7728,9 +7731,7 @@ async def test_team_model_add_rejects_a_route_its_projects_lack_the_quota_for(mo
         "projects video-gen list 'jev-latest' without a positive rpm and tpm quota, "
         "which 'enforce_project_model_quota' requires once this team model change applies"
     )
-    prisma.db.litellm_projecttable.find_many.assert_awaited_once_with(
-        where={"team_id": "media-team", "models": {"has": "jev-latest"}}
-    )
+    prisma.db.litellm_projecttable.find_many.assert_awaited_once_with(where={"team_id": "media-team"})
 
 
 @pytest.mark.parametrize(
@@ -7795,6 +7796,102 @@ async def test_team_model_update_rejects_moving_its_route_where_its_projects_lac
 
     assert error.value.code == "400"
     assert error.value.message.startswith("projects video-gen list 'jev-latest' without a positive rpm and tpm quota")
+
+
+def _team_route_router(public_name: str, team_params: Mapping[str, object]) -> Router:
+    return Router(
+        model_list=[
+            {"model_name": "jev-latest", "litellm_params": {"model": "openai/jev-latest"}},
+            {
+                "model_name": "model_name_media-team_team-row",
+                "litellm_params": dict(team_params),
+                "model_info": {"id": "team-row", "team_id": "media-team", "team_public_model_name": public_name},
+            },
+        ],
+        model_group_alias={"media": "jev-latest"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("public_name", "project_model", "team_params", "moved_to"),
+    [
+        pytest.param(
+            "video-*",
+            "video-gen-1",
+            {"model": "runwayml/*"},
+            updateLiteLLMParams(model="vertex_ai/*", vertex_project="qa-project"),
+            id="a-name-the-team-wildcard-serves",
+        ),
+        pytest.param(
+            "jev-latest",
+            "media",
+            {"model": "runwayml/gen4_turbo"},
+            updateLiteLLMParams(model="vertex_ai/gemini-3.8-flash", vertex_project="qa-project"),
+            id="an-alias-of-the-team-name",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_model_patch_rechecks_projects_listing_any_name_it_serves(
+    monkeypatch: pytest.MonkeyPatch,
+    public_name: str,
+    project_model: str,
+    team_params: Mapping[str, object],
+    moved_to: updateLiteLLMParams,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    prisma: Final = _media_team_db(project_model, {})
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=_team_model_row(public_name, team_params))
+    _use_quota_proxy(monkeypatch, prisma, _team_route_router(public_name, team_params))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    with pytest.raises(ProxyException) as error:
+        await patch_model(
+            model_id="team-row", patch_data=updateDeployment(litellm_params=moved_to), user_api_key_dict=_ADMIN
+        )
+
+    assert error.value.code == "400"
+    assert error.value.message.startswith(
+        f"projects video-gen list '{project_model}' without a positive rpm and tpm quota"
+    )
+    prisma.db.litellm_proxymodeltable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_update_checks_the_limits_of_the_name_it_renames_to(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+        return_value=LiteLLM_ProxyModelTable(
+            model_id="vertex-row",
+            model_name="jev-latest",
+            litellm_params={"model": "vertex_ai/gemini-3.8-flash"},
+            model_info={"id": "vertex-row"},
+            created_by="admin",
+            updated_by="admin",
+        )
+    )
+    _use_quota_proxy(monkeypatch, prisma, Router(model_list=[]))
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"enforce_rpm_tpm_on_model_add": {"providers": {"vertex_ai": ["rpm", "tpm"]}, "models": {"jev-latest": []}}},
+    )
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    with pytest.raises(ProxyException) as error:
+        await update_model(
+            model_params=updateDeployment(
+                model_name="gemini-3.8-flash", litellm_params=updateLiteLLMParams(), model_info=ModelInfo(id="vertex-row")
+            ),
+            user_api_key_dict=_ADMIN,
+        )
+
+    assert error.value.code == "400"
+    assert error.value.message.startswith("rpm and tpm must be set to a positive value for 'gemini-3.8-flash'")
+    prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -7895,7 +7992,6 @@ async def test_team_model_delete_goes_through_when_nothing_else_serves_its_name(
         await delete_model(model_info=ModelInfoDelete(id="team-row"), user_api_key_dict=_ADMIN)
 
     assert "STORE_MODEL_IN_DB" in str(error.value.message)
-    prisma.db.litellm_projecttable.find_many.assert_not_awaited()
 
 
 @pytest.mark.parametrize("endpoint", ["patch", "put"])

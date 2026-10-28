@@ -12,6 +12,7 @@ model/{model_id}/update - PATCH endpoint for model update.
 
 import asyncio
 import datetime
+import itertools
 import json
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
@@ -108,9 +109,11 @@ from litellm.proxy.management_helpers.model_quota_policy import (
     ModelQuotaPolicy,
     QuotaLimit,
     deployment_route,
+    exempts_any_route,
     limits_added_by_team_write,
     parse_model_quota_setting,
     required_limits,
+    team_write_serves,
     unmet_limits,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
@@ -879,6 +882,25 @@ def _project_limit(metadata: object, limits_key: str, model: str) -> object:
     return limits.get(model) if is_str_keyed_mapping(limits) else None
 
 
+def _projects_short_on(
+    projects: Sequence["prisma_models.LiteLLM_ProjectTable"], model: str, added: frozenset[QuotaLimit]
+) -> tuple[str, ...]:
+    return tuple(
+        project.project_alias or project.project_id
+        for project in projects
+        if model in project.models
+        and unmet_limits(
+            added,
+            MappingProxyType(
+                {
+                    "rpm": _project_limit(project.metadata, "model_rpm_limit", model),
+                    "tpm": _project_limit(project.metadata, "model_tpm_limit", model),
+                }
+            ),
+        )
+    )
+
+
 async def _raise_if_team_write_leaves_projects_short(
     *,
     prisma_client: PrismaClient,
@@ -892,32 +914,31 @@ async def _raise_if_team_write_leaves_projects_short(
     if team_id is None:
         return
     policy: Final = _quota_policy(general_settings, ENFORCE_PROJECT_MODEL_QUOTA_SETTING)
-    if policy is None:
+    if policy is None or not exempts_any_route(policy):
         return
-    added: Final = limits_added_by_team_write(policy, llm_router, team_id, public_name, replaced_id, written_params)
-    if not added:
-        return
-    projects: Final = await ProjectRepository(prisma_client).table.find_many(
-        where={"team_id": team_id, "models": {"has": public_name}}
+    projects: Final = await ProjectRepository(prisma_client).table.find_many(where={"team_id": team_id})
+    listed: Final = frozenset(itertools.chain.from_iterable(project.models for project in projects))
+    served: Final = sorted(model for model in listed if team_write_serves(llm_router, team_id, public_name, model))
+    shortfall: Final = next(
+        (
+            (model, added, short)
+            for model in served
+            if (
+                added := limits_added_by_team_write(
+                    policy, llm_router, team_id, public_name, replaced_id, written_params, model
+                )
+            )
+            and (short := _projects_short_on(projects, model, added))
+        ),
+        None,
     )
-    short: Final = tuple(
-        project.project_alias or project.project_id
-        for project in projects
-        if unmet_limits(
-            added,
-            MappingProxyType(
-                {
-                    "rpm": _project_limit(project.metadata, "model_rpm_limit", public_name),
-                    "tpm": _project_limit(project.metadata, "model_tpm_limit", public_name),
-                }
-            ),
-        )
-    )
-    if not short:
+    if shortfall is None:
         return
+    short_model, short_limits, short_projects = shortfall
     raise ProxyException(
         message=(
-            f"projects {', '.join(short)} list '{public_name}' without a positive {' and '.join(sorted(added))} "
+            f"projects {', '.join(short_projects)} list '{short_model}' without a positive "
+            f"{' and '.join(sorted(short_limits))} "
             f"quota, which '{ENFORCE_PROJECT_MODEL_QUOTA_SETTING}' requires once this team model change applies. "
             "Set those limits on the projects first"
         ),
@@ -3191,10 +3212,15 @@ async def update_model(
             incoming_params=model_params.litellm_params,
             existing_params=deployment.litellm_params,
         )
-        stored_public_name: Final = deployment.model_info.team_public_model_name or deployment.model_name
+        renamed_to: Final = (
+            model_params.model_name
+            if model_params.model_name not in (None, deployment.model_name) and deployment.model_info.team_id is None
+            else None
+        )
+        written_name: Final = renamed_to or deployment.model_info.team_public_model_name or deployment.model_name
         _raise_if_model_update_adds_missing_rate_limits(
             existing=deployment,
-            written_name=stored_public_name,
+            written_name=written_name,
             written_team_model=deployment.model_info.team_id is not None,
             incoming_params=model_params.litellm_params,
             remaining_params=deployment.litellm_params,
@@ -3206,7 +3232,7 @@ async def update_model(
             llm_router=llm_router,
             existing=deployment,
             written_team_id=deployment.model_info.team_id,
-            written_name=stored_public_name,
+            written_name=written_name,
             incoming_params=model_params.litellm_params,
             remaining_params=deployment.litellm_params,
         )
@@ -3249,12 +3275,6 @@ async def update_model(
                 if value is not None or _existing_litellm_params_dict.get(key) is not None
             }
 
-            renamed_to: Final = (
-                model_params.model_name
-                if model_params.model_name not in (None, deployment.model_name)
-                and deployment.model_info.team_id is None
-                else None
-            )
             base_update: Final[PrismaCompatibleUpdateDBModel] = {
                 "litellm_params": json.dumps(merged_dictionary),
                 "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,

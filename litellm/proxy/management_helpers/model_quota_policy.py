@@ -1,6 +1,7 @@
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -184,13 +185,16 @@ def deployment_route(litellm_params: Mapping[str, object], team_model: bool) -> 
     return ModelRoute(providers=frozenset() if provider is None else frozenset((provider,)))
 
 
-def _routed_deployments(llm_router: "Router", model: str, team_id: str | None) -> Sequence[Mapping[str, object]]:
-    named: Final[tuple[Mapping[str, object], ...]] = (
+def _named_deployments(llm_router: "Router", model: str, team_id: str | None) -> tuple[Mapping[str, object], ...]:
+    return (
         *llm_router.get_all_deployments(model_name=model, team_id=team_id),
-        *llm_router.get_model_list_from_model_alias(model_name=model),
         *llm_router.get_model_list_from_routing_groups(model_name=model),
     )
-    return named or llm_router.wildcard_route_deployments(model, team_id)
+
+
+def _routed_deployments(llm_router: "Router", model: str, team_id: str | None) -> Sequence[Mapping[str, object]]:
+    target: Final = llm_router.routable_model_group(model)
+    return _named_deployments(llm_router, target, team_id) or llm_router.wildcard_route_deployments(target, team_id)
 
 
 def _is_team_deployment(deployment: Mapping[str, object]) -> bool:
@@ -226,12 +230,57 @@ def _deployment_id(deployment: Mapping[str, object]) -> object:
     return model_info.get("id") if is_str_keyed_mapping(model_info) else None
 
 
+def _routable_name(llm_router: "Router | None", model: str) -> str:
+    return model if llm_router is None else llm_router.routable_model_group(model)
+
+
+def _outranks(rival: str, regex: str) -> bool:
+    return PatternUtils.calculate_pattern_specificity(rival) > PatternUtils.calculate_pattern_specificity(regex)
+
+
+def _team_pattern_serves(llm_router: "Router", team_id: str, pattern: str, model: str) -> bool:
+    regex: Final = _ROUTER_PATTERNS.pattern_to_regex(pattern)
+    if re.match(regex, model) is None or _named_deployments(llm_router, model, team_id):
+        return False
+    team_router: Final = llm_router.team_pattern_routers.get(team_id)
+    rivals: Final = () if team_router is None else tuple(team_router.patterns)
+    return not any(re.match(rival, model) is not None and _outranks(rival, regex) for rival in rivals)
+
+
+def team_write_serves(llm_router: "Router | None", team_id: str, public_name: str, model: str) -> bool:
+    """Whether a request from the team for ``model`` reaches the team route named ``public_name``: the name
+    itself or an alias of it, or, for a `*` name, a model no named deployment shadows and no more specific
+    team pattern takes."""
+    target: Final = _routable_name(llm_router, model)
+    if "*" not in public_name or llm_router is None:
+        return target == public_name
+    return _team_pattern_serves(llm_router, team_id, public_name, target)
+
+
+def _served_params(litellm_params: object, public_name: str, model: str) -> object:
+    if "*" not in public_name or not is_str_keyed_mapping(litellm_params):
+        return litellm_params
+    matched: Final = re.match(_ROUTER_PATTERNS.pattern_to_regex(public_name), model)
+    called: Final = litellm_params.get("model")
+    if matched is None or not isinstance(called, str):
+        return litellm_params
+    return MappingProxyType(
+        {
+            **litellm_params,
+            "model": PatternMatchRouter.set_deployment_model_name(
+                matched_pattern=matched, litellm_deployment_litellm_model=called
+            ),
+        }
+    )
+
+
 def team_route_after_write(
     llm_router: "Router | None",
     team_id: str,
     public_name: str,
     replaced_id: str | None,
     written_params: Mapping[str, object] | None,
+    model: str,
 ) -> ModelRoute | None:
     deployments: Final = () if llm_router is None else llm_router.get_all_deployments(public_name, team_id=team_id)
     kept: Final = tuple(
@@ -240,11 +289,16 @@ def team_route_after_write(
         if _is_team_deployment(deployment) and _deployment_id(deployment) != replaced_id
     )
     team_params: Final = kept if written_params is None else (*kept, written_params)
+    target: Final = _routable_name(llm_router, model)
     if team_params:
-        return ModelRoute(team_deployments=frozenset(team_deployment(litellm_params) for litellm_params in team_params))
-    if llm_router is None or not _routed_deployments(llm_router, public_name, None):
+        return ModelRoute(
+            team_deployments=frozenset(
+                team_deployment(_served_params(litellm_params, public_name, target)) for litellm_params in team_params
+            )
+        )
+    if llm_router is None or not _routed_deployments(llm_router, model, None):
         return None
-    return router_model_routes(llm_router, None)(public_name)
+    return router_model_routes(llm_router, None)(model)
 
 
 def limits_added_by_team_write(
@@ -254,9 +308,17 @@ def limits_added_by_team_write(
     public_name: str,
     replaced_id: str | None,
     written_params: Mapping[str, object] | None,
+    model: str,
 ) -> frozenset[QuotaLimit]:
-    after: Final = team_route_after_write(llm_router, team_id, public_name, replaced_id, written_params)
+    after: Final = team_route_after_write(llm_router, team_id, public_name, replaced_id, written_params, model)
     if after is None:
         return frozenset()
-    now: Final = router_model_routes(llm_router, team_id)(public_name)
-    return required_limits(policy, public_name, after) - required_limits(policy, public_name, now)
+    now: Final = router_model_routes(llm_router, team_id)(model)
+    return required_limits(policy, model, after) - required_limits(policy, model, now)
+
+
+def exempts_any_route(policy: ModelQuotaPolicy) -> bool:
+    return any(
+        limits != REQUIRE_BOTH_LIMITS.default
+        for limits in (policy.default, *policy.providers.values(), *policy.models.values())
+    )

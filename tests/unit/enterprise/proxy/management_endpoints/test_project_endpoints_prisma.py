@@ -1988,7 +1988,84 @@ def test_team_model_write_adds_only_the_limits_its_new_route_requires(
 
     assert policy is not None
     assert limits_added_by_team_write(
-        policy, router, "media-team", public_name, replaced_id, written_params
+        policy, router, "media-team", public_name, replaced_id, written_params, public_name
+    ) == frozenset(added)
+
+
+def test_quota_route_of_an_alias_reads_the_team_deployments_its_target_routes_to():
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "media-latest", "litellm_params": dict(_RUNWAY_PARAMS)},
+            _team_deployment("media-latest", "t1", _VERTEX_PARAMS),
+        ],
+        model_group_alias={"media": "media-latest"},
+    )
+    route_of: Final = router_model_routes(router, "media-team")
+
+    assert route_of("media") == route_of("media-latest")
+    assert TeamDeployment(provider="vertex_ai", called_model="gemini-3.8-flash") in route_of("media").team_deployments
+
+
+def _team_pattern_router() -> "litellm.Router":
+    return litellm.Router(
+        model_list=[
+            {"model_name": "media-latest", "litellm_params": dict(_VERTEX_PARAMS)},
+            {"model_name": "video-named", "litellm_params": dict(_VERTEX_PARAMS)},
+            _team_deployment("video-*", "t1", {"model": "runwayml/*"}),
+            _team_deployment("video-veo-*", "t2", {"model": "vertex_ai/veo-*", "vertex_project": "qa-project"}),
+        ],
+        model_group_alias={"media": "media-latest"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("public_name", "model", "served"),
+    [
+        pytest.param("media-latest", "media-latest", True, id="the-name-itself"),
+        pytest.param("media-latest", "media", True, id="an-alias-of-the-name"),
+        pytest.param("media-latest", "video-named", False, id="another-name"),
+        pytest.param("video-*", "video-gen-1", True, id="a-name-the-pattern-matches"),
+        pytest.param("video-*", "video-veo-3", False, id="a-more-specific-team-pattern-takes-it"),
+        pytest.param("video-veo-*", "video-veo-3", True, id="the-most-specific-team-pattern"),
+        pytest.param("video-*", "video-named", False, id="a-named-deployment-shadows-the-pattern"),
+        pytest.param("video-*", "image-gen-1", False, id="a-name-the-pattern-misses"),
+        pytest.param("audio-*", "audio-gen-1", True, id="a-pattern-the-write-adds"),
+    ],
+)
+def test_team_write_serves_the_project_names_a_team_request_routes_through_it(
+    public_name: str, model: str, served: bool
+):
+    from litellm.proxy.management_helpers.model_quota_policy import team_write_serves
+
+    assert team_write_serves(_team_pattern_router(), "media-team", public_name, model) is served
+
+
+@pytest.mark.parametrize(
+    ("model", "added"),
+    [
+        pytest.param("video-gen-1", {"rpm", "tpm"}, id="vertex-requires-both"),
+        pytest.param("video-veo-3", {"rpm"}, id="the-called-veo-model-entry-wins"),
+    ],
+)
+def test_team_pattern_write_reads_each_served_name_by_the_model_it_calls(model: str, added: set[str]):
+    from litellm.proxy.management_helpers.model_quota_policy import (
+        limits_added_by_team_write,
+        parse_model_quota_setting,
+    )
+
+    policy: Final = parse_model_quota_setting(
+        {"default": [], "providers": {"vertex_ai": ["rpm", "tpm"]}, "models": {"veo-*": ["rpm"]}}
+    )
+
+    assert policy is not None
+    assert limits_added_by_team_write(
+        policy,
+        litellm.Router(model_list=[]),
+        "media-team",
+        "video-*",
+        None,
+        {"model": "vertex_ai/*", "vertex_project": "qa-project"},
+        model,
     ) == frozenset(added)
 
 
