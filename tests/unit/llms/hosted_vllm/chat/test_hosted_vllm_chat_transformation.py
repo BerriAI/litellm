@@ -479,3 +479,24 @@ def test_hosted_vllm_additional_drop_params_removes_only_the_named_tool_fields()
         }
     ]
     assert tools == sent
+
+
+def test_hosted_vllm_additional_drop_params_removes_function_level_additional_properties() -> None:
+    parameters: Final = {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {"name": "search", "parameters": parameters, "additionalProperties": False, "strict": True},
+        }
+    ]
+
+    optional_params: Final = get_optional_params(
+        model="my-vllm-model",
+        custom_llm_provider="hosted_vllm",
+        tools=tools,
+        additional_drop_params=["tools[*].function.additionalProperties"],
+    )
+
+    assert optional_params["tools"] == [
+        {"type": "function", "function": {"name": "search", "parameters": parameters, "strict": True}}
+    ]
