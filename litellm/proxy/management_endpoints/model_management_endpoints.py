@@ -852,12 +852,8 @@ def _raise_if_model_update_adds_missing_rate_limits(
         written_name,
         deployment_route(_written_routing_params(incoming_params, remaining_params), written_team_model),
     )
-    stored_limits: Final = _merged_litellm_params(None, existing.litellm_params, _RATE_LIMIT_KEYS)
     written_limits: Final = _merged_litellm_params(incoming_params, remaining_params, _RATE_LIMIT_KEYS)
-    changed: Final = frozenset[QuotaLimit](
-        limit for limit in after if written_limits.get(limit) != stored_limits.get(limit)
-    )
-    checked: Final = (after - before) | changed
+    checked: Final = after - before
     _raise_on_missing_rate_limits(
         written_name, unmet_limits(checked, MappingProxyType({limit: written_limits.get(limit) for limit in checked}))
     )

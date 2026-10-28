@@ -7546,8 +7546,8 @@ def _stored_model(litellm_params: Mapping[str, object], team_id: str | None) -> 
             id="unchanged-route-adds-no-limits",
         ),
         pytest.param(
-            {"model": "vertex_ai/gemini-3.8-flash", "rpm": 10, "tpm": 1000}, None, updateLiteLLMParams(rpm=0), "rpm",
-            id="required-limit-changed-to-zero",
+            {"model": "vertex_ai/gemini-3.8-flash", "rpm": 10, "tpm": 1000}, None, updateLiteLLMParams(rpm=0), None,
+            id="unchanged-route-can-zero-a-limit-as-on-main",
         ),
         pytest.param(
             {"model": "vertex_ai/gemini-3.8-flash"}, None, updateLiteLLMParams(rpm=10), None,
@@ -7563,15 +7563,20 @@ def test_model_update_requires_only_the_limits_its_new_route_adds(
     )
 
 
-def _model_update_error(existing: Deployment, incoming: updateLiteLLMParams) -> str | None:
+def _model_update_error(
+    existing: Deployment,
+    incoming: updateLiteLLMParams,
+    policy: ModelQuotaPolicy = _CUSTOMER_MODEL_ADD_POLICY,
+    remaining: LiteLLM_Params | None = None,
+) -> str | None:
     try:
         _raise_if_model_update_adds_missing_rate_limits(
             existing=existing,
             written_name="media-latest",
             written_team_model=existing.model_info.team_id is not None,
             incoming_params=incoming,
-            remaining_params=existing.litellm_params,
-            policy=_CUSTOMER_MODEL_ADD_POLICY,
+            remaining_params=existing.litellm_params if remaining is None else remaining,
+            policy=policy,
         )
     except ProxyException as error:
         return error.message
@@ -7894,38 +7899,24 @@ async def test_model_update_checks_the_limits_of_the_name_it_renames_to(monkeypa
     prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_model_patch_rejects_removing_a_limit_its_route_requires(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.proxy import proxy_server
-    from litellm.types.proxy.management_endpoints.model_management_endpoints import PatchModelRequest
+@pytest.mark.parametrize(
+    ("incoming", "remaining"),
+    [
+        pytest.param(updateLiteLLMParams(rpm=0), {"model": "vertex_ai/gemini-3.8-flash", "tpm": 1000}, id="zeroes-rpm"),
+        pytest.param(updateLiteLLMParams(), {"model": "vertex_ai/gemini-3.8-flash", "tpm": 1000}, id="removes-rpm"),
+        pytest.param(updateLiteLLMParams(model="runwayml/gen4_turbo"), {"model": "runwayml/gen4_turbo"}, id="moves"),
+    ],
+)
+def test_model_update_under_the_boolean_setting_never_rejects_as_on_main(
+    incoming: updateLiteLLMParams, remaining: Mapping[str, object]
+) -> None:
+    from litellm.proxy.management_helpers.model_quota_policy import parse_model_quota_setting
 
-    prisma: Final = MagicMock()
-    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
-        return_value=LiteLLM_ProxyModelTable(
-            model_id="vertex-row",
-            model_name="media-latest",
-            litellm_params={"model": "vertex_ai/gemini-3.8-flash", "rpm": 10, "tpm": 1000},
-            model_info={"id": "vertex-row"},
-            created_by="admin",
-            updated_by="admin",
-        )
-    )
-    _use_quota_proxy(monkeypatch, prisma, Router(model_list=[]))
-    monkeypatch.setattr(
-        proxy_server, "general_settings", {"enforce_rpm_tpm_on_model_add": {"providers": {"vertex_ai": ["rpm", "tpm"]}}}
-    )
-    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    stored: Final = _stored_model({"model": "vertex_ai/gemini-3.8-flash", "rpm": 10, "tpm": 1000}, None)
+    policy: Final = parse_model_quota_setting(True)
 
-    with pytest.raises(ProxyException) as error:
-        await patch_model(
-            model_id="vertex-row",
-            patch_data=PatchModelRequest(litellm_params_to_remove=("rpm",)),
-            user_api_key_dict=_ADMIN,
-        )
-
-    assert error.value.code == "400"
-    assert error.value.message.startswith("rpm must be set to a positive value for 'media-latest'")
-    prisma.db.litellm_proxymodeltable.update.assert_not_called()
+    assert policy is not None
+    assert _model_update_error(stored, incoming, policy, LiteLLM_Params(**remaining)) is None
 
 
 @pytest.mark.asyncio
