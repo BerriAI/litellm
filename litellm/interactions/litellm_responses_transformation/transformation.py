@@ -266,9 +266,11 @@ class LiteLLMResponsesInteractionsConfig:
         # (total_input_tokens, total_output_tokens)
         usage: Final[object] = getattr(responses_response, "usage", None)
         if usage:
+            reported_cost: Final[object] = getattr(usage, "cost", None)
             interactions_response_dict["usage"] = {
                 "total_input_tokens": getattr(usage, "input_tokens", 0),
                 "total_output_tokens": getattr(usage, "output_tokens", 0),
+                **({} if reported_cost is None else {"cost": reported_cost}),
             }
 
         # Add updated (same as created for now)

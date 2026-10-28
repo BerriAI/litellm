@@ -2210,6 +2210,16 @@ def _billable_header_cost(value: object) -> float | None:
     return cost if math.isfinite(cost) and cost >= 0 else None
 
 
+def _with_cost_adjustments(
+    cost: float, custom_llm_provider: str | None, model: str | None, region_name: str | None
+) -> float:
+    discounted_cost, _, _ = _apply_cost_discount(
+        base_cost=cost, custom_llm_provider=custom_llm_provider, model=model, region_name=region_name
+    )
+    adjusted_cost, _, _, _ = _apply_cost_margin(base_cost=discounted_cost, custom_llm_provider=custom_llm_provider)
+    return adjusted_cost
+
+
 def response_cost_calculator(
     response_object: ModelResponse
     | EmbeddingResponse
@@ -2293,8 +2303,8 @@ def response_cost_calculator(
                     if provider_response_cost is not None and not custom_pricing:
                         return provider_response_cost
             usage_cost: Final = billed_usage_cost(response_object, custom_llm_provider)
-            if usage_cost is not None and not custom_pricing:
-                return usage_cost
+            if usage_cost is not None and not custom_pricing and base_model is None:
+                return _with_cost_adjustments(usage_cost, custom_llm_provider, model, region_name)
 
             response_cost = completion_cost(
                 completion_response=response_object,
