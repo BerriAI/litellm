@@ -4,12 +4,13 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 import httpx
-import litellm
 import openai
 import pytest
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
+
+import litellm
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _PROMPT: Final = "a transparent lighthouse at dawn"
