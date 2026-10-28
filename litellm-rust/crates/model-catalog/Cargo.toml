@@ -20,4 +20,5 @@ time.workspace = true
 
 [dev-dependencies]
 jsonschema = { version = "0.55.1", default-features = false }
+litellm-error.workspace = true
 rstest.workspace = true

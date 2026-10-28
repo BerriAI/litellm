@@ -13,6 +13,7 @@ from typing import Final
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
+from pydantic import TypeAdapter
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -25,6 +26,8 @@ from litellm.proxy.container_endpoints.ownership import (
     assert_user_can_access_container,
     get_container_forwarding_params,
 )
+
+_UPLOADED_FILE_FIELD: Final = TypeAdapter(object)
 
 
 def _load_endpoints_config() -> dict:
@@ -260,7 +263,7 @@ async def _process_binary_request(
         )
 
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -304,7 +307,7 @@ async def _process_multipart_upload_request(
         raise HTTPException(status_code=400, detail="Missing required 'file' field")
 
     # convert_upload_files_to_file_data returns list of tuples, extract single file
-    file_list: Final = data["file"]
+    file_list: Final = _UPLOADED_FILE_FIELD.validate_python(data["file"])
     if isinstance(file_list, list) and len(file_list) > 0:
         data["file"] = file_list[0]
 
@@ -349,7 +352,7 @@ async def _process_multipart_upload_request(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -438,7 +441,7 @@ async def _process_request(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

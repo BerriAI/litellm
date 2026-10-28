@@ -6,12 +6,14 @@ from dataclasses import dataclass
 from itertools import accumulate
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    BAGGAGE_MAPPED_TAGS_METADATA_KEY,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH,
@@ -38,6 +40,7 @@ from litellm.types.utils import (
 )
 
 _CALLBACK_VAR_MASKER: Final = SensitiveDataMasker()
+_LOADED_CALLBACK: Final = TypeAdapter(object)
 # Compound names that are credential-bearing but don't contain any of the
 # default sensitive segments (so SensitiveDataMasker won't flag them).
 _EXTRA_SENSITIVE_CALLBACK_KEYS: Final = {"gcs_path_service_account"}
@@ -181,7 +184,7 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(callback)
             elif isinstance(callback, str) and callback == "presidio":
                 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-                    _OPTIONAL_PresidioPIIMasking,
+                    OPTIONAL_PresidioPIIMasking,
                 )
 
                 presidio_logging_only: bool | None = litellm_settings.get("presidio_logging_only", None)
@@ -196,7 +199,7 @@ def initialize_callbacks_on_proxy(
                     "logging_only": presidio_logging_only,
                     **_presidio_params,
                 }
-                pii_masking_object = _OPTIONAL_PresidioPIIMasking(**params)
+                pii_masking_object = OPTIONAL_PresidioPIIMasking(**params)
                 imported_list.append(pii_masking_object)
             elif isinstance(callback, str) and callback == "llamaguard_moderations":
                 try:
@@ -324,7 +327,7 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(banned_keywords_obj)
             elif isinstance(callback, str) and callback == "detect_prompt_injection":
                 from litellm.proxy.hooks.prompt_injection_detection import (
-                    _OPTIONAL_PromptInjectionDetection,
+                    OPTIONAL_PromptInjectionDetection,
                 )
 
                 prompt_injection_params = None
@@ -332,20 +335,20 @@ def initialize_callbacks_on_proxy(
                     prompt_injection_params_in_config = litellm_settings["prompt_injection_params"]
                     prompt_injection_params = LiteLLMPromptInjectionParams(**prompt_injection_params_in_config)
 
-                prompt_injection_detection_obj = _OPTIONAL_PromptInjectionDetection(
+                prompt_injection_detection_obj = OPTIONAL_PromptInjectionDetection(
                     prompt_injection_params=prompt_injection_params,
                 )
                 imported_list.append(prompt_injection_detection_obj)
             elif isinstance(callback, str) and callback == "batch_redis_requests":
                 from litellm.proxy.hooks.batch_redis_get import (
-                    _PROXY_BatchRedisRequests,
+                    PROXY_BatchRedisRequests,
                 )
 
-                batch_redis_obj = _PROXY_BatchRedisRequests()
+                batch_redis_obj = PROXY_BatchRedisRequests()
                 imported_list.append(batch_redis_obj)
             elif isinstance(callback, str) and callback == "azure_content_safety":
                 from litellm.proxy.hooks.azure_content_safety import (
-                    _PROXY_AzureContentSafety,
+                    PROXY_AzureContentSafety,
                 )
 
                 azure_content_safety_params = litellm_settings["azure_content_safety_params"]
@@ -353,7 +356,7 @@ def initialize_callbacks_on_proxy(
                     if v is not None and isinstance(v, str) and v.startswith("os.environ/"):
                         azure_content_safety_params[k] = get_secret(v)
 
-                azure_content_safety_obj = _PROXY_AzureContentSafety(
+                azure_content_safety_obj = PROXY_AzureContentSafety(
                     **azure_content_safety_params,
                 )
                 imported_list.append(azure_content_safety_obj)
@@ -388,9 +391,11 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(
                     _loaded_callback_or_raise(
                         entry=callback,
-                        loaded=get_instance_fn(
-                            value=callback,
-                            config_file_path=config_file_path,
+                        loaded=_LOADED_CALLBACK.validate_python(
+                            get_instance_fn(
+                                value=callback,
+                                config_file_path=config_file_path,
+                            )
                         ),
                     )
                 )
@@ -407,9 +412,11 @@ def initialize_callbacks_on_proxy(
         litellm.callbacks = [
             _loaded_callback_or_raise(
                 entry=value,
-                loaded=get_instance_fn(
-                    value=value,
-                    config_file_path=config_file_path,
+                loaded=_LOADED_CALLBACK.validate_python(
+                    get_instance_fn(
+                        value=value,
+                        config_file_path=config_file_path,
+                    )
                 ),
             )
         ]
@@ -543,6 +550,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
         PRE_CALL_EXECUTED_GUARDRAILS_KEY,
         SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
         CONSUMED_REQUEST_TAGS_METADATA_KEY,
+        BAGGAGE_MAPPED_TAGS_METADATA_KEY,
         CLIENT_OUTPUT_CEILING_METADATA_KEY,
         ROUTING_REQUEST_TAGS_METADATA_KEY,
         "disable_global_guardrails",

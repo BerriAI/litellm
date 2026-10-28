@@ -68,9 +68,9 @@ class TestLangfusePromptManagement:
     def test_langfuse_client_init_passes_dedicated_httpx_client(self):
         import httpx
 
-        from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+        from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
-        shared_client = _get_httpx_client().client
+        shared_client = get_httpx_client().client
         built = MagicMock()
         with (
             patch(

@@ -12,7 +12,7 @@ import pytest
 import litellm
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
-CRUSOE_API_BASE = "https://managed-inference-api-proxy.crusoecloud.com/v1"
+CRUSOE_API_BASE = "https://api.inference.crusoecloud.com/v1"
 
 
 def test_crusoe_json_registry():
@@ -36,7 +36,7 @@ def test_crusoe_get_openai_compatible_provider_info():
 
     # Test with default values (no env vars set)
     with mock.patch.dict(os.environ, {}, clear=True):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == CRUSOE_API_BASE
         assert api_key is None
 
@@ -48,7 +48,7 @@ def test_crusoe_get_openai_compatible_provider_info():
             "CRUSOE_API_BASE": "https://custom.crusoecloud.com/v1",
         },
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://custom.crusoecloud.com/v1"
         assert api_key == "test-key"
 
@@ -60,7 +60,7 @@ def test_crusoe_get_openai_compatible_provider_info():
             "CRUSOE_API_BASE": "https://env.crusoecloud.com/v1",
         },
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info("https://param.crusoecloud.com/v1", "param-key")
+        api_base, api_key = config.get_openai_compatible_provider_info("https://param.crusoecloud.com/v1", "param-key")
         assert api_base == "https://param.crusoecloud.com/v1"
         assert api_key == "param-key"
 

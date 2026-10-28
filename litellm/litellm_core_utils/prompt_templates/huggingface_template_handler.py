@@ -2,13 +2,16 @@ import json
 from datetime import datetime
 from typing import Any, Final, Literal
 
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
+
+_DECODED_TOKENIZER_CONFIG: Final = TypeAdapter(object)
 
 
 class _TokenizerConfigResult(TypedDict):
@@ -50,12 +53,12 @@ def get_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
     """
     try:
         url: Final = f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
-        client: Final = _get_httpx_client()
+        client: Final = get_httpx_client()
         response: Final = client.get(url=url)
     except Exception as e:
         raise e
     if response.status_code == 200:
-        tokenizer_config: Final = json.loads(response.content)
+        tokenizer_config: Final = _DECODED_TOKENIZER_CONFIG.validate_python(json.loads(response.content))
         return {"status": "success", "tokenizer": tokenizer_config}
     else:
         return {"status": "failure"}
@@ -83,7 +86,7 @@ async def aget_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
     except Exception as e:
         raise e
     if response.status_code == 200:
-        tokenizer_config: Final = json.loads(response.content)
+        tokenizer_config: Final = _DECODED_TOKENIZER_CONFIG.validate_python(json.loads(response.content))
         return {"status": "success", "tokenizer": tokenizer_config}
     else:
         return {"status": "failure"}
@@ -103,7 +106,7 @@ def get_chat_template_file(hf_model_name: str) -> _ChatTemplateFileResult:
         Dict with 'status' and optionally 'chat_template' keys
     """
     template_filenames: Final = ["chat_template.jinja", "chat_template.jinja2"]
-    client: Final = _get_httpx_client()
+    client: Final = get_httpx_client()
 
     for filename in template_filenames:
         try:

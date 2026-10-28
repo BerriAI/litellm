@@ -1,5 +1,6 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
 
@@ -10,6 +11,30 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.router_utils.deployment_pricing import deployment_pricing_models, str_keyed
+
+
+def _deployment_cost_map_rates(deployment: object) -> tuple[float | None, float | None]:
+    """Input and output per-token prices from the first cost-map row among the deployment's
+    pricing models that carries one; (None, None) when no row does, so the caller falls back to
+    its unmapped default."""
+    rows: Final = (str_keyed(_cost_map().get(model)) for model in deployment_pricing_models(deployment))
+    row: Final = next((row for row in rows if _declares_token_price(row)), None)
+    if row is None:
+        return None, None
+    return _as_rate(row.get("input_cost_per_token")), _as_rate(row.get("output_cost_per_token"))
+
+
+def _cost_map() -> Mapping[str, object]:
+    return litellm.model_cost
+
+
+def _declares_token_price(row: Mapping[str, object]) -> bool:
+    return row.get("input_cost_per_token") is not None or row.get("output_cost_per_token") is not None
+
+
+def _as_rate(value: object) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 class LowestCostLoggingHandler(CustomLogger):
@@ -243,8 +268,8 @@ class LowestCostLoggingHandler(CustomLogger):
                 or _deployment.get("model_info", {}).get("rpm", None)
                 or float("inf")
             )
-            item_litellm_model_name = _deployment.get("litellm_params", {}).get("model")
-            item_litellm_model_cost_map = litellm.model_cost.get(item_litellm_model_name, {})
+            deployment_view: object = _deployment
+            map_input_cost, map_output_cost = _deployment_cost_map_rates(deployment_view)
 
             # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
             item_input_cost = None
@@ -256,10 +281,10 @@ class LowestCostLoggingHandler(CustomLogger):
                 item_output_cost = _deployment.get("litellm_params", {}).get("output_cost_per_token")
 
             if item_input_cost is None:
-                item_input_cost = item_litellm_model_cost_map.get("input_cost_per_token", 5.0)
+                item_input_cost = map_input_cost if map_input_cost is not None else 5.0
 
             if item_output_cost is None:
-                item_output_cost = item_litellm_model_cost_map.get("output_cost_per_token", 5.0)
+                item_output_cost = map_output_cost if map_output_cost is not None else 5.0
 
             # if litellm["model"] is not in model_cost map -> use item_cost = $10
 

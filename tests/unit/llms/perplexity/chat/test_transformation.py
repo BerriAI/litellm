@@ -4,6 +4,7 @@ import os
 from unittest.mock import MagicMock, patch
 
 import pytest
+from openai._legacy_response import LegacyAPIResponse
 
 import litellm
 from litellm import completion
@@ -92,7 +93,7 @@ class TestPerplexityReasoning:
         pydantic_obj = ChatCompletion(**response_object)
 
         def _return_pydantic_obj(*args, **kwargs):
-            new_response = MagicMock()
+            new_response = MagicMock(spec=LegacyAPIResponse)
             new_response.headers = {"content-type": "application/json"}
             new_response.parse.return_value = pydantic_obj
             return new_response
@@ -100,8 +101,7 @@ class TestPerplexityReasoning:
         openai_client = OpenAI(api_key="fake-api-key")
 
         with patch.object(
-            openai_client.chat.completions.with_raw_response,
-            "create",
+            openai_client, "post",
             side_effect=_return_pydantic_obj,
         ) as mock_client:
             response = completion(
@@ -121,7 +121,7 @@ class TestPerplexityReasoning:
 
             # Get the request data from the mock call
             call_args = mock_client.call_args
-            request_data = call_args.kwargs
+            request_data = call_args.kwargs["body"]
 
             # Verify reasoning_effort was included in the request
             assert "reasoning_effort" in request_data
@@ -145,7 +145,7 @@ class TestPerplexityReasoning:
         from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
 
         config = PerplexityChatConfig()
-        api_base, _ = config._get_openai_compatible_provider_info(api_base=None, api_key="test-key")
+        api_base, _ = config.get_openai_compatible_provider_info(api_base=None, api_key="test-key")
 
         assert api_base == expected_api_base
 

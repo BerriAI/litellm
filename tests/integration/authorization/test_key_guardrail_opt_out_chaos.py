@@ -1,31 +1,30 @@
 import json
-import os
-import signal
-import socket
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from queue import SimpleQueue
 from typing import Final
 
 import httpx
-import psutil
+import pytest
 
 from integration._support.client import Gateway, eventually, string_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy, owned_proxy_process
+from integration._support.timing import assert_cut_short, timed
+from integration._support.ports import allocate_port
 from integration.authorization._guardrail_opt_out import (
     chat,
     guardrail_config,
     non_admin_caller,
     stored_metadata,
-    upstream_hits,
     upstream_observations,
 )
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 
 class _GuardrailSink:
@@ -37,13 +36,8 @@ class _GuardrailSink:
         self._action: Final = action
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
-        self._port: Final = self._claim_port()
+        self._port: Final = allocate_port()
         self.start()
-
-    def _claim_port(self) -> int:
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            return probe.getsockname()[1]
 
     @property
     def url(self) -> str:
@@ -231,9 +225,14 @@ def test_exempt_burst_survives_guardrail_sink_outage(gateway: Gateway, tmp_path:
                 "synthetic policy denial" in response.text or response.status_code == 500
                 for response in non_exempt_outage
             ), [response.text for response in non_exempt_outage if response.status_code not in {400, 500}]
-            assert all(upstream_hits(gateway, f"outage-{index}-") == 0 for index in range(1, 20, 2)), (
-                upstream_observations(gateway)
-            )
+            control_marker: Final = "control-" + uuid.uuid4().hex
+            control: Final = chat(candidate, model, exempt, control_marker)
+            assert control.status_code == 200, control.text
+            observed: Final = upstream_observations(gateway)
+            bodies: Final = tuple(json.dumps(entry.get("body")) for entry in observed)
+            assert any(control_marker in body for body in bodies), observed
+            assert all(any(f"outage-{index}-" in body for body in bodies) for index in range(0, 20, 2)), observed
+            assert not any(any(f"outage-{index}-" in body for body in bodies) for index in range(1, 20, 2)), observed
 
             sink.start()
             recovered: Final = chat(candidate, model, plain, "recovered-" + uuid.uuid4().hex)
@@ -250,13 +249,8 @@ def test_flag_denial_survives_worker_kill(gateway: Gateway, tmp_path: Path) -> N
             caller: Final = non_admin_caller(scenario, member, team, model)
             alias: Final = "audit-kill-" + uuid.uuid4().hex
 
-            workers: Final = eventually(
-                lambda: psutil.Process(owned.process.pid).children(recursive=True),
-                lambda children: len(children) >= 2,
-                seconds=30,
-            )
-            victim: Final = workers[0]
-            os.kill(victim.pid, signal.SIGKILL)
+            workers: Final = eventually(owned.worker_pids, lambda pids: len(pids) >= 2, seconds=30)
+            owned.kill_worker(min(workers))
 
             probe: Final = eventually(
                 lambda: candidate.request(
@@ -303,17 +297,18 @@ def test_exempt_chats_do_not_wait_on_slow_guardrail_sink(gateway: Gateway, tmp_p
             model: Final = scenario.model()
             exempt: Final = scenario.key(models=[model], disable_global_guardrails=True)
 
-            started: Final = time.monotonic()
             with ThreadPoolExecutor(max_workers=10) as pool:
-                responses: Final = tuple(
+                calls: Final = tuple(
                     pool.map(
-                        lambda index: chat(candidate, model, exempt, f"slow-sink-{index}-{uuid.uuid4().hex}"),
+                        lambda index: timed(
+                            lambda: chat(candidate, model, exempt, f"slow-sink-{index}-{uuid.uuid4().hex}")
+                        ),
                         range(10),
                     )
                 )
-            elapsed: Final = time.monotonic() - started
+            responses: Final = tuple(call.value for call in calls)
             assert all(response.status_code == 200 for response in responses), [
                 (response.status_code, response.text) for response in responses
             ]
-            assert elapsed < sink_delay, f"exempt chats waited on the guardrail sink: {elapsed}s"
+            assert_cut_short(max(call.seconds for call in calls), injected_delay=sink_delay)
             assert sink.drain() == ()

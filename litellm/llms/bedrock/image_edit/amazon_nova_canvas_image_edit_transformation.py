@@ -17,6 +17,7 @@ import os
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from httpx._types import RequestFiles
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -229,6 +230,13 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         """
         return _supports_nova_canvas_image_edit_from_model_cost(model or "")
 
+    @classmethod
+    def is_nova_canvas_image_edit_model(
+        cls,
+        model: str | None = None,
+    ) -> bool:
+        return cls._is_nova_canvas_image_edit_model(model)
+
     def get_error_class(
         self,
         error_message: str,
@@ -312,7 +320,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict, Any]:
+    ) -> tuple[dict, RequestFiles]:
         op: Final = dict(image_edit_optional_request_params)
         image_b64: Final = _file_types_to_b64(image)
 
@@ -509,9 +517,9 @@ def get_bedrock_image_edit_config_for_model(
         BedrockStabilityImageEditConfig,
     )
 
-    if BedrockStabilityImageEditConfig._is_stability_edit_model(model):
+    if BedrockStabilityImageEditConfig.is_stability_edit_model(model):
         return BedrockStabilityImageEditConfig()
-    if BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(model):
+    if BedrockAmazonNovaCanvasImageEditConfig.is_nova_canvas_image_edit_model(model):
         return BedrockAmazonNovaCanvasImageEditConfig()
     raise ValueError(
         f"Unsupported Bedrock image-edit model: {model!r}. "

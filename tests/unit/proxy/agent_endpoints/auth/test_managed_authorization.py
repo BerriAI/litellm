@@ -451,6 +451,20 @@ def test_managed_realtime_requires_a_model_and_ignores_completion_defaults(route
     )
 
 
+@pytest.mark.parametrize("route", ["/live/sessions", "/v1/live/sessions", "/openai/v1/live/sessions"])
+def test_managed_live_upgrade_defers_the_model_to_the_session_start_frame(route: str) -> None:
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import (
+        managed_agent_route_allowed,
+        managed_inference_request,
+    )
+
+    assert managed_agent_route_allowed(route, "GET")
+    assert managed_inference_request(route, {}, {"completion_model": "allowed-default"}, "cli") == {}
+    assert managed_inference_request(
+        route, {"model": "frame-model"}, {"completion_model": "allowed-default"}, "cli"
+    ) == {"model": "frame-model"}
+
+
 @pytest.mark.parametrize("mode,user", [("autonomous", None), ("delegated", "verified-human")])
 def test_matching_identity_revision_and_execution_mode_pass_admission(mode: str, user: str | None) -> None:
     context: Final = ManagedAgentContext.model_validate(
@@ -574,6 +588,6 @@ def test_registered_inference_routes_have_an_explicit_managed_access_decision(ro
         "/vector_stores", "/vector_store/", "/search", "/containers", "/skills", "/claude-code/",
         "/interactions", "/agents", "/responses/{", "/responses/input_tokens",
         "/realtime/client_secrets", "/realtime/calls", "/realtime/transcription_sessions",
-    )) or normalized in ("/models", "/cursor/models", "/cursor/v1/models")
+    )) or normalized in ("/models", "/cursor/models", "/cursor/v1/models", "/claude_code_gateway/v1/models")
     concrete: Final = route.split("?")[0].replace("{model}", "model").replace("{model_name:path}", "model")
     assert managed_agent_route_allowed(concrete, None) is not unsupported, route

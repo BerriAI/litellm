@@ -17,6 +17,7 @@ from typing import Final
 
 import anthropic
 import pytest
+from _pytest.mark.structures import ParameterSet
 from anthropic import Anthropic
 from anthropic.types import (
     InputJSONDelta,
@@ -42,6 +43,7 @@ from e2e_config import (
     unique_marker,
 )
 from e2e_http import assert_client_error
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import AnthropicErrorEvent, AnthropicMessagesBody, ChatMessage, LiteLLMParamsBody, SpendLogRow
 from provider_edge import EDGE_MOUNTS, LiveEdge, RunningEdge, StreamCut, start_provider_edge
@@ -61,6 +63,7 @@ class _OptionalMessagesBody(BaseModel):
 
 
 ANTHROPIC_BACKEND = "anthropic/claude-haiku-4-5"
+OPENAI_BRIDGE_BACKEND: Final = "openai/gpt-5.6"
 
 WEATHER_TOOL: ToolParam = {
     "name": "get_weather",
@@ -110,6 +113,15 @@ def _user_turn(text: str) -> MessageParam:
 
 class TestAnthropicMessages:
     @pytest.mark.covers("llm.messages.anthropic.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_messages_returns_completion(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model, key = _register(proxy, resources)
         client = sdk.anthropic(key)
@@ -121,6 +133,15 @@ class TestAnthropicMessages:
         assert _text(message).strip(), f"/v1/messages returned no text: {message.content!r}"
 
     @pytest.mark.covers("llm.messages.anthropic.basic.nonstream.cost_logged")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_messages_logs_cost_matching_the_response_header(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -169,6 +190,15 @@ class TestAnthropicMessages:
 
     @pytest.mark.covers("llm.messages.anthropic.basic.stream.works")
     @pytest.mark.provider_live
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_messages_streams_completion(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         """Edge-wired like its non-streaming siblings, so record and replay both
         carry the streamed response.
@@ -226,6 +256,16 @@ class TestAnthropicMessages:
             )
 
     @pytest.mark.covers("llm.messages.anthropic.tool_use.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_messages_tool_use(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model, key = _register(proxy, resources)
         client = sdk.anthropic(key)
@@ -243,6 +283,16 @@ class TestAnthropicMessages:
         )
 
     @pytest.mark.covers("llm.messages.anthropic.structured_output.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            capabilities=(Capability.RESPONSE_SCHEMA,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_messages_output_format_returns_schema_json(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -261,6 +311,14 @@ class TestAnthropicMessages:
         reason="stage red: product gap, /v1/messages 500s (anthropic_messages TypeError) on missing messages instead of 400"
     )
     @pytest.mark.covers("llm.messages.anthropic.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(),
+            models=(),
+        )
+    )
     def test_missing_messages_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources)
         result = proxy.transport.send(
@@ -274,6 +332,14 @@ class TestAnthropicMessages:
         reason="stage red: product gap, /v1/messages 500s (anthropic_messages TypeError) on missing max_tokens instead of 400"
     )
     @pytest.mark.covers("llm.messages.anthropic.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(),
+            models=(),
+        )
+    )
     def test_missing_max_tokens_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources)
         result = proxy.transport.send(
@@ -284,6 +350,14 @@ class TestAnthropicMessages:
         assert_client_error(result, "messages missing max_tokens")
 
     @pytest.mark.covers("llm.messages.anthropic.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(),
+            models=(),
+        )
+    )
     def test_missing_model_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         _, key = _register(proxy, resources)
         result = proxy.transport.send(
@@ -364,9 +438,26 @@ def _request_tool(client: Anthropic, model: str, question: MessageParam, tool: T
     return blocks[0]
 
 
+def _openai_bridge_subject(mode: Mode) -> Subject:
+    return Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.OPENAI,),
+        models=(OPENAI_BRIDGE_BACKEND,),
+        capabilities=(Capability.FUNCTION_CALLING,),
+        mode=mode,
+    )
+
+
 class TestOpenAIMessagesToolContinuation:
     @pytest.mark.provider_live
-    @pytest.mark.parametrize("stream", [True, False], ids=["stream", "nonstream"])
+    @pytest.mark.parametrize(
+        "stream",
+        [
+            pytest.param(stream, marks=meta(_openai_bridge_subject(mode)), id=name)
+            for stream, name, mode in ((True, "stream", Mode.STREAM), (False, "nonstream", Mode.NONSTREAM))
+        ],
+    )
     def test_required_tool_arguments_and_correlated_result(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, stream: bool
     ) -> None:
@@ -375,7 +466,7 @@ class TestOpenAIMessagesToolContinuation:
         model_id: Final = proxy.create_model(
             model,
             LiteLLMParamsBody(
-                model="openai/gpt-5.6", api_key="os.environ/OPENAI_API_KEY", api_base=f"{base}/v1" if base else None
+                model=OPENAI_BRIDGE_BACKEND, api_key="os.environ/OPENAI_API_KEY", api_base=f"{base}/v1" if base else None
             ),
         )
         resources.defer(lambda: proxy.delete_model(model_id))
@@ -478,6 +569,30 @@ _DROPPED_BEFORE_FIRST_BYTE: Final[tuple[tuple[str, _CutRegistration, StreamCut],
 )
 
 
+_CUT_SUBJECTS: Final[MappingProxyType[_CutRegistration, Subject]] = MappingProxyType(
+    {
+        _register_cut_bedrock: Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_BACKEND,),
+            mode=Mode.STREAM,
+        ),
+        _register_cut_anthropic: Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            mode=Mode.STREAM,
+        ),
+    }
+)
+
+
+def _cut_params(cases: tuple[tuple[str, _CutRegistration, StreamCut], ...]) -> list[ParameterSet]:
+    return [pytest.param(register, cut, id=name, marks=meta(_CUT_SUBJECTS[register])) for name, register, cut in cases]
+
+
 def _payload(frame: str) -> JsonValue | None:
     try:
         return _FRAME_PAYLOAD.validate_json(frame)
@@ -495,7 +610,7 @@ def _bare_error_frame(frame: str) -> bool:
 class TestMessagesUpstreamStreamFailure:
     @pytest.mark.covers("llm.messages.anthropic.upstream_stream_failure.stream.error_event")
     @pytest.mark.parametrize(
-        ("register", "cut"), [case[1:] for case in _DROPPED_UPSTREAMS], ids=[case[0] for case in _DROPPED_UPSTREAMS]
+        ("register", "cut"), _cut_params(_DROPPED_UPSTREAMS)
     )
     def test_interrupted_upstream_stream_raises_in_the_anthropic_sdk(
         self,
@@ -533,7 +648,7 @@ class TestMessagesUpstreamStreamFailure:
 
     @pytest.mark.covers("llm.messages.anthropic.upstream_stream_failure.stream.error_event")
     @pytest.mark.parametrize(
-        ("register", "cut"), [case[1:] for case in _DROPPED_UPSTREAMS], ids=[case[0] for case in _DROPPED_UPSTREAMS]
+        ("register", "cut"), _cut_params(_DROPPED_UPSTREAMS)
     )
     def test_interrupted_upstream_stream_is_an_anthropic_error_event(
         self, proxy: ProxyClient, resources: ResourceManager, register: _CutRegistration, cut: StreamCut
@@ -585,11 +700,7 @@ class TestMessagesUpstreamStreamFailure:
         )
 
     @pytest.mark.covers("llm.messages.anthropic.upstream_stream_failure.stream.error_status")
-    @pytest.mark.parametrize(
-        ("register", "cut"),
-        [case[1:] for case in _DROPPED_BEFORE_FIRST_BYTE],
-        ids=[case[0] for case in _DROPPED_BEFORE_FIRST_BYTE],
-    )
+    @pytest.mark.parametrize(("register", "cut"), _cut_params(_DROPPED_BEFORE_FIRST_BYTE))
     def test_upstream_that_hangs_up_before_the_first_byte_raises_with_its_status_in_the_anthropic_sdk(
         self,
         proxy: ProxyClient,
@@ -622,11 +733,7 @@ class TestMessagesUpstreamStreamFailure:
             )
 
     @pytest.mark.covers("llm.messages.anthropic.upstream_stream_failure.stream.error_status")
-    @pytest.mark.parametrize(
-        ("register", "cut"),
-        [case[1:] for case in _DROPPED_BEFORE_FIRST_BYTE],
-        ids=[case[0] for case in _DROPPED_BEFORE_FIRST_BYTE],
-    )
+    @pytest.mark.parametrize(("register", "cut"), _cut_params(_DROPPED_BEFORE_FIRST_BYTE))
     def test_upstream_that_hangs_up_before_the_first_byte_is_a_json_error_with_its_status(
         self, proxy: ProxyClient, resources: ResourceManager, register: _CutRegistration, cut: StreamCut
     ) -> None:
