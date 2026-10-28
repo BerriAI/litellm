@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Final
 
 from litellm.constants import UNKNOWN_MODEL_SPEND_LOG_MODEL
@@ -27,3 +28,12 @@ def api_key_from_bucket(api_key: str) -> str:
     if api_key == UNATTRIBUTED_API_KEY:
         return ""
     return api_key.removeprefix(_RAW_API_KEY_PREFIX)
+
+
+def raw_api_key_filter(api_key: str | Sequence[str] | None) -> tuple[str, ...] | None:
+    """String filters are reporting IDs; sequences are raw keys resolved by authorization."""
+    if api_key is None or api_key == "":
+        return None
+    if isinstance(api_key, str):
+        return (api_key_from_bucket(api_key),)
+    return tuple(api_key)

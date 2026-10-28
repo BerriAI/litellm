@@ -2632,3 +2632,59 @@ def test_model_group_uses_raw_model_before_unknown_group(
         entity_metadata_field=None,
     )
     assert tuple(result["results"][0].breakdown.model_groups) == (expected_group,)
+
+
+@pytest.mark.parametrize(
+    ("raw_key", "bucket"),
+    [
+        ("", "unattributed"),
+        ("real-hash", "real-hash"),
+        ("unattributed", "raw:unattributed"),
+        ("raw:unattributed", "raw:raw:unattributed"),
+        ("raw:real-hash", "raw:raw:real-hash"),
+    ],
+)
+def test_reporting_key_filters_round_trip_without_losing_scope(raw_key: str, bucket: str) -> None:
+    from litellm.repositories.daily_activity_buckets import api_key_bucket
+
+    assert api_key_bucket(raw_key) == bucket
+    scope: Final = daily_activity_scope(
+        "litellm_dailyuserspend", "user_id", "user", None, bucket, "2024-01-01", "2024-01-01", None, None
+    )
+    assert scope.api_keys == (raw_key,)
+    assert scope.entity_ids == ("user",)
+
+
+@pytest.mark.parametrize(("raw_key", "bucket_key"), [("", "unattributed"), ("unattributed", "raw:unattributed")])
+def test_mcp_nested_key_metrics_use_reporting_identity(raw_key: str, bucket_key: str) -> None:
+    record: Final = SimpleNamespace(
+        **{
+            **vars(_daily_user_spend_record(user_id="user", api_key=raw_key, spend=0.25, model=None, model_group=None)),
+            "mcp_namespaced_tool_name": "deleted-server/tool",
+        }
+    )
+    result: Final = common_daily_activity_module._aggregate_spend_records_sync(
+        records=(record,), api_key_metadata={}, entity_id_field=None, entity_metadata_field=None
+    )
+    breakdown: Final = result["results"][0].breakdown
+    assert breakdown.mcp_servers["deleted-server/tool"].api_key_breakdown == breakdown.api_keys
+    assert breakdown.mcp_servers["deleted-server/tool"].api_key_breakdown[bucket_key].metrics.spend == 0.25
+
+
+def test_ptu_rows_do_not_create_endpoint_or_mcp_key_buckets(ptu_cost_attribution_enabled: None) -> None:
+    from litellm.constants import PTU_SENTINEL_API_KEY
+    from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+    record: Final = SimpleNamespace(
+        **{
+            **vars(_spend_record(PTU_SENTINEL_API_KEY, ptu_flat_cost=2.0)),
+            "mcp_namespaced_tool_name": "server/tool",
+            "endpoint": "/mcp",
+        }
+    )
+    breakdown: Final = common_daily_activity_module.update_breakdown_metrics(BreakdownMetrics(), record, {}, {}, {})
+    assert breakdown.api_keys == {}
+    assert breakdown.endpoints["/mcp"].api_key_breakdown == {}
+    assert breakdown.mcp_servers["server/tool"].api_key_breakdown == {}
+    assert breakdown.endpoints["/mcp"].metrics.flat_cost == 2.0
+    assert breakdown.mcp_servers["server/tool"].metrics.flat_cost == 2.0

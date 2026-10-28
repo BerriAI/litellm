@@ -9,12 +9,17 @@ from typing_extensions import assert_never
 
 from litellm import constants
 from litellm.constants import PTU_SENTINEL_API_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
-from litellm.repositories.daily_activity_buckets import UNKNOWN_MODEL_GROUP
+from litellm.repositories.daily_activity_buckets import UNATTRIBUTED_API_KEY, UNKNOWN_MODEL_GROUP
 from litellm.types.repositories.daily_activity import DailyActivityScope, DailyActivityTable, ExportType
 
 _API_KEY_ROLLED_UP_BIT: Final = 32
 _MODEL_EXPR: Final = f"COALESCE(NULLIF(model, ''), '{UNKNOWN_MODEL_SPEND_LOG_MODEL}')"
 _MODEL_GROUP_EXPR: Final = f"COALESCE(NULLIF(model_group, ''), NULLIF(model, ''), '{UNKNOWN_MODEL_GROUP}')"
+
+_API_KEY_EXPR: Final = (
+    f"CASE WHEN api_key = '' THEN '{UNATTRIBUTED_API_KEY}' "
+    f"WHEN api_key = '{UNATTRIBUTED_API_KEY}' OR api_key LIKE 'raw:%' THEN 'raw:' || api_key ELSE api_key END"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,7 +93,11 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
             if scope.exclude_entity_ids
             else ()
         ),
-        *((f"model = ${model_index}",) if scope.model else ()),
+        *(
+            (f"{_MODEL_EXPR if scope.model == UNKNOWN_MODEL_SPEND_LOG_MODEL else 'model'} = ${model_index}",)
+            if scope.model
+            else ()
+        ),
         *(
             ("FALSE",)
             if scope.api_keys == ()
@@ -145,7 +154,7 @@ def _top_api_keys_sql(pg_table: str, where_clause: str, *, sentinel_param: int, 
             FROM "{pg_table}"
             WHERE {where_clause} AND api_key <> ${sentinel_param}
             GROUP BY api_key
-            ORDER BY SUM(spend::numeric) DESC, api_key
+            ORDER BY SUM(spend::numeric) DESC, {_API_KEY_EXPR}
             LIMIT ${limit_param}
         """
 
@@ -296,7 +305,7 @@ def build_key_page_sql(scope: DailyActivityScope, *, offset: int, limit: int) ->
         FROM (SELECT 1) AS one
         LEFT JOIN LATERAL (
             SELECT * FROM ranked
-            ORDER BY rank_spend DESC, api_key
+            ORDER BY rank_spend DESC, {_API_KEY_EXPR}
             LIMIT ${limit_param} OFFSET ${offset_param}
         ) AS page ON TRUE
     """
@@ -359,7 +368,7 @@ def build_key_search_sql(scope: DailyActivityScope, *, search: str, limit: int) 
         WHERE {where_clause}
           AND api_key <> ${sentinel_param}
           AND (
-            api_key ILIKE ${search_param} ESCAPE '\\'
+            {_API_KEY_EXPR} ILIKE ${search_param} ESCAPE '\\'
             OR api_key IN (
                 SELECT v.token FROM "LiteLLM_VerificationToken" v
                 LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = v.user_id
@@ -375,7 +384,7 @@ def build_key_search_sql(scope: DailyActivityScope, *, search: str, limit: int) 
             )
           )
         GROUP BY api_key
-        ORDER BY SUM(spend::numeric) DESC, api_key
+        ORDER BY SUM(spend::numeric) DESC, {_API_KEY_EXPR}
         LIMIT ${limit_param}
     """
     return SqlQuery(sql=sql, params=(*where_params, f"%{escaped}%", PTU_SENTINEL_API_KEY, limit))
@@ -389,15 +398,13 @@ def build_model_top_keys_sql(
     model_param: Final = len(where_params) + 1
     sentinel_param: Final = model_param + 1
     limit_param: Final = sentinel_param + 1
-    model_clause: Final = (
-        f"COALESCE(NULLIF(model_group, ''), model) = ${model_param}" if by_model_group else f"model = ${model_param}"
-    )
+    model_clause: Final = f"{_MODEL_GROUP_EXPR if by_model_group else _MODEL_EXPR} = ${model_param}"
     sql: Final = f"""
         SELECT api_key,{_key_spend_select()}
         FROM "{PRISMA_TO_PG_TABLE[scope.table]}"
         WHERE {where_clause} AND {model_clause} AND api_key <> ${sentinel_param}
         GROUP BY api_key
-        ORDER BY SUM(spend::numeric) DESC, api_key
+        ORDER BY SUM(spend::numeric) DESC, {_API_KEY_EXPR}
         LIMIT ${limit_param}
     """
     return SqlQuery(sql=sql, params=(*where_params, model_group, PTU_SENTINEL_API_KEY, limit))
@@ -414,7 +421,7 @@ def build_cache_leakage_keys_sql(scope: DailyActivityScope, *, limit: int) -> Sq
         WHERE {where_clause} AND api_key <> ${sentinel_param}
         GROUP BY api_key
         HAVING SUM(prompt_tokens) - SUM(cache_read_input_tokens) > 0
-        ORDER BY SUM(prompt_tokens) - SUM(cache_read_input_tokens) DESC, api_key
+        ORDER BY SUM(prompt_tokens) - SUM(cache_read_input_tokens) DESC, {_API_KEY_EXPR}
         LIMIT ${limit_param}
     """
     return SqlQuery(sql=sql, params=(*where_params, PTU_SENTINEL_API_KEY, limit))

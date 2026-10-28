@@ -22,7 +22,12 @@ from litellm.proxy.spend_tracking.key_metadata_recovery import (
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.daily_activity_buckets import api_key_bucket, model_bucket, model_group_bucket
+from litellm.repositories.daily_activity_buckets import (
+    api_key_bucket,
+    model_bucket,
+    model_group_bucket,
+    raw_api_key_filter,
+)
 from litellm.repositories.daily_activity_repository import DailyActivityRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BreakdownMetrics,
@@ -363,19 +368,20 @@ def update_breakdown_metrics(
             breakdown.mcp_servers[record.mcp_namespaced_tool_name].metrics, record
         )
 
-        # Update API key breakdown for this MCP server
-        if api_key not in breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown:
-            breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[api_key] = KeyMetricWithMetadata(
-                metrics=SpendMetrics(),
-                metadata=_key_metadata(api_key_metadata, record.api_key),
-            )
+        if not is_ptu_sentinel:
+            # Update API key breakdown for this MCP server
+            if api_key not in breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown:
+                breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[api_key] = (
+                    KeyMetricWithMetadata(
+                        metrics=SpendMetrics(),
+                        metadata=_key_metadata(api_key_metadata, record.api_key),
+                    )
+                )
 
-        breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[
-            record.api_key
-        ].metrics = update_metrics(
-            breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[api_key].metrics,
-            record,
-        )
+            breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[api_key].metrics = update_metrics(
+                breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[api_key].metrics,
+                record,
+            )
 
     if not is_ptu_sentinel:
         # Update provider breakdown
@@ -409,16 +415,17 @@ def update_breakdown_metrics(
             breakdown.endpoints[record.endpoint].metrics, record
         )
 
-        # Update API key breakdown for this endpoint
-        if api_key not in breakdown.endpoints[record.endpoint].api_key_breakdown:
-            breakdown.endpoints[record.endpoint].api_key_breakdown[api_key] = KeyMetricWithMetadata(
-                metrics=SpendMetrics(),
-                metadata=_key_metadata(api_key_metadata, record.api_key),
+        if not is_ptu_sentinel:
+            # Update API key breakdown for this endpoint
+            if api_key not in breakdown.endpoints[record.endpoint].api_key_breakdown:
+                breakdown.endpoints[record.endpoint].api_key_breakdown[api_key] = KeyMetricWithMetadata(
+                    metrics=SpendMetrics(),
+                    metadata=_key_metadata(api_key_metadata, record.api_key),
+                )
+            breakdown.endpoints[record.endpoint].api_key_breakdown[api_key].metrics = update_metrics(
+                breakdown.endpoints[record.endpoint].api_key_breakdown[api_key].metrics,
+                record,
             )
-        breakdown.endpoints[record.endpoint].api_key_breakdown[api_key].metrics = update_metrics(
-            breakdown.endpoints[record.endpoint].api_key_breakdown[api_key].metrics,
-            record,
-        )
 
     if not is_ptu_sentinel:
         # Update api key breakdown
@@ -573,9 +580,7 @@ def daily_activity_scope(
     entity_ids: tuple[str, ...] | None = (
         (entity_id,) if isinstance(entity_id, str) else tuple(entity_id) if entity_id is not None else None
     )
-    api_keys: tuple[str, ...] | None = (
-        None if api_key in (None, "") else (api_key,) if isinstance(api_key, str) else tuple(api_key)
-    )
+    api_keys: Final = raw_api_key_filter(api_key)
     return DailyActivityScope(
         table=table_value,
         entity_id_field=entity_id_field,
@@ -771,8 +776,7 @@ def _aggregate_grouping_sets_records_sync(
 
     Each row carries a `group_level` bitmask (from Postgres GROUPING()) that
     identifies which rollup level it belongs to. We dispatch the row's
-    pre-aggregated metrics straight into the matching bucket — no per-row
-    summing in Python and no nested update_metrics calls.
+    pre-aggregated metrics into the matching bucket, combining normalized names.
     """
     total_metrics = SpendMetrics()
     grouped_data: Final[dict[str, GroupedData]] = {}
