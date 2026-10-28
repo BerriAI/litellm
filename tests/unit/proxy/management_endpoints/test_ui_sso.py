@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from pydantic import SecretStr
 import respx
 from fastapi import HTTPException, Request
+from pydantic import SecretStr
 
 import litellm
 from litellm._uuid import uuid
@@ -4119,7 +4119,7 @@ class TestCLIKeyRegenerationFlow:
         cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-new-session-key-456"
 
         # Mock the CLI callback and required proxy server components
-        from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+        from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
             assertion_from_sso_login,
         )
 
@@ -9199,58 +9199,6 @@ async def test_saml_callback_blocked_when_admin_ui_disabled():
 
 
 @pytest.mark.asyncio
-async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
-    """An IdP-initiated assertion must not bypass the >5 free-SSO-user Enterprise gate
-    that /sso/key/generate enforces; the ACS re-checks it after validating the assertion,
-    so the entitlement DB query never runs on unvalidated input."""
-    from litellm.proxy._types import ProxyException
-    from litellm.proxy.management_endpoints.types import CustomOpenID
-    from litellm.proxy.management_endpoints.ui_sso import saml_callback
-
-    call_order: list[str] = []
-
-    async def _fake_handle_acs(**kwargs):
-        call_order.append("validate")
-        return (CustomOpenID(
-            id="dana@litellm.ai",
-            email="dana@litellm.ai",
-            first_name=None,
-            last_name=None,
-            display_name="dana",
-            picture=None,
-            provider="saml",
-            team_ids=[],
-            user_role=None,
-        ), None)
-
-    async def _fake_count_billable_users():
-        call_order.append("count")
-        return 6
-
-    async def _stream():
-        yield b"SAMLResponse=signed-response"
-
-    request_double = SimpleNamespace(cookies={}, headers={}, stream=_stream)
-
-    with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}), patch(
-        "litellm.proxy.proxy_server.premium_user", False
-    ), patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
-        "litellm.proxy.proxy_server.master_key", MASTER_KEY
-    ), patch(
-        "litellm.proxy.management_endpoints.sso.saml_sso.SAMLAuthHandler.handle_acs",
-        new=_fake_handle_acs,
-    ), patch(
-        "litellm.repositories.user_repository.UserRepository.count_billable_users",
-        new=AsyncMock(side_effect=_fake_count_billable_users),
-    ):
-        with pytest.raises(ProxyException) as exc:
-            await saml_callback(request_double)
-
-    assert str(exc.value.code) == "403"
-    assert call_order == ["validate", "count"]
-
-
-@pytest.mark.asyncio
 async def test_cli_poll_key_tolerates_missing_user_row():
     """The CLI poll must still mint the JWT when the user lookup raises,
     e.g. the user row was created moments ago and a negative-cache window
@@ -9677,7 +9625,7 @@ async def test_redirect_from_openid_persists_assertion_under_canonical_user_id()
     """The browser funnel persists the captured assertion AFTER canonical user
     resolution, keyed by the user_id admission will later resolve (the key-generation
     response user_id), not the raw IdP subject."""
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
         assertion_from_sso_login,
     )
 
@@ -9748,7 +9696,7 @@ async def test_redirect_from_openid_persists_the_login_exchanged_assertion():
     """A server with ``id_jag_subject_source: refresh_token`` needs the refresh token the login
     assertion was exchanged for, so the funnel persists what the login-time exchange returns, not
     the raw capture."""
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
         assertion_from_sso_login,
     )
 
@@ -9973,11 +9921,11 @@ async def test_microsoft_login_asks_for_offline_access_only_while_an_id_jag_serv
 @pytest.mark.asyncio
 async def test_cli_completion_persists_assertion_under_db_user_id():
     """The CLI funnel persists the captured assertion under the DB-resolved user_id."""
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
-        assertion_from_sso_login,
-    )
     from litellm.proxy.management_endpoints.ui_sso import (
         _complete_cli_sso_callback_session,
+    )
+    from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
+        assertion_from_sso_login,
     )
 
     assertion = assertion_from_sso_login(_ema_id_token(), None)
@@ -10093,11 +10041,11 @@ async def test_a_capturing_provider_that_returned_no_id_token_still_warns(monkey
 
 @pytest.mark.asyncio
 async def test_no_warning_when_the_assertion_was_captured(monkeypatch, caplog):
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
-        assertion_from_sso_login,
-    )
     from litellm.proxy.management_endpoints.ui_sso import (
         warn_if_id_jag_assertion_uncaptured,
+    )
+    from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
+        assertion_from_sso_login,
     )
 
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")

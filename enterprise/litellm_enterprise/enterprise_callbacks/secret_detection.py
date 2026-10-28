@@ -13,12 +13,18 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import configparser
 import contextlib
+import hashlib
 import itertools
+import json
 import re
 import tempfile
+from collections import OrderedDict
 from collections.abc import Generator, Iterator, Sequence
 from contextvars import ContextVar
+from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
+
+from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -27,7 +33,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import walk_user_text
+from litellm.proxy.guardrails._content_utils import iter_tool_json_fields, map_tool_json_text, walk_user_text
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -40,7 +46,7 @@ GUARDRAIL_PROVIDER = "hide-secrets"
 
 # Per-invocation tally of redacted secrets by detect-secrets plugin type; None
 # means the guardrail did not run, so _process_response records nothing.
-_masked_entity_count: ContextVar[Optional[dict]] = ContextVar(
+_masked_entity_count: ContextVar[Optional[dict[str, int]]] = ContextVar(
     "hide_secrets_masked_entity_count", default=None
 )
 
@@ -449,6 +455,19 @@ _default_detect_secrets_config = {
 
 _CONFIG_SECTION: Final = "litellm-prompt"
 
+_JSON_STRING: Final = TypeAdapter(str)
+
+_KEY_CONTEXT: Final = 64
+
+# Longest JSON line scanned for a multi-line tool string. Escaping puts the whole string on one line, and
+# detect-secrets regexes backtrack across it, so a longer multi-line string is cut into runs of whole lines,
+# each scanned as its own JSON line beside the key. Every run holds at least two lines, so the high-entropy
+# detectors, which match only a quoted string made wholly of their charset, never judge a lone line.
+_JSON_LINE_LIMIT: Final = 4096
+
+# A detector can stop a match inside an escape of a JSON-escaped line, as at the backslash of \".
+_CUT_ESCAPE: Final = re.compile(r"(?<=.)\\(?:u[0-9A-Fa-f]{0,3})?\Z", re.DOTALL)
+
 _ASSIGNMENT_LINE: Final = re.compile(r"[^\s\[#;:=][^:=]*[:=]")
 
 _SHELL_ASSIGNMENT: Final = re.compile(r"(?P<key>[^\s\[#;:=](?:[^:=]*[^\s:=])?)=(?P<value>\S+)")
@@ -458,6 +477,10 @@ _SHELL_OPERATORS: Final = ";&|"
 _SHELL_TRAILER: Final = re.compile(r"\\|#.*|-*\w[\w.-]*=\S*")
 
 _SCAN_SUFFIX: Final = ".py"
+
+# Digests of scan inputs that held no secret, so the history an agent resends every turn is scanned once. 65536
+# digests take about 10 MB and hold a few hundred interleaved agent sessions per worker.
+_CLEAN_SCAN_CACHE_SIZE: Final = 65536
 
 
 @contextlib.contextmanager
@@ -532,6 +555,57 @@ def _quoted_assignments(text: str) -> tuple[str, ...]:
     )
 
 
+def _json_unescaped(value: str) -> str:
+    for candidate in (value, _CUT_ESCAPE.sub("", value)):
+        try:
+            return _JSON_STRING.validate_json(f'"{candidate}"')
+        except ValueError:
+            continue
+    return value
+
+
+def _key_context(key: str) -> str:
+    return json.dumps(" ".join(key.split()), ensure_ascii=False)[1:-1][-_KEY_CONTEXT:]
+
+
+def _json_line(context: str | None, text: str) -> str:
+    value: Final = json.dumps(text, ensure_ascii=False)
+    return value if context is None else f'"{context}": {value}'
+
+
+def _json_lines(context: str | None, text: str) -> Iterator[str]:
+    """Yield ``text`` as one JSON line, or a long multi-line ``text`` as JSON lines of two or more whole lines."""
+    line: Final = _json_line(context, text)
+    lines: Final = text.splitlines(keepends=True)
+    if len(line) <= _JSON_LINE_LIMIT or len(lines) < 2:
+        yield line
+        return
+    budget: Final = _JSON_LINE_LIMIT - len(_json_line(context, ""))
+    sizes: Final = (len(json.dumps(part, ensure_ascii=False)) - 2 for part in lines)
+    states: Final = itertools.accumulate(sizes, partial(_next_run_state, budget), initial=(0, 0, 0))
+    run_ids: Final = (state[0] for state in itertools.islice(states, 1, None))
+    runs: Final = tuple(
+        tuple(part for part, _ in run) for _, run in itertools.groupby(zip(lines, run_ids), key=lambda pair: pair[1])
+    )
+    whole_runs: Final = (*runs[:-2], runs[-2] + runs[-1]) if len(runs[-1]) < 2 else runs
+    for run in whole_runs:
+        yield _json_line(context, "".join(run[:-1]) + run[-1].splitlines()[0])
+
+
+def _next_run_state(budget: int, state: tuple[int, int, int], size: int) -> tuple[int, int, int]:
+    """Advance ``(run id, lines in run, escaped size of run)`` by one line of escaped ``size``."""
+    run_id, count, total = state
+    if count >= 2 and total + size > budget:
+        return run_id + 1, 1, size
+    return run_id, count + 1, total + size
+
+
+def _value_in_texts(value: str, texts: Sequence[str]) -> str | None:
+    """Return the detected value as it appears in ``texts``, decoding it when it came from a JSON-escaped key line."""
+    candidates: Final = (value, _json_unescaped(value))
+    return next((candidate for candidate in candidates if any(candidate in text for text in texts)), None)
+
+
 class _ENTERPRISE_SecretDetection(CustomGuardrail):
     # Keeps proxied traffic on async_pre_call_hook (the unified apply_guardrail
     # path skips should_run_check and never sees data["prompt"]).
@@ -539,11 +613,16 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
 
     def __init__(self, detect_secrets_config: Optional[dict] = None, **kwargs):
         self.user_defined_detect_secrets_config = detect_secrets_config
+        self._clean_scans: OrderedDict[bytes, None] = OrderedDict()
         super().__init__(**kwargs)
 
-    def scan_message_for_secrets(self, message_content: str):
+    def scan_message_for_secrets(self, message_content: str) -> list[dict[str, str]]:
         from detect_secrets.settings import transient_settings
 
+        digest: Final = hashlib.sha256(message_content.encode()).digest()
+        if digest in self._clean_scans:
+            self._clean_scans.move_to_end(digest)
+            return []
         detect_secrets_config = (
             self.user_defined_detect_secrets_config or _default_detect_secrets_config
         )
@@ -552,6 +631,10 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                 (*message_content.splitlines(), *_quoted_assignments(message_content))
             )
 
+        if not found:
+            self._clean_scans[digest] = None
+            if len(self._clean_scans) > _CLEAN_SCAN_CACHE_SIZE:
+                self._clean_scans.popitem(last=False)
         return [
             {"type": secret_type, "value": value}
             for value, secret_type in sorted(
@@ -579,6 +662,35 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
             "|".join(re.escape(secret["value"]) for secret in detected_secrets)
         )
         return pattern.sub("[REDACTED]", text)
+
+    def redact_tool_payload(self, payload: JsonValue) -> JsonValue:
+        """Redact secrets in a tool payload's string values, scanning each value alone and as its JSON lines."""
+        fields: Final = tuple(iter_tool_json_fields(payload))
+        texts: Final = tuple(text for _, text in fields)
+        contexts: Final = {key: _key_context(key) for key in {key for key, _ in fields if key is not None}}
+        keyed: Final = tuple(
+            itertools.chain.from_iterable(
+                _json_lines(None if key is None else contexts[key], text) for key, text in fields
+            )
+        )
+        detected: Final = tuple(
+            {**secret, "value": value}
+            for secret in self.scan_message_for_secrets("\n".join((*texts, *keyed)))
+            if (value := _value_in_texts(secret["value"], texts)) is not None
+        )
+        if not detected:
+            return payload
+        counts: Final = _masked_entity_count.get()
+        if counts is not None:
+            for secret in detected:
+                counts[secret["type"]] = counts.get(secret["type"], 0) + 1
+        verbose_proxy_logger.warning(
+            "Detected and redacted secrets in tool payload: %s",
+            sorted(dict.fromkeys(secret["type"] for secret in detected)),
+        )
+        values: Final = sorted({secret["value"] for secret in detected}, key=len, reverse=True)
+        pattern: Final = re.compile("|".join(re.escape(value) for value in values))
+        return map_tool_json_text(payload, lambda text: pattern.sub("[REDACTED]", text))
 
     async def should_run_check(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
         if user_api_key_dict.permissions is not None:
@@ -641,7 +753,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         _masked_entity_count.set({})
 
         # Covers multimodal list content + Responses-API input.
-        inspected = walk_user_text(data, self.redact_text) + self._redact_prompt(data)
+        inspected = walk_user_text(data, self.redact_text, self.redact_tool_payload) + self._redact_prompt(data)
 
         if inspected == 0:
             # Image-only, empty-text, and unsupported payloads inspected

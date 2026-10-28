@@ -1,6 +1,5 @@
 use std::ops::Deref;
 
-/// Only `HttpClientPool` builds one, so every client carries the resolved TLS, proxy and timeout settings.
 #[derive(Clone, Debug)]
 pub struct Client(reqwest::Client);
 

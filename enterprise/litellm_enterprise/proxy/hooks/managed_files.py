@@ -44,6 +44,7 @@ from litellm.constants import (
 )
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.internal_call_metadata import requests_background
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -133,7 +134,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.proxy.utils import PrismaClient as _PrismaClient
 
-    Span = Union[_Span, Any]
+    Span = _Span
     InternalUsageCache = _InternalUsageCache
     PrismaClient = _PrismaClient
 else:
@@ -488,6 +489,14 @@ _PROVIDER_FILE_ID_KWARGS: Final = MappingProxyType(
 )
 _PROVIDER_FILE_ID_KEYS: Final = tuple(dict.fromkeys(chain.from_iterable(_PROVIDER_FILE_ID_KWARGS.values())))
 _PROVIDER_FILE_RETRIEVE_RETRY_DELAYS_SECONDS: Final = (0.5, 1.0, 2.0)
+
+
+class _SupportsKeyedGet(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+def _keyed_get(source: object, key: str, default: object = None) -> object:
+    return require_attributes(source, _SupportsKeyedGet, "get").get(key, default)
 
 
 class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
@@ -1611,7 +1620,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         return holders if holders or "input_file_id" in request else healthy_deployments
 
     async def async_pre_call_deployment_hook(
-        self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
+        self, kwargs: dict[str, object], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
         """
         Allow modifying the request just before it's sent to the deployment.
@@ -1623,11 +1632,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         model_file_id_mapping = cast(Optional[Dict[str, Dict[str, str]]], kwargs.get("model_file_id_mapping"))
         # model_info may be at top-level or nested under litellm_metadata
         # (batch/file operations use litellm_metadata)
-        model_id = cast(Optional[str], kwargs.get("model_info", {}).get("id", None))
+        model_id = cast(Optional[str], _keyed_get(kwargs.get("model_info", {}), "id"))
         if model_id is None:
             model_id = cast(
                 Optional[str],
-                kwargs.get("litellm_metadata", {}).get("model_info", {}).get("id", None),
+                _keyed_get(_keyed_get(kwargs.get("litellm_metadata", {}), "model_info", {}), "id"),
             )
         for accessor_key in accessor_keys:
             input_file_id = cast(Optional[str], kwargs.get(accessor_key))
@@ -1824,7 +1833,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     ),
                 )
 
-    async def get_model_file_id_mapping(self, file_ids: Sequence[str], litellm_parent_otel_span: Span) -> dict:
+    async def get_model_file_id_mapping(self, file_ids: Sequence[str], litellm_parent_otel_span: Span | None) -> dict:
         """
         Get model-specific file IDs for a list of proxy file IDs.
         Returns a dictionary mapping litellm_proxy/ file_id -> model_id -> model_file_id
@@ -1866,7 +1875,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         llm_router: Optional[Router],
         _create_file_request: CreateFileRequest,
         target_model_names_list: List[str],
-        litellm_parent_otel_span: Span,
+        litellm_parent_otel_span: Span | None,
     ) -> List[OpenAIFileObject]:
         if llm_router is None:
             raise Exception("LLM Router not initialized. Ensure models added to proxy.")
@@ -1882,7 +1891,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         create_file_request: CreateFileRequest,
         llm_router: Router,
         target_model_names_list: List[str],
-        litellm_parent_otel_span: Span,
+        litellm_parent_otel_span: Span | None,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> OpenAIFileObject:
         responses = await self.create_file_for_each_model(
@@ -1949,7 +1958,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         file_objects: List[OpenAIFileObject],
         create_file_request: CreateFileRequest,
         internal_usage_cache: InternalUsageCache,
-        litellm_parent_otel_span: Span,
+        litellm_parent_otel_span: Span | None,
         target_model_names_list: List[str],
     ) -> OpenAIFileObject:
         ## GET THE FILE TYPE FROM THE CREATE FILE REQUEST
@@ -2652,7 +2661,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 # Continue with other files even if one fails
                 continue
 
-    def _get_content_type_from_file_object(self, file_object: Optional[Any]) -> str:
+    def _get_content_type_from_file_object(self, file_object: object) -> str:
         """
         Determine content type from file object.
 
