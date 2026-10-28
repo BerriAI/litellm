@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.token_counter import unresolved_tokenizer_model
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     billable_input_since_newest_compaction,
     holds_compaction_summary,
@@ -55,9 +56,9 @@ def tokenizer_models(model: str, llm_router: Router | None) -> tuple[str, ...]:
     """The names to count a request for `model` with, keeping the largest count.
 
     An alias counts as its target group. A group served only by OpenAI models counts as those models, so it gets
-    their tokenizer. A group that also serves other models counts as its own name and its OpenAI models, never with
-    another vendor's tokenizer, so its reservation never rises above what its own name counted before. Any other
-    group counts as its own name."""
+    their tokenizer. A group that also serves other models counts as its OpenAI models and as the requested name with
+    the encoding tiktoken gives that name as written, so the other deployments keep that count without loading their
+    vendor's tokenizer. Any other group counts as its own name."""
     if llm_router is None:
         return (model,)
     group: Final = resolve_model_group_alias(llm_router.model_group_alias, model) or model
@@ -65,7 +66,9 @@ def tokenizer_models(model: str, llm_router: Router | None) -> tuple[str, ...]:
     openai_served: Final = tuple(served_model for served_model in served if served_model is not None)
     if not openai_served:
         return (group,)
-    return openai_served if len(openai_served) == len(served) else (group, *openai_served)
+    if len(openai_served) == len(served):
+        return openai_served
+    return (unresolved_tokenizer_model(model), *openai_served)
 
 
 async def count_input_tokens(

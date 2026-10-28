@@ -7536,6 +7536,32 @@ async def test_acount_pre_call_check_tokens_counts_a_group_of_one_openai_model_w
     assert count == litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT)
 
 
+async def test_a_wildcard_route_checks_the_context_window_with_the_requested_openai_models_tokenizer():
+    limit: Final = (
+        litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT)
+        + litellm.token_counter(model="my-model", messages=_MULTILINGUAL_PROMPT)
+    ) // 2
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "sk-test"},
+                "model_info": {"max_input_tokens": limit},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    sync_response: Final = router.completion(
+        model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT, mock_response="ok"
+    )
+    async_response: Final = await router.acompletion(
+        model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT, mock_response="ok"
+    )
+
+    assert (sync_response.choices[0].message.content, async_response.choices[0].message.content) == ("ok", "ok")
+
+
 def test_pre_call_checks_uses_precounted_tokens(monkeypatch):
     """
     An async caller counts off the event loop and passes the result in. _pre_call_checks

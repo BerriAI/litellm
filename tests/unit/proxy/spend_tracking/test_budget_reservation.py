@@ -31,7 +31,6 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     count_request_input_tokens,
     reserve_budget_for_request,
 )
-from litellm.proxy.spend_tracking.input_tokens import count_input_tokens
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
@@ -475,19 +474,22 @@ async def test_model_group_alias_of_an_openai_group_reserves_on_that_groups_toke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("group", ["gpt-6.1-sol", "mixed"])
-async def test_group_mixing_in_a_non_openai_model_reserves_on_its_own_name_and_its_openai_models_only(group: str):
+@pytest.mark.parametrize(
+    ("group", "counted_as"),
+    [("gpt-6.1-sol", "my-model"), ("openai/gpt-6.1-sol", "my-model"), ("mixed", "my-model"), ("gpt-4o", "gpt-4o")],
+)
+async def test_group_mixing_in_a_non_openai_model_reserves_on_its_name_as_written_and_its_openai_models(
+    group: str, counted_as: str
+):
     served: Final = ("openai/gpt-6.1-sol", "anthropic/claude-sonnet-5-5")
     router: Final = _router_with_groups(*((group, model) for model in served))
 
     reserved: Final = (await _input_tokens(router, group))[group]
-    per_model: Final = await count_input_tokens(
-        request_body={"model": group, "messages": _MULTILINGUAL_MESSAGES},
-        raw_body=None,
-        models=(group, *served),
-    )
 
-    assert reserved == max(per_model[group], per_model["openai/gpt-6.1-sol"])
+    assert reserved == max(
+        litellm.token_counter(model=counted_as, messages=_MULTILINGUAL_MESSAGES),
+        litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_MESSAGES),
+    )
 
 
 @pytest.mark.asyncio

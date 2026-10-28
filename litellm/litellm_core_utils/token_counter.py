@@ -3,6 +3,7 @@
 import base64
 import io
 import math
+import re
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from itertools import accumulate
@@ -795,7 +796,8 @@ def openai_tokenizer_encoding_name(model: str) -> str:
     know (`text-embedding-ada-002-v2`) or a newer release than its table, which gets o200k_base, the encoding every
     OpenAI model since gpt-4o uses. Provider and region prefixes (`azure/eu/`, `azure_ai/`) are dropped, a name
     listed only under Azure (`gpt-41`, `openai/o1-mini`) counts as listed through its `azure/` cost-map key, and an
-    unlisted name tiktoken counts with o200k_base (`openai/gpt-5.9`) gets it."""
+    unlisted name tiktoken counts with o200k_base (`openai/gpt-5.9`) or named like a gpt-5 or o-series release
+    (`openai/gpt-6.2`) gets it."""
     model_to_use: Final = _openai_model_name(model) or _fix_model_name(model)
     if "gpt-4o" in model_to_use:
         return "o200k_base"
@@ -803,6 +805,25 @@ def openai_tokenizer_encoding_name(model: str) -> str:
         return tiktoken.encoding_name_for_model(model_to_use)
     except KeyError:
         return _suffixed_variant_encoding_name(model_to_use) or "o200k_base"
+
+
+def unresolved_tokenizer_model(model: str) -> str:
+    """`model`, or `gpt-3.5-turbo` when resolving the OpenAI model `model` names moves it off cl100k_base, the encoding
+    tiktoken gives the name as written, so a count with the result never drops below that one."""
+    as_written: Final = _fix_model_name(model)
+    as_written_encoding: Final = (
+        "o200k_base" if "gpt-4o" in as_written else (_tiktoken_encoding_name(as_written) or "cl100k_base")
+    )
+    moved_off_cl100k: Final = (
+        as_written_encoding == "cl100k_base" and openai_tokenizer_encoding_name(model) != "cl100k_base"
+    )
+    return "gpt-3.5-turbo" if moved_off_cl100k else model
+
+
+def usage_tokenizer_model(model: str, base_model: str | None) -> str:
+    """The model to estimate missing usage with: a deployment's `base_model` when it names an OpenAI model, since a
+    custom deployment name says nothing about its tokenizer, else `model`."""
+    return base_model if base_model is not None and is_openai_model(base_model) else model
 
 
 def is_openai_model(model: str) -> bool:
@@ -833,7 +854,15 @@ def single_encoding_openai_model(served: Sequence[str | None]) -> str | None:
 
 
 def _openai_model_name(model: str) -> str | None:
-    return _listed_openai_model_name(model) or _tiktoken_o200k_model_name(model)
+    return _listed_openai_model_name(model) or _tiktoken_o200k_model_name(model) or _versioned_openai_model_name(model)
+
+
+_VERSIONED_OPENAI_MODEL: Final = re.compile(r"(?:gpt-(?:[5-9]|[1-9]\d+)|o[1-9]\d*)(?:[.-]|$)")
+
+
+def _versioned_openai_model_name(model: str) -> str | None:
+    name: Final = model.rsplit("/", 1)[-1]
+    return name if _VERSIONED_OPENAI_MODEL.match(name) else None
 
 
 def _tiktoken_o200k_model_name(model: str) -> str | None:

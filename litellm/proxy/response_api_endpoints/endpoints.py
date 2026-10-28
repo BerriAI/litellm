@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.token_counter import usage_tokenizer_model
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, first_validation_error
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
@@ -94,6 +95,7 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.token_count import TokenCountSourceFields
 from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, TokenCountResponse
+from litellm.utils import get_base_model_from_metadata
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import ProxyLogging
@@ -535,7 +537,10 @@ async def cursor_model_list(
 
 def _dispatched_prompt_token_counter(logging_obj: LiteLLMLoggingObj) -> Callable[[], int]:
     return lambda: count_request_input_tokens(
-        model=str(logging_obj.model_call_details.get("model") or ""),
+        model=usage_tokenizer_model(
+            str(logging_obj.model_call_details.get("model") or ""),
+            get_base_model_from_metadata(logging_obj.model_call_details),
+        ),
         request_input=messages_since_newest_compaction(logging_obj.model_call_details.get("messages")),
         system_input=None,
     )

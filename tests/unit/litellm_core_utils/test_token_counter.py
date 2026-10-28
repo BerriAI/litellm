@@ -2512,10 +2512,18 @@ def test_token_counter_counts_unlisted_openai_names_with_the_encoding_tiktoken_g
     )
 
 
+@pytest.mark.parametrize("model", ["gpt-6.2", "openai/gpt-6.2", "azure/gpt-6.2-mini", "azure/eu/o9-mini", "gpt-10"])
+def test_token_counter_counts_unlisted_names_of_newer_openai_releases_with_o200k(model: str):
+    assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == len(
+        tiktoken.get_encoding("o200k_base").encode(_MULTILINGUAL_SAMPLE)
+    )
+
+
 @pytest.mark.parametrize(
     "model",
     [
         "groq/qwen3-32b",
+        "openai/my-llama",
         "text-embedding-ada-002-v2",
         "azure/gpt-4",
         "azure/my-deployment",

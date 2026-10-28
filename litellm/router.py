@@ -14267,7 +14267,10 @@ class Router:
                 messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
                 input=cast(str | list | None, input),  # cast-ok: forwarded to the sync counter
                 request_kwargs=request_kwargs,
-                tokenizer_model=single_encoding_openai_model(self.served_openai_models(model)) or "",
+                tokenizer_model=single_encoding_openai_model(
+                    self.served_openai_models(model) or served_openai_models(healthy_deployments)
+                )
+                or "",
             )
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.error(
@@ -14283,6 +14286,7 @@ class Router:
         input_token_count: int | None,
         count_inline: bool,
         model: str,
+        deployments: Sequence[Mapping[str, object]],
     ) -> int | None:
         if input_token_count is not None:
             return input_token_count
@@ -14293,7 +14297,10 @@ class Router:
                 messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
                 input=cast(str | list[object] | None, input),  # cast-ok: forwarded to the sync counter
                 request_kwargs=request_kwargs,
-                tokenizer_model=single_encoding_openai_model(self.served_openai_models(model)) or "",
+                tokenizer_model=single_encoding_openai_model(
+                    self.served_openai_models(model) or served_openai_models(deployments)
+                )
+                or "",
             )
         except Exception as e:
             verbose_router_logger.error(
@@ -14492,6 +14499,7 @@ class Router:
             and not skip_inline_token_count
             and any(limit is not None for limit in deployment_max_input_tokens),
             model=model,
+            deployments=_returned_deployments,
         )
         request_settings: Final[Mapping[str, object]] = request_kwargs if request_kwargs is not None else {}
         requested_params: Final[frozenset[str]] = (
