@@ -73,7 +73,7 @@ DecisionQuestion: TypeAlias = Annotated[
 
 DecisionQuestionMap: TypeAlias = Annotated[
     Mapping[Annotated[str, Field(min_length=1)], DecisionQuestion],
-    Field(min_length=1, max_length=MAX_DECISION_QUESTIONS),
+    Field(min_length=1),
 ]
 
 
@@ -650,7 +650,7 @@ class DecisionsIRUsage:
 class DecisionsIRResponse:
     model: str | None
     answers: tuple[DecisionsIRAnswer, ...]
-    usage: DecisionsIRUsage
+    usage: DecisionsIRUsage | None
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
 

@@ -1,5 +1,3 @@
-from typing import Any
-
 from pydantic import Field
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -103,5 +101,5 @@ class ConfigOverrideSettingsResponse(LiteLLMBaseModel):
     """Response model for config override settings GET endpoints."""
 
     config_type: str = Field(description="The type of config override")
-    values: dict[str, Any] = Field(description="Current configuration values (sensitive fields decrypted)")
-    field_schema: dict[str, Any] = Field(description="Schema information for UI rendering")
+    values: dict[str, object] = Field(description="Current configuration values (sensitive fields decrypted)")
+    field_schema: dict[str, object] = Field(description="Schema information for UI rendering")
