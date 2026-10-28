@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import httpx
 
 import litellm
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.secret_managers.main import get_secret_str
@@ -88,10 +88,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
             or "https://api.openai.com/v1"
         )
 
-        # Remove trailing slashes
-        api_base = api_base.rstrip("/")
-
-        return f"{api_base}/vector_stores"
+        return join_api_base(api_base, "vector_stores")
 
     def transform_search_vector_store_request(
         self,
@@ -105,7 +102,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     ) -> tuple[str, dict]:
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         base_url, query_separator, query_string = api_base.partition("?")
-        url: Final = f"{base_url}/{encoded_vector_store_id}/search{query_separator}{query_string}"
+        url: Final = f"{join_api_base(base_url, f'{encoded_vector_store_id}/search')}{query_separator}{query_string}"
         typed_request_body: Final = VectorStoreSearchRequest(
             query=query,
             filters=vector_store_search_optional_params.get("filters", None),

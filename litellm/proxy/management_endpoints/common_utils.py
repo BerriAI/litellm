@@ -569,8 +569,8 @@ _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
     "temp_budget_expiry",
 )
 
-_TEMP_BUDGET_FIELDS: Final = frozenset({"temp_budget_increase", "temp_budget_expiry"})
 
+_BUDGET_COLUMNS: Final = TypeAdapter(dict[str, object])
 
 MEMBER_BUDGET_PATCH_FIELDS: Final = MappingProxyType(
     {
@@ -653,8 +653,8 @@ async def upsert_budget_and_membership(
     ``shared_budget_ids`` extends that protection to any other row more than one
     membership points at, which a caller patching several members at once has
     already counted; a row listed there is cloned rather than written in place.
-    A patch that only touches the temporary budget pair never copies permanent
-    limits into a new row, so the member keeps inheriting the live team default.
+    A patch whose every field already matches the shared row changes nothing and
+    is a no-op rather than a clone.
     """
     ignore_default_model_budget_clear: Final = (
         existing_budget_id is not None
@@ -685,7 +685,6 @@ async def upsert_budget_and_membership(
     is_shared_default: Final = existing_budget_id is not None and (
         existing_budget_id == team_default_budget_id or existing_budget_id in (shared_budget_ids or frozenset())
     )
-    temp_only: Final = frozenset(write_data) <= _TEMP_BUDGET_FIELDS
 
     async def _disconnect():
         await tx.litellm_teammembership.update(
@@ -707,11 +706,15 @@ async def upsert_budget_and_membership(
         return
 
     source_row: Final = (
-        await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
-        if is_shared_default and not temp_only
-        else None
+        await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id}) if is_shared_default else None
     )
-    source: Final[Mapping[str, object]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
+    source: Final[Mapping[str, object]] = (
+        MappingProxyType(_BUDGET_COLUMNS.validate_python(source_row.model_dump()))
+        if source_row is not None
+        else MappingProxyType({})
+    )
+    if is_shared_default and all(source.get(field) == value for field, value in effective_patch.items()):
+        return
 
     create_data: Final[dict[str, object]] = {  # mutable-ok: Prisma create payloads are dict-shaped
         "created_by": user_api_key_dict.user_id or "",
@@ -740,7 +743,7 @@ async def upsert_budget_and_membership(
         create_data.pop("budget_reset_at", None)
 
     if not _has_meaningful_budget_limit(create_data):
-        if existing_budget_id is not None and not temp_only:
+        if existing_budget_id is not None:
             await _disconnect()
         return
 

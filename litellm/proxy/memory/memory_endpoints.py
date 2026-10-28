@@ -181,8 +181,8 @@ async def _assert_write_access(
     """
     if _is_admin(user_api_key_dict):
         return
-    row_user_id: Final = getattr(row, "user_id", None)
-    row_team_id: Final = getattr(row, "team_id", None)
+    row_user_id: Final = row.user_id
+    row_team_id: Final = row.team_id
 
     # Personal ownership.
     if row_user_id and row_user_id == user_api_key_dict.user_id:

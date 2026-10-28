@@ -4,6 +4,7 @@ from typing import Final
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
+from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from litellm.proxy._types import *
@@ -36,6 +37,7 @@ from litellm.types.videos.utils import (
 )
 
 router: Final = APIRouter()
+_OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 
 
 @router.post(
@@ -582,7 +584,9 @@ async def video_create_character(
     if video_file:
         data["video"] = video_file[0]
 
-    target_model_name: Final = extract_model_from_target_model_names(data.get("target_model_names"))
+    target_model_name: Final = extract_model_from_target_model_names(
+        _OPAQUE_VALUE_ADAPTER.validate_python(data.get("target_model_names"))
+    )
     if target_model_name and not data.get("model"):
         data["model"] = target_model_name
 
