@@ -11,18 +11,13 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Optional, Protocol, Union
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
 from litellm_proxy_extras._redaction import _redact_credentials
-from litellm_proxy_extras.migration_data_checks import (
-    Finding,
-    find_blockers,
-    migration_data_check_timeout_seconds,
-    pending_change_checks,
-    report,
-)
+from litellm_proxy_extras.migration_dry_run import dry_run
+from litellm_proxy_extras.migration_dry_run import report as dry_run_report
 from litellm_proxy_extras.migration_lock import held_migration_lock
 from litellm_proxy_extras.prisma_toolchain import (
     PRISMA_COMMAND_TIMEOUT_ENV_VAR,
@@ -36,7 +31,6 @@ from litellm_proxy_extras.replica_identity import (
     apply_replica_identity_full,
 )
 from litellm_proxy_extras.request_log_indexes import (
-    REQUEST_LOG_INDEXES,
     ensure_request_log_indexes,
     filter_request_log_index_diff,
 )
@@ -52,7 +46,7 @@ class LensCheckConnect(Protocol):
     ) -> "psycopg.Connection[tuple[object, ...]]": ...
 
 
-def str_to_bool(value: Optional[str]) -> bool:
+def str_to_bool(value: str | None) -> bool:
     if value is None:
         return False
     return value.lower() in ("true", "1", "t", "y", "yes")
@@ -169,7 +163,7 @@ def _without_sql_comments(statement: str) -> str:
     ).strip()
 
 
-def _without_spend_logs_pk_clauses(statement: str) -> Optional[str]:
+def _without_spend_logs_pk_clauses(statement: str) -> str | None:
     prefix_match = _SPEND_LOGS_ALTER_RE.match(statement)
     if not prefix_match:
         return statement
@@ -217,7 +211,7 @@ def _max_migration_timestamp(names) -> int:
     return max(_migration_timestamp(n) for n in names)
 
 
-def _redacted_command(command: object) -> Union[str, tuple[str, ...], list[str]]:
+def _redacted_command(command: object) -> str | tuple[str, ...] | list[str]:
     if isinstance(command, tuple):
         return tuple(_redact_credentials(str(argument)) for argument in command)
     if isinstance(command, list):
@@ -404,7 +398,7 @@ class ProxyExtrasDBManager:
         return tuple(row) if row is not None else ()
 
     @staticmethod
-    def _failed_migration_logs(migration_name: str, started_at: str) -> Optional[str]:
+    def _failed_migration_logs(migration_name: str, started_at: str) -> str | None:
         row: Final = ProxyExtrasDBManager._read_migration_ledger(
             "SELECT logs FROM {} WHERE migration_name = %s AND started_at = %s::timestamptz "
             "AND finished_at IS NULL AND rolled_back_at IS NULL",
@@ -721,10 +715,10 @@ class ProxyExtrasDBManager:
         return row is not None
 
     @staticmethod
-    def _prisma_schema_param(url: str) -> Optional[str]:
+    def _prisma_schema_param(url: str) -> str | None:
         """The `schema` query param Prisma uses to pick its target schema,
         or None when the URL does not set one."""
-        from urllib.parse import urlparse, parse_qsl
+        from urllib.parse import parse_qsl, urlparse
 
         return next(
             (v for k, v in parse_qsl(urlparse(url).query) if k == "schema"),
@@ -1424,7 +1418,6 @@ class ProxyExtrasDBManager:
             bool: True if setup was successful, False otherwise
         """
         ensure_prisma_toolchain(prisma_command=_get_prisma_command(), prisma_env=_get_prisma_env())
-        ProxyExtrasDBManager.raise_if_rows_block_pending_changes(use_migrate=use_migrate)
         migrated = ProxyExtrasDBManager._run_migrations(use_migrate=use_migrate, use_v2_resolver=use_v2_resolver)
         if not migrated:
             return False
@@ -1433,46 +1426,29 @@ class ProxyExtrasDBManager:
         return True
 
     @staticmethod
-    def migration_data_check_findings(use_migrate: bool = True) -> tuple[Finding, ...]:
-        """What in the existing rows would make a pending migration or request-log index
-        fail, read with count queries only: no write, no table lock. Empty when nothing
-        blocks, when no database is configured, or when it cannot be reached, so the
-        migration step that follows reports the connection problem the way it does today."""
+    def migration_dry_run_summary(use_migrate: bool = True) -> tuple[bool, str]:
+        """`--check_migrations_against_existing_data`: the pending migrations applied for real on
+        DIRECT_URL or DATABASE_URL inside one transaction that is rolled back, so Postgres reports
+        what the upgrade would hit. (True, the per-migration timings) when they all apply,
+        (False, Postgres's own error) when one does not."""
         import psycopg
 
+        if not use_migrate:
+            return (True, "The schema is pushed rather than migrated, there is nothing to dry-run.")
         database_url: Final = os.environ.get("DATABASE_URL")
         if not database_url:
-            return ()
+            return (False, "DATABASE_URL is not set.")
         direct_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(
             os.environ.get("DIRECT_URL") or database_url
         )
         schema: Final = ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
-        migrations_dir: Final = Path(ProxyExtrasDBManager._get_prisma_dir()) / "migrations" if use_migrate else None
-        indexes: Final = tuple((index.table, index.name, index.columns) for index in REQUEST_LOG_INDEXES)
+        migrations_dir: Final = Path(ProxyExtrasDBManager._get_prisma_dir()) / "migrations"
         try:
             with psycopg.connect(direct_url, connect_timeout=10, autocommit=True) as connection:
-                checks: Final = pending_change_checks(connection, schema, migrations_dir, indexes)
-                return find_blockers(connection, schema, checks, migration_data_check_timeout_seconds())
+                result: Final = dry_run(connection, schema, migrations_dir)
         except psycopg.OperationalError as exc:
-            logger.warning(
-                "Could not reach the database for the pre-migration row check: %s", _redact_credentials(str(exc))
-            )
-            return ()
-
-    @staticmethod
-    def migration_data_check_report(use_migrate: bool = True) -> Optional[str]:
-        """The operator-facing refusal for `migration_data_check_findings`, None when nothing blocks."""
-        findings: Final = ProxyExtrasDBManager.migration_data_check_findings(use_migrate=use_migrate)
-        return report(findings) if findings else None
-
-    @staticmethod
-    def raise_if_rows_block_pending_changes(use_migrate: bool) -> None:
-        """Refuse to run migrations that the existing rows would make fail, before any is
-        applied. The RuntimeError carries the report and reaches the operator through the
-        proxy's "Database migration cannot proceed" exit."""
-        refusal: Final = ProxyExtrasDBManager.migration_data_check_report(use_migrate=use_migrate)
-        if refusal is not None:
-            raise RuntimeError(refusal)
+            return (False, f"Could not reach the database: {_redact_credentials(str(exc))}")
+        return (result.ok, dry_run_report(result))
 
     @staticmethod
     def build_request_log_indexes(build: Callable[[str, str], bool] = ensure_request_log_indexes) -> bool:
@@ -1724,5 +1700,4 @@ class ProxyExtrasDBManager:
                 time.sleep(random.randrange(5, 15))
             finally:
                 os.chdir(original_dir)
-                pass
         return False
