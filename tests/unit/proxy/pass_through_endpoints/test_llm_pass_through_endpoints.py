@@ -8438,6 +8438,46 @@ class TestEuJevPassthroughRoute:
         assert response.status_code == 200
         assert route.calls.last.request.headers["authorization"] == "Bearer eu-jev-deployment-key"
 
+    def test_a_team_deployment_never_redirects_another_team_s_calls(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy import proxy_server
+
+        team_router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "team-a-eu-jev",
+                    "litellm_params": {
+                        "model": "eu_jev/eu-jeff-latest",
+                        "api_key": "team-a-own-key",
+                        "api_base": "https://team-a-server.example",
+                        "use_in_pass_through": True,
+                    },
+                    "model_info": {"team_id": "team-a"},
+                }
+            ]
+        )
+        monkeypatch.setattr(proxy_server, "llm_router", team_router)
+        with respx.mock(assert_all_called=False) as upstream:
+            team_server: Final = upstream.route(host="team-a-server.example").respond(200, json={"answers": {}})
+            eu_jev: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(
+                200, json={"answers": {}}
+            )
+            response: Final = client.post("/eu_jev/v1/systemone", json={"state": "team b data"})
+
+        assert response.status_code == 200
+        assert not team_server.called
+        assert eu_jev.calls.last.request.headers["authorization"] == "Bearer eu-jev-test-key"
+
+    def test_a_base_ending_in_v1_is_not_doubled(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("EU_JEV_API_BASE", "https://eu-jev.example/base/v1/")
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x"})
+
+        assert response.status_code == 200
+        assert route.called
+
     def test_forwards_query_params_to_the_decision_endpoint(self, client: TestClient) -> None:
         with respx.mock(assert_all_called=True) as upstream:
             route: Final = upstream.post("https://eu-jev.example/base/v1/systemone", params={"trace": "yes"}).respond(

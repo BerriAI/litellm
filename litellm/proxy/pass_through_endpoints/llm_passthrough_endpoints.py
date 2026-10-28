@@ -740,16 +740,13 @@ async def eu_jev_proxy_route(
         raise HTTPException(status_code=400, detail="custom_body is not supported for eu_jev requests")
     if body.get("stream"):
         raise HTTPException(status_code=400, detail="Streaming is not supported for eu_jev requests")
-    eu_jev_api_key: Final = passthrough_endpoint_router.get_credentials(
-        custom_llm_provider="eu_jev",
-        region_name=None,
-    )
-    if not eu_jev_api_key:
+    eu_jev_credentials: Final = passthrough_endpoint_router.get_proxy_wide_credentials(custom_llm_provider="eu_jev")
+    if eu_jev_credentials is None:
         raise HTTPException(status_code=503, detail="eu_jev is not configured, set EU_JEV_API_KEY on the proxy")
     base_url: Final = httpx.URL(
-        passthrough_endpoint_router.get_deployment_api_base(custom_llm_provider="eu_jev", region_name=None)
-        or get_secret_str("EU_JEV_API_BASE")
-        or "https://eu-jev.com"
+        (eu_jev_credentials.api_base or get_secret_str("EU_JEV_API_BASE") or "https://eu-jev.com")
+        .rstrip("/")
+        .removesuffix("/v1")
     )
     updated_url: Final = base_url.copy_with(
         path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, "/v1/systemone"),
@@ -758,7 +755,7 @@ async def eu_jev_proxy_route(
         endpoint="v1/systemone",
         target=str(updated_url),
         custom_headers={
-            "Authorization": f"Bearer {eu_jev_api_key}",
+            "Authorization": f"Bearer {eu_jev_credentials.api_key}",
             "Content-Type": "application/json",
         },
         custom_llm_provider="eu_jev",

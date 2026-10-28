@@ -60,21 +60,37 @@ def test_credential_loaded_after_deployment_registration_still_resolves():
     )
 
 
-def test_deployment_api_base_belongs_to_the_deployment_whose_key_is_used():
+def test_proxy_wide_credentials_pair_a_deployment_key_with_that_deployment_base():
     llm_router = litellm.Router(
         model_list=[
             _flagged_deployment("openai/gpt-4o", api_base="https://keyless.example/v1"),
             _flagged_deployment("openai/gpt-4o-mini", api_key="sk-deployment", api_base="https://keyed.example/v1"),
         ]
     )
-    passthrough_router = _passthrough_router(llm_router)
+    credentials = _passthrough_router(llm_router).get_proxy_wide_credentials(custom_llm_provider="openai")
 
-    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-deployment"
-    assert (
-        passthrough_router.get_deployment_api_base(custom_llm_provider="openai", region_name=None)
-        == "https://keyed.example/v1"
-    )
-    assert passthrough_router.get_deployment_api_base(custom_llm_provider="anthropic", region_name=None) is None
+    assert credentials is not None
+    assert (credentials.api_key, credentials.api_base) == ("sk-deployment", "https://keyed.example/v1")
+
+
+def test_proxy_wide_credentials_never_come_from_a_team_deployment(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-proxy-env")
+    team_deployment = {
+        **_flagged_deployment("openai/gpt-4o", api_key="sk-team-a", api_base="https://team-a.example/v1"),
+        "model_info": {"team_id": "team-a"},
+    }
+    passthrough_router = _passthrough_router(litellm.Router(model_list=[team_deployment]))
+
+    credentials = passthrough_router.get_proxy_wide_credentials(custom_llm_provider="openai")
+
+    assert credentials is not None
+    assert (credentials.api_key, credentials.api_base) == ("sk-proxy-env", None)
+
+
+def test_proxy_wide_credentials_are_missing_without_a_deployment_or_env_key():
+    passthrough_router = _passthrough_router(litellm.Router(model_list=[]))
+
+    assert passthrough_router.get_proxy_wide_credentials(custom_llm_provider="anthropic") is None
 
 
 def test_credential_rotation_is_reflected_without_deployment_update():
