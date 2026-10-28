@@ -1415,7 +1415,7 @@ def _stamp_streaming_response_cost(response: ModelResponse, logging_obj: Optiona
     if logging_obj is None:
         return
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
-    if not isinstance(computed_cost, (int, float)) or computed_cost <= 0:
+    if isinstance(computed_cost, bool) or not isinstance(computed_cost, (int, float)) or computed_cost < 0:
         return
     _set_hidden_response_cost(response, float(computed_cost))
 

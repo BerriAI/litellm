@@ -885,16 +885,29 @@ def test_normalize_responses_usage_never_writes_a_cost_the_provider_did_not_repo
 def test_normalize_responses_usage_stamps_the_logging_objects_bill_as_hidden_response_cost():
     from litellm.responses.streaming_iterator import normalize_responses_usage
 
-    response = _responses_api_response_with_usage()
-    logging_obj = MagicMock()
-    logging_obj.response_cost_calculator.return_value = 0.00032
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    response: Final = _responses_api_response_with_usage()
+    logging_obj: Final = Logging(
+        model="mantle-claude",
+        messages=[{"role": "user", "content": "q"}],
+        stream=True,
+        call_type="aresponses",
+        start_time=None,
+        litellm_call_id="call",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={"custom_llm_provider": "openai", "input_cost_per_token": 2e-6, "output_cost_per_token": 6e-6},
+        optional_params={},
+    )
+    logging_obj.custom_cost_per_token = {"input_cost_per_token": 2e-6, "output_cost_per_token": 6e-6}
 
     normalize_responses_usage(response, logging_obj)
 
     hidden: Final = get_hidden_params(response)
-    assert hidden is not None and hidden["response_cost"] == 0.00032
+    assert hidden is not None and hidden["response_cost"] == pytest.approx(20 * 2e-6 + 60 * 6e-6)
     assert getattr(response.usage, "cost", None) is None, "the client field is written at the proxy egress, not here"
-    assert logging_obj.response_cost_calculator.call_args.kwargs["result"] is response
 
 
 def _capture_dispatch(logged: list):

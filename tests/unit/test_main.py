@@ -4907,6 +4907,26 @@ def test_stream_chunk_builder_bills_a_stream_without_writing_into_its_usage(monk
     assert response._hidden_params["response_cost"] > 0
 
 
+def test_stream_chunk_builder_keeps_a_zero_bill_as_hidden_response_cost() -> None:
+    logging_obj: Final = _stream_builder_logging_obj()
+    logging_obj.update_environment_variables(
+        litellm_params={"custom_llm_provider": "openai", "input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+        optional_params={},
+    )
+    logging_obj.custom_cost_per_token = {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello "),
+        _stream_builder_text_chunk("gpt-4o", "world.", finish_reason="stop"),
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=logging_obj
+    )
+
+    assert response is not None
+    assert response._hidden_params["response_cost"] == 0.0, "a free stream still tells the egress what was billed"
+
+
 def test_stream_chunk_builder_stamped_cost_is_not_re_read_as_xai_reported_cost():
     import time as time_module
 
@@ -4949,7 +4969,7 @@ def test_stream_chunk_builder_stamped_cost_is_not_re_read_as_xai_reported_cost()
     assert spend_row_cost == pytest.approx(usage_cost)
 
 
-def test_stream_chunk_builder_skips_stamp_when_cost_is_unpriceable():
+def test_stream_chunk_builder_stamps_the_zero_bill_when_cost_is_unpriceable():
     import time as time_module
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -4978,7 +4998,7 @@ def test_stream_chunk_builder_skips_stamp_when_cost_is_unpriceable():
 
     assert response is not None
     assert getattr(response.usage, "cost", None) is None
-    assert response._hidden_params.get("response_cost") is None
+    assert response._hidden_params.get("response_cost") == 0.0, "the spend row reads 0, so the egress must too"
 
 
 def test_stream_chunk_builder_prices_alias_response_at_its_deployment_model():
