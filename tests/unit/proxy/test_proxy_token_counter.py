@@ -3422,8 +3422,13 @@ _CONVERSATIONS: Final = (
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("conversation", "call_endpoint"),
-    ((_CONVERSATIONS[0], True), (_CONVERSATIONS[1], True), (_CONVERSATIONS[0], False)),
-    ids=("provider_messages", "provider_contents", "local_messages"),
+    (
+        (_CONVERSATIONS[0], True),
+        (_CONVERSATIONS[1], True),
+        (_CONVERSATIONS[0], False),
+        (_CONVERSATIONS[1], False),
+    ),
+    ids=("provider_messages", "provider_contents", "local_messages", "local_contents"),
 )
 @pytest.mark.parametrize(
     ("global_drop_params", "deployment_drop_params"),

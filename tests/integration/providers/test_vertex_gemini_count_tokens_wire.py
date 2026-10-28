@@ -1043,8 +1043,13 @@ def test_utils_token_counter_sends_a_prompt_as_the_user_turn_of_its_messages_for
 
 @pytest.mark.parametrize(
     ("conversation", "call_endpoint"),
-    (({"messages": _MESSAGES}, True), ({"contents": _CONTENTS}, True), ({"messages": _MESSAGES}, False)),
-    ids=("provider-count-messages", "provider-count-contents", "local-count-messages"),
+    (
+        ({"messages": _MESSAGES}, True),
+        ({"contents": _CONTENTS}, True),
+        ({"messages": _MESSAGES}, False),
+        ({"contents": _CONTENTS}, False),
+    ),
+    ids=("provider-count-messages", "provider-count-contents", "local-count-messages", "local-count-contents"),
 )
 @pytest.mark.parametrize("drop_params", (False, True), ids=("no-drop", "drop"))
 def test_utils_token_counter_counts_the_conversation_regardless_of_prompt_and_drop_params(
