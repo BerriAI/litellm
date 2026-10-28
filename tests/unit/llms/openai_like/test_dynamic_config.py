@@ -148,20 +148,43 @@ class TestToolParamsFollowTheModelMap:
     _TOOLS: Final = [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}]
 
     @pytest.mark.parametrize(
-        ("model_map_entry", "tools_forwarded"),
+        ("model_supports_fc", "provider_supports_fc", "tools_forwarded"),
         [
-            (None, True),
-            ({"litellm_provider": "tools_map", "mode": "chat", "supports_function_calling": True}, True),
-            ({"litellm_provider": "tools_map", "mode": "chat", "supports_function_calling": False}, False),
+            (None, None, True),
+            (None, False, False),
+            (None, True, True),
+            (True, None, True),
+            (False, None, False),
+            (True, False, True),
+            (False, True, False),
         ],
-        ids=["unmapped", "mapped_as_supported", "mapped_as_unsupported"],
+        ids=[
+            "unmapped",
+            "unmapped_provider_unsupported",
+            "unmapped_provider_supported",
+            "mapped_as_supported",
+            "mapped_as_unsupported",
+            "model_supported_overrides_provider",
+            "model_unsupported_overrides_provider",
+        ],
     )
-    def test_tools_are_dropped_only_when_the_model_map_says_unsupported(
-        self, model_map_entry: dict | None, tools_forwarded: bool, monkeypatch: pytest.MonkeyPatch
+    def test_tools_are_dropped_only_when_the_model_or_provider_says_unsupported(
+        self,
+        model_supports_fc: bool | None,
+        provider_supports_fc: bool | None,
+        tools_forwarded: bool,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        if model_map_entry is not None:
-            monkeypatch.setitem(litellm.model_cost, "tools_map/some-model", model_map_entry)
-        config: Final = create_config_class(_provider("tools_map"))()
+        if model_supports_fc is not None:
+            monkeypatch.setitem(
+                litellm.model_cost,
+                "tools_map/some-model",
+                {"litellm_provider": "tools_map", "mode": "chat", "supports_function_calling": model_supports_fc},
+            )
+        provider_overrides: Final = (
+            {} if provider_supports_fc is None else {"provider_info": {"supports_function_calling": provider_supports_fc}}
+        )
+        config: Final = create_config_class(_provider("tools_map", **provider_overrides))()
 
         optional_params: Final = config.map_openai_params(
             non_default_params={"tools": self._TOOLS, "tool_choice": "auto"},
