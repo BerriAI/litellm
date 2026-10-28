@@ -22782,7 +22782,6 @@
             "calculation": "$0.0150/1000 characters = $0.000015 per character",
             "note": "Aura-1 text-to-speech voices (aura-<voice>-<lang>), pay as you go"
         },
-        "mode": "audio_speech",
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/speak"
@@ -22795,7 +22794,6 @@
             "calculation": "$0.030/1000 characters = $0.00003 per character",
             "note": "Aura-2 text-to-speech voices (aura-2-<voice>-<lang>), pay as you go"
         },
-        "mode": "audio_speech",
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/speak"
