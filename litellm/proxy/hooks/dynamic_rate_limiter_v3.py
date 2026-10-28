@@ -616,7 +616,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if "model" not in data:
             return None
 
-        claim_request_stash_for_data(data)
+        claim_request_stash_for_data(data, call_type)
         model: Final = data["model"]
         priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
 

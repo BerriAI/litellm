@@ -785,10 +785,10 @@ def get_or_create_request_stash() -> RequestRateLimiterStash:
     return stash
 
 
-def claim_request_stash_for_data(data: dict) -> RequestRateLimiterStash:
+def claim_request_stash_for_data(data: dict, call_type: str | None) -> RequestRateLimiterStash:
     stash: Final = get_or_create_request_stash()
     owner_call_id: Final = data.get("litellm_call_id")
-    if isinstance(owner_call_id, str):
+    if isinstance(owner_call_id, str) and call_type != CallTypes.pass_through.value:
         stash.owner_litellm_call_id = owner_call_id
     return stash
 
@@ -3984,7 +3984,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         if not isinstance(data, dict):
             return
-        stash: Final = claim_request_stash_for_data(data)
+        stash: Final = claim_request_stash_for_data(data, call_type)
         io_token_descriptors: Final = [
             d for d in descriptors if d["key"] in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
         ]
@@ -4212,7 +4212,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
 
-        stash: Final = claim_request_stash_for_data(data)
+        stash: Final = claim_request_stash_for_data(data, call_type)
         reuses_request_slot: Final = call_type == CallTypes.call_mcp_tool.value and stash.parallel_slot is not None
         if reuses_request_slot:
             stash.parallel_slot_reused_at = self._get_current_time()

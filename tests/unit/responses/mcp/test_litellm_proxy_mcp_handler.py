@@ -420,6 +420,25 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
 
 
 @pytest.mark.asyncio
+async def test_execute_tool_calls_reports_an_unmapped_tool_failure_under_the_tool_calls_own_id(monkeypatch):
+    call_tool_mock: Final = _setup_mcp_call_environment(monkeypatch)
+    post_call_failure_hook: Final = _setup_proxy_logging(monkeypatch)
+
+    results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+        tool_server_map={},
+        tool_calls=[{"id": "call-unmapped", "function": {"name": "unknown_tool", "arguments": "{}"}}],
+        user_api_key_auth=types.SimpleNamespace(api_key="test_key", user_id="test_user"),
+        litellm_call_id="cid",
+    )
+
+    assert results[0]["result"].startswith("Error executing tool")
+    call_tool_mock.assert_not_awaited()
+    post_call_failure_hook.assert_awaited_once()
+    assert post_call_failure_hook.await_args is not None
+    assert post_call_failure_hook.await_args.kwargs["request_data"]["litellm_call_id"] == "cid_call-unmapped"
+
+
+@pytest.mark.asyncio
 async def test_execute_tool_calls_logs_each_tool_call_under_its_own_id_on_the_request_trace(
     monkeypatch,
 ):
