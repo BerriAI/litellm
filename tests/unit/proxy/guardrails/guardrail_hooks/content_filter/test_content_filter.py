@@ -20,6 +20,10 @@ from litellm.constants import (
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
 )
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.validators import (
+    CandidateCheck,
+    run_validator,
+)
 from litellm.types.guardrails import (
     BlockedWord,
     ContentFilterAction,
@@ -493,6 +497,24 @@ class TestContentFilterGuardrail:
         )
 
         assert guardrailed_inputs.get("texts") == ["send it to [IBAN_REDACTED]"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("pattern_name", ["iban", "eu_iban_enhanced"])
+    async def test_checksum_pattern_masks_a_valid_iban_with_characters_attached_to_its_end(self, pattern_name: str):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-checksum-attached",
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name=pattern_name, action=ContentFilterAction.MASK)
+            ],
+        )
+
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": ["pay DE89370400440532013000EUR or DE88370400440532013000EUR"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert guardrailed_inputs.get("texts") == [f"pay [{pattern_name.upper()}_REDACTED] or DE88370400440532013000EUR"]
 
     def test_api_key_patterns(self):
         """
@@ -1080,9 +1102,10 @@ class TestContentFilterGuardrail:
                 self,
                 text: str,
                 detections: list[ContentFilterDetection] | None = None,
+                check_candidate: CandidateCheck = run_validator,
             ) -> str:
                 scanned_lengths.append(len(text))
-                return super()._filter_single_text(text, detections=detections)
+                return super()._filter_single_text(text, detections=detections, check_candidate=check_candidate)
 
         guardrail: Final = RecordingGuardrail(
             guardrail_name="test-streaming-bounded-scan",
@@ -1122,9 +1145,10 @@ class TestContentFilterGuardrail:
                 self,
                 text: str,
                 detections: list[ContentFilterDetection] | None = None,
+                check_candidate: CandidateCheck = run_validator,
             ) -> str:
                 scanned_lengths.append(len(text))
-                return super()._filter_single_text(text, detections=detections)
+                return super()._filter_single_text(text, detections=detections, check_candidate=check_candidate)
 
         guardrail: Final = RecordingGuardrail(
             guardrail_name="test-streaming-refused-cut-backoff",

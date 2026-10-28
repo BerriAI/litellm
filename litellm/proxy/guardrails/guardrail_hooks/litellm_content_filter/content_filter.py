@@ -7,6 +7,7 @@ to detect and block/mask sensitive content.
 
 import asyncio
 import contextvars
+import functools
 import itertools
 import json
 import os
@@ -27,6 +28,7 @@ from typing_extensions import ReadOnly
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    CONTENT_FILTER_STREAMING_CHECKSUM_CACHE_SIZE,
     CONTENT_FILTER_STREAMING_HOLDBACK_CHARS,
     CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -77,7 +79,7 @@ from .competitor_intent import (
     BaseCompetitorIntentChecker,
 )
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
-from .validators import PATTERN_VALIDATORS
+from .validators import PATTERN_VALIDATORS, CandidateCheck, run_validator
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
@@ -840,7 +842,12 @@ class ContentFilterGuardrail(CustomGuardrail):
         except Exception as e:
             raise Exception(f"Error loading blocked words file {file_path}: {e}")
 
-    def _find_pattern_spans(self, text: str, pattern_entry: CompiledPatternEntry) -> list[tuple[int, int]]:
+    def _find_pattern_spans(
+        self,
+        text: str,
+        pattern_entry: CompiledPatternEntry,
+        check_candidate: CandidateCheck = run_validator,
+    ) -> list[tuple[int, int]]:
         """Return all match spans for a pattern, applying contextual rules if required."""
 
         regex: Final[Pattern[str]] = pattern_entry["regex"]
@@ -854,7 +861,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         match_spans: Final[list[tuple[int, int]]] = []
         candidate_spans: Final = (
-            self._checksum_valid_spans(regex, text, validator)
+            self._checksum_valid_spans(regex, text, validator, check_candidate)
             if validator is not None
             else ((match.start(), match.end()) for match in regex.finditer(text))
         )
@@ -880,13 +887,19 @@ class ContentFilterGuardrail(CustomGuardrail):
         return self._merge_spans(match_spans)
 
     def _checksum_valid_spans(
-        self, regex: Pattern[str], text: str, validator: Callable[[str], bool]
+        self,
+        regex: Pattern[str],
+        text: str,
+        validator: Callable[[str], bool],
+        check_candidate: CandidateCheck,
     ) -> tuple[tuple[int, int], ...]:
         if regex.search(text) is None:
             return ()
         overlapping_regex: Final = re.compile(f"(?=({regex.pattern}))", regex.flags)
         candidate_spans: Final = tuple(candidate.span(1) for candidate in overlapping_regex.finditer(text))
-        valid_spans: Final = tuple(span for span in candidate_spans if validator(text[span[0] : span[1]]))
+        valid_spans: Final = tuple(
+            span for span in candidate_spans if check_candidate(validator, text[span[0] : span[1]])
+        )
         if not valid_spans:
             return ()
         valid_starts: Final = tuple(start for start, _ in valid_spans)
@@ -1431,7 +1444,12 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         return text
 
-    def _filter_single_text(self, text: str, detections: list[ContentFilterDetection] | None = None) -> str:
+    def _filter_single_text(
+        self,
+        text: str,
+        detections: list[ContentFilterDetection] | None = None,
+        check_candidate: CandidateCheck = run_validator,
+    ) -> str:
         """
         Apply all content filtering checks to a single text.
 
@@ -1443,6 +1461,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         Args:
             text: Text to filter
             detections: Optional list to append detection information
+            check_candidate: Runs a pattern's checksum validator on a candidate match
 
         Returns:
             Filtered text (with masking applied if action is MASK)
@@ -1475,7 +1494,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         # Check regex patterns - process ALL patterns, not just first match
         for pattern_entry in self.compiled_patterns:
-            spans = self._find_pattern_spans(text, pattern_entry)
+            spans = self._find_pattern_spans(text, pattern_entry, check_candidate)
             if spans:
                 pattern_name = pattern_entry["pattern_name"]
                 action = pattern_entry["action"]
@@ -2130,6 +2149,9 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         state_by_choice: Final[dict[int, _StreamedChoiceState]] = {}
         plan: Final = self._streamed_scan_plan()
+        check_candidate: Final = functools.lru_cache(maxsize=CONTENT_FILTER_STREAMING_CHECKSUM_CACHE_SIZE)(
+            run_validator
+        )
 
         start_time: Final = datetime.now()
         scan_seconds: float = 0.0  # rebind-ok: accumulates per-chunk scan time across the stream
@@ -2170,7 +2192,9 @@ class ContentFilterGuardrail(CustomGuardrail):
                         scan_started = time.perf_counter()
 
                         try:
-                            masked_text = self._filter_single_text(text_to_scan, detections=choice_detections)
+                            masked_text = self._filter_single_text(
+                                text_to_scan, detections=choice_detections, check_candidate=check_candidate
+                            )
                             if is_final and masked_text.endswith(" "):
                                 masked_text = masked_text[:-1]
                             latest_detections = tuple(choice_detections)

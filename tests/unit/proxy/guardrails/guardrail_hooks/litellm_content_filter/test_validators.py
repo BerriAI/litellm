@@ -45,6 +45,8 @@ def test_passes_luhn_rejects_every_single_digit_change(valid_number: str):
         ("GB82WEST12345698765433", False),
         ("GB82", False),
         ("GB82WEST1234569876543é", False),
+        ("DE89370400440532013000EUR", True),
+        ("DE88370400440532013000EUR", False),
     ],
 )
 def test_passes_iban_mod97(value: str, expected: bool):
