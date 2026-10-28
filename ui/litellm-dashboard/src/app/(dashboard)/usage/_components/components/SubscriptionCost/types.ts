@@ -1,3 +1,5 @@
+import type { DailyData } from "@/components/UsagePage/types";
+
 export interface SubscriptionFee {
   subscription_account_id: string;
   custom_llm_provider: string;
@@ -61,3 +63,12 @@ export interface SubscriptionFeeFormValues {
 
 export const isSubscriptionCovered = (metadata: object | undefined): boolean =>
   metadata !== undefined && "subscription_covered" in metadata && metadata.subscription_covered === true;
+
+export const subscriptionCoveredProviders = (results: readonly DailyData[]): ReadonlySet<string> =>
+  new Set(
+    results.flatMap((day) =>
+      Object.entries(day.breakdown.providers ?? {})
+        .filter(([, entry]) => isSubscriptionCovered(entry.metadata))
+        .map(([provider]) => provider),
+    ),
+  );

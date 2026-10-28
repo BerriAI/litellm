@@ -1,4 +1,5 @@
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 import tiktoken
@@ -47,3 +48,24 @@ def test_native_custom_tokenizer_matches_python() -> None:
 
     assert native.encode("Hello World").ids == reference.encode("Hello World").ids
     assert native.decode(reference.encode("Hello World").ids) == reference.decode(reference.encode("Hello World").ids)
+
+
+def test_python_tokenizer_missing_dependency_is_actionable() -> None:
+    with patch.dict("sys.modules", {"tokenizers": None}):
+        with pytest.raises(ImportError, match="pip install tokenizers") as error:
+            tokenizer._python_tokenizer()
+    assert isinstance(error.value.__cause__, ModuleNotFoundError)
+    assert error.value.__cause__.name == "tokenizers"
+
+
+def test_python_tokenizer_factory_preserves_installed_interface() -> None:
+    result: Final = tokenizer._python_tokenizer().from_str(TOKENIZER_JSON)
+    assert result.encode("Hello World").ids == Tokenizer.from_str(TOKENIZER_JSON).encode("Hello World").ids
+
+
+def test_python_tokenizer_preserves_unrelated_import_failure() -> None:
+    failure: Final = ModuleNotFoundError("broken tokenizer installation", name="unrelated_dependency")
+    with patch("builtins.__import__", side_effect=failure):
+        with pytest.raises(ModuleNotFoundError) as error:
+            tokenizer._python_tokenizer()
+    assert error.value is failure

@@ -5,6 +5,7 @@ from typing import Final
 
 from e2e_config import provider_edge_base, unique_marker
 from e2e_http import unwrap
+from e2e_metadata import step
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatResponse, KeyGenerateBody, LiteLLMParamsBody, TeamNewBody
 from spend_e2e_client import SpendClient
@@ -33,6 +34,10 @@ class TeamTraffic:
         return self.prompt_tokens * INPUT_RATE + self.completion_tokens * OUTPUT_RATE
 
 
+@step(
+    "Add a priced deployment, then create two teams with one key each"
+    " and send 7 /chat/completions requests per key, 6 of them at once"
+)
 def create_traffic(client: SpendClient, resources: ResourceManager) -> tuple[TeamTraffic, ...]:
     base: Final = provider_edge_base("openai")
     model: Final = f"e2e-reconciliation-{unique_marker()}"
@@ -85,6 +90,7 @@ def create_traffic(client: SpendClient, resources: ResourceManager) -> tuple[Tea
     return tuple(team_traffic() for _ in range(2))
 
 
+@step("Check that the /spend/logs rows of team {traffic.team_id} match each response's tokens and cost")
 def assert_logs_match(client: SpendClient, traffic: TeamTraffic) -> None:
     expected_ids: Final = frozenset(response.id for response in traffic.responses)
     assert len(expected_ids) == len(traffic.responses), "responses must have distinct IDs"

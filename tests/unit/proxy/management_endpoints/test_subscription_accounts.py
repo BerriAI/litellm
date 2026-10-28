@@ -340,20 +340,54 @@ def test_internal_user_cannot_read_subscription_accounts(client):
     assert response.status_code == 403
 
 
-def test_deployments_resolve_by_provider_and_share_one_account_lookup():
+def test_deployments_take_the_account_of_their_own_login():
     model_list = [
         {"model_name": "gpt-5.6-terra", "litellm_params": {"model": "chatgpt/gpt-5.6-terra"}},
         {"model_name": "gpt-5.6-sol", "litellm_params": {"model": "chatgpt/gpt-5.6-sol"}},
+        {
+            "model_name": "gpt-5.6-luna",
+            "litellm_params": {"model": "chatgpt/gpt-5.6-luna", "chatgpt_auth_file": "/logins/other.json"},
+        },
         {"model_name": "sonnet", "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-x"}},
         {"model_name": "broken", "litellm_params": {"model": "no-such-provider-model"}},
     ]
-    lookups: list[str] = []
+    lookups: list[tuple[str, object]] = []
 
-    def resolver(provider: str) -> str | None:
-        lookups.append(provider)
-        return _ACCOUNT
+    def resolver(provider: str, litellm_params) -> str | None:
+        lookups.append((provider, litellm_params.get("model")))
+        return "org-other" if litellm_params.get("chatgpt_auth_file") == "/logins/other.json" else _ACCOUNT
 
     deployments = subscription_deployments_from_model_list(model_list, resolver)
 
-    assert deployments == _TWO_DEPLOYMENTS_ONE_ACCOUNT
-    assert lookups == ["chatgpt"]
+    assert deployments == (
+        *_TWO_DEPLOYMENTS_ONE_ACCOUNT,
+        SubscriptionDeployment(model_name="gpt-5.6-luna", custom_llm_provider="chatgpt", account_id="org-other"),
+    )
+    assert lookups == [
+        ("chatgpt", "chatgpt/gpt-5.6-terra"),
+        ("chatgpt", "chatgpt/gpt-5.6-sol"),
+        ("chatgpt", "chatgpt/gpt-5.6-luna"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "deployments",
+    [
+        (
+            *_TWO_DEPLOYMENTS_ONE_ACCOUNT,
+            SubscriptionDeployment(model_name="gpt-5.6-luna", custom_llm_provider="chatgpt", account_id="org-other"),
+        )
+    ],
+)
+def test_two_logins_each_count_their_own_fee_once(client):
+    test_client, _ = client
+    other = {**_TEST_FEE, "account_id": "org-other", "monthly_fee": 40.0}
+    assert test_client.post("/subscription_accounts/new", json=_TEST_FEE).status_code == 200
+    assert test_client.post("/subscription_accounts/new", json=other).status_code == 200
+
+    body = _usage(test_client, "2026-10-01", "2026-10-07")
+
+    assert [(a["account_id"], a["deployments"], a["fixed_cost"]) for a in body["accounts"]] == [
+        ("org-other", ["gpt-5.6-luna"], 40.0),
+        (_ACCOUNT, ["gpt-5.6-sol", "gpt-5.6-terra"], 25.0),
+    ]

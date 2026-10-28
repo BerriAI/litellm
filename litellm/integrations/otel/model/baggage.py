@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final
 
-from litellm.integrations.otel.model.metadata import REQUESTER_METADATA_PATH, RequestIdentity
+from litellm.integrations.otel.model.metadata import RequestIdentity, allowlisted_metadata
 from litellm.integrations.otel.model.semconv import GenAI, LiteLLM
 
 # Attribute key -> value extractor over (identity, request_model,
@@ -92,9 +92,8 @@ def promoted_metadata(metadata: Mapping[str, str], metadata_keys: tuple[str, ...
     """Allowlisted entries of a flattened metadata mapping under ``litellm.metadata.*``."""
     return MappingProxyType(
         {
-            f"{LiteLLM.METADATA_PREFIX}{meta_key.removeprefix(REQUESTER_METADATA_PATH)}": value
-            for meta_key in metadata_keys
-            if (value := metadata.get(meta_key))
+            f"{LiteLLM.METADATA_PREFIX}{meta_key}": value
+            for meta_key, value in allowlisted_metadata(metadata, metadata_keys).items()
         }
     )
 

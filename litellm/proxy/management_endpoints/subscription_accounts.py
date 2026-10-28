@@ -49,7 +49,7 @@ class SubscriptionDeployment:
     account_id: str | None
 
 
-AccountIdResolver = Callable[[str], str | None]
+AccountIdResolver: TypeAlias = Callable[[str, Mapping[str, object]], str | None]
 
 
 def _declared_provider(litellm_params: Mapping[str, object]) -> str | None:
@@ -61,23 +61,25 @@ def _declared_provider(litellm_params: Mapping[str, object]) -> str | None:
     )
 
 
-def _subscription_backed_entry(entry: DeploymentTypedDict) -> tuple[str, str] | None:
-    provider: Final = _declared_provider(entry["litellm_params"])
+def _subscription_deployment(
+    entry: DeploymentTypedDict, account_id_resolver: AccountIdResolver
+) -> SubscriptionDeployment | None:
+    litellm_params: Final = entry["litellm_params"]
+    provider: Final = _declared_provider(litellm_params)
     if provider is None or provider not in SUBSCRIPTION_BACKED_PROVIDERS:
         return None
-    return entry["model_name"], provider
+    return SubscriptionDeployment(
+        model_name=entry["model_name"],
+        custom_llm_provider=provider,
+        account_id=account_id_resolver(provider, litellm_params),
+    )
 
 
 def subscription_deployments_from_model_list(
     model_list: Iterable[DeploymentTypedDict], account_id_resolver: AccountIdResolver
 ) -> tuple[SubscriptionDeployment, ...]:
-    candidates: Final = (_subscription_backed_entry(entry) for entry in model_list)
-    entries: Final = tuple(candidate for candidate in candidates if candidate is not None)
-    account_ids: Final = {provider: account_id_resolver(provider) for provider in {p for _, p in entries}}
-    return tuple(
-        SubscriptionDeployment(model_name=model_name, custom_llm_provider=provider, account_id=account_ids[provider])
-        for model_name, provider in entries
-    )
+    candidates: Final = (_subscription_deployment(entry, account_id_resolver) for entry in model_list)
+    return tuple(candidate for candidate in candidates if candidate is not None)
 
 
 def get_subscription_deployments() -> tuple[SubscriptionDeployment, ...]:
@@ -111,14 +113,14 @@ def _account_usage(
     start_date: date,
     end_date: date,
 ) -> SubscriptionAccountUsage:
-    model_names: Final = sorted({deployment.model_name for deployment in deployments})
+    model_names: Final = tuple(sorted({deployment.model_name for deployment in deployments}))
     if fee_row is None:
         return SubscriptionAccountUsage(
             custom_llm_provider=custom_llm_provider,
             account_id=account_id,
             deployments=model_names,
             fee=None,
-            billing_periods=[],
+            billing_periods=(),
             fixed_cost=None,
         )
     periods: Final = billing_periods_starting_within(
@@ -129,7 +131,7 @@ def _account_usage(
         account_id=account_id,
         deployments=model_names,
         fee=fee_row,
-        billing_periods=[BillingPeriod(start=period.start, end=period.end) for period in periods],
+        billing_periods=tuple(BillingPeriod(start=period.start, end=period.end) for period in periods),
         fixed_cost=len(periods) * fee_row.monthly_fee,
     )
 
@@ -144,7 +146,7 @@ def build_subscription_usage(
     fees_by_account: Final = {(row.custom_llm_provider, row.account_id): row for row in fee_rows}
     deployment_keys: Final = {(d.custom_llm_provider, d.account_id) for d in deployment_tuple}
     account_keys: Final = sorted(deployment_keys | set(fees_by_account), key=lambda key: (key[0], key[1] or "~"))
-    accounts: Final = [
+    accounts: Final = tuple(
         _account_usage(
             provider,
             account_id,
@@ -154,11 +156,11 @@ def build_subscription_usage(
             end_date,
         )
         for provider, account_id in account_keys
-    ]
+    )
     return SubscriptionUsageResponse(
         start_date=start_date,
         end_date=end_date,
-        subscription_providers=sorted(SUBSCRIPTION_BACKED_PROVIDERS),
+        subscription_providers=tuple(sorted(SUBSCRIPTION_BACKED_PROVIDERS)),
         accounts=accounts,
     )
 

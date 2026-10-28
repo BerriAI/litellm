@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { normalizeTierModels } from "./complexity_router_tiers";
 import { fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
@@ -53,7 +54,7 @@ const request = buildSavedJevConnectionTestRequest(
   "saved-id",
 );
 const targets = buildAutoRouterTestTargets({
-  tiers: Object.entries(config.tiers),
+  tiers: Object.entries(config.tiers).map(([tier, models]) => [tier, normalizeTierModels(models)]),
   semanticMatchingEnabled: false,
   embeddingModel: undefined,
 });

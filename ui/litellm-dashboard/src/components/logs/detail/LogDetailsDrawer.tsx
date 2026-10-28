@@ -1,3 +1,4 @@
+import { copyToClipboard } from "@/utils/dataUtils";
 import { useEffect, useMemo, useState } from "react";
 import { Bot, Check, Copy, Sparkles, Wrench } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -7,7 +8,7 @@ import { AutoRouterIcon, useIsAutoRoutedModelGroup } from "@/components/shared/t
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "./eventDisplayName";
 import { ClassifyTag } from "./ClassifyTag";
-import { DrawerHeader } from "./DrawerHeader";
+import { type DrawerBackTo, DrawerHeader } from "./DrawerHeader";
 import { SidebarToggle } from "./SidebarToggle";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
 import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
@@ -28,6 +29,7 @@ export interface LogDetailsDrawerProps {
   allLogs?: LogEntry[];
   onSelectLog?: (log: LogEntry) => void;
   startTime?: string;
+  backTo?: DrawerBackTo;
 }
 
 const SIDEBAR_WIDTH_PX = 224;
@@ -119,6 +121,7 @@ export function LogDetailsDrawer({
   allLogs = [],
   onSelectLog,
   startTime,
+  backTo,
 }: LogDetailsDrawerProps) {
   const isSessionMode = Boolean(sessionId);
   const [selectedSessionRequestId, setSelectedSessionRequestId] = useState<string | null>(null);
@@ -287,12 +290,9 @@ export function LogDetailsDrawer({
 
   const handleCopyLeftPanelId = async () => {
     if (!leftPanelId) return;
-    try {
-      await navigator.clipboard.writeText(leftPanelId);
+    if (await copyToClipboard(leftPanelId)) {
       setCopiedLeftPanelId(true);
       setTimeout(() => setCopiedLeftPanelId(false), 1200);
-    } catch {
-      /* clipboard unavailable in non-secure contexts */
     }
   };
 
@@ -461,6 +461,7 @@ export function LogDetailsDrawer({
               statusLabel={statusLabel}
               statusColor={statusColor}
               environment={environment}
+              backTo={backTo}
             />
             <div className="flex-1 overflow-y-auto">
               <LogDetailContent

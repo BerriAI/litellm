@@ -19,7 +19,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
-from litellm.utils import _count_characters, is_base64_encoded
+from litellm.utils import count_characters, is_base64_encoded
 
 from ...base_llm.embedding.transformation import BaseEmbeddingConfig
 from ..common_utils import VertexAIError
@@ -208,7 +208,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         if raw_response.status_code != 200:
             raise Exception(f"Error: {raw_response.status_code} {raw_response.text}")
 
-        _json_response: Final = raw_response.json()
+        _json_response: Final[MultimodalPredictions] = raw_response.json()
         if "predictions" not in _json_response:
             raise InternalServerError(
                 message=f"embedding response does not contain 'predictions', got {_json_response}",
@@ -245,7 +245,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
                     prompt += text
 
         if prompt is not None:
-            character_count = _count_characters(prompt)
+            character_count = count_characters(prompt)
 
         ## Calculate image embeddings usage
         image_count = 0

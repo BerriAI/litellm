@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._uuid import uuid
@@ -23,6 +24,8 @@ from litellm.types.rerank import (
     RerankResponseResult,
     RerankTokens,
 )
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _DeepinfraInferenceStatus(TypedDict, total=False):
@@ -213,7 +216,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
             rerank_response = RerankResponse(id=request_id or str(uuid.uuid4()), results=results, meta=meta)
 
             # Store additional information in hidden params
-            rerank_response._hidden_params = {
+            rerank_response.hidden_params = {
                 "status": status,
                 "runtime_ms": runtime_ms,
                 "cost": cost,
@@ -237,7 +240,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
                 litellm_params=litellm_params,
             )
 
-            rerank_response._hidden_params["model"] = model
+            rerank_response.hidden_params["model"] = model
             return rerank_response
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
@@ -251,7 +254,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         try:
             error_data = error_message
             if isinstance(error_message, str):
-                error_data = json.loads(error_message)
+                error_data = _DECODED_JSON.validate_python(json.loads(error_message))
             if isinstance(error_data, dict):
                 # Check for {"detail": {"error": "..."}}
                 detail: Final = error_data.get("detail")

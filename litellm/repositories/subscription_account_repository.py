@@ -62,7 +62,7 @@ class SubscriptionAccountFeeChanges:
 
 
 class SubscriptionAccountStore(Protocol):
-    async def list_all(self) -> list[LiteLLM_SubscriptionAccountTable]: ...
+    async def list_all(self) -> tuple[LiteLLM_SubscriptionAccountTable, ...]: ...
 
     async def find_by_id(self, id_value: str) -> LiteLLM_SubscriptionAccountTable | None: ...
 
@@ -94,8 +94,8 @@ class SubscriptionAccountRepository(BaseRepository[LiteLLM_SubscriptionAccountTa
     def model_class(self) -> type[LiteLLM_SubscriptionAccountTable]:
         return LiteLLM_SubscriptionAccountTable
 
-    async def list_all(self) -> list[LiteLLM_SubscriptionAccountTable]:
-        return await self.find_many(order={"created_at": "asc"})
+    async def list_all(self) -> tuple[LiteLLM_SubscriptionAccountTable, ...]:
+        return tuple(await self.find_many(order={"created_at": "asc"}))
 
     async def find_by_id(
         self, id_value: str, id_field: str = "subscription_account_id"

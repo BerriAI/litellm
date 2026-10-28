@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum Recognized<T> {
     Known(T),
@@ -18,10 +18,9 @@ impl<T> Recognized<T> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rstest::rstest;
     use serde_json::json;
-
-    use super::*;
 
     #[rstest]
     #[case::known(json!(7), Recognized::Known(7))]

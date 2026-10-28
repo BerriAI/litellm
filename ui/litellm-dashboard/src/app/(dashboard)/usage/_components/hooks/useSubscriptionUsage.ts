@@ -2,7 +2,7 @@ import { keepPreviousData, queryOptions, skipToken, useQuery } from "@tanstack/r
 import { formatDate, subscriptionUsageCall } from "@/components/networking";
 import type { SubscriptionUsageResponse } from "../components/SubscriptionCost/types";
 
-interface Options {
+export interface SubscriptionUsageOptions {
   accessToken: string | null;
   startTime: Date | null;
   endTime: Date | null;
@@ -34,7 +34,7 @@ const subscriptionUsageQuery = (request: UsageRequest | null) => {
   return queryOptions({ queryKey, queryFn, placeholderData: keepPreviousData });
 };
 
-export function useSubscriptionUsage({ accessToken, startTime, endTime, enabled }: Options): Result {
+export function useSubscriptionUsage({ accessToken, startTime, endTime, enabled }: SubscriptionUsageOptions): Result {
   const range = startTime && endTime ? { startTime, endTime } : null;
   const request = enabled && accessToken && range ? { accessToken, ...range } : null;
   const query = useQuery(subscriptionUsageQuery(request));

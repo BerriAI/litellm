@@ -7,10 +7,14 @@ recurring fee of a provider account whose requests are covered by a flat subscri
 
 from datetime import datetime
 
+from pydantic import ConfigDict
+
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
 class LiteLLM_SubscriptionAccountTable(LiteLLMPydanticObjectBase):
+    model_config = ConfigDict(protected_namespaces=(), frozen=True)
+
     subscription_account_id: str
     custom_llm_provider: str
     account_id: str

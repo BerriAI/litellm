@@ -4,13 +4,14 @@ import "prosemirror-view/style/prosemirror.css";
 
 import { useDebouncer } from "@tanstack/react-pacer/debouncer";
 import { ProseMirror, ProseMirrorDoc, reactKeys, useEditorEventCallback } from "@handlewithcare/react-prosemirror";
-import { Check, Copy, CornerDownLeft, type LucideIcon, Search } from "lucide-react";
+import { Check, Copy, CornerDownLeft, Loader2, type LucideIcon, Search } from "lucide-react";
 import { Schema } from "prosemirror-model";
 import { EditorState, Plugin, TextSelection, type Transaction } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
-import { type ComponentProps, createContext, type ReactNode, useContext, useId, useMemo, useState } from "react";
+import { type ComponentProps, createContext, useContext, useId, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/cva.config";
 
 import { type FilterOp, languageOps, parseQuery, type QueryClause, type QueryLanguage } from "./language";
@@ -232,10 +233,12 @@ function Root<F extends string>({
 
 export type SearchBoxInputProps = ComponentProps<"div"> & {
   placeholder: string;
+  /** Results for the current query are loading: the search icon becomes a spinner. */
+  busy?: boolean;
 };
 
 /** The bordered field holding the editor; shows `placeholder` while the query is empty. */
-function Input({ placeholder, className, ...props }: SearchBoxInputProps) {
+function Input({ placeholder, busy = false, className, ...props }: SearchBoxInputProps) {
   const { text } = useSearchBox();
   return (
     <div
@@ -246,7 +249,15 @@ function Input({ placeholder, className, ...props }: SearchBoxInputProps) {
       )}
       {...props}
     >
-      <Search className="size-3.5 shrink-0 text-muted-foreground" />
+      {busy ? (
+        <Loader2
+          role="status"
+          aria-label="Loading results"
+          className="size-3.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
+        />
+      ) : (
+        <Search className="size-3.5 shrink-0 text-muted-foreground" />
+      )}
       <div className="relative flex min-w-0 flex-1">
         <ProseMirrorDoc />
         {!text && (
@@ -316,7 +327,7 @@ function Suggestions({ className, children, ...props }: SearchBoxSuggestionsProp
         </span>
         <span className="flex items-center gap-1">
           <Kbd>
-            <CornerDownLeft className="size-3" />
+            <CornerDownLeft />
           </Kbd>
           Select
         </span>
@@ -379,14 +390,6 @@ function OperatorHints({ ops }: { ops: readonly FilterOp[] }) {
         </div>
       ))}
     </div>
-  );
-}
-
-function Kbd({ children }: { children: ReactNode }) {
-  return (
-    <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border px-1 font-sans">
-      {children}
-    </kbd>
   );
 }
 

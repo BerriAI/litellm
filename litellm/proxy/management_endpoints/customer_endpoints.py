@@ -14,7 +14,7 @@ from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypeVar, overload
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypeVar, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -37,9 +37,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
-from litellm.proxy.management_helpers.object_permission_utils import (
-    _set_object_permission,
+from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
+    _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
+    set_object_permission,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
@@ -83,6 +84,9 @@ if TYPE_CHECKING:
             self,
             where: Mapping[str, object] | None = None,
             include: Mapping[str, bool] | None = None,
+            take: int | None = None,
+            skip: int | None = None,
+            order: Mapping[str, str] | None = None,
         ) -> Sequence[_RowT_co]: ...
 
         async def create(
@@ -170,7 +174,7 @@ async def block_user(data: BlockUsers):
 
         ```
         curl -X POST "http://0.0.0.0:8000/user/block"
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
         -d '{
         "user_ids": [<user_id>, ...]
         }'
@@ -222,7 +226,7 @@ async def unblock_user(data: BlockUsers):
     Example
     ```
     curl -X POST "http://0.0.0.0:8000/user/unblock"
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     -d '{
     "user_ids": [<user_id>, ...]
     }'
@@ -230,7 +234,7 @@ async def unblock_user(data: BlockUsers):
     """
     try:
         from enterprise.enterprise_hooks.blocked_user_list import (
-            _ENTERPRISE_BlockedUserList,
+            ENTERPRISE_BlockedUserList,
         )
     except ImportError:
         raise HTTPException(
@@ -242,7 +246,7 @@ async def unblock_user(data: BlockUsers):
         )
 
     if (
-        not any(isinstance(x, _ENTERPRISE_BlockedUserList) for x in litellm.callbacks)
+        not any(isinstance(x, ENTERPRISE_BlockedUserList) for x in litellm.callbacks)
         or litellm.blocked_user_list is None
     ):
         raise HTTPException(
@@ -375,7 +379,7 @@ async def new_end_user(
     Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/customer/new' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --header 'Content-Type: application/json' \
         --data '{
             "user_id" : "ishaan-jaff-3",
@@ -387,7 +391,7 @@ async def new_end_user(
 
     # With object permissions
     curl -L -X POST 'http://localhost:4000/customer/new' \
-        -H 'Authorization: Bearer sk-1234' \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H 'Content-Type: application/json' \
         -d '{
             "user_id": "user_1",
@@ -469,7 +473,7 @@ async def new_end_user(
 
         ## Handle Object Permission - MCP Servers, Vector Stores etc.
         new_end_user_obj = _STR_OBJECT_DICT.validate_python(
-            await _set_object_permission(
+            await set_object_permission(
                 data_json=new_end_user_obj,
                 prisma_client=prisma_client,
             )
@@ -558,7 +562,7 @@ async def end_user_info(
     Example curl:
     ```
     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4' \
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     try:
@@ -638,7 +642,7 @@ async def update_end_user(
     Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/customer/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "user_id": "test-litellm-user-4",
@@ -648,7 +652,7 @@ async def update_end_user(
 
     # Updating object permissions
     curl -L -X POST 'http://localhost:4000/customer/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "user_id": "user_1",
@@ -797,7 +801,7 @@ async def delete_end_user(
     Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/customer/delete' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --header 'Content-Type: application/json' \
         --data '{
             "user_ids" :["ishaan-jaff-5"]
@@ -865,14 +869,20 @@ async def delete_end_user(
 async def list_end_user(
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    page: Annotated[int, fastapi.Query(ge=1, description="Page number")] = 1,
+    page_size: Annotated[int, fastapi.Query(ge=1, le=100, description="Number of customers per page")] = 50,
+    search: Annotated[
+        str | None,
+        fastapi.Query(description="Case-insensitive search by customer ID or alias"),
+    ] = None,
 ) -> list[CustomerResponse]:
     """
-    [Admin-only] List all available customers
+    [Admin-only] List customers in pages of up to 100, ordered by user ID. Defaults to 50 customers per page.
 
     Example curl:
     ```
     curl --location --request GET 'http://0.0.0.0:4000/customer/list' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     """
@@ -895,7 +905,18 @@ async def list_end_user(
             )
 
         response: Final = await _typed_table(EndUserRepository(prisma_client)).find_many(
-            include={"litellm_budget_table": True, "object_permission": True}
+            where={
+                "OR": (
+                    {"user_id": {"contains": search, "mode": "insensitive"}},
+                    {"alias": {"contains": search, "mode": "insensitive"}},
+                )
+            }
+            if search
+            else None,
+            include={"litellm_budget_table": True, "object_permission": True},
+            take=page_size,
+            skip=(page - 1) * page_size,
+            order={"user_id": "asc"},
         )
 
         return [_to_customer_response(item) for item in response]
