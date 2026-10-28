@@ -3043,7 +3043,7 @@ class TestPresetDegradation:
             "https://otlp.nr-data.net",
         ]
 
-    def test_a_credentialless_newrelic_fallback_does_not_export_to_stdout(self, monkeypatch, capfd):
+    def test_a_credentialless_newrelic_without_a_base_exporter_falls_back(self, monkeypatch):
         from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
 
         monkeypatch.delenv("NEW_RELIC_LICENSE_KEY", raising=False)
@@ -3055,11 +3055,7 @@ class TestPresetDegradation:
         logger = in_fresh_context(_maybe_construct_otel_v2, "newrelic", [])
         is_otel_v2_enabled.cache_clear()
 
-        assert logger is not None
-        capfd.readouterr()
-        emit(logger.tracer_provider)
-        logger.tracer_provider.force_flush()
-        assert capfd.readouterr().out == ""
+        assert logger is None
 
     def test_an_explicit_console_exporter_keeps_a_credentialless_preset_on_v2(self, monkeypatch, capfd):
         """``OTEL_EXPORTER=console`` reads exactly like the placeholder ``_normalize``
