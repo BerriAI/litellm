@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -979,31 +980,26 @@ async def test_sdk_path_forwards_configured_timeout(mock_sdk_decisions):
 
 
 @pytest.mark.asyncio
-async def test_a_guardrail_with_more_than_128_checks_asks_and_enforces_every_check():
-    check_count: Final = 1000
+async def test_a_guardrail_with_more_than_128_checks_asks_and_enforces_every_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     checks: Final = tuple(
-        DecisionModelCheck(name=f"check_{index}", instructions=f"Is claim {index} true?")
-        for index in range(check_count)
+        DecisionModelCheck(name=f"check_{index}", instructions=f"Is claim {index} true?") for index in range(1000)
     )
-    router: Final = _decision_router()
-    router.adecisions = AsyncMock(
-        return_value=OpenAIDecisionResponse(
-            model="jev-latest",
-            answers=tuple(
-                OpenAIPredicateAnswer(name=check.name, probability=0.9 if check is checks[-1] else 0.0)
-                for check in checks
-            ),
-            usage=OpenAIDecisionUsage(input_tokens=10, output_tokens=1, total_tokens=11),
-        )
-    )
+    router: Final = Router(model_list=[_decision_deployment("jev-latest", "decision.example", {})])
     guardrail: Final = _make_guardrail(checks=checks, router_provider=lambda: router)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await guardrail.apply_guardrail({"texts": ["hi"]}, _request_data(), "request")
-
-    assert cast(dict[str, object], exc_info.value.detail)["flagged_checks"] == [checks[-1].name]
-    assert router.adecisions.await_args.kwargs["questions"] == [
-        {"type": "predicate", "name": check.name, "instructions": check.instructions} for check in checks
+    answers: Final = {check.name: {"type": "noul", "noul": 0.9 if check is checks[-1] else 0.0} for check in checks}
+    with respx.mock:
+        upstream: Final = respx.post("https://decision.example/v1/systemone").mock(
+            return_value=httpx.Response(200, json={"model": "jev-latest", "answers": answers})
+        )
+        with pytest.raises(HTTPException) as blocked:
+            await guardrail.apply_guardrail({"texts": ["hi"]}, _request_data(), "request")
+    sent_questions: Final = json.loads(upstream.calls.last.request.content)["questions"]
+    assert cast(dict[str, object], blocked.value.detail)["flagged_checks"] == [checks[-1].name]
+    assert list(sent_questions.items()) == [
+        (check.name, {"type": "noul", "instructions": check.instructions}) for check in checks
     ]
 
 
