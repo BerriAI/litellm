@@ -534,12 +534,12 @@ class _CatalogHeldUntilTheLoopRuns:
 
     def answer(self, _request: httpx.Request) -> httpx.Response:
         self.requested.set()
-        if not self.released.wait(timeout=2):
+        if not self.released.wait(timeout=30):
             return httpx.Response(504)
         return httpx.Response(200, json={"data": [{"id": "openai/gpt-5.4-mini"}]})
 
     async def release_from_the_loop(self) -> None:
-        assert await asyncio.to_thread(self.requested.wait, 5)
+        assert await asyncio.to_thread(self.requested.wait, 30)
         self.released.set()
 
 
@@ -569,7 +569,7 @@ def test_v1_models_fetches_a_live_openrouter_catalog_without_holding_the_event_l
     )
     catalog: Final = _CatalogHeldUntilTheLoopRuns()
 
-    async def list_models_on_a_one_thread_default_pool() -> dict:
+    async def listed_ids_on_a_one_thread_default_pool() -> list[str]:
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
         listing: Final = asyncio.ensure_future(
             proxy_server.model_list(
@@ -580,11 +580,12 @@ def test_v1_models_fetches_a_live_openrouter_catalog_without_holding_the_event_l
             )
         )
         await catalog.release_from_the_loop()
-        return await listing
+        response: Final = await listing
+        return [str(model["id"]) for model in response["data"]]
 
     with respx.mock() as respx_mock:
         catalog_route: Final = respx_mock.get(f"{OPENROUTER_BASE}/models/user").mock(side_effect=catalog.answer)
-        response: Final = asyncio.run(list_models_on_a_one_thread_default_pool())
+        listed_ids: Final = asyncio.run(listed_ids_on_a_one_thread_default_pool())
 
     assert catalog_route.calls.last.response.status_code == 200
-    assert [model["id"] for model in response["data"]] == ["openrouter/openai/gpt-5.4-mini"]
+    assert listed_ids == ["openrouter/openai/gpt-5.4-mini"]

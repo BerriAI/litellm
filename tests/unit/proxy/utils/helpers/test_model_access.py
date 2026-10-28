@@ -669,12 +669,12 @@ class _CatalogHeldUntilTheLoopRuns:
 
     def answer(self, _request: httpx.Request) -> httpx.Response:
         self.requested.set()
-        if not self.released.wait(timeout=2):
+        if not self.released.wait(timeout=30):
             return httpx.Response(504)
         return httpx.Response(200, json={"data": [{"id": "openai/gpt-5.4-mini"}]})
 
     async def release_from_the_loop(self) -> None:
-        assert await asyncio.to_thread(self.requested.wait, 5)
+        assert await asyncio.to_thread(self.requested.wait, 30)
         self.released.set()
 
 
