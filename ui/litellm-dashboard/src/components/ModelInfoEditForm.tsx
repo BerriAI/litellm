@@ -34,7 +34,7 @@ import type { Tag } from "./tag_management/types";
 import { ModelTeamSelect } from "./view_model/ModelTeamSelect";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { formatPtuUtcDisplay, utcIsoToPickerValue } from "../utils/ptuDatetime";
-import { isMaskedSecret } from "../utils/maskedSecretUtils";
+import { editableModelExtraParams, parseModelExtraParams } from "../utils/modelEditParams";
 import {
   MAX_COST_PER_PTU_PER_HOUR,
   MAX_PTU_COUNT,
@@ -80,43 +80,17 @@ const COST_SOURCES: Record<TouchedPricingField, string> = {
   cache_write_cost_1h: "cache_creation_input_token_cost_above_1hr",
 };
 
-export interface ModelEditFormValues {
-  model_name?: string;
-  litellm_model_name?: string;
-  api_base?: string;
-  custom_llm_provider?: string;
-  organization?: string;
-  tpm?: string | number | null;
-  rpm?: string | number | null;
-  max_retries?: string | number | null;
-  timeout?: string | number | null;
-  stream_timeout?: string | number | null;
-  input_cost?: string | number | null;
-  output_cost?: string | number | null;
-  cache_read_cost?: string | number | null;
-  cache_write_cost?: string | number | null;
-  cache_write_cost_1h?: string | number | null;
-  ptu_count?: string | number | null;
-  cost_per_ptu_per_hour?: string | number | null;
-  ptu_effective_from?: Dayjs | null;
-  ptu_effective_to?: Dayjs | null;
-  cache_control?: boolean;
-  cache_control_injection_points?: CacheControlInjectionPoint[];
-  model_access_group?: string[];
-  guardrails?: string[];
-  vector_store_ids?: string[];
-  tags?: string[];
-  health_check_model?: string | null;
-  litellm_credential_name?: string | null;
-  litellm_extra_params?: string;
-  model_info?: string;
-  team_id?: string;
-}
-
-type ModelEditFieldName = keyof ModelEditFormValues;
-
 const scalar = z.union([z.string(), z.number(), z.null()]).optional();
 const textish = z.string().optional();
+
+const isBlank = (value: string | number | null | undefined): boolean => value == null || String(value).trim() === "";
+
+export const perMillionToPerToken = scalar
+  .refine(
+    (perMillion) => isBlank(perMillion) || (Number.isFinite(Number(perMillion)) && Number(perMillion) >= 0),
+    "Enter a price of 0 or more",
+  )
+  .transform((perMillion) => (isBlank(perMillion) ? null : Number(perMillion) / 1_000_000));
 
 const modelEditShape = {
   model_name: textish,
@@ -129,11 +103,11 @@ const modelEditShape = {
   max_retries: scalar,
   timeout: scalar,
   stream_timeout: scalar,
-  input_cost: scalar,
-  output_cost: scalar,
-  cache_read_cost: scalar,
-  cache_write_cost: scalar,
-  cache_write_cost_1h: scalar,
+  input_cost: perMillionToPerToken,
+  output_cost: perMillionToPerToken,
+  cache_read_cost: perMillionToPerToken,
+  cache_write_cost: perMillionToPerToken,
+  cache_write_cost_1h: perMillionToPerToken,
   ptu_count: scalar,
   cost_per_ptu_per_hour: scalar,
   ptu_effective_from: z.custom<Dayjs | null>().nullish(),
@@ -151,22 +125,15 @@ const modelEditShape = {
   team_id: textish,
 };
 
-const isJson = (value: string): boolean => {
-  try {
-    JSON.parse(value);
-    return true;
-  } catch {
-    return false;
-  }
-};
+type ModelEditFieldName = keyof typeof modelEditShape;
 
 const buildSchema = (ptuEnabled: boolean, isFieldTouched: (field: TouchedPricingField) => boolean) =>
   z.object(modelEditShape).superRefine((values, ctx) => {
     const reject = (path: ModelEditFieldName, message: string) =>
       ctx.addIssue({ code: "custom", path: [path], message });
 
-    if (values.litellm_extra_params && !isJson(values.litellm_extra_params)) {
-      reject("litellm_extra_params", "Please enter valid JSON");
+    if (parseModelExtraParams(values.litellm_extra_params) === null) {
+      reject("litellm_extra_params", "Please enter a valid JSON object");
     }
 
     // antd validates only mounted fields, and the PTU block does not render when the flag is off.
@@ -209,6 +176,10 @@ const buildSchema = (ptuEnabled: boolean, isFieldTouched: (field: TouchedPricing
       }
     }
   });
+
+type ModelEditSchema = ReturnType<typeof buildSchema>;
+export type ModelEditFormValues = z.input<ModelEditSchema>;
+export type ModelEditSubmitValues = z.output<ModelEditSchema>;
 
 const perMillionTokens = (...rates: (number | null | undefined)[]): number | null => {
   const rate = rates.find((candidate) => candidate != null);
@@ -265,15 +236,7 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
   // antd never mounted this field for a non-wildcard model, so the key must be absent, not null.
   ...(isWildcardModel ? { health_check_model: localModelData.model_info?.health_check_model } : {}),
   litellm_credential_name: localModelData.litellm_params?.litellm_credential_name ?? null,
-  litellm_extra_params: JSON.stringify(
-    Object.fromEntries(
-      Object.entries(localModelData.litellm_params || {}).filter(
-        ([key, value]) => key !== "litellm_credential_name" && !isMaskedSecret(value),
-      ),
-    ),
-    null,
-    2,
-  ),
+  litellm_extra_params: JSON.stringify(editableModelExtraParams(localModelData.litellm_params ?? {}), null, 2),
   team_id: localModelData.model_info?.team_id ?? undefined,
 });
 
@@ -295,7 +258,7 @@ interface ModelInfoEditFormProps {
   showCacheControl: boolean;
   setShowCacheControl: (checked: boolean) => void;
   onCancel: () => void;
-  onSubmit: (values: ModelEditFormValues, isFieldTouched: (field: TouchedPricingField) => boolean) => Promise<void>;
+  onSubmit: (values: ModelEditSubmitValues, isFieldTouched: (field: TouchedPricingField) => boolean) => Promise<void>;
   modelAccessGroups: string[] | null;
   guardrailsList: string[];
   tagsList: Record<string, Tag>;
@@ -383,10 +346,10 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
   };
 
   // react-hook-form refreshes control._options every render, so this rebuild is what the next submit runs.
-  const resolver: Resolver<ModelEditFormValues> = (values, context, options) =>
+  const resolver: Resolver<ModelEditFormValues, unknown, ModelEditSubmitValues> = (values, context, options) =>
     zodResolver(buildSchema(ptuCostAttributionEnabled, isFieldTouched))(values, context, options);
 
-  const form = useForm<ModelEditFormValues>({
+  const form = useForm<ModelEditFormValues, unknown, ModelEditSubmitValues>({
     resolver,
     defaultValues: toModelEditFormValues(localModelData, isWildcardModel),
   });
@@ -795,7 +758,7 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               <FieldLabel>
                 LiteLLM Params
                 <DocsHint
-                  text="Optional litellm params used for making a litellm.completion() call. Some params are automatically added by LiteLLM."
+                  text="Additional parameters for model requests. Settings with dedicated fields above are edited there. Remove a key here to delete its saved value."
                   href="https://docs.litellm.ai/docs/completion/input"
                 />
               </FieldLabel>
@@ -804,9 +767,10 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
                   {({ value, ...control }) => (
                     <Textarea
                       {...control}
+                      aria-label="LiteLLM Params"
                       value={(value as string) ?? ""}
                       rows={4}
-                      placeholder={'{\n  "rpm": 100,\n  "timeout": 0,\n  "stream_timeout": 0\n}'}
+                      placeholder={'{\n  "drop_params": true\n}'}
                     />
                   )}
                 </FormField>

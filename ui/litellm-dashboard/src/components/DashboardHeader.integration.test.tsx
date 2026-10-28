@@ -74,7 +74,7 @@ describe("mobile header nested controls", () => {
     "selects a portalled gateway item with %s without dismissing More",
     async (pointer) => {
       const { user, tools } = await openTools();
-      await user.click(within(tools).getByRole("button", { name: "AI Gateway" }));
+      await user.click(within(tools).getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
       const item = await screen.findByRole("menuitem", { name: "Metrics" });
       if (pointer === "touch") {
         await user.pointer([
@@ -84,7 +84,7 @@ describe("mobile header nested controls", () => {
       } else {
         await user.click(item);
       }
-      expect(within(tools).getByRole("button", { name: "Metrics" })).toBeVisible();
+      expect(within(tools).getByRole("button", { name: "Switch workspace, current: Metrics" })).toBeVisible();
       expect(screen.getByRole("dialog", { name: "Gateway tools" })).toBeVisible();
     },
   );

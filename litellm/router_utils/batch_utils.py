@@ -1,16 +1,27 @@
 import io
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from os import PathLike
-from typing import Final
+from typing import Final, TypeVar
 
-from pydantic import TypeAdapter
+from openai.types import Batch
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, LlmProviders
 
 _DECODED_JSONL_ROW: Final = TypeAdapter(object)
+_DEPLOYMENT_FIELD: Final = TypeAdapter(Mapping[str, object])
+_ENDPOINT_PATHS: Final = TypeAdapter(tuple[str, ...])
+
+BATCH_ENDPOINT: Final = "/v1/batch"
+_AZURE_PROVIDERS: Final = frozenset({LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value})
+
+_batch_create_routing: Final[ContextVar[bool]] = ContextVar("batch_create_routing", default=False)
+_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
 
 class InMemoryFile(io.BytesIO):
@@ -63,6 +74,72 @@ def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
             raise e
 
     return json_objects
+
+
+@contextmanager
+def batch_create_routing() -> Generator[None, None, None]:
+    token: Final = _batch_create_routing.set(True)
+    try:
+        yield
+    finally:
+        _batch_create_routing.reset(token)
+
+
+def is_batch_create_routing() -> bool:
+    return _batch_create_routing.get()
+
+
+def _deployment_field(deployment: Mapping[str, object], field: str) -> Mapping[str, object]:
+    return _DEPLOYMENT_FIELD.validate_python(deployment.get(field) or {})
+
+
+def is_batch_capable(deployment: Mapping[str, object]) -> bool:
+    return _deployment_field(deployment, "model_info").get("mode") == "batch"
+
+
+def _deployment_provider(deployment: Mapping[str, object]) -> str | None:
+    litellm_params: Final = _deployment_field(deployment, "litellm_params")
+    configured_provider: Final = litellm_params.get("custom_llm_provider")
+    if isinstance(configured_provider, str):
+        return configured_provider
+    model: Final = litellm_params.get("model")
+    return model.split("/", 1)[0] if isinstance(model, str) and "/" in model else None
+
+
+def _cannot_run_batches(deployment: Mapping[str, object], provider: str | None) -> bool:
+    return provider in _AZURE_PROVIDERS and not is_batch_capable(deployment)
+
+
+def without_deployments_that_cannot_batch(
+    deployments: Sequence[_DeploymentT], caller_deployments: Callable[[], Iterable[Mapping[str, object]]]
+) -> Sequence[_DeploymentT]:
+    if not is_batch_create_routing() or not any(is_batch_capable(deployment) for deployment in caller_deployments()):
+        return deployments
+    return [
+        deployment
+        for deployment in deployments
+        if not _cannot_run_batches(deployment, _deployment_provider(deployment))
+    ]
+
+
+def _endpoint_paths(configured: object) -> tuple[str, ...]:
+    try:
+        return _ENDPOINT_PATHS.validate_python(configured)
+    except ValidationError:
+        return ()
+
+
+def deployment_supported_endpoints(
+    resolved_endpoints: object, deployment: Mapping[str, object], provider: str | None
+) -> tuple[str, ...]:
+    endpoints: Final = _endpoint_paths(resolved_endpoints)
+    if is_batch_capable(deployment) and provider in _AZURE_PROVIDERS:
+        return (BATCH_ENDPOINT,)
+    if is_batch_capable(deployment):
+        return endpoints if BATCH_ENDPOINT in endpoints else (*endpoints, BATCH_ENDPOINT)
+    if _cannot_run_batches(deployment, provider):
+        return tuple(endpoint for endpoint in endpoints if endpoint != BATCH_ENDPOINT)
+    return endpoints
 
 
 def should_replace_model_in_jsonl(
@@ -210,3 +287,14 @@ def is_batch_retrieve_call_type(call_type: object) -> bool:
     routing strategies' own state, must not be fed from it.
     """
     return isinstance(call_type, str) and call_type in BATCH_RETRIEVE_CALL_TYPES
+
+
+def batch_charged_once_marker_key(spend_key: str, batch_id: str) -> str:
+    return f"{spend_key}:batch:{batch_id}"
+
+
+def batch_id_to_charge_once(call_type: object, response_obj: object, response_cost: float) -> str | None:
+    """A finished batch reports its whole cost on every poll, so its id is charged once per counter."""
+    if response_cost <= 0 or not is_batch_retrieve_call_type(call_type):
+        return None
+    return response_obj.id if isinstance(response_obj, Batch) else None

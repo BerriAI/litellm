@@ -8,7 +8,10 @@ import json
 
 import litellm
 from litellm.types.llms.openai import (
+    ContentPartDoneEvent,
+    ContentPartDonePartOutputText,
     HttpxBinaryResponseContent,
+    OpenAIChatCompletionLogprobsContent,
     OpenAIModerationResponse,
     OpenAIVideoObject,
     ResponseCompletedEvent,
@@ -74,6 +77,38 @@ def test_output_item_added_event():
     assert event.sequence_number == 4
     assert event.output_index == 1
     assert event.item is None
+
+
+@pytest.mark.parametrize(
+    ("include_logprobs", "logprobs"),
+    (
+        (False, None),
+        (True, None),
+        (True, []),
+        (True, [{"token": "hello", "logprob": -0.5, "top_logprobs": []}]),
+    ),
+    ids=("missing", "null", "empty", "values"),
+)
+def test_content_part_done_preserves_typed_text_with_optional_logprobs(
+    include_logprobs: bool, logprobs: list[OpenAIChatCompletionLogprobsContent] | None
+) -> None:
+    event: Final = ContentPartDoneEvent.model_validate(
+        {
+            "type": "response.content_part.done",
+            "item_id": "msg_test",
+            "output_index": 0,
+            "content_index": 0,
+            "part": {
+                "type": "output_text",
+                "text": "hello",
+                "annotations": [],
+                **({"logprobs": logprobs} if include_logprobs else {}),
+            },
+        }
+    )
+    assert isinstance(event.part, ContentPartDonePartOutputText)
+    assert event.part.text == "hello"
+    assert event.part.logprobs == logprobs
 
 
 class TestResponsesAPIResponseOutputText:

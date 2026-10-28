@@ -23,6 +23,8 @@ from integration._support.process import OwnedProxy, owned_proxy_process, stop_r
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 MARKER: Final = re.compile(rb"otelconv-[0-9a-f]{32}")
 CONVERSATION: Final = "gen_ai.conversation.id"
 

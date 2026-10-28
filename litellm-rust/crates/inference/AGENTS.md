@@ -2,7 +2,7 @@
 
 - `gateway-inference` (serving) -> `inference-<fmt>` (one API's call) -> `inference` (shared base)
 - This crate is the shared base every format crate builds on
-  - `RouteError` (`src/error.rs`), `CallOptions` (`src/lib.rs`), `CallContext` (`src/context.rs`)
+  - `Error` (`src/error.rs`), `CallOptions` (`src/lib.rs`), `CallContext` (`src/context.rs`)
   - diagnostic spans (`src/diagnostic.rs`), outbound send and signing (`src/outbound.rs`), provider resolution (`src/provider.rs`), `CoreResources` (`src/resources.rs`)
   - response caching (`src/caching.rs`): `Cachable`, `StreamCachable`, `CacheRequest`, `CallCache`, `execute_unary`, `execute_streaming`, stream capture
   - Shared test helpers belong in litellm-inference-testing, used only as a dev dependency
@@ -49,14 +49,14 @@
 - `litellm-inference-<fmt>` mirrors the route packages (`litellm/ocr/`, `litellm/messages/`, ...)
 - Provider code never imports from `inference` or `inference-*`
 - Handlers belong in `inference-*` or `llms`, never in a host crate
-- Import every item from its canonical path. Never re-export another crate's items or give an item a second public path. The only allowed re-exports are a private submodule surfacing its item at its module root (`mod error; pub use error::Error;`) and each format crate's `pub use litellm_inference::RouteError as Error;`, which keeps the pre-split `<fmt>::Error` name
+- Import every item from its canonical path. Never re-export another crate's items or give an item a second public path. The only allowed re-exports are a private submodule surfacing its item at its module root (`mod error; pub use error::Error;`) and each format crate's `pub use litellm_inference::Error;`, which keeps the pre-split `<fmt>::Error` name
 
 ## Error placement
 
 - The workspace `Error definitions` rules shape each crate's error. This section decides which crate and module a failure belongs to
 - A failure is declared once, by the lowest crate that raises it
   - every crate above nests it unchanged (`#[error(transparent)] Auth(#[from] litellm_auth::Error)`) or maps it once at its boundary, as `src/error.rs` does for `litellm_llms::Error`
-  - `RouteError` collects route failures for every format crate and never re-declares a variant a lower crate raises
+  - `Error` collects route failures for every format crate and never re-declares a variant a lower crate raises
 - Scope follows the concept, not the first caller
   - an error type under `litellm-llms`'s `<provider>/` is private to that provider: no other provider and nothing in `base_llm` may import it
   - a failure two providers or two routes can hit (wire framing, stream event decoding, a malformed provider response) belongs to the crate that owns the concept: `litellm-framer` for framing, `litellm_llms::Error` for the transformation layer
