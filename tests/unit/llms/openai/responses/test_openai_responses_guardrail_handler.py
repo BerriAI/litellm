@@ -47,6 +47,7 @@ from litellm.types.responses.main import (
     OutputToolSearchCall,
 )
 from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
+from tests.unit.litellm_core_utils.attribute_forwarder import AttributeForwarder
 
 
 class MockGuardrail(CustomGuardrail):
@@ -1782,6 +1783,22 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert events[3]["part"]["text"] == "hello [MASKED]"
         assert events[4]["item"]["content"][0]["text"] == "hello [MASKED]"
         assert events[5]["response"]["output"][0]["content"][0]["text"] == "hello [MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_syncs_events_that_forward_their_fields(self):
+        handler: Final = OpenAIResponsesHandler()
+        plain_events: Final = self._ended_stream_events()
+        forwarded_delta: Final = AttributeForwarder(plain_events[0])
+        events: Final = [forwarded_delta, *plain_events[1:]]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert forwarded_delta.delta == "hello [MASKED]"
 
     @staticmethod
     def _ended_function_call_stream_events() -> List[dict]:
