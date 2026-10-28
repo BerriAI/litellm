@@ -1120,13 +1120,16 @@ if MCP_AVAILABLE:
         )
         from litellm.proxy.proxy_server import prisma_client
 
-        access_groups: Final = set()
+        access_groups: Final[set[str]] = set()
 
         if user_api_key_has_admin_view(user_api_key_dict):
             # Get from config-loaded servers
             for server in global_mcp_server_manager.config_mcp_servers.values():
-                if server.access_groups:
-                    access_groups.update(server.access_groups)
+                cfg_groups = getattr(server, "access_groups", None)
+                if cfg_groups and isinstance(cfg_groups, (list, set, tuple)):
+                    for g in cfg_groups:
+                        if g:
+                            access_groups.add(str(g))
 
             # Get from DB
             if prisma_client is not None:
@@ -1135,20 +1138,29 @@ if MCP_AVAILABLE:
                         prisma_client
                     ).table.find_many()
                     for server in mcp_servers:
-                        if hasattr(server, "mcp_access_groups") and server.mcp_access_groups:
-                            access_groups.update(server.mcp_access_groups)
+                        mcp_groups = getattr(server, "mcp_access_groups", None)
+                        if mcp_groups and isinstance(mcp_groups, (list, set, tuple)):
+                            for g in mcp_groups:
+                                if g:
+                                    access_groups.add(str(g))
                 except Exception as e:
                     verbose_proxy_logger.debug("Error getting MCP access groups: %s", e)
         else:
             accessible_servers: Final = await _resolve_accessible_mcp_servers(user_api_key_dict)
             for server in accessible_servers:
-                if hasattr(server, "mcp_access_groups") and server.mcp_access_groups:
-                    access_groups.update(server.mcp_access_groups)
-                if hasattr(server, "access_groups") and server.access_groups:
-                    access_groups.update(server.access_groups)
+                mcp_groups = getattr(server, "mcp_access_groups", None)
+                if mcp_groups and isinstance(mcp_groups, (list, set, tuple)):
+                    for g in mcp_groups:
+                        if g:
+                            access_groups.add(str(g))
+                cfg_groups = getattr(server, "access_groups", None)
+                if cfg_groups and isinstance(cfg_groups, (list, set, tuple)):
+                    for g in cfg_groups:
+                        if g:
+                            access_groups.add(str(g))
 
         # Convert to sorted list
-        access_groups_list: Final = sorted(list(access_groups))
+        access_groups_list: Final[list[str]] = sorted(list(access_groups))
         return {"access_groups": access_groups_list}
 
     @router.get(
