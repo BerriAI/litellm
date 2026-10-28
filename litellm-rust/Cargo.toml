@@ -69,6 +69,9 @@ litellm-token-counter-huggingface = { path = "crates/token-counter-huggingface" 
 litellm-token-counter-tiktoken = { path = "crates/token-counter-tiktoken" }
 litellm-host-python = { path = "crates/host-python" }
 litellm-python-compat = { path = "crates/python-compat" }
+litellm-circuit-breaker = { path = "crates/circuit-breaker" }
+litellm-redis-client = { path = "crates/redis-client" }
+litellm-redis-testing = { path = "crates/redis-testing" }
 
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 tracing = "0.1"
@@ -88,6 +91,9 @@ rand = "0.8"
 macro_rules_attribute = "0.2.3"
 schemars = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "http2", "stream"] }
+redis = "1.8.0"
+redis-test = "1.0.4"
+testcontainers-modules = "0.15.0"
 qdrant-client = { version = "1.19.0", default-features = false }
 uuid = { version = "1", features = ["v4"] }
 rstest = "0.26.1"
@@ -104,6 +110,7 @@ serde_with = { version = "=3.21.0", default-features = false, features = ["std",
 sha2 = "0.10"
 syn = { version = "2", default-features = false }
 sqlx = { version = "0.9.0", default-features = false, features = ["json", "macros", "postgres", "runtime-tokio", "chrono", "tls-rustls-ring-native-roots"] }
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 proc-macro2 = "1"
 quote = "1"
 subtle = "2"
@@ -124,7 +131,7 @@ moka = { version = "0.12.16", features = ["future"] }
 strum = { version = "0.28.0", features = ["derive"] }
 url = "2.5.8"
 percent-encoding = "2.3"
-webpki-roots = "1"
+webpki-roots = "1.0.10"
 time = { version = "0.3.53", features = ["parsing"] }
 criterion = "0.8.2"
 fancy-regex = "0.19.2"

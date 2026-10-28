@@ -137,7 +137,6 @@ class LiteLLMCompletionTransformationHandler:
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
             **acompletion_args,
         )
-
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (
                 LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(

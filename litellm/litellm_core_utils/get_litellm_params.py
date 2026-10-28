@@ -76,6 +76,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "itpm",
             "otpm",
             "use_xai_oauth",
+            "chatgpt_auth_file",
             "github_copilot_auth_type",
             "github_copilot_host",
             "github_copilot_user_session",
