@@ -122,9 +122,9 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         returned_response: Final = ModelResponse(**response_json)
         set_provider_response_headers_in_hidden_params(returned_response, response.headers)
 
-        sh: Final[dict[str, object]] = model_response.hidden_params  # mutable-ok: dict  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped
-        dh: Final[dict[str, object]] = returned_response.hidden_params  # mutable-ok: dict  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped
-        for k, v in sh.items():
+        sh: Final = model_response.hidden_params  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # raw
+        dh: Final = returned_response.hidden_params  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # raw
+        for k, v in sh.items():  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # raw
             if k not in dh:
                 dh[k] = v
 
@@ -166,7 +166,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
             litellm_params["custom_llm_provider"],  # pyright: ignore[reportUnknownArgumentType]  # untyped
             str,
         ):
-            mh: Final[dict[str, object]] = model_response.hidden_params  # mutable-ok: dict  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped
+            mh: Final = model_response.hidden_params  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # raw
             if "custom_llm_provider" not in mh:
                 mh["custom_llm_provider"] = litellm_params["custom_llm_provider"]  # pyright: ignore[reportUnknownArgumentType]  # untyped
         return OpenAILikeChatConfig._transform_response(
