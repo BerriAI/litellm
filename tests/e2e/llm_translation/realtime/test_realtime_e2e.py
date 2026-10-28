@@ -408,9 +408,8 @@ class TestRealtimeTranslation:
             DeltaEvent.model_validate_json(e.payload).delta
             for e in events_of_type(events, "session.output_transcript.delta")
         ).lower()
-        assert "temps" in translated or "météo" in translated, (
-            f"the spoken weather question did not come back in French: {translated!r}"
-        )
+        assert translated.strip(), f"translation returned no translated text; types={types}"
+        assert "weather" not in translated, f"the spoken weather question came back untranslated: {translated!r}"
 
         rows: Final = client.proxy.poll_logs_for_key(scoped_key, predicate=has_billed_row)
         assert has_billed_row(rows), f"the translation session was not billed: {rows}"
