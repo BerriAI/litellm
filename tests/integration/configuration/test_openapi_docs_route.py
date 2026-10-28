@@ -134,7 +134,8 @@ def test_each_root_path_prefix_lists_itself_first_in_servers(gateway: Gateway, t
 
 @OWNED_PROXY_TIMEOUT
 def test_a_scalar_server_root_path_is_listed_once_in_servers(gateway: Gateway, tmp_path: Path) -> None:
-    with owned_proxy_process(gateway, tmp_path, {"SERVER_ROOT_PATH": "/gateway"}, client_timeout=DOCS_SECONDS) as owned:
+    overrides: Final = {"SERVER_ROOT_PATH": "/gateway", "LITELLM_UI_PATH": str(tmp_path / "ui")}
+    with owned_proxy_process(gateway, tmp_path, overrides, client_timeout=DOCS_SECONDS) as owned:
         servers: Final = _servers(owned.gateway.request("GET", "/gateway/openapi.json"))
     assert servers == [{"url": "/gateway"}]
 
