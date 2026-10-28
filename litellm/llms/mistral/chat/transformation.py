@@ -6,11 +6,12 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from itertools import accumulate, count
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 import httpx
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -56,6 +57,10 @@ def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: 
 
 
 _NO_TOOL_CALL_TURN: Final[tuple[int, frozenset[str]]] = (-1, frozenset())
+
+
+def _is_json_array(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: a decoded JSON array is a list
+    return isinstance(value, list)
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -457,6 +462,46 @@ class MistralConfig(OpenAIGPTConfig):
                 return False
 
     @staticmethod
+    def _text_item_text(item: object) -> str | None:
+        match item:
+            case {"type": "text", "text": str(text)}:
+                return text
+            case _:
+                return None
+
+    @staticmethod
+    def _sendable_think_chunk(chunk: object, items: Sequence[object]) -> MistralThinkingBlock | None:
+        text_items: Final = [
+            MistralTextBlock(type="text", text=text)
+            for text in map(MistralConfig._text_item_text, items)
+            if text is not None
+        ]
+        if not text_items:
+            return None
+        match chunk:
+            case {"closed": bool(closed)}:
+                return MistralThinkingBlock(type="thinking", thinking=text_items, closed=closed)
+            case _:
+                return MistralThinkingBlock(type="thinking", thinking=text_items)
+
+    @staticmethod
+    def _sendable_part(part: object) -> object | None:
+        match part:
+            case {"type": "thinking", "thinking": object() as items} if _is_json_array(items):
+                return MistralConfig._sendable_think_chunk(part, items)
+            case _:
+                return part
+
+    @staticmethod
+    def _with_sendable_think_chunks(message: AllMessageValues, content_parts: tuple[object, ...]) -> AllMessageValues:
+        sendable_parts: Final = [
+            sendable for part in content_parts if (sendable := MistralConfig._sendable_part(part)) is not None
+        ]
+        return cast(  # cast-ok: Mistral's ThinkChunk is outside the OpenAI assistant content union
+            AllMessageValues, {**message, "content": sendable_parts or None}
+        )
+
+    @staticmethod
     def _thinking_block_text(block: object) -> str:
         match block:
             case {"type": "thinking", "thinking": str(thinking)}:
@@ -497,11 +542,11 @@ class MistralConfig(OpenAIGPTConfig):
         content_parts: Final = MistralConfig._assistant_content_parts(message)
         if not keeps_reasoning:
             return MistralConfig._without_think_chunks(stripped_message, content_parts)
+        if content_parts is not None and any(map(MistralConfig._is_mistral_think_chunk, content_parts)):
+            return MistralConfig._with_sendable_think_chunks(stripped_message, content_parts)
         reasoning_text: Final = MistralConfig._replayed_reasoning_text(message)
         has_turn_output: Final = bool(content_parts) or bool(message.get("tool_calls"))
         if reasoning_text is None or content_parts is None or not has_turn_output:
-            return stripped_message
-        if any(map(MistralConfig._is_mistral_think_chunk, content_parts)):
             return stripped_message
         think_chunk: Final = MistralThinkingBlock(
             type="thinking", thinking=[MistralTextBlock(type="text", text=reasoning_text)], closed=True

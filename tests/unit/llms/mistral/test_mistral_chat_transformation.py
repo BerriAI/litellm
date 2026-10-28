@@ -1152,6 +1152,74 @@ def test_mistral_keeps_a_native_thinking_chunk_with_no_text_part():
 
 
 @pytest.mark.parametrize(
+    ("inner_items", "expected_content"),
+    [
+        pytest.param(
+            [{"type": "text", "text": "I pick 518362."}, {"type": "reference", "reference_ids": [1]}],
+            [
+                {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 518362."}], "closed": True},
+                {"type": "text", "text": "I have picked it."},
+            ],
+            id="text_and_reference",
+        ),
+        pytest.param(
+            [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}],
+            "I have picked it.",
+            id="only_image_url",
+        ),
+        pytest.param([1, 2], "I have picked it.", id="not_items"),
+    ],
+)
+def test_mistral_sends_only_the_text_items_of_a_native_thinking_chunk(
+    inner_items: list[object], expected_content: object
+):
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Pick a number."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": inner_items, "closed": True},
+                    {"type": "text", "text": "I have picked it."},
+                ],
+            },
+            {"role": "user", "content": "Which one?"},
+        ]
+    )
+
+    assert result[1] == {"role": "assistant", "content": expected_content}
+
+
+def test_mistral_sends_only_the_text_items_of_a_native_thinking_chunk_beside_an_image():
+    image_part: Final = {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": [{"type": "text", "text": "What is this?"}, image_part]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": [{"type": "text", "text": "It has whiskers."}, {"type": "reference", "reference_ids": [1]}],
+                    },
+                    {"type": "text", "text": "A cat."},
+                ],
+            },
+            {"role": "user", "content": "What color?"},
+        ]
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": [{"type": "text", "text": "It has whiskers."}]},
+            {"type": "text", "text": "A cat."},
+        ],
+    }
+
+
+@pytest.mark.parametrize(
     "reasoning_fields",
     [
         pytest.param({}, id="none"),
