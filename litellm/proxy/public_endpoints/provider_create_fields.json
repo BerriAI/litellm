@@ -3976,6 +3976,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "WATT",
+    "provider_display_name": "Watt Cloud",
+    "litellm_provider": "watt",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.watt-cloud.com/v1",
+        "tooltip": "Optional. Leave blank to use the provider's default endpoint.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "watt/DeepSeek-V4-Pro"
+  },
+  {
     "provider": "WATSONX",
     "provider_display_name": "Watsonx",
     "litellm_provider": "watsonx",

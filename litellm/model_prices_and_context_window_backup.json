@@ -75684,7 +75684,6 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing",
         "supports_web_search": true
     },
-<<<<<<< HEAD
     "gpt-6.1-terra": {
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_12hr": 2.5e-06,
@@ -76010,8 +76009,11 @@
     "watt/DeepSeek-V4-Flash": {
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 2.8e-07,
         "litellm_provider": "watt",
         "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76027,8 +76029,11 @@
     "watt/DeepSeek-V4-Flash-0731": {
         "cache_read_input_token_cost": 1.4e-08,
         "input_cost_per_token": 4.4e-07,
+        "output_cost_per_token": 1.32e-06,
         "litellm_provider": "watt",
         "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76044,8 +76049,11 @@
     "watt/DeepSeek-V4-Pro": {
         "cache_read_input_token_cost": 1.4e-07,
         "input_cost_per_token": 1.6e-06,
+        "output_cost_per_token": 3.38e-06,
         "litellm_provider": "watt",
         "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76061,8 +76069,11 @@
     "watt/DeepSeek-V4.1-Flash": {
         "cache_read_input_token_cost": 6e-09,
         "input_cost_per_token": 2.85e-07,
+        "output_cost_per_token": 5.7e-07,
         "litellm_provider": "watt",
         "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76079,8 +76090,11 @@
     "watt/DeepSeek-V4.1-Flash-1017": {
         "cache_read_input_token_cost": 6e-09,
         "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 6e-07,
         "litellm_provider": "watt",
         "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76097,8 +76111,11 @@
     "watt/GLM-5.1": {
         "cache_read_input_token_cost": 2.6e-07,
         "input_cost_per_token": 1.38e-06,
+        "output_cost_per_token": 4.4e-06,
         "litellm_provider": "watt",
         "max_input_tokens": 202752,
+        "max_output_tokens": 202752,
+        "max_tokens": 202752,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76114,8 +76131,11 @@
     "watt/GLM-5.2": {
         "cache_read_input_token_cost": 2.6e-07,
         "input_cost_per_token": 1.4e-06,
+        "output_cost_per_token": 4.4e-06,
         "litellm_provider": "watt",
         "max_input_tokens": 1048576,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76131,8 +76151,11 @@
     "watt/GLM-5.3": {
         "cache_read_input_token_cost": 2.6e-07,
         "input_cost_per_token": 1.4e-06,
+        "output_cost_per_token": 4.4e-06,
         "litellm_provider": "watt",
         "max_input_tokens": 1048576,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76148,8 +76171,11 @@
     "watt/GLM-5.3-Flash": {
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 5e-07,
         "litellm_provider": "watt",
         "max_input_tokens": 1048576,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76166,8 +76192,11 @@
     "watt/Hy4-preview": {
         "cache_read_input_token_cost": 4.2e-08,
         "input_cost_per_token": 8.34e-07,
+        "output_cost_per_token": 2.501e-06,
         "litellm_provider": "watt",
         "max_input_tokens": 1048576,
+        "max_output_tokens": 202752,
+        "max_tokens": 202752,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76183,8 +76212,11 @@
     "watt/Kimi-K2.5": {
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 3e-06,
         "litellm_provider": "watt",
         "max_input_tokens": 262144,
+        "max_output_tokens": 180224,
+        "max_tokens": 180224,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76201,8 +76233,11 @@
     "watt/Kimi-K2.7-Code": {
         "cache_read_input_token_cost": 1.9e-07,
         "input_cost_per_token": 9.5e-07,
+        "output_cost_per_token": 4e-06,
         "litellm_provider": "watt",
         "max_input_tokens": 271360,
+        "max_output_tokens": 271360,
+        "max_tokens": 271360,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76219,8 +76254,11 @@
     "watt/Kimi-K3": {
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
         "litellm_provider": "watt",
         "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76237,8 +76275,11 @@
     "watt/Kimi-K3.1-Pro": {
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 1e-05,
         "litellm_provider": "watt",
         "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76255,8 +76296,11 @@
     "watt/MiniMax-M3": {
         "cache_read_input_token_cost": 6e-08,
         "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
         "litellm_provider": "watt",
         "max_input_tokens": 524288,
+        "max_output_tokens": 524288,
+        "max_tokens": 524288,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76272,8 +76316,11 @@
     },
     "watt/Qwen3.5-122B-A10B": {
         "input_cost_per_token": 4e-07,
+        "output_cost_per_token": 3.2e-06,
         "litellm_provider": "watt",
         "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76289,8 +76336,11 @@
     },
     "watt/Qwen3.5-27B": {
         "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 2.4e-06,
         "litellm_provider": "watt",
         "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76306,8 +76356,11 @@
     },
     "watt/Qwen3.5-35B-A3B": {
         "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 2e-06,
         "litellm_provider": "watt",
         "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [
@@ -76323,8 +76376,11 @@
     },
     "watt/Qwen3.5-397B-A17B": {
         "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 3.6e-06,
         "litellm_provider": "watt",
         "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
         "mode": "chat",
         "source": "https://www.watt-cloud.com/models",
         "supported_endpoints": [

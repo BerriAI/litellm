@@ -114,6 +114,22 @@ class TestWattProviderRegistration:
         assert api_base == WATT_BASE_URL
         assert api_key == "sk-watt-env"
 
+    def test_watt_is_in_the_add_model_catalog(self):
+        fields_path = (
+            Path(litellm.__file__).parent
+            / "proxy"
+            / "public_endpoints"
+            / "provider_create_fields.json"
+        )
+        entries = [
+            entry
+            for entry in json.loads(fields_path.read_text())
+            if entry.get("litellm_provider") == "watt"
+        ]
+        assert len(entries) == 1, "watt must appear exactly once in provider_create_fields.json"
+        assert entries[0]["provider"] == "WATT"
+        assert entries[0]["default_model_placeholder"] == "watt/DeepSeek-V4-Pro"
+
 
 class TestWattRequestShape:
     def test_chat_url_and_param_mapping(self):
