@@ -4,6 +4,7 @@ import logging
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import TypedDict, Unpack
 
 from litellm._internal_context import internal_sub_call
@@ -23,6 +24,8 @@ from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+_DELEGATED_ATTRIBUTE: Final = TypeAdapter(object)
 
 
 class _MCPCompletionKwargs(TypedDict, total=False, extra_items=object):
@@ -566,7 +569,7 @@ async def acompletion_with_mcp(
 
             def __getattr__(self, name: str) -> object:
                 # Delegate all other attributes to original wrapper
-                return getattr(self._original_wrapper, name)
+                return _DELEGATED_ATTRIBUTE.validate_python(getattr(self._original_wrapper, name))
 
         # Helper class to wrap async iterator for sync iteration
         class _SyncIteratorWrapper:
