@@ -17,6 +17,7 @@ import respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from httpx import Response
+from starlette.types import Message, Receive, Scope, Send
 
 import litellm
 from litellm.proxy._types import ProxyException
@@ -188,9 +189,19 @@ async def test_a_failure_after_keepalive_pings_keeps_the_client_protocol(monkeyp
     upstream_url: Final = "https://streaming.example/v1"
     is_chat: Final = path == "/v1/chat/completions"
 
-    async def slow_rate_limit(_: httpx.Request) -> httpx.Response:
-        await asyncio.sleep(0.3)
+    first_ping_sent: Final = asyncio.Event()
+
+    async def rate_limit_after_first_ping(_: httpx.Request) -> httpx.Response:
+        await first_ping_sent.wait()
         return httpx.Response(429, json={"error": {"message": message, "type": "rate_limit_error", "code": None}})
+
+    async def app_marking_first_ping(scope: Scope, receive: Receive, send: Send) -> None:
+        async def send_and_mark(asgi_message: Message) -> None:
+            await send(asgi_message)
+            if asgi_message["type"] == "http.response.body" and asgi_message.get("body", b"").startswith(b": ping"):
+                first_ping_sent.set()
+
+        await app(scope, receive, send_and_mark)
 
     router: Final = litellm.Router(
         model_list=[
@@ -212,9 +223,11 @@ async def test_a_failure_after_keepalive_pings_keeps_the_client_protocol(monkeyp
     monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
     with respx.mock as transport:
         transport.post(upstream_url + ("/chat/completions" if is_chat else "/responses")).mock(
-            side_effect=slow_rate_limit
+            side_effect=rate_limit_after_first_ping
         )
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app_marking_first_ping), base_url="http://testserver"
+        ) as client:
             result: Final = await client.post(
                 path,
                 json={
@@ -232,10 +245,10 @@ async def test_a_failure_after_keepalive_pings_keeps_the_client_protocol(monkeyp
         assert message in json.loads(frames[-2].removeprefix("data: "))["error"]["message"]
     else:
         assert "data: [DONE]" not in result.text
-        assert frames[-1].startswith("event: response.failed\ndata: "), result.text
-        failed_error: Final = json.loads(frames[-1].split("data: ", 1)[1])["response"]["error"]
-        assert failed_error["code"] == "rate_limit_exceeded"
-        assert message in failed_error["message"]
+        assert frames[-1].startswith("event: error\ndata: "), result.text
+        error: Final = json.loads(frames[-1].split("data: ", 1)[1])["error"]
+        assert error["code"] == "429"
+        assert message in error["message"]
 
 
 _COMPACTION_ITEM: Final = {

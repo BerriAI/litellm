@@ -19,7 +19,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import RESPONSES_LATE_SSE_FRAMING, ProxyBaseLLMRequestProcessing
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 from litellm.types.llms.openai import ResponsesAPIStatus
 
@@ -68,6 +68,7 @@ class _StreamEvent(TypedDict, total=False):
     delta: ReadOnly[str]
     part: ReadOnly[object]
     response: ReadOnly[_TerminalResponse]
+    error: ReadOnly[_JsonDict]
 
 
 class _StreamEventParser:
@@ -164,6 +165,7 @@ async def background_streaming_task(
             user_api_base=user_api_base,
             version=version,
             skip_pre_call_logic=True,
+            late_framing=RESPONSES_LATE_SSE_FRAMING,
         )
 
         # Process streaming response following OpenAI events format
@@ -324,6 +326,10 @@ async def background_streaming_task(
                                 polling_id=polling_id,
                                 status="in_progress",
                             )
+
+                        elif event_type == "error":
+                            terminal_status = "failed"
+                            terminal_error = event.get("error")
 
                         elif event_type in (
                             "response.completed",

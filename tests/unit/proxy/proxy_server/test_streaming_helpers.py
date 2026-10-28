@@ -146,6 +146,37 @@ async def test_responses_stream_dispatches_named_events_without_a_chat_done_sent
         assert payload["type"] == event_type
     assert json.loads(frames[1].split("data: ", 1)[1])["delta"] == "hello"
 
+@pytest.mark.asyncio
+async def test_a_guardrail_error_string_mid_responses_stream_ends_it_as_a_named_error_event() -> None:
+    response: Final = ResponsesAPIResponse(id="resp_hook_error", created_at=1, model="local-model", output=[])
+    created: Final = ResponseCreatedEvent.model_validate(
+        {"type": "response.created", "sequence_number": 0, "response": response}
+    )
+    guardrail_error: Final = {"message": "response withheld", "type": "guardrail_scan_error", "code": 500}
+
+    async def upstream() -> AsyncIterator[object]:
+        yield created
+        yield f"data: {json.dumps({'error': guardrail_error})}\n\n"
+
+    frames: Final = tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in select_data_generator(
+                response=upstream(), user_api_key_dict=_user_auth(), request_data={}, responses_stream_errors=True
+            )
+        ]
+    )
+    event_line, data_line = frames[-1].strip().split("\n")
+
+    assert "data: [DONE]" not in "".join(frames)
+    assert event_line == "event: error"
+    assert json.loads(data_line.removeprefix("data: ")) == {
+        "type": "error",
+        "sequence_number": 1,
+        "error": guardrail_error,
+    }
+
+
 @pytest.mark.parametrize("binary", [False, True])
 @pytest.mark.parametrize(
     ("event_type", "event_line"),

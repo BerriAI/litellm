@@ -21,7 +21,7 @@ from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
@@ -1521,6 +1521,38 @@ class TestBackgroundStreamingTerminalEvents:
         final_call = handler.update_state.call_args_list[-1]
         assert final_call.kwargs["status"] == "failed"
         assert final_call.kwargs["error"] == error_payload
+
+    @pytest.mark.asyncio
+    async def test_a_late_failure_after_keepalive_pings_sets_failed_status_and_error(self):
+        from litellm.proxy.common_request_processing import RESPONSES_LATE_SSE_FRAMING
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        late_frames = RESPONSES_LATE_SSE_FRAMING.failure(HTTPException(status_code=429, detail="rate limited"))
+
+        async def _body_iterator():
+            yield b": ping\n\n"
+            for frame in late_frames:
+                yield frame.encode()
+
+        mock_response = Mock()
+        mock_response.body_iterator = _body_iterator()
+        handler = AsyncMock(spec=ResponsePollingHandler)
+        kwargs = _make_background_streaming_kwargs("poll_late_failure", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"]["message"] == "rate limited"
+        assert final_call.kwargs["error"]["code"] == "429"
 
     @pytest.mark.asyncio
     async def test_response_incomplete_sets_incomplete_status_and_details(self):

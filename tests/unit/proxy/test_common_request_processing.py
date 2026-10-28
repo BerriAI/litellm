@@ -5,7 +5,7 @@ import datetime
 import json
 from collections.abc import AsyncIterable, Mapping
 from types import MappingProxyType, SimpleNamespace
-from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
+from typing import AsyncGenerator, Awaitable, Callable, Final, Iterator, Literal, Optional, Sequence
 from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2167,6 +2167,19 @@ class TestCommonRequestProcessingHelpers:
 
         async def responses_stream():
             yield f"event: error\ndata: {json.dumps({'type': 'error', 'sequence_number': 0, 'error': error})}\n\n"
+
+        response: Final = await create_response(responses_stream(), "text/event-stream", {})
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 400
+        assert json.loads(response.body) == {"error": error}
+
+    async def test_a_first_event_error_with_a_unicode_line_separator_in_its_message_answers_as_json(self):
+        error: Final = {"type": "guardrail_error", "code": "400", "message": "blocked\u2028by policy", "param": None}
+
+        async def responses_stream():
+            event: Final = json.dumps({"type": "error", "sequence_number": 0, "error": error}, ensure_ascii=False)
+            yield f"event: error\ndata: {event}\n\n"
 
         response: Final = await create_response(responses_stream(), "text/event-stream", {})
 
@@ -10391,41 +10404,58 @@ async def test_ttft_keepalive_relays_a_late_non_streaming_body_as_an_sse_frame()
     assert collected[-1] == b"data: [DONE]\n\n"
 
 
-async def _slow_rate_limit_failure():
-    await asyncio.sleep(0.2)
+async def _rate_limit_failure_once_released(released: asyncio.Event) -> JSONResponse:
+    await released.wait()
     raise HTTPException(status_code=429, detail="rate limited")
 
 
-async def _slow_guardrail_block_body():
-    await asyncio.sleep(0.2)
+async def _guardrail_block_body_once_released(released: asyncio.Event) -> JSONResponse:
+    await released.wait()
     return JSONResponse(status_code=400, content={"error": {"message": "blocked", "type": "guardrail_error", "code": "400"}})
+
+
+_POLICY_BLOCK_DETAIL: Final = MappingProxyType(
+    {"error": {"message": "blocked by policy", "type": "guardrail_error"}, "guardrail": "content-filter"}
+)
+
+
+async def _dict_detail_failure_once_released(released: asyncio.Event) -> JSONResponse:
+    await released.wait()
+    raise HTTPException(status_code=400, detail=dict(_POLICY_BLOCK_DETAIL))
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "produce,expected_code,expected_message",
+    "produce,expected_error",
     [
-        (_slow_rate_limit_failure, "rate_limit_exceeded", "rate limited"),
-        (_slow_guardrail_block_body, "invalid_request_error", "blocked"),
+        (_rate_limit_failure_once_released, {"message": "rate limited", "code": "429"}),
+        (_guardrail_block_body_once_released, {"message": "blocked", "type": "guardrail_error", "code": "400"}),
+        (
+            _dict_detail_failure_once_released,
+            {"message": "blocked by policy", "code": "400", "provider_specific_fields": dict(_POLICY_BLOCK_DETAIL)},
+        ),
     ],
 )
-async def test_ttft_keepalive_ends_a_late_responses_failure_with_response_failed_and_no_done(
-    produce, expected_code, expected_message
-):
+async def test_ttft_keepalive_ends_a_late_responses_failure_with_an_error_event_and_no_done(
+    produce: Callable[[asyncio.Event], Awaitable[JSONResponse]], expected_error: Mapping[str, object]
+) -> None:
+    released: Final = asyncio.Event()
     response: Final = await open_sse_before_first_byte(
-        produce(), ping_interval_seconds=0.05, late_framing=RESPONSES_LATE_SSE_FRAMING
+        produce(released), ping_interval_seconds=0.05, late_framing=RESPONSES_LATE_SSE_FRAMING
     )
-    collected: Final = await _drain(response)
+    assert isinstance(response, StreamingResponse)
+    frames: Final = aiter(response.body_iterator)
+    first_frame: Final = await anext(frames)
+    released.set()
+    collected: Final = [first_frame, *[frame async for frame in frames]]
 
     assert collected[0] == TTFT_PING
     assert b"data: [DONE]\n\n" not in collected
     event_line, data_line = collected[-1].decode().strip().split("\n")
-    failed: Final = json.loads(data_line.removeprefix("data: "))
-    assert event_line == "event: response.failed"
-    assert failed["type"] == "response.failed"
-    assert failed["response"]["status"] == "failed"
-    assert failed["response"]["error"]["code"] == expected_code
-    assert expected_message in failed["response"]["error"]["message"]
+    event: Final = json.loads(data_line.removeprefix("data: "))
+    assert event_line == "event: error"
+    assert event["type"] == "error"
+    assert {key: event["error"].get(key) for key in expected_error} == expected_error
 
 
 @pytest.mark.asyncio

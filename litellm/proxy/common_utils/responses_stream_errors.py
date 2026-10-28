@@ -1,10 +1,11 @@
+import json
 import time
 from collections.abc import Mapping
 from http import HTTPStatus
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
@@ -57,10 +58,17 @@ class _FailureDetails(LiteLLMBaseModel):
         return cls.model_validate({field: getattr(exception, field, None) for field in cls.model_fields})
 
 
-class _ErrorBody(LiteLLMBaseModel):
+class _ErrorPayload(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
-    error: _FailureDetails = _FailureDetails()
+    error: Mapping[str, object]
+
+
+def sse_error_object(data: str | bytes) -> Mapping[str, object] | None:
+    try:
+        return _ErrorPayload.model_validate_json(data).error
+    except ValidationError:
+        return None
 
 
 def _original_failure(exception: Exception) -> Exception:
@@ -142,17 +150,26 @@ class ResponsesStreamErrorState:
         prefix: Final = f"event: {event.type}\n"
         return prefix.encode("utf-8") + frame if isinstance(frame, bytes) else prefix + frame
 
+    def format_error(self, error: Mapping[str, object]) -> str:
+        payload: Final = json.dumps(
+            {
+                "type": ResponsesAPIStreamEvents.ERROR.value,
+                "sequence_number": self.sequence_number + 1,
+                "error": error,
+            },
+            default=str,
+        )
+        return f"event: error\ndata: {payload}\n\n"
+
+    def format_error_message(self, frame: str) -> str:
+        error: Final = sse_error_object(frame.removeprefix("data: "))
+        return frame if error is None else self.format_error(error)
+
     def format_failure(self, exception: Exception) -> str | None:
-        original: Final = _original_failure(exception)
-        return self._format_failed(_failure_details(original), str(original))
-
-    def format_error_body(self, body: bytes, status_code: int) -> str | None:
-        error: Final = _ErrorBody.model_validate_json(body or b"{}").error
-        return self._format_failed(error.model_copy(update={"status_code": status_code}), body.decode())
-
-    def _format_failed(self, details: _FailureDetails, fallback_message: str) -> str | None:
         if self.terminal_emitted:
             return None
+        original: Final = _original_failure(exception)
+        details: Final = _failure_details(original)
         response: Final = ResponsesAPIResponse.model_validate(
             MappingProxyType(
                 {
@@ -165,7 +182,7 @@ class ResponsesStreamErrorState:
                     "error": MappingProxyType(
                         {
                             "code": _response_error_code(details),
-                            "message": redact_internal_details_from_client_message(details.message or fallback_message),
+                            "message": redact_internal_details_from_client_message(details.message or str(original)),
                         }
                     ),
                 }

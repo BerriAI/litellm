@@ -10619,7 +10619,7 @@ async def async_data_generator(
             yield (raw_sse_buffer if raw_sse_buffer.endswith(_SSE_FRAME_DELIMITERS) else raw_sse_buffer + "\n\n")
 
         if error_message is not None:
-            yield error_message
+            yield error_message if error_state is None else error_state.format_error_message(error_message)
         # Chat Completions streams terminate with data: [DONE]; Responses and Google GenAI (?alt=sse) streams do not.
         if ends_with_openai_done:
             yield _OPENAI_STREAM_DONE_FRAME

@@ -115,7 +115,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_param,
     openai_error_type,
 )
-from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState
+from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState, sse_error_object
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING_BYTES,
     SSE_STREAM_START_TAIL,
@@ -912,7 +912,7 @@ async def _enforce_guardrail_added_tag_budgets(
 def _sse_data_payload(event_line: str | bytes) -> str | None:
     text: Final = event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
     return next(
-        (line.removeprefix("data: ").strip() for line in text.splitlines() if line.startswith("data: ")),
+        (line.removeprefix("data: ").strip() for line in text.split("\n") if line.startswith("data: ")),
         None,
     )
 
@@ -1196,13 +1196,14 @@ def _openai_late_body_frames(produced: Response) -> tuple[bytes, ...]:
 
 
 def _responses_late_failure_frames(exc: Exception) -> tuple[str, ...]:
-    frame: Final = ResponsesStreamErrorState().format_failure(exc)
-    return () if frame is None else (frame,)
+    _, error_obj = sse_error_payload(exc)
+    return (ResponsesStreamErrorState().format_error(error_obj),)
 
 
 def _responses_late_body_frames(produced: Response) -> tuple[bytes, ...]:
-    frame: Final = ResponsesStreamErrorState().format_error_body(bytes(produced.body), produced.status_code)
-    return () if frame is None else (frame.encode(),)
+    body: Final = bytes(produced.body)
+    error_obj: Final = sse_error_object(body or b"{}") or {"message": body.decode(), "code": str(produced.status_code)}
+    return (ResponsesStreamErrorState().format_error(error_obj).encode(),)
 
 
 OPENAI_LATE_SSE_FRAMING: Final = LateSseFraming(failure=_openai_late_failure_frames, body=_openai_late_body_frames)
@@ -3423,8 +3424,8 @@ class ProxyBaseLLMRequestProcessing:
 
         Streaming ``/v1/responses`` short-circuits out of
         ``base_process_llm_request`` before the non-streaming ownership
-        tail runs. The OpenAI SDK closes the connection at ``data: [DONE]``
-        and starlette cancels the body task on disconnect, so a write that
+        tail runs. The OpenAI SDK can close the connection right after the terminal
+        event and starlette cancels the body task on disconnect, so a write that
         waits for the generator to finish never lands. The iterator sets
         ``completed_response`` before it hands over its terminal chunk, so
         the ``LiteLLM_ManagedObjectTable`` row is written the moment it
