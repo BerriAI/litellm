@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import functools
 import ipaddress
 import json
 import queue
@@ -13,7 +14,7 @@ import time
 from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -39,12 +40,16 @@ from integration._support.vertex import service_account_json
 STREAM_CHUNKS: Final = 3
 HELD_SEARCHES: Final = 150
 HOLD_SECONDS: Final = 10.0
-_HELD_ARRIVALS: Final = queue.SimpleQueue[int]()
-_TOKEN_REQUESTS: Final = queue.SimpleQueue[str]()
-_COUNTED_CLIENT_PORTS: Final = queue.SimpleQueue[int]()
 VERTEX_SERVING_CONFIG_PATH: Final = (
     "/v1/projects/p/locations/global/collections/default_collection/engines/e/servingConfigs/default_search"
 )
+
+
+@dataclass(frozen=True, slots=True)
+class PeerLog:
+    held_arrivals: queue.SimpleQueue[int] = field(default_factory=queue.SimpleQueue)
+    token_requests: queue.SimpleQueue[str] = field(default_factory=queue.SimpleQueue)
+    counted_client_ports: queue.SimpleQueue[int] = field(default_factory=queue.SimpleQueue)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +57,7 @@ class TlsPeer:
     url: str
     cert_file: Path
     key_file: Path
+    log: PeerLog
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +99,7 @@ def _write_self_signed_cert(cert_dir: Path) -> tuple[Path, Path]:
     return cert_file, key_file
 
 
-async def _peer(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
+async def _peer(log: PeerLog, scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
     if scope["type"] != "http":
         return
     while True:
@@ -105,15 +111,15 @@ async def _peer(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallab
     version: Final = scope["http_version"]
     if scope["path"] == "/hold:search":
         client: Final = scope["client"]
-        await _send_json(send, {"results": [{"id": await _hold_until_all_arrive(client[1] if client else 0)}]})
+        await _send_json(send, {"results": [{"id": await _hold_until_all_arrive(log, client[1] if client else 0)}]})
         return
     if scope["path"].endswith("/_oauth/token"):
-        _TOKEN_REQUESTS.put(scope["path"])
+        log.token_requests.put(scope["path"])
         await _send_json(send, {"access_token": "scripted", "expires_in": 3600, "token_type": "Bearer"})
         return
     if scope["path"] == "/counted:search":
         counted_client: Final = scope["client"]
-        _COUNTED_CLIENT_PORTS.put(counted_client[1] if counted_client else 0)
+        log.counted_client_ports.put(counted_client[1] if counted_client else 0)
         await _send_json(send, {"results": [{"id": "counted"}]})
         return
     if scope["path"].endswith(":search"):
@@ -136,12 +142,12 @@ async def _peer(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallab
     await _send_json(send, {"http_version": version})
 
 
-async def _hold_until_all_arrive(client_port: int) -> str:
-    _HELD_ARRIVALS.put(client_port)
+async def _hold_until_all_arrive(log: PeerLog, client_port: int) -> str:
+    log.held_arrivals.put(client_port)
     deadline: Final = time.monotonic() + HOLD_SECONDS
-    while _HELD_ARRIVALS.qsize() < HELD_SEARCHES and time.monotonic() < deadline:
+    while log.held_arrivals.qsize() < HELD_SEARCHES and time.monotonic() < deadline:
         await asyncio.sleep(0.01)
-    return "held-together" if _HELD_ARRIVALS.qsize() >= HELD_SEARCHES else "released-alone"
+    return "held-together" if log.held_arrivals.qsize() >= HELD_SEARCHES else "released-alone"
 
 
 async def _send_json(send: ASGISendCallable, body: dict[str, object]) -> None:
@@ -151,11 +157,12 @@ async def _send_json(send: ASGISendCallable, body: dict[str, object]) -> None:
     await send(HTTPResponseBodyEvent(type="http.response.body", body=json.dumps(body).encode(), more_body=False))
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def http2_tls_peer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[TlsPeer]:
     cert_file, key_file = _write_self_signed_cert(tmp_path_factory.mktemp("h2certs"))
     port: Final = allocate_port()
     shutdown: Final = threading.Event()
+    log: Final = PeerLog()
 
     def _serve() -> None:
         loop: Final = asyncio.new_event_loop()
@@ -164,7 +171,9 @@ def http2_tls_peer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[TlsPeer
         config.certfile = str(cert_file)
         config.keyfile = str(key_file)
         config.alpn_protocols = ["h2", "http/1.1"]
-        loop.run_until_complete(serve(_peer, config, shutdown_trigger=lambda: asyncio.to_thread(shutdown.wait)))
+        loop.run_until_complete(
+            serve(functools.partial(_peer, log), config, shutdown_trigger=lambda: asyncio.to_thread(shutdown.wait))
+        )
         loop.close()
 
     thread: Final = threading.Thread(target=_serve, daemon=True)
@@ -177,7 +186,7 @@ def http2_tls_peer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[TlsPeer
             time.sleep(0.05)
     else:
         pytest.fail("hypercorn peer did not start")
-    yield TlsPeer(url=f"https://127.0.0.1:{port}", cert_file=cert_file, key_file=key_file)
+    yield TlsPeer(url=f"https://127.0.0.1:{port}", cert_file=cert_file, key_file=key_file, log=log)
     shutdown.set()
     thread.join(timeout=10)
 
@@ -357,7 +366,8 @@ def test_vertex_search_fetches_one_token_for_many_searches(
     asyncio.run(_searches())
     litellm.vector_stores.search(**search)
 
-    token_paths: Final = tuple(iter(lambda: None if _TOKEN_REQUESTS.empty() else _TOKEN_REQUESTS.get(), None))
+    token_requests: Final = http2_tls_peer.log.token_requests
+    token_paths: Final = tuple(iter(lambda: None if token_requests.empty() else token_requests.get(), None))
     assert token_paths.count("/token-reuse/_oauth/token") == 1
 
 
@@ -613,7 +623,9 @@ def test_async_http2_handler_opens_another_connection_once_the_streams_run_out(
             await handler.close()
 
     search_ids: Final = asyncio.run(_burst())
-    client_ports: Final = frozenset(_HELD_ARRIVALS.get_nowait() for _ in range(_HELD_ARRIVALS.qsize()))
+    client_ports: Final = frozenset(
+        http2_tls_peer.log.held_arrivals.get_nowait() for _ in range(http2_tls_peer.log.held_arrivals.qsize())
+    )
 
     assert search_ids == ["held-together"] * HELD_SEARCHES
     assert len(client_ports) == 2
@@ -635,8 +647,9 @@ def test_http2_transport_opens_no_more_connections_than_its_cap(http2_tls_peer: 
         return frozenset(response.json()["results"][0]["id"] for response in responses)
 
     assert asyncio.run(_burst()) == {"counted"}
+    counted_client_ports: Final = http2_tls_peer.log.counted_client_ports
     client_ports: Final = frozenset(
-        iter(lambda: None if _COUNTED_CLIENT_PORTS.empty() else _COUNTED_CLIENT_PORTS.get(), None)
+        iter(lambda: None if counted_client_ports.empty() else counted_client_ports.get(), None)
     )
     assert len(client_ports) == 1
 
