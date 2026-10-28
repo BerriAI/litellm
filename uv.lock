@@ -21,6 +21,7 @@ brotli = "2026-10-22T14:01:00Z"
 members = [
     "litellm",
     "litellm-enterprise",
+    "litellm-gateway",
     "litellm-proxy-extras",
 ]
 constraints = [
@@ -5477,6 +5478,11 @@ provides-extras = ["test"]
 name = "litellm-enterprise"
 version = "0.1.80"
 source = { editable = "enterprise" }
+
+[[package]]
+name = "litellm-gateway"
+version = "0.1.0"
+source = { editable = "litellm-rust/crates/gateway" }
 
 [[package]]
 name = "litellm-proxy-extras"
