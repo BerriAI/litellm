@@ -522,8 +522,13 @@ def cost_per_token(
     if _is_anthropic_style:
         _normalized_prompt_tokens += _cache_read_tokens + _cache_creation_tokens
 
+    billed_prompt_tokens: Final = (
+        max(_normalized_prompt_tokens, _min_billed_input_tokens(model, custom_llm_provider))
+        if custom_cost_per_token is not None
+        else _normalized_prompt_tokens
+    )
     response_cost: Final = _cost_per_token_custom_pricing_helper(
-        prompt_tokens=_normalized_prompt_tokens,
+        prompt_tokens=billed_prompt_tokens,
         completion_tokens=completion_tokens,
         response_time_ms=response_time_ms,
         cached_tokens=_cache_read_tokens,
@@ -2434,6 +2439,12 @@ def _priced_candidates_before_unpriced_rules(candidates: tuple[_CostCandidate, .
 def _raw_cost_map_entry(key: str) -> Mapping[str, object] | None:
     raw_entry: Final = litellm.model_cost.get(key)
     return raw_entry if isinstance(raw_entry, Mapping) else None
+
+
+def _min_billed_input_tokens(model: str, custom_llm_provider: str | None) -> int:
+    cost_entry: Final = _raw_cost_map_entry(model) or _raw_cost_map_entry(f"{custom_llm_provider}/{model}") or {}
+    minimum: Final = cost_entry.get("min_billed_input_tokens")
+    return minimum if isinstance(minimum, int) else 0
 
 
 def pricing_entry_for_cost_calc(

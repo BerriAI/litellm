@@ -126,10 +126,18 @@ def test_vispark_chat_completion_request_maps_max_completion_tokens():
     assert response.choices[0].message.content == "Hello from Vispark"
 
 
-def test_vispark_strips_additional_properties_from_a_json_schema_response_format():
+@pytest.mark.parametrize("additional_properties", [False, True, {"type": "string"}])
+def test_vispark_strips_additional_properties_from_a_json_schema_response_format(
+    additional_properties: bool | dict[str, str],
+):
+    city_schema: Final = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "additionalProperties": additional_properties,
+    }
     schema: Final = {
         "type": "object",
-        "properties": {"city": {"type": "object", "properties": {"name": {"type": "string"}}, "additionalProperties": False}},
+        "properties": {"city": city_schema},
         "required": ["city"],
         "additionalProperties": False,
     }
@@ -149,7 +157,30 @@ def test_vispark_strips_additional_properties_from_a_json_schema_response_format
     assert "additionalProperties" not in json.dumps(sent_format)
     assert sent_format["json_schema"]["strict"] is True
     assert sent_format["json_schema"]["schema"]["properties"]["city"]["properties"] == {"name": {"type": "string"}}
-    assert schema["additionalProperties"] is False
+    assert city_schema["additionalProperties"] == additional_properties
+
+
+def test_other_json_providers_keep_additional_properties_and_file_parts():
+    file_part: Final = {"type": "file", "file": {"file_data": "data:application/pdf;base64,JVBERi0xLjQK"}}
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "City",
+            "schema": {"type": "object", "properties": {"name": {"type": "string"}}, "additionalProperties": False},
+        },
+    }
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.scaleway.ai/v1/chat/completions").respond(200, json=_CHAT_COMPLETION)
+        litellm.completion(
+            model="scaleway/llama-3.3-70b-instruct",
+            messages=[{"role": "user", "content": [{"type": "text", "text": "Read this"}, file_part]}],
+            response_format=response_format,
+            api_key="scaleway-test-key",
+        )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert body["response_format"] == response_format
+    assert body["messages"][0]["content"][1] == file_part
 
 
 def test_vispark_sends_a_pdf_file_part_as_an_image_url():
@@ -223,6 +254,46 @@ def test_vispark_bills_a_short_prompt_at_its_minimum_input_tokens(model: str):
     )
 
     assert prompt_cost == pytest.approx(minimum * cost_entry["input_cost_per_token"])
+
+
+def test_vispark_router_deployment_with_custom_pricing_still_bills_the_minimum_input_tokens():
+    minimum: Final = litellm.model_cost["vispark/vision-small"]["min_billed_input_tokens"]
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vispark-custom-priced",
+                "litellm_params": {
+                    "model": "vispark/vision-small",
+                    "api_key": "vispark-test-key",
+                    "input_cost_per_token": 2e-6,
+                    "output_cost_per_token": 5e-6,
+                },
+            }
+        ]
+    )
+    with respx.mock() as upstream:
+        upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(200, json=_CHAT_COMPLETION)
+        response: Final = router.completion(
+            model="vispark-custom-priced", messages=[{"role": "user", "content": "Say hello"}]
+        )
+
+    completion_tokens: Final = _CHAT_COMPLETION["usage"]["completion_tokens"]
+    assert response._hidden_params["response_cost"] == pytest.approx(minimum * 2e-6 + completion_tokens * 5e-6)
+
+
+def test_vispark_explicit_custom_cost_per_token_still_bills_the_minimum_input_tokens():
+    minimum: Final = litellm.model_cost["vispark/vision-small"]["min_billed_input_tokens"]
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model="vision-small",
+        custom_llm_provider="vispark",
+        prompt_tokens=minimum // 2,
+        completion_tokens=3,
+        custom_cost_per_token={"input_cost_per_token": 2e-6, "output_cost_per_token": 5e-6},
+    )
+
+    assert prompt_cost == pytest.approx(minimum * 2e-6)
+    assert completion_cost == pytest.approx(3 * 5e-6)
 
 
 def test_vispark_models_are_listed_for_the_provider():

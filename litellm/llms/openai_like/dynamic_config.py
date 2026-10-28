@@ -17,7 +17,6 @@ from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
-from litellm.utils import remove_additional_properties
 
 from .json_loader import SimpleProviderConfig
 
@@ -36,6 +35,16 @@ def _with_file_parts_as_image_url(message: AllMessageValues) -> AllMessageValues
     ]
     updated: Final[ChatCompletionUserMessage] = {**message, "content": content}
     return updated
+
+
+def _without_additional_properties(value: JsonValue) -> JsonValue:
+    if isinstance(value, dict):
+        return {
+            key: _without_additional_properties(item) for key, item in value.items() if key != "additionalProperties"
+        }
+    if isinstance(value, list):
+        return [_without_additional_properties(item) for item in value]
+    return value
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -169,7 +178,7 @@ def create_config_class(provider: SimpleProviderConfig):
                     optional_params[provider.param_mappings[param]] = value
                 elif param in supported_params:
                     optional_params[param] = (
-                        remove_additional_properties(_JSON_VALUE_ADAPTER.validate_python(value))
+                        _without_additional_properties(_JSON_VALUE_ADAPTER.validate_python(value))
                         if param == "response_format"
                         and provider.special_handling.get("remove_additional_properties_from_response_format")
                         else value

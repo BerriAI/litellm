@@ -48595,6 +48595,7 @@
         "supports_vision": true
     },
     "vispark/vision-small": {
+        "cache_read_input_token_cost": 0.0,
         "input_cost_per_token": 1.05e-06,
         "litellm_provider": "vispark",
         "max_input_tokens": 1000000,
@@ -48627,6 +48628,7 @@
         "supports_vision": true
     },
     "vispark/vision-medium": {
+        "cache_read_input_token_cost": 0.0,
         "input_cost_per_token": 4.21e-06,
         "litellm_provider": "vispark",
         "max_input_tokens": 1000000,
@@ -48659,6 +48661,7 @@
         "supports_vision": true
     },
     "vispark/vision-large": {
+        "cache_read_input_token_cost": 0.0,
         "input_cost_per_token": 7.37e-06,
         "litellm_provider": "vispark",
         "max_input_tokens": 1000000,
