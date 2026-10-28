@@ -743,6 +743,10 @@ def _window_reset_at(started_at: float | None, budget_duration: str | None, now:
     return datetime.fromtimestamp(ends_at, tz=timezone.utc).isoformat()
 
 
+def is_enforced_budget_entry(raw_budget_config: object) -> bool:
+    return _usable_budget_config(raw_budget_config) is not None
+
+
 def _usable_budget_config(raw_budget_config: object) -> BudgetConfig | None:
     try:
         budget_config: Final = BudgetConfig.model_validate(raw_budget_config)

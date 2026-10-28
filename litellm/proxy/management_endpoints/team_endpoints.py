@@ -144,6 +144,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     build_model_max_budget_usage,
     entries_outranked_by,
     entry_names_model,
+    is_enforced_budget_entry,
     proxy_routed_models,
     resolve_model_budget,
 )
@@ -1499,7 +1500,8 @@ def _check_team_model_budget_update_authority(
         existing = _existing_model_cap(existing_model_max_budget.get(entry))
         if existing is not None:
             _check_existing_model_cap_kept(entry=entry, cap_entry=entry, proposed=proposed, existing=existing)
-            continue
+            if is_enforced_budget_entry(existing) or not is_enforced_budget_entry(proposed):
+                continue
         governing = resolve_model_budget(model=entry, model_max_budget=existing_model_max_budget, team_id=data.team_id)
         if governing is not None and entry_names_model(entry=governing.budget_model, model=entry):
             _check_existing_model_cap_kept(

@@ -17747,6 +17747,10 @@ def test_team_admin_cannot_add_an_entry_that_takes_precedence_over_a_cap(
             {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"rpm_limit": 20}},
         ),
         (
+            {**_TEAM_OPUS_FAMILY_CAP, "claude-opus-4-8": {"rpm_limit": 10, "budget_duration": "1d"}},
+            {**_TEAM_OPUS_FAMILY_CAP, "claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
+        (
             _TEAM_OPUS_FAMILY_CAP,
             {**_TEAM_OPUS_FAMILY_CAP, "gemini-3-pro*": {"max_budget": 1000.0, "budget_duration": "1d"}},
         ),
@@ -17761,6 +17765,7 @@ def test_team_admin_cannot_add_an_entry_that_takes_precedence_over_a_cap(
         "unchanged_looser_entry",
         "tightened_looser_entry",
         "uncapped_entry_edited",
+        "enforced_uncapped_entry_capped",
         "pattern_sharing_only_a_wildcard_route",
     ],
 )
@@ -17768,6 +17773,18 @@ def test_team_admin_can_keep_or_tighten_entries_and_add_ones_that_outrank_no_cap
     existing: Mapping[str, object], requested: Mapping[str, object]
 ) -> None:
     assert _check_team_admin_model_caps(existing=existing, requested=requested) is None
+
+
+def test_team_admin_cannot_make_an_unenforced_entry_take_precedence_over_a_cap() -> None:
+    existing: Final = {**_TEAM_OPUS_FAMILY_CAP, "claude-opus-4-8": {"rpm_limit": 10}}
+
+    with pytest.raises(HTTPException) as exc:
+        _check_team_admin_model_caps(
+            existing=existing,
+            requested={**existing, "claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        )
+    assert exc.value.status_code == 403
+    assert "'claude-opus*'" in exc.value.detail["error"]
 
 
 @pytest.mark.parametrize("added_entry", _BEDROCK_ROUTE_ADDED_ENTRIES, ids=["model", "pattern"])
