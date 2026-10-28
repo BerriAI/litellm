@@ -13,6 +13,7 @@ from litellm.exceptions import (
     RateLimitError,
     ServiceUnavailableError,
     Timeout,
+    UnsupportedEndpointError,
 )
 from litellm.types.router import RetryPolicy
 
@@ -59,6 +60,8 @@ def get_num_retries_from_retry_policy(
     policy: Final = resolve_retry_policy(retry_policy, model_group, model_group_retry_policy)
     if policy is None:
         return None
+    if isinstance(exception, UnsupportedEndpointError):
+        return policy.DefaultRetries
     by_class: Final = (
         _RETRIES_BY_EXCEPTION_TYPE[cls](policy) for cls in type(exception).__mro__ if cls in _RETRIES_BY_EXCEPTION_TYPE
     )

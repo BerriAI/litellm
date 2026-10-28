@@ -261,7 +261,10 @@ def is_bad_request_without_fallback(exception: Exception, fallback_on_unsupporte
         return False
     if isinstance(exception, litellm.UnsupportedParamsError):
         return True
-    if isinstance(exception, (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError)):
+    if isinstance(
+        exception,
+        (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError, litellm.UnsupportedEndpointError),
+    ):
         return False
     return exception.status_code == 400 and bool(getattr(exception, "llm_provider", ""))
 
