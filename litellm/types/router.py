@@ -572,6 +572,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         default=False,
         description="Use stored xAI OAuth credentials when no xAI API key is configured.",
     )
+    chatgpt_auth_file: str | None = Field(
+        default=None,
+        description="Path to a ChatGPT OAuth auth.json for this deployment.",
+    )
     fireworks_forward_user_id: bool | None = Field(
         default=None,
         description="Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.",

@@ -2964,12 +2964,14 @@ def supports_native_streaming(model: str, custom_llm_provider: str | None) -> bo
     Raises:
     Exception: If the given model is not found in model_prices_and_context_window.json.
     """
+    from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
+
     try:
-        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        resolved_model, resolved_provider = resolve_model_and_provider_for_metadata(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        model_info: Final = get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider)
         supports_native_streaming = model_info.get("supports_native_streaming", True)
         if supports_native_streaming is None:
             supports_native_streaming = True
@@ -6077,11 +6079,8 @@ def get_max_tokens(model: str) -> int | None:
             return None
 
     try:
-        if model in litellm.model_cost:
-            if "max_output_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_output_tokens"]
-            elif "max_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_tokens"]
+        if model in litellm.model_cost and "max_output_tokens" in litellm.model_cost[model]:
+            return litellm.model_cost[model]["max_output_tokens"]
         get_llm_provider: Final = litellm_utils.get_llm_provider
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         if custom_llm_provider == "huggingface":
@@ -6090,8 +6089,6 @@ def get_max_tokens(model: str) -> int | None:
         if model in litellm.model_cost:  # check if extracted model is in model_list
             if "max_output_tokens" in litellm.model_cost[model]:
                 return litellm.model_cost[model]["max_output_tokens"]
-            elif "max_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_tokens"]
         else:
             raise Exception()
         return None
@@ -6740,7 +6737,7 @@ def get_model_info_helper(
 
             returned_model_info: Final = ModelInfoBase(
                 key=key,
-                max_tokens=_model_info.get("max_tokens", None),
+                max_tokens=_model_info.get("max_output_tokens") or _model_info.get("max_input_tokens"),
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),
                 input_cost_per_token=_input_cost_per_token,
@@ -7003,6 +7000,8 @@ def get_model_info_helper(
                 supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
                 supports_max_reasoning_effort=_model_info.get("supports_max_reasoning_effort", None),
                 reasoning_effort_levels=_model_info.get("reasoning_effort_levels", None),
+                reasoning_modes=_model_info.get("reasoning_modes", None),
+                reasoning_contexts=_model_info.get("reasoning_contexts", None),
                 default_reasoning_effort=_model_info.get("default_reasoning_effort", None),
                 bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
                 bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
@@ -8240,9 +8239,7 @@ def trim_messages(
         if max_tokens is None:
             # Check if model is valid
             if model in litellm.model_cost:
-                max_tokens_for_model: Final = litellm.model_cost[model].get(
-                    "max_input_tokens", litellm.model_cost[model]["max_tokens"]
-                )
+                max_tokens_for_model: Final = litellm.model_cost[model]["max_input_tokens"]
                 max_tokens = int(max_tokens_for_model * trim_ratio)
             else:
                 # if user did not specify max (input) tokens
@@ -9571,7 +9568,7 @@ class ProviderConfigManager:
 
             return get_nvidia_nim_rerank_config(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            return litellm.VertexAIRerankConfig()
+            return ProviderConfigManager._get_vertex_ai_rerank_config_cached()
         elif litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIRerankConfig()
         elif litellm.LlmProviders.VOYAGE == provider:
@@ -9589,6 +9586,11 @@ class ProviderConfigManager:
 
             return get_dashscope_family_rerank_config(provider.value)
         return litellm.CohereRerankConfig()
+
+    @staticmethod
+    @lru_cache(maxsize=1)
+    def _get_vertex_ai_rerank_config_cached() -> BaseRerankConfig:
+        return litellm.VertexAIRerankConfig()
 
     @staticmethod
     def get_provider_decisions_config(model: str, provider: LlmProviders) -> BaseDecisionsConfig | None:
@@ -9610,14 +9612,21 @@ class ProviderConfigManager:
             return litellm.DatabricksDecisionsConfig()
         if provider == LlmProviders.HOSTED_VLLM:
             return litellm.HostedVLLMDecisionsConfig()
+        if provider == LlmProviders.LM_STUDIO:
+            return litellm.LMStudioDecisionsConfig()
+        if provider in (LlmProviders.OLLAMA, LlmProviders.OLLAMA_CHAT):
+            return litellm.OllamaDecisionsConfig()
         if provider == LlmProviders.LAYA:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
-        if provider == LlmProviders.OPENAI:
-            return litellm.OpenAIDecisionsConfig()
-        if provider == LlmProviders.AZURE_AI:
-            return litellm.AzureAIDecisionsConfig()
+        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI):
+            configs: Final = {
+                LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
+                LlmProviders.AZURE: litellm.AzureDecisionsConfig,
+                LlmProviders.AZURE_AI: litellm.AzureAIDecisionsConfig,
+            }
+            return configs[provider]()
         return None
 
     @staticmethod
@@ -9662,7 +9671,7 @@ class ProviderConfigManager:
                 return BedrockMantleAnthropicMessagesConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
             if "claude" in model_lower:
-                from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+                from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
                     VertexAIPartnerModelsAnthropicMessagesConfig,
                 )
 
@@ -10630,6 +10639,7 @@ class ProviderConfigManager:
         from litellm.llms.serper.search.transformation import SerperSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
         from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
+        from litellm.llms.xai.search.transformation import XAISearchConfig
         from litellm.llms.you_com.search.transformation import YouComSearchConfig
 
         PROVIDER_TO_CONFIG_MAP: Final = {
@@ -10654,6 +10664,7 @@ class ProviderConfigManager:
             SearchProviders.NIMBLE: NimbleSearchConfig,
             SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
             SearchProviders.DEEPSEEK: DeepSeekSearchConfig,
+            SearchProviders.XAI: XAISearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

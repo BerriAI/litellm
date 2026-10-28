@@ -225,6 +225,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_xhigh_reasoning_effort: bool | None
     supports_max_reasoning_effort: bool | None
     reasoning_effort_levels: ReadOnly[Sequence[str] | None]
+    reasoning_modes: ReadOnly[Sequence[str] | None]
+    reasoning_contexts: ReadOnly[Sequence[str] | None]
     default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
@@ -4360,6 +4362,7 @@ server_owned_wif_litellm_params: Final = (
     + openai_wif_litellm_params
     + oauth_token_exchange_litellm_params
     + github_copilot_oauth_litellm_params
+    + ("chatgpt_auth_file",)
 )
 secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
 
@@ -4414,6 +4417,7 @@ GenericBudgetConfigType = dict[str, BudgetConfig]
 
 
 class LlmProviders(str, Enum):
+    REFUSELESS = "refuseless"
     OPENAI = "openai"
     CHATGPT = "chatgpt"
     OPENAI_LIKE = "openai_like"  # embedding only
@@ -4441,6 +4445,7 @@ class LlmProviders(str, Enum):
     VERTEX_AI = "vertex_ai"
     VERTEX_AI_BETA = "vertex_ai_beta"
     GEMINI = "gemini"
+    ABLITERATION = "abliteration"
     AI21 = "ai21"
     BASETEN = "baseten"
     BLACK_FOREST_LABS = "black_forest_labs"
@@ -4570,6 +4575,7 @@ class LlmProviders(str, Enum):
     POE = "poe"
     CHUTES = "chutes"
     NEOSANTARA = "neosantara"
+    AIAND = "aiand"
     PARASAIL = "parasail"
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
@@ -4582,6 +4588,7 @@ class LlmProviders(str, Enum):
     PRISM = "prism"
     OPENINFER = "openinfer"
     INFERENCEAPIS = "inferenceapis"
+    ZEROGPU = "zerogpu"
     DARKBLOOM = "darkbloom"
     META = "meta"
     SAIL = "sail"
@@ -4640,6 +4647,7 @@ class SearchProviders(str, Enum):
     NIMBLE = "nimble"
     BING_GROUNDING = "bing_grounding"
     DEEPSEEK = "deepseek"
+    XAI = "xai"
 
 
 # Create a set of all search provider values for quick lookup

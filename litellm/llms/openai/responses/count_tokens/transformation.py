@@ -15,9 +15,9 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.pass_through.convertible_blocks import malformed_tool_result_text_error
-from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
-from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
+from litellm.llms.anthropic.messages.convertible_blocks import malformed_tool_result_text_error
+from litellm.llms.anthropic.messages.native.utils import normalize_native_messages
+from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
