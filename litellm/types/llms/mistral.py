@@ -1,6 +1,6 @@
 from typing import Literal
 
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 
 class FunctionCall(TypedDict):
@@ -22,3 +22,4 @@ class MistralTextBlock(TypedDict):
 class MistralThinkingBlock(TypedDict):
     type: Literal["thinking"]
     thinking: list[MistralTextBlock]
+    closed: NotRequired[ReadOnly[bool]]

@@ -6,7 +6,7 @@ from typing import Final, cast
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.constants import CONTROL_OPTIONS_KEY
+from litellm.constants import CONTROL_OPTIONS_KEY, SESSION_ID_FROM_TRACE_ID_PARAM_KEY
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.litellm_params import MAX_CONTROL_INT_DIGITS, ControlOptions
@@ -212,6 +212,9 @@ def get_litellm_params(
 
     # Derive litellm_session_id / litellm_trace_id from metadata when not provided (call chaining)
     _meta: Final = resolved_metadata or {}
+    session_id_from_trace_id: Final = (
+        litellm_session_id is None and not _meta.get("session_id") and bool(_meta.get("trace_id"))
+    )
     if litellm_session_id is None:
         litellm_session_id = _meta.get("session_id") or _meta.get("trace_id")
     if litellm_trace_id is None:
@@ -254,6 +257,7 @@ def get_litellm_params(
         or (get_base_model_from_litellm_call_metadata(metadata=metadata) if metadata else None),
         "litellm_trace_id": litellm_trace_id,
         "litellm_session_id": litellm_session_id,
+        **({SESSION_ID_FROM_TRACE_ID_PARAM_KEY: True} if session_id_from_trace_id else {}),
         "hf_model_name": hf_model_name,
         "custom_prompt_dict": custom_prompt_dict,
         "litellm_metadata": litellm_metadata,

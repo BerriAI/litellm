@@ -17,7 +17,7 @@ fn stored_bytes(value: redis::Value) -> Result<Option<Vec<u8>>, Error> {
         redis::Value::Nil => Ok(None),
         redis::Value::BulkString(bytes) => Ok(Some(bytes)),
         redis::Value::SimpleString(text) => Ok(Some(text.into_bytes())),
-        _ => Err(Error::InvalidEntry),
+        _ => Err(Error::InvalidEntry(None)),
     }
 }
 
@@ -37,13 +37,13 @@ where
 {
     let payload = codec.encode(&candidate)?;
     if payload.is_empty() {
-        return Err(Error::InvalidEntry);
+        return Err(Error::InvalidEntry(None));
     }
     for _ in 0..CLAIM_ATTEMPTS {
         let current = stored_bytes(
             connection
                 .get::<_, redis::Value>(key)
-                .map_err(|_| Error::Unavailable)?,
+                .map_err(Error::unavailable)?,
         )?
         .filter(|bytes| !bytes.is_empty());
         let existing = current
@@ -63,13 +63,17 @@ where
             .arg(write)
             .arg(u8::from(refresh))
             .query::<bool>(connection)
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(Error::unavailable)?;
         if applied {
             return Ok(existing.unwrap_or(candidate));
         }
     }
-    Err(Error::Unavailable)
+    Err(Error::unavailable(ClaimContended))
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("claim kept losing the race after {CLAIM_ATTEMPTS} attempts")]
+struct ClaimContended;
 
 impl<S, C> ClaimCache for RedisCache<S, C>
 where
