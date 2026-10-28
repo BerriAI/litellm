@@ -1900,8 +1900,6 @@ class DBSpendUpdateWriter:
             proxy_logging_obj=proxy_logging_obj,
         )
 
-        # NOTE: Daily tag spend is committed by update_daily_tag_spend, on its own interval and at shutdown.
-
         ################## Daily End-User Spend Update Transactions ##################
         # Aggregate all in memory daily end-user spend transactions and commit to db
         await self._flush_daily_spend_queue(
