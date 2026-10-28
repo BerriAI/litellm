@@ -31,6 +31,10 @@ class A2AError(BaseLLMException):
         )
 
 
+def _message_role(message: Mapping[str, object]) -> object:
+    return message.get("role", "user")
+
+
 def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
     """
     Convert OpenAI messages to a single prompt string for A2A agent.
@@ -51,7 +55,7 @@ def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
 
         # Get role
         if isinstance(msg, BaseModel):
-            role = msg.model_dump().get("role", "user")
+            role = _message_role(msg.model_dump())
         elif isinstance(msg, dict):
             role = msg.get("role", "user")
         else:

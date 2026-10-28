@@ -11,6 +11,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
@@ -101,12 +102,7 @@ class SearXNGSearchConfig(BaseSearchConfig):
                 "or pass `api_base` parameter. Example: os.environ['SEARXNG_API_BASE'] = 'https://your-searxng-instance.com'"
             )
 
-        # Append "/search" to the api base if it's not already there
-        if not api_base.endswith("/search"):
-            if api_base.endswith("/"):
-                api_base = f"{api_base}search"
-            else:
-                api_base = f"{api_base}/search"
+        api_base = ensure_api_route(api_base, "search")
 
         # Build query parameters from the transformed request body
         if data and isinstance(data, dict) and "_searxng_params" in data:

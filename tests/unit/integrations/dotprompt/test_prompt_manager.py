@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 
 
+from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
@@ -362,6 +363,22 @@ def test_load_prompts_from_json_data():
     assert rendered == "Dynamic prompt: test"
 
 
+def test_load_prompts_from_json_data_skips_malformed_entries():
+    manager: Final = PromptManager(prompt_directory=str(Path(__file__).parent))
+    initial_count: Final = len(manager.prompts)
+
+    manager.load_prompts_from_json_data(
+        {
+            "valid_prompt": {"content": "Valid: {{value}}", "metadata": {"model": "gpt-4"}},
+            "string_entry": "not a prompt",
+            "null_entry": None,
+        }
+    )
+
+    assert len(manager.prompts) == initial_count + 1
+    assert manager.render("valid_prompt", {"value": "ok"}) == "Valid: ok"
+
+
 def test_prompt_file_to_json_conversion():
     """Test converting .prompt files to JSON format."""
     # Create a temporary prompt file with frontmatter
@@ -657,6 +674,27 @@ def test_prompt_initializer_registers_flat_db_prompt_under_base_id():
 
     assert isinstance(dotprompt_manager, DotpromptManager)
     template = dotprompt_manager.prompt_manager.get_prompt("agent-prompt")
+    assert template is not None
+    assert template.content == "AHOY {{name}}"
+
+
+def test_prompt_initializer_accepts_params_without_dotprompt_content():
+    from types import SimpleNamespace
+
+    from litellm.integrations.dotprompt import prompt_initializer
+    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
+
+    litellm_params: Final = SimpleNamespace(
+        prompt_data={"content": "AHOY {{name}}", "metadata": {"model": "gpt-4o-mini"}},
+    )
+    prompt_spec: Final = PromptSpec(
+        prompt_id="agent-prompt",
+        litellm_params=PromptLiteLLMParams(prompt_integration="dotprompt"),
+    )
+
+    dotprompt_manager: Final = prompt_initializer(litellm_params, prompt_spec)
+
+    template: Final = dotprompt_manager.prompt_manager.get_prompt("agent-prompt")
     assert template is not None
     assert template.content == "AHOY {{name}}"
 

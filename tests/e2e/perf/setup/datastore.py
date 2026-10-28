@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import TypeAdapter
 
+from setup.series import Recorder, Series
+
 if TYPE_CHECKING:
     import redis
 
@@ -182,13 +184,22 @@ def slowest_statement(statements: tuple[StatementCalls, ...] | None) -> Statemen
 
 class ConnectionsSampler:
     """`pg_stat_activity` client backends on the gateway's database once a second on a background thread, minus
-    this sampler's own connection, so the peak is what the gateway (and the test's own reads) held open."""
+    this sampler's own connection, so the peak is what the gateway (and the test's own reads) held open.
+    `series` keeps every count with its time for a ramped run's per-step peaks."""
 
     def __init__(self, url: str) -> None:
         self._url: Final = url
         self._stop: Final = threading.Event()
         self._thread: Final = threading.Thread(target=self._run, name="postgres-connections", daemon=True)
-        self.peak: int | None = None
+        self._counts: Final[Recorder[int]] = Recorder()
+
+    @property
+    def peak(self) -> int | None:
+        return max((sample.value for sample in self._counts.series.samples), default=None)
+
+    @property
+    def series(self) -> Series[int]:
+        return self._counts.series
 
     def start(self) -> None:
         self._thread.start()
@@ -203,12 +214,13 @@ class ConnectionsSampler:
         with psycopg.connect(self._url, autocommit=True) as conn:
             while not self._stop.is_set():
                 (count,) = _COMMITS_ROW.validate_python(conn.execute(_CONNECTIONS_QUERY).fetchone())
-                self.peak = count if self.peak is None else max(self.peak, count)
+                self._counts.record(count)
                 _ = self._stop.wait(_CONNECTIONS_SAMPLE_SECONDS)
 
 
 class NoConnectionsSampler:
     peak: None = None
+    series: None = None
 
     def start(self) -> None:
         return None

@@ -94,6 +94,7 @@ async def test_proxy_gemini_to_openai_like_model_token_counting():
         request=Request(
             scope={
                 "type": "http",
+                "headers": [],
                 "parsed_body": (
                     ["contents"],
                     {"contents": [{"parts": [{"text": "Hello, how are you?"}]}]},
