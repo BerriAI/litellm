@@ -8,7 +8,7 @@ from pydantic import TypeAdapter
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.openai.common_utils import decoded_json_object
+from litellm.llms.openai.common_utils import as_str_mapping, decoded_json_object
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import ModelResponse
@@ -18,6 +18,7 @@ from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
+    normalize_copilot_usage,
 )
 from ..per_user_auth import require_github_copilot_user_session
 
@@ -234,7 +235,7 @@ class GithubCopilotConfig(OpenAIConfig):
         return normalized
 
     @classmethod
-    def _synthesize_choices_for_anthropic_native(cls, response_json: dict) -> dict:
+    def _synthesize_choices_for_anthropic_native(cls, response_json: dict) -> dict[str, object]:
         """
         Synthesize a `choices` array from an Anthropic-native Copilot response.
 
@@ -282,21 +283,26 @@ class GithubCopilotConfig(OpenAIConfig):
         if thinking_blocks:
             message["thinking_blocks"] = thinking_blocks
 
-        synthesized: Final = {
+        usage: Final = response_json.get("usage")
+        usage_fields: Final = {"usage": cls._normalize_anthropic_usage(usage)} if isinstance(usage, dict) else {}
+        return {
             **response_json,
             "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+            **usage_fields,
         }
-        usage: Final = response_json.get("usage")
-        if isinstance(usage, dict):
-            synthesized["usage"] = cls._normalize_anthropic_usage(usage)
-        return synthesized
 
-    def transform_parsed_response_dict(self, parsed_response: dict) -> dict:
+    def transform_parsed_response_dict(self, parsed_response: dict) -> dict[str, object]:
         """
         Repair the OpenAI-SDK-parsed response on the handler path that bypasses
         transform_response. See: https://github.com/BerriAI/litellm/issues/30927
         """
-        return self._synthesize_choices_for_anthropic_native(parsed_response)
+        synthesized: Final = self._synthesize_choices_for_anthropic_native(parsed_response)
+        usage: Final = as_str_mapping(synthesized.get("usage"))
+        if usage is not None:
+            normalized: Final = normalize_copilot_usage(usage, synthesized.get("copilot_usage"))
+            if normalized is not usage:
+                return {**synthesized, "usage": normalized}
+        return synthesized
 
     def transform_response(
         self,
@@ -330,8 +336,13 @@ class GithubCopilotConfig(OpenAIConfig):
             )
 
         response_json: Final = decoded_json_object(decoded_response)
-        if not response_json.get("choices"):
-            synthesized: Final = self._synthesize_choices_for_anthropic_native(dict(response_json))
+        raw_usage: Final = as_str_mapping(response_json.get("usage"))
+        if (
+            not response_json.get("choices")
+            or "copilot_usage" in response_json
+            or (raw_usage is not None and "copilot_usage" in raw_usage)
+        ):
+            synthesized: Final = self.transform_parsed_response_dict(dict(response_json))
             raw_response = httpx.Response(
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,

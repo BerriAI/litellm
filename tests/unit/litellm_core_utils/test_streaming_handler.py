@@ -7943,3 +7943,74 @@ def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
     assert usage.prompt_tokens_details.cached_tokens == 80
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == 5
+
+
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("sdk", [False, True])
+@pytest.mark.parametrize("usage_only", [False, True])
+@pytest.mark.parametrize("include_usage", [False, True])
+@pytest.mark.parametrize("top_level", [False, True])
+@pytest.mark.parametrize("write_alias", [None, "cache_creation_tokens", "cache_creation_input_tokens"])
+@pytest.mark.asyncio
+async def test_copilot_cache_usage_survives_stream_and_assembly(
+    async_stream: bool, sdk: bool, usage_only: bool, include_usage: bool,
+    top_level: bool, write_alias: str | None,
+) -> None:
+    from litellm.llms.openai.openai import OpenAIChatCompletionResponseIterator
+
+    metadata: Final = {"token_details": [
+        {"token_type": "cache_read", "token_count": 70},
+        {"token_type": "cache_write", "token_count": 20},
+    ]}
+    reported: Final = {
+        "usage": {
+            "prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110,
+            **({} if top_level else {"copilot_usage": metadata}),
+            **({"prompt_tokens_details": {write_alias: 0}} if write_alias else {}),
+        },
+        **({"copilot_usage": metadata} if top_level else {}),
+    }
+    bodies: Final = [
+        {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}}]},
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+         **({} if usage_only else reported)},
+        *([{"choices": [], **reported}] if usage_only else []),
+    ]
+    parser: Final = OpenAIChatCompletionResponseIterator(streaming_response=None, sync_stream=True)
+    payloads: Final = [
+        {"id": "chatcmpl-cache", "created": 1, "model": "claude-sonnet-5",
+         "object": "chat.completion.chunk", **body}
+        for body in bodies
+    ]
+    chunks: Final = [
+        ChatCompletionChunk(**payload) if sdk else parser.chunk_parser(payload)
+        for payload in payloads
+    ]
+    before: Final = [chunk.model_dump() for chunk in chunks]
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="github_copilot/claude-sonnet-5", custom_llm_provider="openai",
+        stream_options={"include_usage": True} if include_usage else None,
+        logging_obj=Logging(
+            model="github_copilot/claude-sonnet-5",
+            messages=[{"role": "user", "content": "hi"}], stream=True,
+            call_type="acompletion", start_time=datetime.datetime(2025, 1, 1),
+            litellm_call_id="copilot-cache", function_id="copilot-cache",
+        ),
+    )
+    received: Final = [chunk async for chunk in wrapper] if async_stream else list(wrapper)
+    final_usage: Final = (
+        received[-1].usage if include_usage else received[-1]._hidden_params["usage"]
+    )
+    assembled: Final = litellm.stream_chunk_builder(chunks=received)
+    assert assembled is not None
+    assert assembled.choices[0].message.content == "hi"
+    for usage in (final_usage, assembled.usage):
+        assert isinstance(usage, Usage)
+        assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (100, 10, 110)
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 70
+        assert usage.prompt_tokens_details.cache_write_tokens == (0 if write_alias else 20)
+        assert getattr(usage, "cache_read_input_tokens", None) == 70
+        assert getattr(usage, "cache_creation_input_tokens", None) == (0 if write_alias else 20)
+    assert [chunk.model_dump() for chunk in chunks] == before

@@ -1,7 +1,7 @@
 import asyncio
 import json
 from datetime import datetime, timedelta
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Final
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
@@ -966,3 +966,112 @@ def test_transform_response_carries_upstream_usage():
     assert result.usage.prompt_tokens == 11
     assert result.usage.completion_tokens == 7
     assert result.usage.total_tokens == 18
+
+
+def _copilot_normalized_usage(payload: dict[str, object], raw: bool) -> Usage:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        convert_to_model_response_object,
+    )
+
+    config: Final = GithubCopilotConfig()
+    result: Final = (
+        config.transform_response(
+            model="claude-sonnet-5", raw_response=httpx.Response(200, json=payload),
+            model_response=ModelResponse(), request_data={}, messages=[],
+            optional_params={}, litellm_params={}, encoding=None,
+            logging_obj=Logging(
+                model="claude-sonnet-5", messages=[], stream=False,
+                call_type="completion", start_time=datetime(2025, 1, 1),
+                litellm_call_id="copilot-cache", function_id="copilot-cache",
+            ),
+        )
+        if raw else convert_to_model_response_object(
+            response_object=config.transform_parsed_response_dict(payload),
+            model_response_object=ModelResponse(),
+        )
+    )
+    assert isinstance(result, ModelResponse)
+    assert isinstance(result.usage, Usage)
+    return result.usage
+
+
+@pytest.mark.parametrize("raw", [False, True])
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("top_level", [False, True])
+@pytest.mark.parametrize(
+    "details,standard,expected",
+    [
+        ([{"token_type": "cache_read", "token_count": 50},
+          {"token_type": "cache_read", "token_count": 20},
+          {"token_type": "cache_write", "token_count": 20}], {}, (70, 20)),
+        ([{"token_type": "cache_read", "token_count": 70},
+          {"token_type": "cache_write", "token_count": 20}],
+         {"cache_read_input_tokens": 0, "cache_creation_input_tokens": 3}, (0, 3)),
+        ([{"token_type": "cache_read", "token_count": 70},
+          {"token_type": "cache_write", "token_count": 20}],
+         {"prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3}}, (0, 3)),
+        ([{"token_type": "cache_read", "token_count": 70},
+          {"token_type": "cache_write", "token_count": 20}],
+         {"prompt_tokens_details": {"cache_creation_tokens": 0}}, (70, 0)),
+        ([{"token_type": "cache_read", "token_count": 70},
+          {"token_type": "cache_write", "token_count": 20}],
+         {"prompt_tokens_details": {"cache_creation_input_tokens": 3}}, (70, 3)),
+        ([{"token_type": "cache_read", "token_count": 0},
+          {"token_type": "cache_write", "token_count": 0}], {}, (0, 0)),
+        ([None, "bad", {}, {"token_type": "other", "token_count": 10},
+          {"token_type": "cache_read", "token_count": True},
+          {"token_type": "cache_read", "token_count": -1},
+          {"token_type": "cache_write", "token_count": "20"}], {}, (None, None)),
+        (None, {}, (None, None)),
+        ({}, {}, (None, None)),
+    ],
+)
+def test_copilot_cache_usage_survives_response_conversion(
+    raw: bool, native: bool, top_level: bool, details: object,
+    standard: dict[str, object], expected: tuple[int | None, int | None],
+) -> None:
+    metadata: Final = {"token_details": details}
+    usage: Final = {
+        **({"input_tokens": 100, "output_tokens": 10} if native else {
+            "prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110,
+        }),
+        "copilot_usage": {"token_details": [{"token_type": "cache_read", "token_count": 99}]}
+        if top_level else metadata,
+        **standard,
+    }
+    payload: Final = {
+        "id": "chatcmpl-cache", "created": 1, "model": "claude-sonnet-5",
+        "object": "chat.completion", "usage": usage,
+        **({"content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn"}
+           if native else {"choices": [{"index": 0, "message": {
+               "role": "assistant", "content": "hi"}, "finish_reason": "stop"}]}),
+        **({"copilot_usage": metadata} if top_level else {}),
+    }
+    before: Final = json.dumps(payload, sort_keys=True)
+    result: Final = _copilot_normalized_usage(payload, raw)
+
+    assert (result.prompt_tokens, result.completion_tokens, result.total_tokens) == (100, 10, 110)
+    assert getattr(result, "cache_read_input_tokens", None) == expected[0]
+    assert getattr(result, "cache_creation_input_tokens", None) == expected[1]
+    assert getattr(result.prompt_tokens_details, "cached_tokens", None) == expected[0]
+    assert getattr(result.prompt_tokens_details, "cache_write_tokens", None) == expected[1]
+    assert json.dumps(payload, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("metadata", [None, [], "malformed"])
+@pytest.mark.parametrize("usage", [None, {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}])
+def test_copilot_cache_normalization_preserves_absent_metadata(usage: object, metadata: object) -> None:
+    payload: Final = {
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}}],
+        "usage": usage, "copilot_usage": metadata,
+    }
+    assert GithubCopilotConfig().transform_parsed_response_dict(payload) is payload
+
+
+def test_copilot_cache_metadata_does_not_create_usage() -> None:
+    payload: Final = {
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}}],
+        "copilot_usage": {"token_details": [{"token_type": "cache_read", "token_count": 70}]},
+    }
+    assert GithubCopilotConfig().transform_parsed_response_dict(payload) is payload

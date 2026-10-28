@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.github_copilot.common_utils import normalize_copilot_chunk
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
@@ -1606,6 +1607,8 @@ class CustomStreamWrapper:
         return _ProviderChunkParsed(response_obj)
 
     def chunk_creator(self, chunk: Any):
+        if isinstance(chunk, (ChatCompletionChunk, ModelResponseStream)):
+            chunk = normalize_copilot_chunk(chunk)  # rebind-ok: normalize a copy before both usage consumers
         if isinstance(chunk, ModelResponseStream) and chunk.provider_specific_fields:
             self.logging_obj.record_native_bedrock_guardrail(chunk.provider_specific_fields)
         if self.custom_llm_provider != "cached_response" and isinstance(

@@ -519,7 +519,11 @@ def cost_per_token(
     # Anthropic reports prompt_tokens as input_tokens (excluding cache tokens).
     # Adjust so the helper's "prompt_tokens includes cache tokens" invariant holds.
     _normalized_prompt_tokens = float(prompt_tokens)
-    if _is_anthropic_style:
+    model_is_str: Final = isinstance(model, str)
+    _copilot_inclusive_prompt: Final = custom_llm_provider == "github_copilot" or (
+        custom_llm_provider is None and model_is_str and model.startswith("github_copilot/")
+    )
+    if _is_anthropic_style and not _copilot_inclusive_prompt:
         _normalized_prompt_tokens += _cache_read_tokens + _cache_creation_tokens
 
     response_cost: Final = _cost_per_token_custom_pricing_helper(
@@ -546,8 +550,6 @@ def cost_per_token(
     # non-string objects. Only run the string-based dedup/prefix-join when it is
     # actually a string — e.g. a MagicMock's `.startswith()` is always truthy and
     # its slices return new mocks, which would spin the dedup loop forever.
-    model_is_str: Final = isinstance(model, str)
-
     # Router/proxy deployments may repeat the provider segment (e.g. model_name
     # "openai/openai/gpt-5.5"). Strip duplicated `{provider}/` chains before joining.
     if caller_supplied_provider and model_is_str:

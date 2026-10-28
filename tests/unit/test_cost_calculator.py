@@ -3700,6 +3700,53 @@ def test_custom_pricing_anthropic_style_cache_tokens_not_double_counted():
     assert cost == pytest.approx(expected)
 
 
+@pytest.mark.parametrize(
+    "model,provider",
+    [("claude-sonnet-5", "github_copilot"), ("github_copilot/claude-sonnet-5", None)],
+)
+@pytest.mark.parametrize("cached,created", [(70, 0), (0, 20), (70, 20)])
+@pytest.mark.parametrize("native", [False, True])
+def test_copilot_custom_pricing_keeps_cache_tokens_inside_prompt_total(
+    model: str, provider: str | None, cached: int, created: int, native: bool,
+) -> None:
+    from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
+    from litellm.types.utils import CostPerToken
+
+    payload: Final = {
+        "id": "copilot-priced", "created": 1, "model": model,
+        "choices": [] if native else [{"index": 0, "message": {
+            "role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn",
+        "usage": {"input_tokens": 100, "output_tokens": 10} if native else {
+            "prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110,
+        },
+        "copilot_usage": {"token_details": [
+            {"token_type": "cache_read", "token_count": cached},
+            {"token_type": "cache_write", "token_count": created},
+        ]},
+    }
+    response: Final = convert_to_model_response_object(
+        response_object=GithubCopilotConfig().transform_parsed_response_dict(payload),
+        model_response_object=ModelResponse(),
+    )
+    assert isinstance(response, ModelResponse)
+    assert isinstance(response.usage, Usage)
+    rates: Final = CostPerToken(
+        input_cost_per_token=1.0, output_cost_per_token=2.0,
+        cache_read_input_token_cost=0.1, cache_creation_input_token_cost=1.25,
+    )
+    expected_input: Final = (100 - cached - created) * 1.0 + cached * 0.1 + created * 1.25
+    assert cost_per_token(
+        model=model, custom_llm_provider=provider, prompt_tokens=response.usage.prompt_tokens,
+        completion_tokens=response.usage.completion_tokens, usage_object=response.usage,
+        custom_cost_per_token=rates,
+    ) == pytest.approx((expected_input, 20.0))
+    assert completion_cost(
+        completion_response=response, model=model, custom_llm_provider=provider,
+        custom_cost_per_token=rates,
+    ) == pytest.approx(expected_input + 20.0)
+
+
 def test_custom_pricing_without_cache_keys_preserves_legacy_behavior():
     """
     Backward compatibility: when custom_cost_per_token omits both cache rates,
