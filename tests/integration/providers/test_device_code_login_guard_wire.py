@@ -655,14 +655,17 @@ def test_chatgpt_token_with_a_text_expiry_falls_back_to_the_expiry_inside_the_to
     assert scene.rig.peers.auth_connections() == ()
 
 
-_UNUSABLE_COPILOT_FILES: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
+_UNUSABLE_COPILOT_FILES: Final[Mapping[str, Mapping[str, bytes]]] = MappingProxyType(
     {
-        "empty-access-token": MappingProxyType({"access-token": ""}),
-        "blank-access-token": MappingProxyType({"access-token": "  \n"}),
-        "invalid-api-key-json": MappingProxyType({"api-key.json": "{not json"}),
-        "api-key-list": MappingProxyType({"api-key.json": "[]"}),
+        "empty-access-token": MappingProxyType({"access-token": b""}),
+        "blank-access-token": MappingProxyType({"access-token": b"  \n"}),
+        "invalid-api-key-json": MappingProxyType({"api-key.json": b"{not json"}),
+        "api-key-list": MappingProxyType({"api-key.json": b"[]"}),
         "api-key-expiry-text": MappingProxyType(
-            {"api-key.json": json.dumps({"token": "copilot-text-expiry", "expires_at": "soon"})}
+            {"api-key.json": json.dumps({"token": "copilot-text-expiry", "expires_at": "soon"}).encode()}
+        ),
+        "api-key-utf-16": MappingProxyType(
+            {"api-key.json": json.dumps({"token": "copilot-utf-16", "expires_at": 9999999999}).encode("utf-16")}
         ),
     }
 )
@@ -672,7 +675,7 @@ _UNUSABLE_COPILOT_FILES: Final[Mapping[str, Mapping[str, str]]] = MappingProxyTy
 def test_unusable_copilot_token_files_are_refused_like_missing_ones_each_time(scene: _Scene, name: str) -> None:
     files: Final = _UNUSABLE_COPILOT_FILES[name]
     for file_name, content in files.items():
-        (scene.rig.copilot_dir / file_name).write_text(content)
+        (scene.rig.copilot_dir / file_name).write_bytes(content)
     first: Final = _serve(scene.call(_Cell("copilot", "chat", False, "httpx")))
     second: Final = _serve(scene.call(_Cell("copilot", "chat", False, "httpx")))
     for served in (first, second):
@@ -682,7 +685,7 @@ def test_unusable_copilot_token_files_are_refused_like_missing_ones_each_time(sc
     assert scene.rig.peers.auth_connections() == ()
     assert _describe(scene.rig.peers.api.drain()) == ()
     for file_name, content in files.items():
-        assert (scene.rig.copilot_dir / file_name).read_text() == content
+        assert (scene.rig.copilot_dir / file_name).read_bytes() == content
 
 
 @pytest.mark.parametrize("provider", _PROVIDERS)

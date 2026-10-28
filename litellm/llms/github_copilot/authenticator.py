@@ -200,7 +200,7 @@ class Authenticator:
 
     def _read_api_key_file(self, view: type[ApiKeyFileView]) -> ApiKeyFileView | None:
         try:
-            with open(self.api_key_file, "r") as f:
+            with open(self.api_key_file, "rb") as f:
                 raw: Final = f.read()
         except OSError:
             verbose_logger.warning("No API key file found or error opening file")

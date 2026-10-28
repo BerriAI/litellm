@@ -165,14 +165,18 @@ class TestGitHubCopilotAuthenticator:
 
     @pytest.mark.parametrize(
         "malformed",
-        ["[]", json.dumps({"token": "tid=abc", "expires_at": "soon"})],
-        ids=["json-list", "text-expires-at"],
+        [
+            b"[]",
+            json.dumps({"token": "tid=abc", "expires_at": "soon"}).encode(),
+            json.dumps({"token": "tid=abc", "expires_at": 9999999999}).encode("utf-16"),
+        ],
+        ids=["json-list", "text-expires-at", "utf-16-file"],
     )
     def test_get_api_key_malformed_file_refreshes_like_missing(self, tmp_path, monkeypatch, malformed):
         """A file that is not a Copilot key object is ignored, refreshed over, never answered with a parse error."""
         monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
         api_key_file = tmp_path / "api-key.json"
-        api_key_file.write_text(malformed)
+        api_key_file.write_bytes(malformed)
         refreshed = {"token": "new-api-key", "expires_at": (datetime.now() + timedelta(hours=1)).timestamp()}
         auth = Authenticator()
 
@@ -184,14 +188,18 @@ class TestGitHubCopilotAuthenticator:
 
     @pytest.mark.parametrize(
         "malformed",
-        ["[]", json.dumps({"token": "tid=abc", "expires_at": "soon"})],
-        ids=["json-list", "text-expires-at"],
+        [
+            b"[]",
+            json.dumps({"token": "tid=abc", "expires_at": "soon"}).encode(),
+            json.dumps({"token": "tid=abc", "expires_at": 9999999999}).encode("utf-16"),
+        ],
+        ids=["json-list", "text-expires-at", "utf-16-file"],
     )
     def test_get_api_key_malformed_file_is_kept_when_refresh_fails(self, tmp_path, monkeypatch, malformed):
         """Ignoring the file never deletes it, so a failed refresh leaves the operator's file for inspection."""
         monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
         api_key_file = tmp_path / "api-key.json"
-        api_key_file.write_text(malformed)
+        api_key_file.write_bytes(malformed)
         auth = Authenticator()
 
         with (
@@ -200,17 +208,22 @@ class TestGitHubCopilotAuthenticator:
         ):
             auth.get_api_key()
 
-        assert api_key_file.read_text() == malformed
+        assert api_key_file.read_bytes() == malformed
 
     @pytest.mark.parametrize(
         "malformed",
-        ["[]", json.dumps({"endpoints": {"api": 5}}), json.dumps({"token": "t", "expires_at": 1, "endpoints": []})],
-        ids=["json-list", "number-api", "list-endpoints"],
+        [
+            b"[]",
+            json.dumps({"endpoints": {"api": 5}}).encode(),
+            json.dumps({"token": "t", "expires_at": 1, "endpoints": []}).encode(),
+            json.dumps({"endpoints": {"api": "https://api.tenant.githubcopilot.com"}}).encode("utf-16"),
+        ],
+        ids=["json-list", "number-api", "list-endpoints", "utf-16-file"],
     )
     def test_get_api_base_malformed_file_returns_none(self, tmp_path, monkeypatch, malformed):
         """get_api_base runs before get_api_key on every request, so it must survive malformed shapes too."""
         monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-        (tmp_path / "api-key.json").write_text(malformed)
+        (tmp_path / "api-key.json").write_bytes(malformed)
 
         assert Authenticator().get_api_base() is None
 
