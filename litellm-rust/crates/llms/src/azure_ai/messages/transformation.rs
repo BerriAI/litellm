@@ -2,7 +2,7 @@ use litellm_auth::SecretValue;
 use litellm_http::request::{has_bearer_auth, has_header};
 use litellm_llms_types::{
     formats::messages::MessagesRequest,
-    providers::anthropic::{DEFAULT_HEADERS, MESSAGES_PATH},
+    providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
 };
 use litellm_router_types::LitellmParams;
 
@@ -12,7 +12,7 @@ use crate::{
         common_utils::API_KEY_PLACEMENT,
         messages::{
             handler::shape_anthropic_messages_request,
-            transformation::{transform_messages_request, update_headers_with_anthropic_beta},
+            transformation::{transform_messages_request, update_headers_with_safeguards_beta},
         },
     },
     azure_ai::common_utils::{
@@ -104,7 +104,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
-        update_headers_with_anthropic_beta(headers, request)
+        update_headers_with_safeguards_beta(headers, request, BetaProvider::AzureAi)
     }
 }
 
@@ -544,6 +544,12 @@ mod tests {
         &[("x-api-key", "k"), ("anthropic-beta", "structured-outputs-2025-11-13,web-search-2025-03-05")]
     )]
     #[case::no_feature_needs_a_beta(json!({}), &[], &[("x-api-key", "k")])]
+    #[case::safeguards_need_the_dangerous_tool_use_beta(
+        json!({"safeguards": [{"type": "dangerous_tool_use"}]}),
+        &[("anthropic-beta", "claude-code-20250219")],
+        &[("x-api-key", "k"), ("anthropic-beta", "claude-code-20250219,dangerous-tool-use-2026-09-03")]
+    )]
+    #[case::null_safeguards_need_no_beta(json!({"safeguards": null}), &[], &[("x-api-key", "k")])]
     fn request_headers_carry_the_anthropic_feature_betas(
         #[case] fields: serde_json::Value,
         #[case] forwarded: &[(&str, &str)],

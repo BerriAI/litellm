@@ -27,6 +27,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm._uuid import uuid
 from litellm.constants import (
+    BILLED_RETRY_ATTEMPT_METADATA_KEY,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -381,6 +382,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    BILLED_RETRY_ATTEMPT_METADATA_KEY,
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     "standard_logging_object",
     "litellm_roi_estimator",
@@ -407,14 +409,12 @@ _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY: Final = "allow_client_mess
 # ``litellm.model_cost`` map. Both effects belong to deployment configuration,
 # not to user-supplied request bodies, so the proxy strips them before they
 # reach the call path. Built from the Pydantic model so newly-added pricing
-# fields are covered automatically.
-_CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+# fields are covered automatically. ``base_model`` selects which cost-map entry
+# prices the row, so a caller naming a cheaper model lowers their own spend.
+_CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys()) | {"base_model"}
 # ``model_info`` carries the same pricing fields when read by
 # ``use_custom_pricing_for_model``; strip from metadata for the same reason.
-# ``standard_logging_guardrail_information`` is proxy-written telemetry summed
-# into response_cost and spend; a client seeding it forges (even negative)
-# guardrail cost.
-_CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info", "standard_logging_guardrail_information"})
+_CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info"})
 # ``attempted_fallbacks`` and ``original_model_group`` are written by the router
 # and read by spend logs as fact; a client value has no legitimate meaning and no
 # key or team setting keeps it, so the strip is never gated.
@@ -422,6 +422,7 @@ _ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
     {
         "attempted_fallbacks",
         "original_model_group",
+        "previous_models",
         "request_retry_count",
         CLIENT_OUTPUT_CEILING_METADATA_KEY,
         ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
@@ -671,6 +672,19 @@ def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
             "metadata to keep these values.",
             ", ".join(stripped),
         )
+
+
+def strip_client_guardrail_information(data: dict[str, object]) -> None:  # mutable-ok: strips the request body in place
+    """Guardrail hooks write this field and its cost is billed, so no key or team setting keeps a caller's value."""
+    for metadata_key in ("metadata", "litellm_metadata"):
+        if (
+            isinstance(metadata := data.get(metadata_key), dict)
+            and "standard_logging_guardrail_information" in metadata
+        ):
+            del metadata["standard_logging_guardrail_information"]
+            verbose_proxy_logger.debug(
+                "Stripped client-supplied guardrail information from request body: %s", metadata_key
+            )
 
 
 def _strip_router_reserved_metadata(
@@ -2390,6 +2404,7 @@ async def add_litellm_data_to_request(
     # would silently skip the field.
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
         _strip_client_pricing_overrides(data)
+    strip_client_guardrail_information(data)
     _strip_router_reserved_metadata(data)
 
     # Same reason as the strips above: runs after the metadata string-to-dict parse

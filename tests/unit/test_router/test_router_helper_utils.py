@@ -613,7 +613,12 @@ def test_log_retry(model_list: list[DeploymentTypedDict], metadata_key: str) -> 
             "model": "gpt-3.5-turbo",
             "api_key": "sk-must-not-be-recorded",
             "messages": [{"role": "user", "content": "hi"}],
-            metadata_key: {"model_info": {"id": "deployment-1"}, "attempted_retries": 2, "user_api_key": "sk-proxy"},
+            metadata_key: {
+                "model_info": {"id": "deployment-1", "base_model": "azure/gpt-3.5-turbo"},
+                "deployment": "azure/my-35-deployment",
+                "attempted_retries": 2,
+                "user_api_key": "sk-proxy",
+            },
         },
         e=rate_limit_error,
     )
@@ -621,6 +626,8 @@ def test_log_retry(model_list: list[DeploymentTypedDict], metadata_key: str) -> 
         {
             "model_group": "gpt-3.5-turbo",
             "deployment_id": "deployment-1",
+            "model": "azure/my-35-deployment",
+            "base_model": "azure/gpt-3.5-turbo",
             "exception_type": "RateLimitError",
             "exception_string": "litellm.RateLimitError: slow down",
             "attempted_retries": 2,
@@ -630,6 +637,38 @@ def test_log_retry(model_list: list[DeploymentTypedDict], metadata_key: str) -> 
     assert router.log_retry(kwargs=new_kwargs, e=rate_limit_error)[metadata_key]["request_retry_count"] == 2
     planted_kwargs = {"model": "gpt-3.5-turbo", metadata_key: {"request_retry_count": -100}}
     assert router.log_retry(kwargs=planted_kwargs, e=rate_limit_error)[metadata_key]["request_retry_count"] == 1
+
+
+def test_log_retry_reads_base_model_from_the_deployments_litellm_params() -> None:
+    """An Azure named deployment declares ``base_model`` under ``litellm_params``, not ``model_info``, and
+    that is the model the failure row is priced at, so the retry record has to carry it too"""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "azure-group",
+                "litellm_params": {
+                    "model": "azure/my-named-deployment",
+                    "api_key": "sk-fake",
+                    "api_base": "https://example.openai.azure.com",
+                    "base_model": "azure/gpt-4o-mini",
+                },
+                "model_info": {"id": "dep-azure-named"},
+            }
+        ]
+    )
+    new_kwargs = router.log_retry(
+        kwargs={
+            "model": "azure-group",
+            "metadata": {
+                "model_info": {"id": "dep-azure-named"},
+                "deployment": "azure/my-named-deployment",
+                "attempted_retries": 0,
+            },
+        },
+        e=litellm.Timeout(message="slow", llm_provider="azure", model="azure/my-named-deployment"),
+    )
+    record = new_kwargs["metadata"]["previous_models"][0]
+    assert (record["model"], record["base_model"]) == ("azure/my-named-deployment", "azure/gpt-4o-mini")
 
 
 @pytest.mark.usefixtures("router_minute_pinned")

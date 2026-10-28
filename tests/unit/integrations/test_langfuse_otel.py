@@ -488,6 +488,22 @@ class TestLangfuseOtelIntegration:
             # Endpoint assertion removed as side effect is gone
 
 
+def _exported_auth_headers(exporter):
+    import requests_mock
+    from opentelemetry.sdk.trace.export import SpanExportResult
+
+    with requests_mock.Mocker() as collector:
+        collector.post(requests_mock.ANY, status_code=200)
+        assert exporter.export(()) is SpanExportResult.SUCCESS
+    return [
+        (
+            request.url,
+            {name: request.headers[name] for name in ("Authorization", "x-langfuse-ingestion-version")},
+        )
+        for request in collector.request_history
+    ]
+
+
 class TestLangfuseOtelKeyDynamicConfig:
     """Key/team-scoped Langfuse credentials must define the full export target
     (OTLP endpoint + auth), not just auth headers on the init-time exporter."""
@@ -592,15 +608,15 @@ class TestLangfuseOtelKeyDynamicConfig:
 
         exporter = span_processors[0].span_exporter
         assert isinstance(exporter, OTLPSpanExporter)
-        assert exporter._endpoint == "https://langfuse.example.com/api/public/otel/v1/traces"
-
         import base64
 
         expected_auth = base64.b64encode(b"key_public:key_secret").decode()
-        assert exporter._headers == {
-            "Authorization": f"Basic {expected_auth}",
-            "x-langfuse-ingestion-version": "4",
-        }
+        assert _exported_auth_headers(exporter) == [
+            (
+                "https://langfuse.example.com/api/public/otel/v1/traces",
+                {"Authorization": f"Basic {expected_auth}", "x-langfuse-ingestion-version": "4"},
+            )
+        ]
 
     def test_key_dynamic_params_reuse_cached_provider(self):
         with self._clean_env():
@@ -653,10 +669,12 @@ class TestLangfuseOtelKeyDynamicConfig:
         provider = next(iter(logger._tracer_provider_cache.values())).provider
         exporter = provider._active_span_processor._span_processors[0].span_exporter
         assert isinstance(exporter, OTLPSpanExporter)
-        assert exporter._headers == {
-            "Authorization": f"Basic {secret}",
-            "x-langfuse-ingestion-version": "4",
-        }
+        assert _exported_auth_headers(exporter) == [
+            (
+                "https://langfuse.example.com/api/public/otel/v1/traces",
+                {"Authorization": f"Basic {secret}", "x-langfuse-ingestion-version": "4"},
+            )
+        ]
 
 
 class TestLangfuseOtelResponsesAPI:

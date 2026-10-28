@@ -416,7 +416,7 @@ def _storable_json_value(value: JsonValue) -> JsonValue:
     return value
 
 
-def _postgres_storable_json(file_object: BaseModel) -> str:
+def postgres_storable_json(file_object: BaseModel) -> str:
     dumped: Final = file_object.model_dump_json()
     if "\\u0000" not in dumped:
         return dumped
@@ -650,7 +650,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
         # FIX: Update status and file_object on every operation to keep state in sync
         update_columns: Final = {
-            "file_object": _postgres_storable_json(stored_object),
+            "file_object": postgres_storable_json(stored_object),
             "status": file_object.status,
             "updated_by": user_api_key_dict.user_id,
         }
@@ -666,7 +666,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             data={
                 "create": {
                     "unified_object_id": unified_object_id,
-                    "file_object": _postgres_storable_json(stored_object),
+                    "file_object": postgres_storable_json(stored_object),
                     "model_object_id": model_object_id,
                     "file_purpose": file_purpose,
                     "created_by": resolve_resource_owner_id(user_api_key_dict),
@@ -702,7 +702,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "unified_object_id": response_id,
                     "model_object_id": decrypted_response_id(response_id),
                     "file_purpose": "response",
-                    "file_object": _postgres_storable_json(_without_model_output(response)),
+                    "file_object": postgres_storable_json(_without_model_output(response)),
                     "status": PENDING_RESPONSE_STATUSES[0],
                     "created_by": resolve_resource_owner_id(user_api_key_dict),
                     "team_id": user_api_key_dict.team_id,

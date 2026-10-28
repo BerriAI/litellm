@@ -12,6 +12,7 @@ from litellm.decisions.call import (
     SystemOneQuestions,
     SystemOneRequestFields,
     asend,
+    log_caller_request,
     prepare_call,
     reject_other_format,
     send,
@@ -37,12 +38,14 @@ def _prepare_systemone_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
+    fields: Final = SystemOneRequestFields(
+        state=state, questions=questions, images=images, assets=assets, audio=audio, videos=videos
+    )
+    log_caller_request(kwargs, fields)
     reject_other_format(model=model, kwargs=kwargs, field_name="input", other_function="decisions")
     return prepare_call(
         model=model,
-        fields=SystemOneRequestFields(
-            state=state, questions=questions, images=images, assets=assets, audio=audio, videos=videos
-        ),
+        fields=fields,
         safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,

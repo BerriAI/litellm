@@ -1,20 +1,17 @@
 """Resolve which reasoning_effort values a deployment, and by intersection a model group, accepts.
 
-An entry that states its levels outright in reasoning_effort_levels is read first and wins
-whole, for a model whose set the per-level flags cannot express: Kimi K3 takes low, high and max,
-and no flag can drop medium because medium has none. Every other entry answers through the
-supports_*_reasoning_effort flags below, whose polarity mirrors how a request path reads that same
-flag. medium and high are unconditional for a reasoning model. minimal and low are opt-out:
-openai/chat/gpt_5_transformation.py refuses them only when the map says false. xhigh and max are
-opt-in. none is opt-out everywhere except the azure gpt-5 family, whose config raises
-UnsupportedParamsError without an explicit true.
+An entry that states its levels outright in reasoning_effort_levels wins whole, for a model whose set
+the per-level flags cannot express (Kimi K3 takes low, high and max, and no flag can drop medium).
+Every other entry answers through its supports_*_reasoning_effort flags, read with the polarity the
+chat gate uses: medium and high are unconditional, minimal and low are opt-out (refused only on an
+explicit false), xhigh is opt-in, and none is opt-out except on the azure gpt-5 family, whose chat
+config refuses it without an explicit true.
 
-xhigh is gated on the request path by the openai and azure gpt-5 configs. max is not gated there at
-all: outside the gpt-6-astra rows every entry carrying supports_max_reasoning_effort is Claude-family,
-and anthropic/chat/transformation.py gates max on the output_config path while its reasoning_effort
-path maps any level to a thinking budget. Making max opt-in is a deliberate trade, then, since an
-explicit flag is the only signal that the tier is a real one rather than litellm rounding the level
-to a budget, and a missing flag costs advisory metadata rather than a rejected request.
+The Responses gate reads none, minimal, low and xhigh as opt-out. Neither gate judges max, which
+Chat Completions refuses and Responses honors on the gpt-6 family, so its flag is advisory and
+advertised opt-in: outside the gpt-6 rows every entry carrying supports_max_reasoning_effort is
+Claude-family, where anthropic/chat/transformation.py gates max on the output_config path, so an
+explicit flag is the only signal that the tier is real.
 
 A deployment the map describes with no effort flags at all resolves to None rather than to the
 opt-out defaults. 689 of the map's 854 reasoning entries carry no flag, and the o-series, xai and
