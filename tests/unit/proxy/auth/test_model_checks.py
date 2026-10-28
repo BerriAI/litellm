@@ -1150,6 +1150,55 @@ def test_partial_bedrock_wildcard_lists_nothing_when_no_discovered_id_carries_it
     assert get_known_models_from_wildcard("bedrock/anthropic.*", deployment) == []
 
 
+@pytest.mark.parametrize(
+    ("wildcard", "deployment_model", "listed_ids"),
+    [
+        (
+            "openrouter/*",
+            "openrouter/*",
+            [
+                "openrouter/openai/gpt-5.4-mini",
+                "openrouter/anthropic/claude-haiku-5-5",
+                "openrouter/openai/text-embedding-3-small",
+            ],
+        ),
+        (
+            "or-team/*",
+            "openrouter/*",
+            ["or-team/openai/gpt-5.4-mini", "or-team/anthropic/claude-haiku-5-5", "or-team/openai/text-embedding-3-small"],
+        ),
+        (
+            "openrouter/openai/*",
+            "openrouter/openai/*",
+            ["openrouter/openai/gpt-5.4-mini", "openrouter/openai/text-embedding-3-small"],
+        ),
+    ],
+)
+@respx.mock
+def test_openrouter_wildcard_lists_the_live_catalog_with_each_vendor_namespace(
+    monkeypatch: pytest.MonkeyPatch, wildcard: str, deployment_model: str, listed_ids: list[str]
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
+    respx.get("https://openrouter.ai/api/v1/models/user").mock(
+        return_value=httpx.Response(
+            200, json={"data": [{"id": "openai/gpt-5.4-mini"}, {"id": "anthropic/claude-haiku-5-5"}]}
+        )
+    )
+    respx.get("https://openrouter.ai/api/v1/embeddings/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "openai/text-embedding-3-small"}]})
+    )
+
+    assert (
+        get_known_models_from_wildcard(wildcard, LiteLLM_Params(model=deployment_model, api_key=f"sk-or-{wildcard}"))
+        == listed_ids
+    )
+
+
 @respx.mock
 def test_custom_prefix_that_starts_a_discovered_id_still_prefixes_every_listed_model(
     monkeypatch: pytest.MonkeyPatch,
