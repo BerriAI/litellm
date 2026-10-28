@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from fastapi import HTTPException
 from pydantic import SecretStr, TypeAdapter
@@ -48,6 +48,7 @@ from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
     _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
     _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    oauth2_introspection_applies,
     run_centralized_common_checks,
     user_api_key_auth,
 )
@@ -102,6 +103,7 @@ _EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
 OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 _PROXY_SETTINGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _CAUSE_CHAIN_MAX_DEPTH: Final = 16
+_IdentityCheck: TypeAlias = Literal["oauth2", "oauth2_proxy", "jwt"]
 _CACHED_VALUE: Final = TypeAdapter(object)
 
 
@@ -266,21 +268,64 @@ async def _bearer_is_litellm_credential(token: str) -> bool:
     return token.startswith(LITELLM_VIRTUAL_KEY_PREFIX) and await virtual_key_may_exist(token)
 
 
-async def _upstream_bearer_identity(token: str, litellm_api_key: str, request: Request) -> UserAPIKeyAuth | None:
-    """The LiteLLM user an upstream bearer also proves, or ``None`` when it proves none.
-
-    Custom auth decides alone, so any rejection is ``None``. A JWT is tried only when JWT auth is on, its
-    issuer may be LiteLLM's, and its signature verifies. Past that, only a user LiteLLM does not know is
-    ``None``; every other refusal (budget, blocked team, disallowed route) propagates."""
+def _identity_check(token: str, route: str, settings: Mapping[str, object]) -> _IdentityCheck | None:
+    """The identity check LiteLLM's own auth would run on ``token`` for ``route``, in its order: OAuth2
+    introspection, then trusted reverse-proxy identity headers, then a JWT whose issuer may be LiteLLM's."""
     from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.mcp_server.bridge_token_flow import (  # noqa: PLC0415  # bridge flow imports this module
-        custom_auth_configured,
         jwt_issuer_may_be_litellm,
     )
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # startup owns the active auth configuration
-        general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy global is declared as a bare dict
         jwt_handler,
         premium_user,
+    )
+
+    enable_jwt_auth: Final = settings.get("enable_jwt_auth") is True
+    if oauth2_introspection_applies(
+        token,
+        route,
+        enable_oauth2_auth=settings.get("enable_oauth2_auth") is True,
+        enable_jwt_auth=enable_jwt_auth,
+        jwt_handler=jwt_handler,
+    ):
+        return "oauth2" if premium_user is True else None
+    if settings.get("enable_oauth2_proxy_auth") is True:
+        return "oauth2_proxy"
+    if enable_jwt_auth and premium_user is True and JWTHandler.is_jwt(token=token) and jwt_issuer_may_be_litellm(token):
+        return "jwt"
+    return None
+
+
+async def _verify_identity(check: _IdentityCheck, token: str, request: Request) -> None:
+    from litellm.proxy.auth.oauth2_check import Oauth2Handler  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.oauth2_proxy_hook import (  # noqa: PLC0415  # proxy import cycle
+        handle_oauth2_proxy_request,
+    )
+    from litellm.proxy.proxy_server import jwt_handler  # noqa: PLC0415  # startup owns the active auth configuration
+
+    match check:
+        case "oauth2":
+            await Oauth2Handler.check_oauth2_token(token=token)
+        case "oauth2_proxy":
+            await handle_oauth2_proxy_request(request=request)
+        case "jwt":
+            await jwt_handler.auth_jwt(token=token)  # pyright: ignore[reportUnknownMemberType]  # returns a bare dict; only whether it raises matters
+        case _:
+            assert_never(check)
+
+
+async def _upstream_bearer_identity(token: str, litellm_api_key: str, request: Request) -> UserAPIKeyAuth | None:
+    """The LiteLLM user an upstream bearer also proves, or ``None`` when it proves none.
+
+    Custom auth decides alone, so any rejection is ``None``. Otherwise the identity check LiteLLM would run
+    (OAuth2 introspection, reverse-proxy headers, or a JWT) must pass first. Past that, only a user LiteLLM
+    does not know is ``None``; every other refusal (budget, blocked team, disallowed route) propagates."""
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.mcp_server.bridge_token_flow import (  # noqa: PLC0415  # bridge flow imports this module
+        custom_auth_configured,
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # startup owns the active auth configuration
+        general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy global is declared as a bare dict
     )
 
     if custom_auth_configured():
@@ -288,16 +333,13 @@ async def _upstream_bearer_identity(token: str, litellm_api_key: str, request: R
             return await user_api_key_auth(api_key=litellm_api_key, request=request)
         except (HTTPException, ProxyException):
             return None
-    settings: Final = _PROXY_SETTINGS_ADAPTER.validate_python(general_settings)
-    if (
-        settings.get("enable_jwt_auth") is not True
-        or premium_user is not True
-        or not JWTHandler.is_jwt(token=token)
-        or not jwt_issuer_may_be_litellm(token)
-    ):
+    check: Final = _identity_check(
+        token, get_request_route(request), _PROXY_SETTINGS_ADAPTER.validate_python(general_settings)
+    )
+    if check is None:
         return None
     try:
-        await jwt_handler.auth_jwt(token=token)  # pyright: ignore[reportUnknownMemberType]  # returns a bare dict; only whether it raises matters
+        await _verify_identity(check, token, request)
     except Exception:  # noqa: BLE001  # any verification failure means LiteLLM does not vouch for this bearer
         return None
     try:

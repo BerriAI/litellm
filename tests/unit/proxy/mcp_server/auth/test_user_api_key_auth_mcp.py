@@ -2826,6 +2826,84 @@ class TestMCPDelegateAuthToUpstream:
 
         assert exc_info.value is refusal
 
+    @staticmethod
+    @contextlib.contextmanager
+    def _idp_auth_enabled(mechanism: str, verify: AsyncMock, premium: bool = True):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.auth.oauth2_check import Oauth2Handler
+
+        settings = {"oauth2": {"enable_oauth2_auth": True}, "oauth2_proxy": {"enable_oauth2_proxy_auth": True}}
+        verifier = (
+            patch.object(Oauth2Handler, "check_oauth2_token", verify)
+            if mechanism == "oauth2"
+            else patch("litellm.proxy.auth.oauth2_proxy_hook.handle_oauth2_proxy_request", verify)
+        )
+        with (
+            patch.dict(proxy_server.general_settings, settings[mechanism]),
+            patch.object(proxy_server, "premium_user", premium),
+            patch.object(proxy_server, "user_custom_auth", None),
+            verifier,
+        ):
+            yield
+
+    @pytest.mark.parametrize("mechanism", ["oauth2", "oauth2_proxy"])
+    @pytest.mark.parametrize(
+        "verify_effect, allowed_server_ids, expected_user_id",
+        [
+            (None, ["test-server-id"], "idp-user"),
+            (None, [], None),
+            (ValueError("Token is not active"), ["test-server-id"], None),
+        ],
+        ids=["granted-user", "user-not-granted", "identity-rejected"],
+    )
+    async def test_delegate_idp_identity_follows_the_jwt_rules(
+        self, mechanism, verify_effect, allowed_server_ids, expected_user_id
+    ):
+        """OAuth2 introspection and trusted reverse-proxy headers admit a granted user by name, and a user
+        who is not granted or not vouched for anonymously. The bearer is forwarded either way."""
+        admission = AsyncMock(return_value=UserAPIKeyAuth(user_id="idp-user"))
+        with (
+            TestMCPDelegateAuthToUpstream._idp_auth_enabled(mechanism, AsyncMock(side_effect=verify_effect)),
+            TestMCPDelegateAuthToUpstream._delegate_admission(admission, allowed_server_ids),
+        ):
+            auth_result, _, _, _, oauth2_headers, _ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope("opaque-idp-token")
+            )
+
+        assert auth_result.user_id == expected_user_id
+        assert auth_result.mcp_forwards_caller_authorization is True
+        assert oauth2_headers == {"Authorization": "Bearer opaque-idp-token"}
+
+    @pytest.mark.parametrize("mechanism", ["oauth2", "oauth2_proxy"])
+    async def test_delegate_idp_user_refusal_propagates(self, mechanism):
+        """Once the provider vouches for the caller, LiteLLM's budget and permission refusals apply."""
+        refusal = ProxyException(message="Budget has been exceeded", type="budget_exceeded", param=None, code=400)
+        with (
+            TestMCPDelegateAuthToUpstream._idp_auth_enabled(mechanism, AsyncMock()),
+            TestMCPDelegateAuthToUpstream._delegate_admission(AsyncMock(side_effect=refusal)),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(
+                    TestMCPDelegateAuthToUpstream._bearer_scope("opaque-idp-token")
+                )
+
+        assert exc_info.value is refusal
+
+    async def test_delegate_oauth2_without_premium_never_calls_the_provider(self):
+        """OAuth2 introspection is enterprise-only, so without a license the bearer is the upstream's alone."""
+        introspect = AsyncMock()
+        with (
+            TestMCPDelegateAuthToUpstream._idp_auth_enabled("oauth2", introspect, premium=False),
+            TestMCPDelegateAuthToUpstream._delegate_admission(AsyncMock(return_value=UserAPIKeyAuth(user_id="idp-user"))),
+        ):
+            auth_result, *_ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope("opaque-idp-token")
+            )
+
+        assert auth_result.user_id is None
+        assert auth_result.mcp_forwards_caller_authorization is True
+        introspect.assert_not_awaited()
+
     async def test_delegate_jwt_from_unconfigured_issuer_is_forwarded_without_jwt_auth(self):
         """A JWT from an issuer LiteLLM's JWT auth is not configured for never reaches JWT auth."""
         auth_jwt = AsyncMock(return_value={"sub": "jwt-user"})
