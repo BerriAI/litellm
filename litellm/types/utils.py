@@ -4523,6 +4523,7 @@ class LlmProviders(str, Enum):
     GALADRIEL = "galadriel"
     NEBIUS = "nebius"
     INFINITY = "infinity"
+    ISMSCOPILOT = "ismscopilot"
     DEEPGRAM = "deepgram"
     ELEVENLABS = "elevenlabs"
     NOVITA = "novita"
