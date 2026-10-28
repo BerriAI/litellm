@@ -9,7 +9,7 @@ ARN unified_object_id) batches with no managed unified id.
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import copy
@@ -3850,7 +3850,7 @@ class TestBatchLineItemsFromThePoller:
 
     @classmethod
     @contextmanager
-    def _provider(cls, journal: list[str], missing_file_error: Exception | None = None):
+    def _provider(cls, journal: list[str], missing_file_error: Exception | None = None) -> Iterator[None]:
         """The provider's batch files by id, and a spend-log writer that journals each write. Reading any other
         file raises missing_file_error, or the NotFoundError OpenAI answers with."""
         files = {"file-input-1": cls._INPUT, _CLAIM_OUTPUT_FILE_ID: cls._OUTPUT, "file-err-1": cls._ERROR}
@@ -4155,8 +4155,8 @@ class TestBatchLineItemsFromThePoller:
         ),
     )
     async def test_a_storage_404_for_the_output_object_retires_the_batch_unbilled(
-        self, status_code, missing_object, retired
-    ):
+        self, status_code: int, missing_object: str, retired: bool
+    ) -> None:
         """Vertex AI reports a deleted gs:// output as a VertexAIError 404 that names the object without its
         scheme, and no later poll can read that object either."""
         from litellm.llms.vertex_ai.common_utils import VertexAIError
