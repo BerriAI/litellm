@@ -5,7 +5,9 @@ import os
 import stat
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Final
 from unittest.mock import patch
 
 import click
@@ -201,18 +203,21 @@ def _codex_config(args):
     return tomllib.loads("\n".join(args[1::2]))
 
 
-def _set_codex_key(config, keys, value):
-    if len(keys) == 1:
-        return {**config, keys[0]: value}
-    return {**config, keys[0]: _set_codex_key(config.get(keys[0], {}), keys[1:], value)}
+def _set_codex_key(config: Mapping[str, object], keys: Sequence[str], value: object) -> Mapping[str, object]:
+    head, *rest = keys
+    if not rest:
+        return {**config, head: value}
+    nested: Final = config.get(head, {})
+    assert isinstance(nested, Mapping)
+    return {**config, head: _set_codex_key(nested, rest, value)}
 
 
-def _with_codex_override(config, override):
+def _with_codex_override(config: Mapping[str, object], override: str) -> Mapping[str, object]:
     path, value = override.split("=", 1)
     return _set_codex_key(config, path.split("."), tomllib.loads(f"value = {value}")["value"])
 
 
-def _codex_config_over(user_config_toml, args):
+def _codex_config_over(user_config_toml: str, args: Sequence[str]) -> Mapping[str, object]:
     assert set(args[0::2]) == {"-c"}
     return functools.reduce(_with_codex_override, args[1::2], tomllib.loads(user_config_toml))
 
