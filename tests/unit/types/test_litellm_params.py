@@ -154,6 +154,8 @@ OPTION_NAMES: Final = (
     "model_info",
     "rpm",
     "tpm",
+    "rpd",
+    "tpd",
     "itpm",
     "otpm",
     "default_api_key_rpm_limit",

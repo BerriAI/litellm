@@ -859,7 +859,7 @@ class TestModelRateLimitingCheckIOTokens:
             with pytest.raises(litellm.RateLimitError):
                 await check.async_pre_call_check(deployment)
 
-        assert await dual_cache.async_get_cache(key=rpm_key) == 6
+        assert await dual_cache.async_get_cache(key=rpm_key) == 5, "the rejected request hands its rpm count back"
         assert (await dual_cache.async_get_cache(key=itpm_key) or 0) == 0
         assert ITPM_RESERVED_KEY not in request_kwargs["metadata"]
         assert any("both limit types are enforced" in record.message for record in caplog.records)

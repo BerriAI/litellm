@@ -35647,6 +35647,8 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Responses Api Version */
             responses_api_version?: string | null;
+            /** Rpd */
+            rpd?: number | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Access Key Id */
@@ -35699,6 +35701,8 @@ export interface components {
             token_exchange_profile?: string | null;
             /** Token Exchange Scope */
             token_exchange_scope?: string | null;
+            /** Tpd */
+            tpd?: number | null;
             /** Tpm */
             tpm?: number | null;
             /** Use Chat Completions Api */
@@ -51039,6 +51043,8 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Responses Api Version */
             responses_api_version?: string | null;
+            /** Rpd */
+            rpd?: number | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Access Key Id */
@@ -51091,6 +51097,8 @@ export interface components {
             token_exchange_profile?: string | null;
             /** Token Exchange Scope */
             token_exchange_scope?: string | null;
+            /** Tpd */
+            tpd?: number | null;
             /** Tpm */
             tpm?: number | null;
             /** Use Chat Completions Api */

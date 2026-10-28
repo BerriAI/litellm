@@ -75,6 +75,8 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "rpm",
             "itpm",
             "otpm",
+            "tpd",
+            "rpd",
             "use_xai_oauth",
             "chatgpt_auth_file",
             "github_copilot_auth_type",
