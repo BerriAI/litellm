@@ -1315,24 +1315,21 @@ def resolve_tenant_otel_destinations(
 ) -> "tuple[OtelDestination, ...]":
     """The OTLP destinations this request's key or team config overrides its traces to.
 
-    Key settings win over team settings outright, the same precedence
+    Key settings win over team settings outright, and team settings over the key's
+    team in the config's ``default_team_settings``, the same precedence
     ``_get_dynamic_logging_metadata`` applies, so one caller never exports the same
     backend to two accounts. An empty key-level list counts as configured, since that
     is what disabling a key's callbacks writes. Returns empty when OTEL V2 is off, when
-    neither level named a destination-capable backend, or when the config is
+    no level named a destination-capable backend, or when the config is
     incomplete, and the request then keeps the operator's own exporters.
 
     Two entries naming the same backend merge their ``callback_vars`` last-wins, the
     way ``convert_key_logging_metadata_to_callback`` merges them, so the destination
     and the per-request tracer routing cannot read one config two ways.
 
-    A ``failure``-only entry is skipped: a destination is resolved during auth, before
-    the request has an outcome, so honouring the filter would mean holding every span
-    back until the call finishes. Those entries keep today's behaviour instead, where
-    the tenant's credentials reach the backend through per-request tracer routing and
-    the operator's exporter is left alone. Its ``callback_vars`` still take part in the
-    merge for a backend another entry made eligible, so the destination carries the
-    same credentials the runtime parser resolves for that request.
+    A backend only ``failure``-only entries name resolves to a destination that keeps
+    no successful request: the fan-out holds that request's spans until the request
+    goes quiet and forwards them only when one of them failed.
 
     A backend the request disabled dynamically, through the key's
     ``litellm_disabled_callbacks`` or the ``x-litellm-disable-callbacks`` header in
@@ -1352,36 +1349,77 @@ def resolve_tenant_otel_destinations(
         if key_entries is not None
         else KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
     )
-    if not entries:
+    configured: Final = (
+        _config_team_callbacks(user_api_key_dict)
+        if entries is None
+        else tuple(
+            callback
+            for item in entries
+            if (callback := get_validated_callback_metadata(item=item, source="otel-destination")) is not None
+        )
+    )
+    if not configured:
         return ()
     disabled: Final = _dynamically_disabled_backends(user_api_key_dict, request_headers)
-    callbacks: Final = tuple(
-        callback
-        for item in entries
-        if (callback := get_validated_callback_metadata(item=item, source="otel-destination")) is not None
-        if callback.callback_name.lower() not in disabled
-    )
+    callbacks: Final = tuple(callback for callback in configured if callback.callback_name.lower() not in disabled)
+    service_name: Final = _tenant_service_name(user_api_key_dict)
     return tuple(
         destination
-        for name in dict.fromkeys(
-            callback.callback_name for callback in callbacks if callback.callback_type != "failure"
+        for name in dict.fromkeys(callback.callback_name for callback in callbacks)
+        if (destination := _tenant_destination(name, callbacks, service_name, entries is None)) is not None
+    )
+
+
+def _config_team_callbacks(user_api_key_dict: UserAPIKeyAuth) -> tuple[AddTeamCallback, ...]:
+    """The callbacks ``litellm_settings.default_team_settings`` gives the key's team.
+
+    Read through ``add_team_based_callbacks_from_config`` and only where
+    ``_get_dynamic_logging_metadata`` reaches it, past a team's deprecated
+    ``callback_settings``, so the destination and the request's own callback settings
+    read one config. A name in ``success_callback`` is a success entry, one only in
+    ``failure_callback`` a failure-only entry.
+    """
+    from litellm.proxy.proxy_server import proxy_config
+
+    team_id: Final = user_api_key_dict.team_id
+    if (
+        team_id is None
+        or not litellm.default_team_settings
+        or "callback_settings" in (user_api_key_dict.team_metadata or {})
+    ):
+        return ()
+    settings: Final = LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
+        team_id=team_id, proxy_config=proxy_config
+    )
+    if settings is None:
+        return ()
+    success: Final = settings.success_callback or []
+    return tuple(
+        callback
+        for name in dict.fromkeys((*success, *(settings.failure_callback or [])))
+        if (
+            callback := get_validated_callback_metadata(
+                item={
+                    "callback_name": name,
+                    "callback_type": "success" if name in success else "failure",
+                    "callback_vars": dict(settings.callback_vars or {}),
+                },
+                source="default_team_settings",
+            )
         )
-        if (destination := _tenant_destination(name, callbacks, _tenant_service_name(user_api_key_dict))) is not None
+        is not None
     )
 
 
 def _tenant_destination(
-    name: str, callbacks: Sequence[AddTeamCallback], service_name: str | None
+    name: str, callbacks: Sequence[AddTeamCallback], service_name: str | None, operator_configured: bool
 ) -> "OtelDestination | None":
     from litellm.integrations.otel.model.config import parse_capture_message_content, parse_excluded_services
     from litellm.integrations.otel.presets.destinations import destination_for
 
+    named: Final = tuple(callback for callback in callbacks if callback.callback_name == name)
     callback_vars: Final = MappingProxyType(
-        dict(
-            itertools.chain.from_iterable(
-                callback.callback_vars.items() for callback in callbacks if callback.callback_name == name
-            )
-        )
+        dict(itertools.chain.from_iterable(callback.callback_vars.items() for callback in named))
     )
     return destination_for(
         name,
@@ -1389,6 +1427,8 @@ def _tenant_destination(
         service_name,
         parse_capture_message_content(callback_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)),
         parse_excluded_services(callback_vars.get(EXCLUDED_SERVICES_VAR)),
+        failure_only=all(callback.callback_type == "failure" for callback in named),
+        operator_configured=operator_configured,
     )
 
 

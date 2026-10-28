@@ -3873,11 +3873,80 @@ class TestCallbackTypeFilter:
 
         assert resolve_tenant_otel_destinations(self._auth(callback_type)) != ()
 
-    def test_a_failure_only_entry_does_not_take_over_the_trace(self, monkeypatch):
+    def test_a_failure_only_entry_keeps_only_failed_requests(self, monkeypatch):
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
         is_otel_v2_enabled.cache_clear()
 
-        assert resolve_tenant_otel_destinations(self._auth("failure")) == ()
+        (destination,) = resolve_tenant_otel_destinations(self._auth("failure"))
+
+        assert (destination.success_sampling_rate, destination.error_sampling_rate) == (0.0, None)
+
+    def test_a_failure_only_entry_beside_a_success_entry_keeps_every_request(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        entries: Final = [
+            *self._auth("failure").team_metadata["logging"],
+            *self._auth("success").team_metadata["logging"],
+        ]
+
+        (destination,) = resolve_tenant_otel_destinations(UserAPIKeyAuth(team_metadata={"logging": entries}))
+
+        assert destination.success_sampling_rate is None
+
+
+class TestConfigTeamDestinations:
+    """``litellm_settings.default_team_settings`` is the last level ``get_dynamic_logging_metadata``
+    reads, so a team configured only there resolves its destination from it."""
+
+    @staticmethod
+    @pytest.fixture(autouse=True)
+    def config_team(monkeypatch):
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setenv("CFG_TEAM_LANGFUSE_SK", "sk-from-env")
+        is_otel_v2_enabled.cache_clear()
+        team: Final = {
+            "team_id": "cfg-team",
+            "success_callback": ["langfuse_otel"],
+            "callback_vars": {
+                "langfuse_public_key": "pk",
+                "langfuse_secret_key": "os.environ/CFG_TEAM_LANGFUSE_SK",
+                "langfuse_host": "http://cfg-team.internal",
+            },
+        }
+        monkeypatch.setattr(litellm, "default_team_settings", [team])
+        monkeypatch.setattr(
+            proxy_server.proxy_config, "load_team_config", lambda team_id: dict(team) if team_id == "cfg-team" else {}
+        )
+        return team
+
+    def test_a_config_team_resolves_with_its_env_secret_and_unlisted_host(self):
+        (destination,) = resolve_tenant_otel_destinations(UserAPIKeyAuth(team_id="cfg-team"))
+
+        assert destination.endpoint == "http://cfg-team.internal/api/public/otel"
+        assert destination.headers["Authorization"] == "Basic " + b64encode(b"pk:sk-from-env").decode()
+        assert destination.success_sampling_rate is None
+
+    def test_a_failure_only_config_team_keeps_only_failed_requests(self, config_team):
+        config_team["failure_callback"] = config_team.pop("success_callback")
+
+        (destination,) = resolve_tenant_otel_destinations(UserAPIKeyAuth(team_id="cfg-team"))
+
+        assert destination.success_sampling_rate == 0.0
+
+    @pytest.mark.parametrize(
+        "auth",
+        [
+            UserAPIKeyAuth(team_id="cfg-team", metadata={"logging": []}),
+            UserAPIKeyAuth(team_id="cfg-team", team_metadata={"logging": []}),
+            UserAPIKeyAuth(team_id="cfg-team", team_metadata={"callback_settings": {"success_callback": []}}),
+            UserAPIKeyAuth(team_id="other-team"),
+        ],
+        ids=["key-logging", "team-logging", "team-callback-settings", "unconfigured-team"],
+    )
+    def test_a_level_that_wins_over_the_config_keeps_it_out(self, auth):
+        assert resolve_tenant_otel_destinations(auth) == ()
 
 
 class TestTenantConfigAgreement:

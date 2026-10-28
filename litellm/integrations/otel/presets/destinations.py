@@ -32,14 +32,15 @@ def _warn_host_not_allowlisted(host: str) -> None:
     )
 
 
-def _langfuse_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":
+def _langfuse_destination(params: StandardCallbackDynamicParams, operator_configured: bool) -> "_Destination | None":
     """The tenant's own Langfuse host, else the operator's, else Langfuse US cloud.
 
     A host the tenant named has to be allowlisted by the operator, the same way a
     URL-valued ``model`` is: anyone who can mint a key can write it, and it becomes an
     endpoint the proxy posts the request's whole trace to, carrying the tenant's own
     credentials. The operator's own ``LANGFUSE_HOST`` is not checked, since an internal
-    collector there is a deployment choice.
+    collector there is a deployment choice, and neither is a host the operator wrote
+    into its own config for a team.
     """
     from litellm.integrations.langfuse.langfuse_otel import (
         LANGFUSE_CLOUD_US_ENDPOINT,
@@ -52,7 +53,7 @@ def _langfuse_destination(params: StandardCallbackDynamicParams) -> "_Destinatio
         return (LANGFUSE_CLOUD_US_ENDPOINT, None)
     normalized: Final = host if host.startswith("http") else f"https://{host}"
     endpoint: Final = f"{normalized.rstrip('/')}/api/public/otel"
-    if tenant_host is None:
+    if tenant_host is None or operator_configured:
         return (endpoint, None)
     if not is_url_destination_allowed_by_host(endpoint, litellm.provider_url_destination_allowed_hosts):
         _warn_host_not_allowlisted(host)
@@ -60,20 +61,20 @@ def _langfuse_destination(params: StandardCallbackDynamicParams) -> "_Destinatio
     return (endpoint, None)
 
 
-def _arize_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":
+def _arize_destination(params: StandardCallbackDynamicParams, operator_configured: bool) -> "_Destination | None":
     from litellm.integrations.arize.arize import ArizeLogger
 
     config: Final = ArizeLogger.get_arize_config(params.get("arize_otlp_protocol"))
     return (config.endpoint, config.protocol)
 
 
-def _weave_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":
+def _weave_destination(params: StandardCallbackDynamicParams, operator_configured: bool) -> "_Destination | None":
     from litellm.integrations.weave.weave_otel import weave_otel_endpoint
 
     return (weave_otel_endpoint(os.environ.get("WANDB_HOST")), None)
 
 
-def _newrelic_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":
+def _newrelic_destination(params: StandardCallbackDynamicParams, operator_configured: bool) -> "_Destination | None":
     from litellm.integrations.otel.presets.newrelic import newrelic_dynamic_endpoint
 
     endpoint: Final = newrelic_dynamic_endpoint(params)
@@ -84,15 +85,15 @@ def _newrelic_destination(params: StandardCallbackDynamicParams) -> "_Destinatio
 #: when it appears here AND in ``DYNAMIC_HEADERS_BY_CALLBACK``: without a header
 #: builder the destination would carry no tenant credentials, and the exporter
 #: would post the tenant's traffic to the operator's account.
-_DESTINATION_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], "_Destination | None"]]] = (
-    MappingProxyType(
-        {
-            "langfuse_otel": _langfuse_destination,
-            "arize": _arize_destination,
-            "weave_otel": _weave_destination,
-            "newrelic": _newrelic_destination,
-        }
-    )
+_DESTINATION_BY_CALLBACK: Final[
+    Mapping[str, Callable[[StandardCallbackDynamicParams, bool], "_Destination | None"]]
+] = MappingProxyType(
+    {
+        "langfuse_otel": _langfuse_destination,
+        "arize": _arize_destination,
+        "weave_otel": _weave_destination,
+        "newrelic": _newrelic_destination,
+    }
 )
 
 #: Headers a destination must carry to authenticate. Several dynamic-header builders
@@ -189,6 +190,9 @@ def destination_for(
     service_name: str | None = None,
     capture_message_content: str | None = None,
     excluded_db_systems: frozenset[str] | None = None,
+    *,
+    failure_only: bool = False,
+    operator_configured: bool = False,
 ) -> OtelDestination | None:
     """The destination ``params`` names for ``callback_name``, or ``None``.
 
@@ -196,6 +200,8 @@ def destination_for(
     request keeps the operator's global exporters. ``service_name`` is the key's or
     team's ``otel_service_name``, which the per-request tracer route applies when the
     backend is not overridden and the destination has to apply once it is.
+    ``failure_only`` keeps no successful request tree, and ``operator_configured``
+    marks ``params`` the operator wrote itself (``default_team_settings``).
     """
     from litellm.integrations.otel.presets import DYNAMIC_HEADERS_BY_CALLBACK
 
@@ -206,7 +212,7 @@ def destination_for(
     headers: Final = header_builder(params)
     if not headers or not _REQUIRED_HEADERS_BY_CALLBACK[callback_name] <= frozenset(headers):
         return None
-    resolved: Final = destination_builder(params)
+    resolved: Final = destination_builder(params, operator_configured)
     if resolved is None:
         return None
     endpoint, protocol = resolved
@@ -221,6 +227,6 @@ def destination_for(
         span_scope=_span_scope(callback_name, params),
         capture_message_content=capture_message_content,
         excluded_db_systems=excluded_db_systems,
-        success_sampling_rate=success_sampling_rate,
+        success_sampling_rate=0.0 if failure_only else success_sampling_rate,
         error_sampling_rate=error_sampling_rate,
     )
