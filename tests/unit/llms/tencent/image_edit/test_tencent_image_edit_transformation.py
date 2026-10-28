@@ -107,6 +107,66 @@ def test_edit_is_not_offered_for_tencent_models_outside_seedream() -> None:
     assert captured == {}
 
 
+@pytest.mark.parametrize(
+    ("form_params", "expected_body_params"),
+    [
+        ({"watermark": "false", "seed": "7"}, {"watermark": False, "seed": 7}),
+        ({"watermark": "True", "seed": "-1"}, {"watermark": True, "seed": -1}),
+        ({"watermark": "maybe"}, {"watermark": "maybe"}),
+    ],
+)
+def test_edit_parses_tokenhub_values_sent_as_form_strings(
+    form_params: dict[str, object], expected_body_params: dict[str, object]
+) -> None:
+    captured: Final[dict[str, object]] = {}
+
+    litellm.image_edit(
+        model="tencent/seedream-image-v5.0-flash",
+        image=PNG_BYTES,
+        prompt="turn the square into a paper lantern",
+        api_key="sk-tokenhub",
+        client=_client(captured),
+        **form_params,
+    )
+
+    assert captured["body"] == {
+        "model": "seedream-image-v5.0-flash",
+        "prompt": "turn the square into a paper lantern",
+        "images": [f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"],
+        **expected_body_params,
+    }
+
+
+@pytest.mark.parametrize(
+    ("params", "expected_body_params"),
+    [
+        ({"background": "auto", "watermark": False}, {"watermark": False}),
+        ({"watermark": False, "seed": 7, "additional_drop_params": ["watermark"]}, {"seed": 7}),
+        ({"extra_body": {"watermark": False}, "additional_drop_params": ["watermark"]}, {}),
+    ],
+)
+def test_edit_keeps_dropped_params_out_of_the_tokenhub_body(
+    params: dict[str, object], expected_body_params: dict[str, object]
+) -> None:
+    captured: Final[dict[str, object]] = {}
+
+    litellm.image_edit(
+        model="tencent/seedream-image-v5.0-flash",
+        image=PNG_BYTES,
+        prompt="turn the square into a paper lantern",
+        api_key="sk-tokenhub",
+        client=_client(captured),
+        **params,
+    )
+
+    assert captured["body"] == {
+        "model": "seedream-image-v5.0-flash",
+        "prompt": "turn the square into a paper lantern",
+        "images": [f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"],
+        **expected_body_params,
+    }
+
+
 def test_edit_forwards_tokenhub_only_params_and_extra_body() -> None:
     captured: Final[dict[str, object]] = {}
 

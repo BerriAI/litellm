@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -24,6 +25,17 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _IMAGES: Final = TypeAdapter(tuple[object, ...])
+_FORM_BOOLEANS: Final = MappingProxyType({"true": True, "false": False})
+
+
+def _form_field_value(key: str, value: object) -> object:
+    match key, value:
+        case "watermark", str() if value.lower() in _FORM_BOOLEANS:
+            return _FORM_BOOLEANS[value.lower()]
+        case "seed", str() if value.removeprefix("-").isdigit():
+            return int(value)
+        case _:
+            return value
 
 
 class TencentImageEditConfig(BaseImageEditConfig):
@@ -79,7 +91,7 @@ class TencentImageEditConfig(BaseImageEditConfig):
             "model": model,
             "prompt": prompt,
             "images": tuple(image_to_data_url(img) for img in images if img is not None),
-            **image_edit_optional_request_params,
+            **{key: _form_field_value(key, value) for key, value in image_edit_optional_request_params.items()},
         }, ()
 
     @override
