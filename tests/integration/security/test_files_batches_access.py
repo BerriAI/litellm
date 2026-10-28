@@ -48,6 +48,7 @@ VERTEX_ACCESS_TOKEN: Final = "ya29.scripted-delete-token"
 AWS_ACCESS_KEY_ID: Final = "AKIAIOSFODNN7EXAMPLE"
 AWS_SECRET_ACCESS_KEY: Final = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 AWS_REGION: Final = "us-east-1"
+S3_OBJECT_BODY: Final = b'{"recordId":"r1","modelOutput":{"stop_reason":"end_turn"}}\n'
 _ForbiddenSurface = Literal[
     "upload_sdk_extra_body",
     "upload_form",
@@ -708,6 +709,62 @@ def test_non_admin_cannot_delete_a_raw_gcs_uri_before_vertex_auth_or_storage(gat
         assert token_requests == (), "non-admin raw GCS delete reached the Vertex token endpoint"
 
 
+def test_non_admin_still_reads_an_ordinary_provider_file_id(gateway: Gateway) -> None:
+    with wire_server(_openai_backend()) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/gpt-4o-mini", api_base=wire.url + "/v1", api_key="provider-key-" + uuid.uuid4().hex[:8]
+        )
+        _wait_until_every_worker_serves(gateway, model)
+        member: Final = _member(scenario, model)
+        file_id: Final = "file-" + uuid.uuid4().hex
+
+        read: Final = gateway.request("GET", f"/v1/files/{file_id}/content", key=member.key, params={"model": model})
+        assert read.status_code == 200, read.text
+        assert read.content == b"file-content\n", read.content
+        assert [
+            (request.method, urlsplit(request.target).path) for request in _drained_other_than_model_list_probes(wire)
+        ] == [("GET", f"/v1/files/{file_id}/content")]
+
+
+@pytest.mark.parametrize(
+    ("method", "route_suffix", "verb"),
+    [("GET", "/content", "retrieved"), ("DELETE", "", "deleted")],
+    ids=["content", "delete"],
+)
+def test_non_admin_cannot_reach_vertex_with_a_twice_encoded_raw_gcs_uri(
+    gateway: Gateway, method: Literal["GET", "DELETE"], route_suffix: str, verb: str
+) -> None:
+    with (
+        wire_server(_vertex_token_backend) as token_wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model=VERTEX_MODEL,
+            api_key=None,
+            vertex_project=VERTEX_PROJECT,
+            vertex_location=VERTEX_LOCATION,
+            vertex_credentials=_vertex_credentials(token_wire.url),
+            gcs_bucket_name=BUCKET,
+        )
+        _wait_until_every_worker_serves(gateway, model)
+        caller_user: Final = scenario.user(user_role="internal_user")
+        caller_key: Final = scenario.key(user_id=caller_user, models=[model])
+        object_uri: Final = f"gs://{BUCKET}/litellm-vertex-files/litellm-vertex-files-obj.jsonl"
+        twice_encoded: Final = quote(quote(object_uri, safe=""), safe="")
+        token_wire.drain()
+
+        denied: Final = gateway.request(
+            method, f"/v1/files/{twice_encoded}{route_suffix}", key=caller_key, params={"model": model}
+        )
+        token_requests: Final = token_wire.drain()
+        assert denied.status_code == 403, f"{denied.text}; token requests={token_requests}"
+        assert _error_message(denied, 403) == (
+            f"Raw cloud storage file ids can only be {verb} by a proxy admin key. "
+            "Use the LiteLLM managed file id returned when the file was created."
+        ), denied.text
+        assert token_requests == (), f"non-admin twice-encoded raw GCS {method} reached the Vertex token endpoint"
+
+
 def test_proxy_admin_deletes_a_raw_s3_uri_with_one_signed_delete(gateway: Gateway) -> None:
     with wire_server(_s3_backend()) as wire, gateway.scenario() as scenario:
         model: Final = _bedrock_model(scenario, wire)
@@ -744,6 +801,33 @@ def test_proxy_admin_deletes_a_raw_s3_uri_with_one_signed_delete(gateway: Gatewa
         )
         assert request.headers["authorization"] == expected_authorization, request.headers["authorization"]
         assert request.method == "DELETE", request.method
+
+
+def _s3_object_backend(request: Request) -> Reply:
+    if request.method == "GET":
+        return Reply(body=S3_OBJECT_BODY, content_type="application/octet-stream")
+    return _json_reply({"error": {"message": f"unscripted {request.method} {request.target}"}}, 404)
+
+
+def test_proxy_admin_reads_a_raw_s3_uri_with_one_signed_get(gateway: Gateway) -> None:
+    with wire_server(_s3_object_backend) as wire, gateway.scenario() as scenario:
+        model: Final = _bedrock_model(scenario, wire)
+        _wait_until_every_worker_serves(gateway, model)
+        object_key: Final = f"litellm-batch-outputs/{uuid.uuid4().hex}.jsonl.out"
+        object_uri: Final = f"s3://{BUCKET}/{object_key}"
+
+        read: Final = gateway.request(
+            "GET", "/v1/files/" + quote(object_uri, safe="") + "/content", params={"model": model}
+        )
+        storage_requests: Final = _drained_other_than_model_list_probes(wire)
+        assert read.status_code == 200, f"{read.text}; storage requests={storage_requests}"
+        assert read.content == S3_OBJECT_BODY, read.content
+        assert [(request.method, request.target) for request in storage_requests] == [
+            ("GET", f"/{BUCKET}/{object_key}")
+        ], storage_requests
+        assert (
+            storage_requests[0].headers["authorization"].startswith(f"AWS4-HMAC-SHA256 Credential={AWS_ACCESS_KEY_ID}/")
+        ), storage_requests[0].headers
 
 
 def _granting_vertex_token_backend(request: Request) -> Reply:
