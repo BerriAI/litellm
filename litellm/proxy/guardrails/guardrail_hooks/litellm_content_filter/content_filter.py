@@ -882,18 +882,25 @@ class ContentFilterGuardrail(CustomGuardrail):
     def _checksum_valid_spans(
         self, regex: Pattern[str], text: str, validator: Callable[[str], bool]
     ) -> tuple[tuple[int, int], ...]:
-        overlapping_regex: Final = re.compile(f"(?=({regex.pattern}))", regex.flags)
-        candidates: Final = tuple(overlapping_regex.finditer(text))
-        valid_starts: Final = tuple(candidate.start(1) for candidate in candidates if validator(candidate.group(1)))
-        if not valid_starts:
+        if regex.search(text) is None:
             return ()
-        candidate_runs: Final = self._merge_spans([candidate.span(1) for candidate in candidates])
-        return tuple(run for run in candidate_runs if self._run_contains_start(run, valid_starts))
+        overlapping_regex: Final = re.compile(f"(?=({regex.pattern}))", regex.flags)
+        candidate_spans: Final = tuple(candidate.span(1) for candidate in overlapping_regex.finditer(text))
+        valid_spans: Final = tuple(span for span in candidate_spans if validator(text[span[0] : span[1]]))
+        if not valid_spans:
+            return ()
+        valid_starts: Final = tuple(start for start, _ in valid_spans)
+        furthest_valid_ends: Final = tuple(itertools.accumulate((end for _, end in valid_spans), max))
+        return tuple(
+            span for span in candidate_spans if self._overlaps_a_valid_span(span, valid_starts, furthest_valid_ends)
+        )
 
     @staticmethod
-    def _run_contains_start(run: tuple[int, int], sorted_starts: Sequence[int]) -> bool:
-        index: Final = bisect_left(sorted_starts, run[0])
-        return index < len(sorted_starts) and sorted_starts[index] < run[1]
+    def _overlaps_a_valid_span(
+        span: tuple[int, int], sorted_valid_starts: Sequence[int], furthest_valid_ends: Sequence[int]
+    ) -> bool:
+        index: Final = bisect_left(sorted_valid_starts, span[1])
+        return index > 0 and furthest_valid_ends[index - 1] > span[0]
 
     def _match_near_keyword(
         self,

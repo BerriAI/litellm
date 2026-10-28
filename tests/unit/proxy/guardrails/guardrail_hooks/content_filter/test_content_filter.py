@@ -410,10 +410,11 @@ class TestContentFilterGuardrail:
         [
             ("PIN 4821 4532 0151 1283 0366 thanks", "PIN [CREDIT_CARD_REDACTED] thanks"),
             ("order 4111 4532 0151 1283 0366", "order [CREDIT_CARD_REDACTED]"),
+            ("codes 4532 4532 4532 4532 4532 0151 1283 0366 thanks", "codes 4532 [CREDIT_CARD_REDACTED] thanks"),
             ("order 4532 1234 5678 9010 paid by 4532 0151 1283 0366", "order 4532 1234 5678 9010 paid by [CREDIT_CARD_REDACTED]"),
         ],
     )
-    async def test_checksum_pattern_masks_each_run_of_candidates_that_holds_a_valid_card(self, text: str, expected: str):
+    async def test_checksum_pattern_masks_a_valid_card_with_the_candidates_overlapping_it(self, text: str, expected: str):
         guardrail: Final = ContentFilterGuardrail(
             guardrail_name="test-checksum-overlap",
             patterns=[
@@ -428,6 +429,47 @@ class TestContentFilterGuardrail:
         )
 
         assert guardrailed_inputs.get("texts") == [expected]
+
+    @pytest.mark.asyncio
+    async def test_checksum_pattern_streams_the_same_text_as_a_whole_response(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-checksum-streaming",
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="credit_card", action=ContentFilterAction.MASK)
+            ],
+        )
+        chunks: Final = ("4532 " * 20, "4532 0151 1283 0366 thanks")
+
+        async def mock_stream():
+            for index, content in enumerate(chunks):
+                yield ModelResponseStream(
+                    id=f"chunk{index}",
+                    choices=[
+                        StreamingChoices(
+                            delta=Delta(content=content),
+                            index=0,
+                            finish_reason="stop" if index == len(chunks) - 1 else None,
+                        )
+                    ],
+                    model="gpt-4",
+                )
+
+        streamed: Final = "".join(
+            [
+                chunk.choices[0].delta.content or ""
+                async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=MagicMock(), response=mock_stream(), request_data={}
+                )
+            ]
+        )
+        whole_response: Final = await guardrail.apply_guardrail(
+            inputs={"texts": ["".join(chunks)]}, request_data={}, input_type="response"
+        )
+
+        assert "0366" not in streamed
+        assert [streamed] == whole_response.get("texts")
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
