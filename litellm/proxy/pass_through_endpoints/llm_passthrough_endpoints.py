@@ -111,6 +111,7 @@ from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
+    YieldsToConfiguredPassThroughRoute,
     create_pass_through_route,
     create_websocket_passthrough_route,
     websocket_passthrough_request,
@@ -715,7 +716,10 @@ _EU_JEV_DECISION_REQUEST_BODY: Final = inline_request_body(
 )
 
 
-@router.post(
+eu_jev_router: Final = APIRouter(route_class=YieldsToConfiguredPassThroughRoute)
+
+
+@eu_jev_router.post(
     "/eu_jev/v1/systemone",
     tags=["eu/jev Pass-through", "pass-through"],
     responses={200: {"model": EuJevDecisionResponse}},
@@ -731,7 +735,7 @@ async def eu_jev_proxy_route(
 
     `POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)
     and returns one answer per question name, with spend booked from the reported `usage`. `custom_body` and
-    `stream` are rejected with a 400.
+    `stream` are rejected with a 400. A pass-through endpoint configured at this path keeps serving it.
 
     [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
     """
@@ -764,6 +768,9 @@ async def eu_jev_proxy_route(
     return TypeAdapter(Response, config=ConfigDict(arbitrary_types_allowed=True)).validate_python(
         await endpoint_func(request, fastapi_response, user_api_key_dict)
     )
+
+
+router.include_router(eu_jev_router)
 
 
 @router.post(

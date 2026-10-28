@@ -109,7 +109,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/vllm/",
     "/mistral/",
     "/typesafe/",
-    "/eu_jev/",
+    "/eu_jev/v1/systemone",
     "/openrouter/",
     "/nvidia_nim/",
     "/groq/",

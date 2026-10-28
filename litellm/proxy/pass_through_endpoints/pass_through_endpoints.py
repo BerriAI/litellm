@@ -26,9 +26,11 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
+from fastapi.routing import APIRoute
 from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
-from starlette.routing import BaseRoute, Route
+from starlette.routing import BaseRoute, Match, Route
+from starlette.types import Scope
 from starlette.websockets import WebSocketState
 from websockets.asyncio.client import connect
 from websockets.exceptions import (
@@ -3495,6 +3497,18 @@ class InitPassThroughEndpointHelpers:
                         return _registered_pass_through_routes[key]
 
         return None
+
+
+class YieldsToConfiguredPassThroughRoute(APIRoute):
+    def matches(self, scope: Scope) -> tuple[Match, Scope]:
+        match, child_scope = super().matches(scope)
+        if match is not Match.FULL:
+            return match, child_scope
+        request: Final = Request(scope)
+        configured: Final = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            route=request.url.path, method=request.method
+        )
+        return (match, child_scope) if configured is None else (Match.NONE, {})
 
 
 def _get_combined_pass_through_endpoints(

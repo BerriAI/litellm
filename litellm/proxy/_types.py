@@ -413,7 +413,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vllm",
         "/mistral",
         "/typesafe",
-        "/eu_jev",
+        "/eu_jev/v1/systemone",
         "/laya",
         "/bespoke",
         "/openrouter",

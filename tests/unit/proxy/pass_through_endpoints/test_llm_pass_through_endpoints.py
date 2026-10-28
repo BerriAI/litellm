@@ -8542,6 +8542,51 @@ class TestEuJevPassthroughRoute:
         assert "Streaming" in response.text
         assert not route.called
 
+    def test_a_pass_through_endpoint_configured_at_the_same_path_keeps_serving_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import LAZY_FEATURES, attach_lazy_features, reserve_lazy_slot
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            InitPassThroughEndpointHelpers,
+            _registered_pass_through_routes,
+        )
+
+        monkeypatch.delenv("EU_JEV_API_KEY", raising=False)
+        monkeypatch.delenv("LITELLM_DISABLE_LAZY_ROUTES", raising=False)
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        features: Final = tuple(feature for feature in LAZY_FEATURES if feature.name == "llm_passthrough")
+        app: Final = FastAPI()
+        reserve_lazy_slot(app, "llm_passthrough", features=features)
+        attach_lazy_features(app, features)
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+        saved_registry: Final = dict(_registered_pass_through_routes)
+        try:
+            InitPassThroughEndpointHelpers.add_exact_path_route(
+                app=app,
+                path="/eu_jev/v1/systemone",
+                target="https://operator.example/decide",
+                custom_headers={"x-operator": "on"},
+                forward_headers=None,
+                merge_query_params=None,
+                dependencies=None,
+                cost_per_request=None,
+                endpoint_id="operator-eu-jev",
+                methods=["POST"],
+            )
+            with respx.mock(assert_all_called=True) as upstream, TestClient(app) as client:
+                route: Final = upstream.post("https://operator.example/decide").respond(200, json={"operator": True})
+                response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x", "stream": True})
+        finally:
+            _registered_pass_through_routes.clear()
+            _registered_pass_through_routes.update(saved_registry)
+
+        assert (response.status_code, response.json()) == (200, {"operator": True})
+        assert route.calls.last.request.headers["x-operator"] == "on"
+
 
 @pytest.mark.parametrize("provider", ["laya", "bespoke"])
 class TestOssDecisionPassthroughRoute:

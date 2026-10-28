@@ -31896,7 +31896,7 @@
       },
       "/eu_jev/v1/systemone": {
         "post": {
-          "description": "Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.\n\n`POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)\nand returns one answer per question name, with spend booked from the reported `usage`. `custom_body` and\n`stream` are rejected with a 400.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
+          "description": "Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.\n\n`POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)\nand returns one answer per question name, with spend booked from the reported `usage`. `custom_body` and\n`stream` are rejected with a 400. A pass-through endpoint configured at this path keeps serving it.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
           "operationId": "eu_jev_proxy_route_eu_jev_v1_systemone_post",
           "requestBody": {
             "content": {

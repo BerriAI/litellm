@@ -5372,7 +5372,7 @@ export interface paths {
          *
          *     `POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)
          *     and returns one answer per question name, with spend booked from the reported `usage`. `custom_body` and
-         *     `stream` are rejected with a 400.
+         *     `stream` are rejected with a 400. A pass-through endpoint configured at this path keeps serving it.
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
          */
