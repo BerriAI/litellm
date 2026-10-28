@@ -45,10 +45,15 @@ _AWS_HOSTS: Final = (
     re.compile(r"\.(?P<region>[a-z0-9-]+)\.(?P<service>aoss|aoss-fips|es)\.amazonaws\.com(?:\.cn)?\Z"),
     re.compile(r"\.(?P<service>aoss|aos)\.(?P<region>[a-z0-9-]+)\.on\.aws\Z"),
 )
+_ACCOUNT_ID_LABEL: Final = re.compile(r"\A\d{12}\.")
 _QUERY_VECTOR: Final = TypeAdapter(tuple[float, ...])
 _SEARCH_ONLY_MESSAGE: Final = (
     "The OpenSearch vector store is search-only. Create the k-NN index in OpenSearch, "
     "then register it here with the index name as vector_store_id."
+)
+_PER_ACCOUNT_MESSAGE: Final = (
+    "api_base is an OpenSearch Serverless per-account endpoint, which needs a collection header the vector store "
+    "does not send. Use the collection endpoint instead, for example https://<collection-id>.<region>.aoss.amazonaws.com."
 )
 _SIGV4_ONLY_MESSAGE: Final = (
     "The OpenSearch vector store signs every request with AWS SigV4 and does not support api_key. "
@@ -218,6 +223,9 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
     def _signing_credentials(self, params: Mapping[str, object], region: str) -> "Credentials":
         if params.get("api_key"):
             raise _bad_request(_SIGV4_ONLY_MESSAGE)
+        auth: Final = AwsAuthParams.model_validate(params)
+        if bool(auth.aws_access_key_id) != bool(auth.aws_secret_access_key):
+            raise _unauthenticated("aws_access_key_id and aws_secret_access_key must be set together")
         ensure_optional_import("botocore")
         from botocore.exceptions import (
             CredentialRetrievalError,
@@ -227,7 +235,7 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         )
 
         try:
-            return _usable_credentials(self._aws.resolve_credentials(AwsAuthParams.model_validate(params), region))
+            return _usable_credentials(self._aws.resolve_credentials(auth, region))
         except (CredentialRetrievalError, NoCredentialsError, PartialCredentialsError, ProfileNotFound) as error:
             raise _unauthenticated(str(error)) from None
 
@@ -238,7 +246,12 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
                 "api_base must be the OpenSearch endpoint URL, for example "
                 "https://<collection-id>.<region>.aoss.amazonaws.com or https://<domain-endpoint>."
             )
+        if _ACCOUNT_ID_LABEL.match(parsed.hostname) and aws_signing_target(api_base or "")[0] == "aoss":
+            raise _bad_request(_PER_ACCOUNT_MESSAGE)
         return (api_base or "").rstrip("/")
+
+    def get_vector_store_url(self, api_base: str, encoded_vector_store_id: str) -> NoReturn:
+        raise _bad_request(_SEARCH_ONLY_MESSAGE)
 
     @staticmethod
     def _params(

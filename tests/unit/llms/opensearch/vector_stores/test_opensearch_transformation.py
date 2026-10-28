@@ -21,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.opensearch.vector_stores.transformation import OpenSearchVectorStoreConfig
 from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import VectorStoreSearchResponse
+from litellm.vector_stores import main as vector_stores
 
 ACCESS_KEY: Final = "AKIDOPENSEARCHTEST"
 SECRET_KEY: Final = "opensearch-test-secret"
@@ -238,6 +239,7 @@ async def test_opensearch_error_keeps_its_status(asynchronous: bool, status: int
         ({"extra_body": {"min_score": 0.5}}, "extra_body"),
         ({"api_base": None}, "api_base"),
         ({"api_base": "abc123.us-east-1.aoss.amazonaws.com"}, "api_base"),
+        ({"api_base": "https://123456789012.aoss.us-east-1.on.aws"}, "per-account endpoint"),
         ({"api_key": "opensearch-basic-auth"}, "api_key"),
     ],
 )
@@ -279,6 +281,16 @@ _AMBIENT_AWS_ENV: Final = (
         pytest.param({"aws_session_name": "opensearch-no-credentials"}, {}, id="none-anywhere"),
         pytest.param({"aws_profile_name": "opensearch-missing-profile"}, {}, id="missing-profile"),
         pytest.param({}, {"AWS_ACCESS_KEY_ID": "AKIDPARTIAL"}, id="key-without-secret"),
+        pytest.param(
+            {"aws_access_key_id": "AKIDSTOREONLY"},
+            {"AWS_ACCESS_KEY_ID": "AKIDAMBIENT", "AWS_SECRET_ACCESS_KEY": "ambient-secret"},
+            id="store-key-without-secret-beside-ambient-credentials",
+        ),
+        pytest.param(
+            {"aws_secret_access_key": "store-secret-only"},
+            {"AWS_ACCESS_KEY_ID": "AKIDAMBIENT", "AWS_SECRET_ACCESS_KEY": "ambient-secret"},
+            id="store-secret-without-key-beside-ambient-credentials",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -329,6 +341,31 @@ async def test_no_op_values_of_unsupported_params_are_accepted() -> None:
 def test_create_is_rejected_because_the_store_is_search_only() -> None:
     with pytest.raises(litellm.BadRequestError, match="search-only"):
         litellm.vector_stores.create(custom_llm_provider="opensearch")
+
+
+async def _store_operation(
+    asynchronous: bool, operation: str, respond: Callable[[httpx.Request], httpx.Response]
+) -> object:
+    request_kwargs: Final = {**BASE_PARAMS, "vector_store_id": "litellm-qa-docs", "custom_llm_provider": "opensearch"}
+    if asynchronous:
+        return await getattr(vector_stores, f"a{operation}")(
+            **request_kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+        )
+    with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
+        return getattr(vector_stores, operation)(**request_kwargs, client=HTTPHandler(client=transport))
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("operation", ["retrieve", "update", "delete"])
+@pytest.mark.asyncio
+async def test_store_operations_besides_search_send_nothing_to_the_index(asynchronous: bool, operation: str) -> None:
+    respond: Final = MagicMock(return_value=httpx.Response(200, json={"acknowledged": True}))
+
+    with pytest.raises(litellm.BadRequestError, match="search-only") as error:
+        await _store_operation(asynchronous, operation, respond)
+
+    assert error.value.status_code == 400
+    respond.assert_not_called()
 
 
 @pytest.mark.parametrize(
