@@ -8,6 +8,8 @@ the very class of undeclared-dependency bug this guards against.
 
 import argparse
 import importlib.util
+from importlib.machinery import EXTENSION_SUFFIXES
+from pathlib import Path
 import re
 import sys
 import traceback
@@ -87,6 +89,18 @@ def check_import() -> str:
     _require(sdk_version == version(distribution), "SDK version does not match installed metadata")
     _require("litellm.proxy.proxy_cli" not in sys.modules, "SDK import loaded the proxy CLI")
     return f"imported {distribution} {sdk_version}"
+
+
+def check_native_extension() -> str:
+    import litellm
+    from litellm.rust_bridge import _native
+
+    native_path: Final = Path(_native.__file__).resolve()
+    package_path: Final = Path(litellm.__file__).resolve().parent
+    _require(native_path.parent == package_path / "rust_bridge", "native extension is outside the SDK package")
+    _require(any(str(native_path).endswith(suffix) for suffix in EXTENSION_SUFFIXES), "native module is not compiled")
+    _require(_native.trace_encode_error("ping") == b"\x12\x04ping", "native OTLP error encoding failed")
+    return f"loaded and exercised {native_path}"
 
 
 def check_completion() -> str:
@@ -230,6 +244,7 @@ def check_bedrock_credential_resolution() -> str:
 CHECKS: tuple[tuple[str, Callable[[], str]], ...] = (
     ("environment is base-only", check_environment_is_base_only),
     ("import litellm", check_import),
+    ("native extension", check_native_extension),
     ("optional MCP installation guidance", check_mcp_install_guidance),
     ("chat completion", check_completion),
     ("chat completion with a function tool", check_completion_with_function_tool),
@@ -250,8 +265,11 @@ def _run(check: Callable[[], str]) -> tuple[bool, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("legacy", "core", "dependencies"), default="legacy")
+    parser.add_argument("--profile", choices=("legacy", "core", "dependencies", "native"), default="legacy")
     profile = parser.parse_args().profile
+    if profile == "native":
+        print(check_native_extension())
+        return 0
     for module in ("boto3", "botocore", "tokenizers", "huggingface_hub"):
         present = importlib.util.find_spec(module) is not None
         _require(present == (profile != "core"), f"{profile}: unexpected presence of {module}: {present}")
