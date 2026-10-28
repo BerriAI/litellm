@@ -2198,7 +2198,6 @@ def client(original_function):
         kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
         _is_litellm_internal_call: Final = is_internal_call.get()
         _deployment_call_end_time: datetime.datetime | None = None
-        uncached_call_kwargs: dict | None = None
 
         try:
             if logging_obj is None:
@@ -2309,8 +2308,6 @@ def client(original_function):
                 and _caching_handler_response.embedding_uncached_input is not None
                 else kwargs
             )
-            if call_kwargs is not kwargs:
-                uncached_call_kwargs = call_kwargs
             try:
                 result = await original_function(*args, **call_kwargs)
             except Exception as deployment_error:
@@ -2323,6 +2320,11 @@ def client(original_function):
                     )
                 except BaseException:  # noqa: S110, BLE001  # hook dispatch - including cancellation mid-await - must never replace the real deployment failure, so there is nothing to do with what it raises
                     pass
+                if call_kwargs is not kwargs:
+                    # The uncached-input dict is a wrapper-private copy of kwargs whose
+                    # request never left this frame except as part of the failure
+                    # traceback below, so its logging reference is released here.
+                    call_kwargs.pop("litellm_logging_obj", None)
                 raise
             end_time = datetime.datetime.now()
 
@@ -2505,8 +2507,6 @@ def client(original_function):
             if logging_obj is not None and not _is_litellm_internal_call:
                 logging_obj.model_call_details.pop("exception", None)
             kwargs.pop("litellm_logging_obj", None)
-            if uncached_call_kwargs is not None:
-                uncached_call_kwargs.pop("litellm_logging_obj", None)
             raise e
 
         finally:
