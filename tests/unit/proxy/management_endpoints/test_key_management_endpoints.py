@@ -65,6 +65,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _member_key_request,
     _team_admin_requests_member_key,
     KeyProjectBindingError,
+    _hash_token_if_needed,
     _effective_key_after_update,
     _effective_key_for_generate,
     _enforce_custom_key_policy,
@@ -20725,11 +20726,40 @@ async def test_project_detachment_uses_effective_project_for_validation_on_unown
         assert expected in str(exc.value.detail)
 
 
-def _project_assignment_prisma() -> MagicMock:
+def _project_assignment_prisma(stored_row: Mapping[str, object] | None = None) -> MagicMock:
     database = MagicMock()
     team_row: Final = LiteLLM_TeamTable(team_id="team-lit-5823", members=[])
     database.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     database.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    if stored_row is None:
+        return database
+
+    database.jsonify_object = lambda data: dict(data)
+    tx: Final = database.tx.return_value.__aenter__.return_value
+
+    def _where_matches(where: Mapping[str, object], row: Mapping[str, object]) -> bool:
+        for key, clause in where.items():
+            if key == "OR":
+                if not any(_where_matches(part, row) for part in clause):
+                    return False
+            elif key == "models":
+                equals = clause["equals"]
+                if equals is None:
+                    if row[key] is not None:
+                        return False
+                elif row[key] is None or list(row[key]) != list(equals):
+                    return False
+            elif row.get(key) != clause:
+                return False
+        return True
+
+    async def _update_many(*, where, data):
+        return 1 if _where_matches(where, stored_row) else 0
+
+    tx.litellm_verificationtoken.update_many = AsyncMock(side_effect=_update_many)
+    written = MagicMock()
+    written.model_dump = MagicMock(return_value={**stored_row, "project_id": "project-orbit"})
+    tx.litellm_verificationtoken.find_unique = AsyncMock(return_value=written)
     return database
 
 
@@ -20947,6 +20977,31 @@ async def test_project_assignment_write_upserts_object_permission_in_same_tx():
     assert update_data["object_permission_id"] == "perm-lit-01"
     assert "object_permission" not in update_data
     assert result["data"] == {"project_id": "project-orbit"}
+
+
+@pytest.mark.asyncio
+async def test_project_assignment_write_matches_null_models_column():
+    stored: Final = {
+        "token": _hash_token_if_needed("sk-assign"),
+        "project_id": None,
+        "team_id": "team-lit-5823",
+        "models": None,
+        "max_budget": None,
+        "object_permission_id": None,
+    }
+    database: Final = _project_assignment_prisma(stored_row=stored)
+    existing: Final = LiteLLM_VerificationToken(
+        token=stored["token"], project_id=None, team_id="team-lit-5823", models=[]
+    )
+
+    result: Final = await _update_key_row_assigning_project(
+        prisma_client=database,
+        key="sk-assign",
+        non_default_values={"project_id": "project-orbit"},
+        existing_key_row=existing,
+    )
+
+    assert result["data"]["project_id"] == "project-orbit"
 
 
 @pytest.mark.asyncio

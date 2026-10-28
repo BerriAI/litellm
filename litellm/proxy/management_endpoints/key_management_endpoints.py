@@ -2736,12 +2736,17 @@ async def _write_guarded_project_assignment(
         )
         or []
     )
+    models_guard: Final[Mapping[str, object]] = (
+        {"OR": [{"models": {"equals": list[str]()}}, {"models": {"equals": None}}]}
+        if not validated_models
+        else {"models": {"equals": validated_models}}
+    )
     updated_count: Final = await table.update_many(
         where={
             "token": hashed_token,
             "project_id": None,
             "team_id": existing_key_row.team_id,
-            "models": {"equals": validated_models},
+            **models_guard,
             "max_budget": existing_key_row.max_budget,
             "object_permission_id": existing_key_row.object_permission_id,
         },
