@@ -3982,12 +3982,16 @@ class ModelResponseIterator:
 
         # Also handle the case where the final chunk has empty
         # content (e.g. text:"") WITH finishReason. In this case
-        # _process_candidates DOES create a choice, but maps
-        # finishReason="STOP" to "stop" because the current chunk
-        # has no tool_calls. Override if we saw tool_calls earlier.
+        # _process_candidates DOES create a choice, but maps the reason
+        # from what this chunk alone shows, which is never a call. Override
+        # if we saw tool_calls earlier.
+        # "length" is a normal termination for a call too: Gemini reports
+        # MAX_TOKENS when the reply with the call ran out of budget, and the
+        # non-streaming path reports "tool_calls" for that same reply.  A
+        # filtered reply keeps its reason, matching the non-streaming path.
         if self.has_seen_tool_calls:
             for choice in model_response.choices:
-                if choice.finish_reason == "stop":
+                if choice.finish_reason in ("stop", "length"):
                     choice.finish_reason = "tool_calls"
 
         VertexGeminiConfig.set_stream_metadata_on_response(
