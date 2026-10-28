@@ -370,7 +370,7 @@ def test_success_handler_skips_typesafe_pricing_for_non_decisions_openrouter_rou
 
 def test_eu_jev_decision_is_priced_from_its_registry_row():
     model_cost: Final = litellm.model_cost["eu_jev/eu-jeff-1.0.0"]
-    response = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
+    response: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
         httpx_response=_response(),
         response_body={"model": "eu-jeff-1.0.0", "usage": {"input_tokens": 64, "output_tokens": 0}},
         logging_obj=_logging_obj(),
@@ -399,7 +399,7 @@ def test_eu_jev_decision_is_priced_from_its_registry_row():
 def test_eu_jev_release_without_its_own_row_is_priced_as_the_latest_alias(request_body: dict[str, object]) -> None:
     unlisted_release: Final = "eu-jeff-99.0.0"
     assert f"eu_jev/{unlisted_release}" not in litellm.model_cost
-    response = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
+    response: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
         httpx_response=_response(),
         response_body={"model": unlisted_release, "usage": {"input_tokens": 64, "output_tokens": 0}},
         logging_obj=_logging_obj(),
@@ -424,7 +424,7 @@ def test_eu_jev_pinned_release_is_not_priced_as_the_latest_alias(monkeypatch: py
         "eu_jev/eu-jeff-latest",
         {**litellm.model_cost["eu_jev/eu-jeff-latest"], "input_cost_per_token": 1.0},
     )
-    response = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
+    response: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
         httpx_response=_response(),
         response_body={"model": "eu-jeff-1.0.0", "usage": {"input_tokens": 64, "output_tokens": 0}},
         logging_obj=_logging_obj(),
@@ -442,7 +442,7 @@ def test_eu_jev_pinned_release_is_not_priced_as_the_latest_alias(monkeypatch: py
 
 
 def test_success_handler_dispatches_eu_jev_to_the_shared_handler():
-    normalized = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+    normalized: Final = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
         httpx_response=_response(),
         response_body={"model": "eu-jeff-1.0.0", "usage": {"input_tokens": 64, "output_tokens": 0}},
         request_body={"model": "eu-jeff-latest"},

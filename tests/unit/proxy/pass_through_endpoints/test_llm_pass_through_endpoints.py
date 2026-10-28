@@ -8355,10 +8355,10 @@ class TestEuJevPassthroughRoute:
     def test_forwards_a_decision_upstream_with_the_eu_jev_key(self, client: TestClient) -> None:
         body: Final = {"model": "eu-jeff-latest", "state": "x"}
         with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.post("https://eu-jev.example/base/v1/systemone").mock(
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").mock(
                 return_value=httpx.Response(200, json={"id": "upstream_123"})
             )
-            response = client.post("/eu_jev/v1/systemone", json=body)
+            response: Final = client.post("/eu_jev/v1/systemone", json=body)
 
             assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
             sent: Final = route.calls.last.request
