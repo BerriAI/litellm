@@ -135,7 +135,11 @@ def test_a_tenant_langfuse_project_gets_user_session_and_tags_without_operator_k
         for span in tenant
     ] == [{"user.id": "user-42", "session.id": session, "langfuse.trace.tags": TAGS}], [s["name"] for s in tenant]
     assert "langfuse.observation.metadata" in tenant[0]["attributes"], sorted(tenant[0]["attributes"])
+    assert f"lf-tenant-only-{trace_id}" in str(tenant[0]["attributes"].get("langfuse.observation.input")), sorted(
+        tenant[0]["attributes"]
+    )
     assert len(operator) == 1, [span["name"] for span in operator]
+    assert f"lf-tenant-only-{trace_id}" not in json.dumps(operator[0]["attributes"]), sorted(operator[0]["attributes"])
     assert [
         name for name in operator[0]["attributes"] if name in ("user.id", "session.id") or name.startswith("langfuse.")
     ] == [], sorted(operator[0]["attributes"])

@@ -3483,7 +3483,10 @@ class TestLangfuseDestinationFields:
 
     @staticmethod
     def _received_by_account(
-        monkeypatch: pytest.MonkeyPatch, config: OpenTelemetryV2Config, destinations: tuple[OtelDestination, ...]
+        monkeypatch: pytest.MonkeyPatch,
+        config: OpenTelemetryV2Config,
+        destinations: tuple[OtelDestination, ...],
+        with_content: bool = False,
     ) -> Mapping[str | None, Mapping[str, object]]:
         """The attributes of the model call each account received, keyed by the headers it was sent with."""
         credential_less_proxy(monkeypatch)
@@ -3494,7 +3497,7 @@ class TestLangfuseDestinationFields:
         attach_tenant_fan_out(provider, config)
         emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
         call: Final = replace(
-            _MODEL_CALL_WITHOUT_CONTENT,
+            _MODEL_CALL_WITH_CONTENT if with_content else _MODEL_CALL_WITHOUT_CONTENT,
             trace=TraceControls(user_id="user-42", session_id="sess-1", tags=("agent:orders",)),
             request_metadata=MappingProxyType({"user_api_key_alias": "prod-key"}),
         )
@@ -3554,6 +3557,7 @@ class TestLangfuseDestinationFields:
         tracing_environment: str | None,
         expected: Mapping[str, str],
     ) -> None:
+        credential_less_proxy(monkeypatch)
         if tracing_environment is None:
             monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
         else:
@@ -3568,6 +3572,76 @@ class TestLangfuseDestinationFields:
 
         assert destination is not None
         assert dict(destination.resource_attributes) == expected
+
+    def test_a_langfuse_destination_on_a_proxy_with_langfuse_keys_names_no_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With operator keys the older Langfuse logger never runs, so there is no environment of its to keep."""
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
+
+        destination: Final = destination_for(
+            "langfuse_otel",
+            StandardCallbackDynamicParams(
+                langfuse_public_key="pk", langfuse_secret_key="sk", langfuse_environment="prod"
+            ),
+        )
+
+        assert destination is not None
+        assert dict(destination.resource_attributes) == {}
+
+    @pytest.mark.parametrize(
+        ("configured", "operator_keys", "expected"),
+        [
+            (None, False, "span_only"),
+            ("no_content", False, "no_content"),
+            (None, True, None),
+            ("span_only", True, "span_only"),
+        ],
+        ids=["unset", "key-no-content", "operator-keys", "operator-keys-key-span-only"],
+    )
+    def test_a_langfuse_destination_captures_the_prompt_where_the_legacy_logger_sent_it(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        configured: str | None,
+        operator_keys: bool,
+        expected: str | None,
+    ) -> None:
+        credential_less_proxy(monkeypatch)
+        if operator_keys:
+            monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
+            monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
+
+        destination: Final = destination_for(
+            "langfuse_otel",
+            StandardCallbackDynamicParams(langfuse_public_key="pk", langfuse_secret_key="sk"),
+            capture_message_content=configured,
+        )
+
+        assert destination is not None
+        assert destination.capture_message_content == expected
+
+    def test_only_the_langfuse_destination_gets_the_prompt_it_captures_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        credential_less_proxy(monkeypatch)
+        destination: Final = destination_for(
+            "langfuse_otel", StandardCallbackDynamicParams(langfuse_public_key="pk", langfuse_secret_key="sk")
+        )
+        arize: Final = destination_for("arize", StandardCallbackDynamicParams(arize_space_id="s", arize_api_key="k"))
+        assert destination is not None
+        assert arize is not None
+
+        received: Final = self._received_by_account(
+            monkeypatch, OpenTelemetryV2Config(), (destination, arize), with_content=True
+        )
+
+        assert {headers: "langfuse.observation.input" in attributes for headers, attributes in received.items()} == {
+            destination.header_string(): True,
+            arize.header_string(): False,
+            None: False,
+        }
+        assert not [key for key in received[None] if key.startswith("gen_ai.input")]
 
     def test_only_the_langfuse_destination_gets_the_keys_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         credential_less_proxy(monkeypatch)
@@ -5303,7 +5377,10 @@ class TestCaptureMessageContent:
     def test_the_setting_rides_the_teams_destination_and_omission_stays_omitted(
         self, monkeypatch: pytest.MonkeyPatch, setting: str | None
     ) -> None:
+        """On a proxy with Langfuse keys of its own; without them see ``TestLangfuseDestinationFields``."""
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
         is_otel_v2_enabled.cache_clear()
         callback_vars: Final = {
             "langfuse_public_key": "pk-team",

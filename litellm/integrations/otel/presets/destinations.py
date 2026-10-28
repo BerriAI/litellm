@@ -15,7 +15,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
-from litellm.types.utils import OtelSpanScope, StandardCallbackDynamicParams
+from litellm.types.utils import CaptureMessageContent, OtelSpanScope, StandardCallbackDynamicParams
 
 #: An endpoint plus the OTLP transport to reach it with, or ``None`` when the backend
 #: names no destination. The transport is ``None`` where the backend has only one.
@@ -124,10 +124,19 @@ def _arize_default_project() -> Mapping[str, str]:
     return MappingProxyType({"model_id": ARIZE_DEFAULT_PROJECT})
 
 
+def _stands_in_for_the_legacy_langfuse_logger() -> bool:
+    """Whether a Langfuse destination replaces the older Langfuse logger's copy, which a proxy without Langfuse keys
+    of its own sends for a key's or team's ``langfuse_otel``."""
+    return not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY"))
+
+
 def _langfuse_environment(params: StandardCallbackDynamicParams) -> Mapping[str, str]:
-    """The key's or team's ``langfuse_environment``, else ``LANGFUSE_TRACING_ENVIRONMENT``."""
+    """The key's or team's ``langfuse_environment``, else ``LANGFUSE_TRACING_ENVIRONMENT``, where the older Langfuse
+    logger wrote it."""
     from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
 
+    if not _stands_in_for_the_legacy_langfuse_logger():
+        return _NO_ATTRS
     environment: Final = params.get("langfuse_environment") or os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
     return MappingProxyType({LangfuseSpanAttributes.LANGFUSE_ENVIRONMENT.value: environment} if environment else {})
 
@@ -160,6 +169,14 @@ def _resource_attributes(
 def _resource_defaults(callback_name: str) -> Mapping[str, str]:
     backend: Final = _RESOURCE_DEFAULTS_BY_CALLBACK.get(callback_name)
     return backend() if backend is not None else _NO_ATTRS
+
+
+def _capture_message_content(callback_name: str, configured: str | None) -> str | None:
+    """The key's or team's own setting, else the prompt and response where the older Langfuse logger sent them
+    whatever the global setting."""
+    if configured is not None or callback_name != "langfuse_otel" or not _stands_in_for_the_legacy_langfuse_logger():
+        return configured
+    return CaptureMessageContent.SPAN_ONLY
 
 
 def _span_scope(callback_name: str, params: StandardCallbackDynamicParams) -> OtelSpanScope:
@@ -229,7 +246,7 @@ def destination_for(
         callback_name=callback_name,
         protocol=protocol,
         span_scope=_span_scope(callback_name, params),
-        capture_message_content=capture_message_content,
+        capture_message_content=_capture_message_content(callback_name, capture_message_content),
         excluded_db_systems=excluded_db_systems,
         success_sampling_rate=success_sampling_rate,
         error_sampling_rate=error_sampling_rate,
