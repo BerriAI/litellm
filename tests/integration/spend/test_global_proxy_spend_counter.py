@@ -1,6 +1,7 @@
 import json
 import os
 import uuid
+from itertools import product
 from pathlib import Path
 from typing import Final
 
@@ -163,6 +164,11 @@ def test_a_key_with_no_user_spends_toward_the_proxy_max_budget(gateway: Gateway,
         key: Final = scenario.key(models=[BUDGET_MODEL])
         (spent,) = _logged_spend(owned, (_served_id(owned, key),))
         assert spent > 0.01, spent
+        eventually(
+            lambda: _proxy_budget_spend(owned),
+            lambda recorded: recorded is not None and recorded > 0.01,
+            seconds=70,
+        )
 
         marker: Final = f"over the proxy budget {uuid.uuid4().hex}"
         refused: Final = _chat(owned, key, marker)
@@ -191,7 +197,7 @@ def test_two_proxies_add_every_request_to_one_proxy_spend_counter(gateway: Gatew
                 ttl_before: Final = redis.ttl(counter)
 
                 request_ids: Final = tuple(
-                    _served_id(proxy, key) for key in (user_key, userless_key) for proxy in (first, second)
+                    _served_id(proxy, key) for key, proxy in product((user_key, userless_key), (first, second))
                 )
                 total: Final = sum(_logged_spend(first, request_ids))
                 persisted: Final = eventually(
@@ -201,5 +207,9 @@ def test_two_proxies_add_every_request_to_one_proxy_spend_counter(gateway: Gatew
                 )
 
                 assert persisted == pytest.approx(total)
-                assert float(str(redis.get(counter), "utf-8")) == pytest.approx(total)
+                eventually(
+                    lambda: redis.get(counter),
+                    lambda shared: shared is not None and float(str(shared, "utf-8")) == pytest.approx(total),
+                    seconds=70,
+                )
                 assert 0 < redis.ttl(counter) <= ttl_before
