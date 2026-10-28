@@ -2,9 +2,10 @@
 needs an approving review from the spend-log owner before it can merge.
 
 CODEOWNERS can only match file paths, and every schema change edits the same schema.prisma copies,
-so a path rule would put every migration on the owner. This gate reads the diff instead: when no
-added line in the watched files mentions the table it passes at once, otherwise it passes only once
-the owner's latest review on the pull request is an approval. The workflow re-runs on every review.
+so a path rule would put every migration on the owner. This gate reads the diff instead: a schema.prisma
+hunk counts when it adds or removes a line inside the `model LiteLLM_SpendLogs { ... }` block, a migration
+hunk counts when an added line names the table. Without such a hunk it passes at once, otherwise it passes
+only once the owner's latest review on the pull request is an approval. The workflow re-runs on every review.
 """
 
 from __future__ import annotations
@@ -13,8 +14,10 @@ import argparse
 import re
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -26,6 +29,8 @@ WATCHED: Final = (
 )
 MIGRATIONS_PREFIX: Final = "litellm-proxy-extras/litellm_proxy_extras/migrations/"
 TABLE: Final = re.compile(r"(?<![A-Za-z0-9])LiteLLM_SpendLogs", re.IGNORECASE)
+MODEL_START: Final = re.compile(r"^model\s+LiteLLM_SpendLogs\s*\{")
+HUNK: Final = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@[^\n]*\n", re.MULTILINE)
 
 
 class Reviewer(BaseModel):
@@ -42,26 +47,71 @@ class Review(BaseModel):
 _REVIEWS: Final = TypeAdapter(list[Review])
 
 
+@dataclass(frozen=True, slots=True)
+class Block:
+    """Lines of `model LiteLLM_SpendLogs { ... }` in one schema.prisma copy at the merge base and at the head."""
+
+    base: range
+    head: range
+
+
+@dataclass(frozen=True, slots=True)
+class Hunk:
+    removed: tuple[tuple[int, str], ...]
+    added: tuple[tuple[int, str], ...]
+
+
 def watched(path: str) -> bool:
     return path in WATCHED or (path.startswith(MIGRATIONS_PREFIX) and path.endswith("/migration.sql"))
 
 
-def _added_lines(section: str) -> tuple[str, ...]:
-    body: Final = section.split("\n@@", 1)
-    return tuple(line[1:] for line in body[1].splitlines() if line.startswith("+")) if len(body) == 2 else ()
+def model_block(schema: str) -> range:
+    """1-based line range of `model LiteLLM_SpendLogs { ... }` including both braces, empty when the schema has none."""
+    lines: Final = schema.splitlines()
+    starts: Final = tuple(number for number, line in enumerate(lines, 1) if MODEL_START.match(line))
+    if not starts:
+        return range(0)
+    ends: Final = tuple(number for number, line in enumerate(lines, 1) if number > starts[0] and line.startswith("}"))
+    return range(starts[0], (ends[0] if ends else len(lines)) + 1)
 
 
-def spend_log_hits(diff: str) -> tuple[str, ...]:
-    """`path: added line` for every added line in a watched file that names the table."""
+def _hunks(section: str) -> tuple[Hunk, ...]:
+    headers: Final = tuple(HUNK.finditer(section))
+    ends: Final = tuple(header.start() for header in headers[1:]) + (len(section),)
+    return tuple(_hunk(header, section[header.end() : end]) for header, end in zip(headers, ends))
+
+
+def _hunk(header: re.Match[str], body: str) -> Hunk:
+    lines: Final = body.splitlines()
+    return Hunk(
+        removed=tuple(enumerate((line[1:] for line in lines if line.startswith("-")), int(header.group(1)))),
+        added=tuple(enumerate((line[1:] for line in lines if line.startswith("+")), int(header.group(2)))),
+    )
+
+
+def spend_log_hits(diff: str, blocks: Mapping[str, Block]) -> tuple[str, ...]:
+    """`path: +line` or `path: -line` for every changed line that touches the table.
+
+    A schema.prisma line counts when its number falls inside that copy's `blocks` entry (head for added lines,
+    merge base for removed ones), a migration line when it is added and names the table."""
     sections: Final = re.split(r"^diff --git [^\n]*\n", diff, flags=re.MULTILINE)
-    return tuple(f"{path}: {line.strip()}" for path, line in _watched_added_lines(sections) if TABLE.search(line))
-
-
-def _watched_added_lines(sections: Sequence[str]) -> tuple[tuple[str, str], ...]:
-    pairs: Final = tuple((_path_of(section), section) for section in sections)
+    paths: Final = tuple((_path_of(section), section) for section in sections)
     return tuple(
-        (path, line) for path, section in pairs if watched(path) for line in _added_lines(section)
-    )  # comprehension-ok: path then its lines
+        hit for path, section in paths if watched(path) for hit in _section_hits(path, _hunks(section), blocks)
+    )  # comprehension-ok: path then its hits
+
+
+def _section_hits(path: str, hunks: Sequence[Hunk], blocks: Mapping[str, Block]) -> tuple[str, ...]:
+    if path not in blocks:
+        return tuple(f"{path}: +{line.strip()}" for hunk in hunks for _, line in hunk.added if TABLE.search(line))
+    block: Final = blocks[path]
+    removed: Final = tuple(
+        f"{path}: -{line.strip()}" for hunk in hunks for number, line in hunk.removed if number in block.base
+    )  # comprehension-ok: hunk then its lines
+    added: Final = tuple(
+        f"{path}: +{line.strip()}" for hunk in hunks for number, line in hunk.added if number in block.head
+    )  # comprehension-ok: hunk then its lines
+    return removed + added
 
 
 def _path_of(section: str) -> str:
@@ -85,6 +135,18 @@ def added_diff(base: str, head: str) -> str:
     return result.stdout
 
 
+def file_at(revision: str, path: str) -> str:
+    """Contents of `path` at `revision`, empty when the file does not exist there."""
+    result: Final = subprocess.run(("git", "show", f"{revision}:{path}"), check=False, capture_output=True, text=True)
+    return result.stdout if result.returncode == 0 else ""
+
+
+def schema_blocks(base: str, head: str) -> Mapping[str, Block]:
+    return MappingProxyType(
+        {path: Block(base=model_block(file_at(base, path)), head=model_block(file_at(head, path))) for path in WATCHED}
+    )
+
+
 class Arguments(BaseModel):
     model_config = ConfigDict(frozen=True)
     base: str
@@ -100,9 +162,12 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--approver", required=True, help="GitHub login whose approval unlocks the merge")
     parser.add_argument("--reviews", required=True, help="JSON file with the pull request's reviews")
     args: Final = Arguments.model_validate(vars(parser.parse_args(argv)))
-    hits: Final = spend_log_hits(added_diff(args.base, args.head))
+    hits: Final = spend_log_hits(added_diff(args.base, args.head), schema_blocks(args.base, args.head))
     if not hits:
-        sys.stdout.write("No added line in schema.prisma or a migration names LiteLLM_SpendLogs; nothing to review.\n")
+        sys.stdout.write(
+            "No change inside model LiteLLM_SpendLogs in schema.prisma and no added migration line names it; "
+            "nothing to review.\n"
+        )
         return 0
     if approved_by(_REVIEWS.validate_json(args.reviews.read_bytes()), args.approver):
         sys.stdout.write(f"LiteLLM_SpendLogs change approved by {args.approver}: {', '.join(hits)}\n")
