@@ -385,11 +385,20 @@ class EncryptedContentAffinityCheck(CustomLogger):
             model_id,
         )
 
-        excluded_ids: Final = frozenset(
-            as_excluded_deployment_ids(typed_request_kwargs.get("_excluded_deployment_ids"))
+        previous_response_id: Final = typed_request_kwargs.get("previous_response_id")
+        previous_response_origin: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(
+            None if previous_response_id is None else str(previous_response_id)
         )
-        retry_skipped_ids: Final = frozenset(
-            as_retry_skipped_deployment_ids(typed_request_kwargs.get("_retry_skipped_deployment_ids"))
+        previous_response_binds_origin: Final = previous_response_origin == model_id
+        excluded_ids: Final[frozenset[str]] = (
+            frozenset()
+            if previous_response_binds_origin
+            else frozenset(as_excluded_deployment_ids(typed_request_kwargs.get("_excluded_deployment_ids")))
+        )
+        retry_skipped_ids: Final[frozenset[str]] = (
+            frozenset()
+            if previous_response_binds_origin
+            else frozenset(as_retry_skipped_deployment_ids(typed_request_kwargs.get("_retry_skipped_deployment_ids")))
         )
         not_excluded_candidates: Final = [
             candidate for candidate in candidates if self._deployment_model_id(candidate) not in excluded_ids

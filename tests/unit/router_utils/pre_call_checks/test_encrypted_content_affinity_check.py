@@ -2633,6 +2633,10 @@ def _reasoning_input_minted_by(origin: str) -> list[dict[str, object]]:
     ]
 
 
+def _previous_response_id_from(origin: str) -> str:
+    return ResponsesAPIRequestUtils._build_responses_api_response_id("openai", origin, "resp_test")
+
+
 _ORIGIN_FAILED_THIS_REQUEST: Final = pytest.mark.parametrize(
     "failed_in_request",
     [{"_excluded_deployment_ids": ["region-a"]}, {"_retry_skipped_deployment_ids": ("region-a",)}],
@@ -2641,8 +2645,9 @@ _ORIGIN_FAILED_THIS_REQUEST: Final = pytest.mark.parametrize(
 
 @pytest.mark.asyncio
 @_ORIGIN_FAILED_THIS_REQUEST
+@pytest.mark.parametrize("continuing", [{}, {"previous_response_id": _previous_response_id_from("region-b")}])
 async def test_affinity_strips_and_dispatches_when_origin_already_failed_this_request(
-    failed_in_request: dict[str, object],
+    failed_in_request: dict[str, object], continuing: dict[str, object]
 ):
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
@@ -2656,11 +2661,38 @@ async def test_affinity_strips_and_dispatches_when_origin_already_failed_this_re
         model="gpt-5.4",
         healthy_deployments=group,
         messages=None,
-        request_kwargs={"litellm_metadata": {}, "input": reasoning_input, **failed_in_request},
+        request_kwargs={"litellm_metadata": {}, "input": reasoning_input, **failed_in_request, **continuing},
     )
 
     assert result is group
     assert reasoning_input[0] == {"type": "reasoning", "summary": [{"type": "summary_text", "text": "scattering"}]}
+
+
+@pytest.mark.asyncio
+@_ORIGIN_FAILED_THIS_REQUEST
+async def test_affinity_keeps_origin_and_reasoning_when_previous_response_id_binds_the_failed_origin(
+    failed_in_request: dict[str, object],
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    pool: Final = (_region_deployment("region-a"), _region_deployment("region-b"))
+    reasoning_input: Final = _reasoning_input_minted_by("region-a")
+    original_reasoning: Final = dict(reasoning_input[0])
+
+    assert await EncryptedContentAffinityCheck(router=litellm.Router(model_list=list(pool))).async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=list(pool),
+        messages=None,
+        request_kwargs={
+            "litellm_metadata": {},
+            "input": reasoning_input,
+            "previous_response_id": _previous_response_id_from("region-a"),
+            **failed_in_request,
+        },
+    ) == [pool[0]]
+    assert reasoning_input[0] == original_reasoning
 
 
 @pytest.mark.asyncio
