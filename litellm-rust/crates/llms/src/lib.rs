@@ -17,4 +17,4 @@ pub mod reducto;
 pub mod tencent;
 pub mod vertex_ai;
 
-pub use error::{Error, ErrorDetail, ErrorSource};
+pub use error::{Error, ErrorDetail};
