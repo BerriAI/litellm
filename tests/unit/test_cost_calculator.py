@@ -10332,6 +10332,30 @@ def test_realtime_translation_deployment_per_second_rates_fall_back_to_public_ra
     ) == pytest.approx(60 * 0.001 + (60 * public_input_rate if bills_public_input_rate else 0.0))
 
 
+def test_realtime_translation_custom_deployment_with_one_rate_bills_the_session_model_for_the_other(
+    _local_model_cost_map: None,
+) -> None:
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "translate",
+                "litellm_params": {
+                    "model": "openai/my-translator",
+                    "api_key": "sk-test",
+                    "output_cost_per_second": 0.001,
+                },
+                "model_info": {"id": "custom-translate-output-priced"},
+            }
+        ]
+    )
+    public_input_rate: Final = litellm.model_cost["gpt-realtime-translate"]["input_cost_per_second"]
+
+    assert public_input_rate > 0
+    assert _translation_session_cost(
+        "custom-translate-output-priced", model="my-translator"
+    ) == pytest.approx(60 * 0.001 + 60 * public_input_rate)
+
+
 def test_realtime_translation_rate_ignores_a_session_model_the_deployment_does_not_run(
     _local_model_cost_map: None,
 ) -> None:

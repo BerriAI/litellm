@@ -3758,13 +3758,8 @@ def handle_realtime_translation_cost_calculation(
     input_seconds, output_seconds = _translation_session_seconds(results)
     if input_seconds <= 0 and output_seconds <= 0:
         return 0.0
-    deployment_rates: Final = _translation_per_second_rates(
-        (*deployment_pricing_models, litellm_model_name), custom_llm_provider
-    )
-    input_rate, output_rate = (
-        deployment_rates
-        if any(rate is not None for rate in deployment_rates)
-        else _translation_per_second_rates((session_model,), custom_llm_provider)
+    input_rate, output_rate = _translation_per_second_rates(
+        (*deployment_pricing_models, litellm_model_name, session_model), custom_llm_provider
     )
     return input_seconds * (input_rate or 0.0) + output_seconds * (output_rate or 0.0)
 
