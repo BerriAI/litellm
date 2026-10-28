@@ -14,6 +14,7 @@ from .common_utils import (
 )
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
 
@@ -110,6 +111,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         sync_stream: bool,
         json_mode: bool | None,
         optional_params: Mapping[str, object],
+        logging_obj: "Logging | None" = None,
     ) -> "ModelResponseIterator":
         from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 

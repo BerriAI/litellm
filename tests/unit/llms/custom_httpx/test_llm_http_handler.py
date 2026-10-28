@@ -24,6 +24,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.azure.vector_stores.transformation import AzureOpenAIVectorStoreConfig
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -48,7 +49,7 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     _rust_responses_websocket_enabled,
 )
 from litellm.llms.azure.videos.transformation import AzureVideoConfig
-from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
 from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
@@ -978,7 +979,7 @@ async def test_async_anthropic_messages_handler_streaming_forwards_provider_resp
     """
     from collections.abc import AsyncIterator as ABCAsyncIterator
 
-    from litellm.llms.anthropic.pass_through.messages.transformation import (
+    from litellm.llms.anthropic.messages.native.transformation import (
         AnthropicMessagesConfig,
     )
 
@@ -1041,10 +1042,10 @@ async def test_async_anthropic_messages_handler_agentic_streaming_forwards_provi
     from collections.abc import AsyncIterator as ABCAsyncIterator
 
     from litellm.integrations.custom_logger import CustomLogger
-    from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
         AgenticAnthropicStreamingIterator,
     )
-    from litellm.llms.anthropic.pass_through.messages.transformation import (
+    from litellm.llms.anthropic.messages.native.transformation import (
         AnthropicMessagesConfig,
     )
 
@@ -1112,7 +1113,7 @@ async def test_anthropic_messages_streaming_response_aclose_closes_upstream_stre
     the upstream stream so provider connections are released on client
     disconnect instead of lingering until garbage collection.
     """
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.streaming_iterator import (
         AnthropicMessagesStreamingResponse,
     )
 
@@ -1144,10 +1145,10 @@ async def test_anthropic_messages_streaming_response_aclose_closes_upstream_stre
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_streaming_response_aclose_closes_agentic_upstream_stream():
-    from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
         AgenticAnthropicStreamingIterator,
     )
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.streaming_iterator import (
         AnthropicMessagesStreamingResponse,
     )
 
@@ -2095,7 +2096,7 @@ async def test_anthropic_post_skips_the_thinking_strip_retry_when_block_binding_
 ) -> None:
     """A caller that pinned ``prefix_mismatch_behavior: error`` asked for the 400,
     so the handler must surface it instead of stripping the bound blocks and retrying."""
-    from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
 
     handler = BaseLLMHTTPHandler()
     thinking_block = {"type": "thinking", "thinking": "", "signature": "sig"}
@@ -3172,7 +3173,7 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
     """Regression: after Bedrock rejects a replayed thinking block (400 invalid signature),
     the strip-and-retry re-sign must not inherit attempt 1's SigV4 Authorization/X-Amz-Date;
     reusing them over the new stripped body makes AWS return 403 SignatureDoesNotMatch."""
-    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeMessagesConfig,
     )
 
@@ -5685,3 +5686,73 @@ async def test_messages_opencode_session_header(
         "stream": stream,
     }
     assert received.empty()
+
+
+def test_vector_store_retrieve_handler_sends_id_before_azure_api_version_query() -> None:
+    received: Final[list[httpx.Request]] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(200, json={"id": "vs_abc", "object": "vector_store"})
+
+    handler: Final = BaseLLMHTTPHandler()
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer)))
+
+    handler.vector_store_retrieve_handler(
+        vector_store_id="vs_abc",
+        vector_store_provider_config=AzureOpenAIVectorStoreConfig(),
+        custom_llm_provider="azure",
+        litellm_params=GenericLiteLLMParams(
+            api_base="https://x.openai.azure.com",
+            api_key="azure-test-key",
+            api_version="2025-04-01-preview",
+        ),
+        logging_obj=Mock(),
+        client=client,
+        _is_async=False,
+    )
+
+    sent: Final = received[0]
+    assert str(sent.url) == "https://x.openai.azure.com/openai/vector_stores/vs_abc?api-version=2025-04-01-preview"
+    assert len(received) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("provider", ("openai", "azure"))
+async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
+    is_async: bool, provider: str, respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://responses\.example\.com/.*").respond(
+        200,
+        json={
+            "id": "resp_headers", "object": "response", "created_at": 1,
+            "model": "gpt-6-luna", "status": "completed", "output": [],
+            "parallel_tool_calls": False, "tool_choice": "auto", "tools": [],
+        },
+    )
+    client: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()) if is_async else HTTPHandler(client=httpx.Client())
+    kwargs: Final = {
+        "model": f"{provider}/gpt-6-luna",
+        "input": "hello",
+        "api_key": "fake-configured-key",
+        "api_base": "https://responses.example.com/v1",
+        "api_version": "2025-04-01-preview",
+        "extra_headers": {"Authorization": "Bearer fake-caller-key", "content-type": "application/vnd.example+json"},
+        "client": client,
+    }
+    try:
+        response: Final = await litellm.aresponses(**kwargs) if is_async else litellm.responses(**kwargs)
+        assert response.status == "completed"
+        assert route.calls[0].request.headers["authorization"] == "Bearer fake-caller-key"
+        expected_content_types: Final = (
+            ["application/json", "application/vnd.example+json"]
+            if provider == "openai"
+            else ["application/vnd.example+json"]
+        )
+        assert route.calls[0].request.headers.get_list("content-type") == expected_content_types
+    finally:
+        if isinstance(client, AsyncHTTPHandler):
+            await client.close()
+        else:
+            client.client.close()
