@@ -385,6 +385,10 @@ class _RouterFileCallKwargs(TypedDict, total=False):
     custom_llm_provider: ReadOnly[str | None]
 
 
+def _managed_database(prisma_client: _ManagedResourcePrismaClient) -> _ManagedResourceDatabase:
+    return prisma_client.db
+
+
 def _managed_file_table(prisma_client: _ManagedResourcePrismaClient) -> _ManagedFileTableActions:
     return prisma_client.db.litellm_managedfiletable
 
@@ -428,7 +432,7 @@ def _owner_condition(owner_filter: Mapping[str, object]) -> tuple[str, tuple[str
 
 
 async def _scoped_file_rows(
-    prisma_client: _ManagedResourcePrismaClient,
+    database: _ManagedResourceDatabase,
     owner_filter: Mapping[str, object],
     model_mapping_keys: frozenset[str],
     cursor_id: str | None,
@@ -445,7 +449,7 @@ async def _scoped_file_rows(
         else ""
     )
     order: Final = direction.upper()
-    rows: Final = await prisma_client.db.query_raw(
+    rows: Final = await database.query_raw(
         'SELECT "unified_file_id", "file_object", "model_mappings", "storage_backend" FROM "LiteLLM_ManagedFileTable" '
         f'WHERE {owner_condition} AND ("model_mappings" ?| ${keys_param}::text[] OR "storage_backend" IS NOT NULL) '
         f'{cursor_condition}ORDER BY "created_at" {order}, "unified_file_id" {order} '
@@ -2377,8 +2381,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
         cursor_param: Final = "before_id" if before else "after"
         cursor: Final = before or after
+        database: Final = _managed_database(self.prisma_client)
         if cursor:
-            cursor_row = await _managed_file_table(self.prisma_client).find_first(
+            cursor_row = await database.litellm_managedfiletable.find_first(
                 where={**owner_filter, "unified_file_id": cursor}
             )
             if cursor_row is None:
@@ -2403,10 +2408,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             cursor_args: _CursorPageArgs = {"cursor": {"unified_file_id": cursor_id}, "skip": 1} if cursor_id else {}
             chunk: Sequence[_ListedFileRow] = (
                 await _scoped_file_rows(
-                    self.prisma_client, owner_filter, model_scope.model_mapping_keys, cursor_id, direction, chunk_size
+                    database, owner_filter, model_scope.model_mapping_keys, cursor_id, direction, chunk_size
                 )
                 if model_scope is not None
-                else await _managed_file_table(self.prisma_client).find_many(
+                else await database.litellm_managedfiletable.find_many(
                     where=owner_filter,
                     take=chunk_size,
                     order=[{"created_at": direction}, {"unified_file_id": direction}],
