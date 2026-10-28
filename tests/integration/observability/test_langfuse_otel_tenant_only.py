@@ -136,7 +136,9 @@ def test_a_tenant_langfuse_project_gets_user_session_and_tags_without_operator_k
     ] == [{"user.id": "user-42", "session.id": session, "langfuse.trace.tags": TAGS}], [s["name"] for s in tenant]
     assert "langfuse.observation.metadata" in tenant[0]["attributes"], sorted(tenant[0]["attributes"])
     assert len(operator) == 1, [span["name"] for span in operator]
-    assert "langfuse.observation.metadata" not in operator[0]["attributes"], sorted(operator[0]["attributes"])
+    assert [
+        name for name in operator[0]["attributes"] if name in ("user.id", "session.id") or name.startswith("langfuse.")
+    ] == [], sorted(operator[0]["attributes"])
 
 
 def test_a_tenant_langfuse_project_gets_the_keys_langfuse_environment(

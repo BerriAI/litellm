@@ -35,7 +35,7 @@ from litellm.integrations.otel.logger import (
     publish_global_otel_v2_provider,
 )
 from litellm.integrations.otel.mappers import resolve_mappers
-from litellm.integrations.otel.mappers.langfuse import LANGFUSE_REQUEST_METADATA_ATTRIBUTES
+from litellm.integrations.otel.mappers.langfuse import LANGFUSE_REQUEST_METADATA_ATTRIBUTES, LangfuseMapper
 from litellm.integrations.otel.model.config import (
     CaptureMessageContent,
     ExporterOwner,
@@ -3480,6 +3480,62 @@ class TestLangfuseDestinationFields:
         }
         assert "langfuse.observation.metadata" in to_langfuse
         assert "langfuse.observation.metadata" not in received[None]
+
+    @staticmethod
+    def _received_by_account(
+        monkeypatch: pytest.MonkeyPatch, config: OpenTelemetryV2Config, destinations: tuple[OtelDestination, ...]
+    ) -> Mapping[str | None, Mapping[str, object]]:
+        """The attributes of the model call each account received, keyed by the headers it was sent with."""
+        credential_less_proxy(monkeypatch)
+        capture: Final = _ExporterCapture()
+        for kind in ("otlp_grpc", "otlp_http", "console"):
+            monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
+        provider: Final = build_tracer_provider(config, tenant_overrides=True)
+        attach_tenant_fan_out(provider, config)
+        emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
+        call: Final = replace(
+            _MODEL_CALL_WITHOUT_CONTENT,
+            trace=TraceControls(user_id="user-42", session_id="sess-1", tags=("agent:orders",)),
+            request_metadata=MappingProxyType({"user_api_key_alias": "prod-key"}),
+        )
+
+        def with_destinations() -> None:
+            set_request_destinations(deliverable_destinations(destinations, provider))
+            emitter.emit(SpanRole.LLM_CALL, call)
+
+        in_fresh_context(with_destinations)
+        provider.force_flush()
+        return MappingProxyType(
+            {headers: dict(exporter.get_finished_spans()[0].attributes or {}) for headers, exporter in capture.built}
+        )
+
+    def test_only_the_langfuse_destination_gets_the_langfuse_fields_written_for_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The operator's own exporter and the key's Arize destination get the model call as they would with no
+        Langfuse destination on the request."""
+        received: Final = self._received_by_account(monkeypatch, OpenTelemetryV2Config(), (LANGFUSE_DEST, ARIZE_DEST))
+
+        assert received[LANGFUSE_DEST.header_string()]["user.id"] == "user-42"
+        assert {
+            headers: sorted(LangfuseMapper.LLM_CALL_ATTRIBUTES & attributes.keys())
+            for headers, attributes in received.items()
+            if headers != LANGFUSE_DEST.header_string()
+        } == {None: [], ARIZE_DEST.header_string(): []}
+
+    def test_an_exporter_whose_config_maps_langfuse_keeps_the_langfuse_fields_but_the_request_metadata(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        received: Final = self._received_by_account(
+            monkeypatch, OpenTelemetryV2Config(mapper_names=["genai", "langfuse"]), (LANGFUSE_DEST,)
+        )
+
+        assert {key: received[None].get(key) for key in ("user.id", "session.id", "langfuse.trace.tags")} == {
+            "user.id": "user-42",
+            "session.id": "sess-1",
+            "langfuse.trace.tags": ("agent:orders",),
+        }
+        assert not LANGFUSE_REQUEST_METADATA_ATTRIBUTES & received[None].keys()
 
     @pytest.mark.parametrize(
         ("key_environment", "tracing_environment", "expected"),
