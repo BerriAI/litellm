@@ -14439,7 +14439,6 @@ class Router:
         Filter out model in model group, if:
 
         - model context window < message length. For azure openai models, requires 'base_model' is set. - https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models
-        - filter models above rpm limits
         - if region given, filter out models not in that region / unknown region
         - [TODO] function call and model doesn't support function calling
         """
@@ -14454,8 +14453,6 @@ class Router:
 
         _context_window_error = False
         _potential_error_str = ""
-        _rate_limit_error = False
-        parent_otel_span: Final = get_parent_otel_span_from_kwargs(request_kwargs)
 
         has_countable_input: Final = (messages is not None or input is not None) and not compaction_pending(
             request_kwargs
@@ -14479,13 +14476,6 @@ class Router:
             else frozenset()
         )
 
-        ## get model group RPM ##
-        dt: Final = get_utc_datetime()
-        current_minute: Final = dt.strftime("%H-%M")
-        rpm_key: Final = f"{model}:rpm:{current_minute}"
-        model_group_cache: Final = (
-            self.cache.get_cache(key=rpm_key, local_only=True, parent_otel_span=parent_otel_span) or {}
-        )  # check the in-memory cache used by lowest_latency and usage-based routing. Only check the local cache.
         for idx, deployment in enumerate(_returned_deployments):
             # Cache nested dict access to avoid repeated temporary dict allocations
             _litellm_params = deployment.get("litellm_params", {})
@@ -14507,24 +14497,6 @@ class Router:
                     f"Model={deployment_model}, Max Input Tokens={max_input_tokens}, Got={input_tokens}"
                 )
                 continue
-
-            model_id = _model_info.get("id", "")
-            ## RPM CHECK ##
-            ### get local router cache ###
-            current_request_cache_local = (
-                self.cache.get_cache(key=model_id, local_only=True, parent_otel_span=parent_otel_span) or 0
-            )
-            ### get usage based cache ###
-            if isinstance(model_group_cache, dict) and self.routing_strategy != "usage-based-routing-v2":
-                model_group_cache[model_id] = model_group_cache.get(model_id, 0)
-
-                current_request = max(current_request_cache_local, model_group_cache[model_id])
-
-                if isinstance(_litellm_params, dict) and _litellm_params.get("rpm", None) is not None:
-                    if isinstance(_litellm_params["rpm"], int) and _litellm_params["rpm"] <= current_request:
-                        invalid_model_indices.add(idx)
-                        _rate_limit_error = True
-                        continue
 
             ## REGION CHECK ##
             if request_kwargs is not None and request_kwargs.get("allowed_model_region") is not None:
@@ -14562,12 +14534,6 @@ class Router:
         )
 
         if len(excluded_indices) == len(_returned_deployments):
-            """
-            - no healthy deployments available b/c context window checks or rate limit error
-
-            - First check for rate limit errors (if this is true, it means the model passed the context window check but failed the rate limit check)
-            """
-
             group_deployments: Final = (
                 tuple(request_deployments)
                 if request_deployments is not None
@@ -14589,12 +14555,7 @@ class Router:
                     ),
                     model=model,
                 )
-            if _rate_limit_error is True:  # allow generic fallback logic to take place
-                raise RouterRateLimitErrorBasic(
-                    model=model,
-                )
-
-            elif _context_window_error is True:
+            if _context_window_error is True:
                 raise litellm.ContextWindowExceededError(
                     message=f"litellm._pre_call_checks: Context Window exceeded for given call. No models have context window large enough for this call.\n{_potential_error_str}",
                     model=model,
