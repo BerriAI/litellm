@@ -98,7 +98,7 @@ class ResponsePollingHandler:
         polling_id: str,
         status: ResponsesAPIStatus | None = None,
         usage: dict | None = None,
-        error: dict | None = None,
+        error: Mapping[str, object] | None = None,
         incomplete_details: dict | None = None,
         reasoning: dict | None = None,
         tool_choice: object | None = None,

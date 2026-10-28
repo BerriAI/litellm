@@ -126,6 +126,14 @@ def _response_error_code(details: _FailureDetails) -> str:
     return _status_error_code(details.status_code)
 
 
+def responses_error_fields(error: Mapping[str, object]) -> Mapping[str, object]:
+    details: Final = _FailureDetails.model_validate(error)
+    return {
+        "code": _response_error_code(details.model_copy(update={"status_code": _status_of(details.code)})),
+        "message": details.message,
+    }
+
+
 class ResponsesStreamErrorState:
     def __init__(self) -> None:
         self.response_id: str | None = None
@@ -157,12 +165,10 @@ class ResponsesStreamErrorState:
         return prefix.encode("utf-8") + frame if isinstance(frame, bytes) else prefix + frame
 
     def format_error(self, error: Mapping[str, object]) -> str:
-        details: Final = _FailureDetails.model_validate(error)
         payload: Final = json.dumps(
             {
                 "type": ResponsesAPIStreamEvents.ERROR.value,
-                "code": _response_error_code(details.model_copy(update={"status_code": _status_of(details.code)})),
-                "message": details.message,
+                **responses_error_fields(error),
                 "param": error.get("param"),
                 "sequence_number": self.sequence_number + 1,
                 "error": error,
