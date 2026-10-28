@@ -32,6 +32,8 @@ _SUPPORTED_PARAMS: Final = (
     "max_output_tokens",
     "tools",
     "tool_choice",
+    "parallel_tool_calls",
+    "include",
     "reasoning",
     "text",
     "prompt_cache_key",
@@ -62,6 +64,7 @@ class _RequestedTools(BaseModel):
 
     tools: JsonValue = None
     tool_choice: JsonValue = None
+    parallel_tool_calls: JsonValue = None
 
 
 def _requested_tools(logging_obj: Logging) -> _RequestedTools:
@@ -97,6 +100,7 @@ def _normalize_response(
     output: Final = body.get("output")
     tools: Final = body.get("tools")
     tool_choice: Final = body.get("tool_choice")
+    parallel_tool_calls: Final = body.get("parallel_tool_calls")
     input_tokens: Final = usage.get("input_tokens") if isinstance(usage, dict) else None
     output_tokens: Final = usage.get("output_tokens") if isinstance(usage, dict) else None
     normalized_usage: Final = (
@@ -108,8 +112,10 @@ def _normalize_response(
         else usage
     )
     normalized: Final[JsonValue] = {
-        "parallel_tool_calls": False,
         **body,
+        "parallel_tool_calls": (
+            requested.parallel_tool_calls is True if parallel_tool_calls is None else parallel_tool_calls
+        ),
         "tools": (requested.tools or []) if tools is None else tools,
         "tool_choice": (requested.tool_choice or "auto") if tool_choice is None else tool_choice,
         **({"usage": normalized_usage} if "usage" in body else {}),

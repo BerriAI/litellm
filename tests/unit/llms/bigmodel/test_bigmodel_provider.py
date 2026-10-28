@@ -180,6 +180,23 @@ async def test_chat_uses_native_endpoint_and_maps_token_limit(is_async: bool) ->
         assert json.loads(route.calls.last.request.content)["thinking"] == {"type": "enabled"}
 
 
+@respx.mock
+def test_chat_does_not_send_the_openai_organization_to_bigmodel(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_ORGANIZATION", "org-openai-only")
+    route: Final = respx.post(f"{BASE}/api/paas/v4/chat/completions").respond(
+        json={
+            "id": "chat_test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": MODEL,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    _ = litellm.completion(model=f"bigmodel/{MODEL}", messages=[{"role": "user", "content": "Hello"}])
+    assert "openai-organization" not in route.calls.last.request.headers
+
+
 @pytest.mark.parametrize("is_async", (False, True))
 @pytest.mark.asyncio
 @respx.mock
@@ -451,23 +468,37 @@ def test_responses_failure_envelope_raises_its_status_instead_of_a_parse_error(
 
 @pytest.mark.parametrize("stream", (False, True))
 @respx.mock
-def test_responses_without_tools_in_the_answer_echo_the_requested_tools(stream: bool) -> None:
+def test_responses_forward_codex_tool_params_and_echo_them_when_the_answer_omits_them(stream: bool) -> None:
     tools: Final = [{"type": "function", "name": "weather", "parameters": {"type": "object", "properties": {}}}]
-    completed: Final = {"type": "response.completed", "sequence_number": 0, "response": response_payload()}
-    respx.post(f"{BASE}/api/v1/responses").respond(
+    completed: Final = {
+        "type": "response.completed",
+        "sequence_number": 0,
+        "response": {**response_payload(), "parallel_tool_calls": None},
+    }
+    route: Final = respx.post(f"{BASE}/api/v1/responses").respond(
         **(
             {"content": f"event: response.completed\ndata: {json.dumps(completed)}\n\n"}
             if stream
-            else {"json": response_payload()}
+            else {"json": {**response_payload(), "parallel_tool_calls": None}}
         )
     )
     answer: Final = litellm.responses(
-        model=f"bigmodel/{MODEL}", input="Hello", tools=tools, tool_choice="required", stream=stream
+        model=f"bigmodel/{MODEL}",
+        input="Hello",
+        tools=tools,
+        tool_choice="required",
+        parallel_tool_calls=True,
+        include=["reasoning.encrypted_content"],
+        stream=stream,
     )
     response: Final = tuple(answer)[-1].response if stream else answer
     validated: Final = OpenAIResponse.model_validate(response.model_dump())
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["parallel_tool_calls"] is True
+    assert sent["include"] == ["reasoning.encrypted_content"]
     assert validated.tools[0].name == "weather"
     assert validated.tool_choice == "required"
+    assert validated.parallel_tool_calls is True
 
 
 @pytest.mark.asyncio
@@ -820,6 +851,9 @@ async def test_messages_stream_preserves_native_events() -> None:
         "web_search_requests": 0,
         "web_fetch_requests": 0,
     }
+    assert tuple(line for line in lines if line.startswith("data: {"))[1:] == tuple(
+        f"data: {json.dumps(event, ensure_ascii=False)}" for event in events[1:]
+    )
     assert "event: ping" in lines
     assert "data: [DONE]" in lines
     assert b"id: bigmodel-event\n" in output[0]

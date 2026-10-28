@@ -62,7 +62,7 @@ def _normalized_data(data: str) -> str:
         if body.get("type") == "message_start" and isinstance(message, dict)
         else _normalize_message(body)
     )
-    return json.dumps(normalized)
+    return data if normalized == body else json.dumps(normalized, ensure_ascii=False)
 
 
 def _normalize_event(event: ServerSentEvent) -> bytes:
