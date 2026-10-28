@@ -1593,11 +1593,17 @@ def test_gpt_6_astra_takes_the_reasoning_series_request_shape():
 
 
 @pytest.mark.parametrize(
-    ("custom_llm_provider", "level"),
-    [("azure", "none"), ("azure", "xhigh"), ("openai", "xhigh")],
+    ("custom_llm_provider", "level", "advice"),
+    [
+        ("azure", "none", frozenset(("model_info.reasoning_effort_levels", "model_info.base_model"))),
+        ("azure", "xhigh", frozenset(("model_info.reasoning_effort_levels", "model_info.base_model"))),
+        ("openai", "xhigh", frozenset(("model_info.reasoning_effort_levels",))),
+        ("azure_ai", "xhigh", frozenset(("model_info.reasoning_effort_levels",))),
+        ("github_copilot", "xhigh", frozenset()),
+    ],
 )
-def test_a_reasoning_effort_the_level_gate_drops_logs_a_warning_naming_the_fix(
-    caplog: pytest.LogCaptureFixture, custom_llm_provider: str, level: str
+def test_a_reasoning_effort_the_level_gate_drops_logs_a_warning_naming_only_the_fixes_its_route_honors(
+    caplog: pytest.LogCaptureFixture, custom_llm_provider: str, level: str, advice: frozenset[str]
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         params: Final = litellm.get_optional_params(
@@ -1614,9 +1620,14 @@ def test_a_reasoning_effort_the_level_gate_drops_logs_a_warning_naming_the_fix(
         if record.levelno == logging.WARNING and "reasoning_effort" in record.getMessage()
     ]
     assert len(drop_warnings) == 1
-    assert all(
-        fragment in drop_warnings[0]
-        for fragment in (level, "gpt-5.6-terra-ptu", "model_info.base_model", "model_info.reasoning_effort_levels")
+    assert repr(level) in drop_warnings[0] and "gpt-5.6-terra-ptu" in drop_warnings[0]
+    assert (
+        frozenset(
+            fragment
+            for fragment in ("model_info.reasoning_effort_levels", "model_info.base_model")
+            if fragment in drop_warnings[0]
+        )
+        == advice
     )
 
 

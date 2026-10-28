@@ -291,6 +291,7 @@ def test_azure_dropped_effort_warning_suggests_base_model_only_for_a_name_the_ma
             model=model,
             drop_params=True,
             api_version="2025-04-01-preview",
+            declared_reasoning_efforts=(),
         )
 
     assert "reasoning_effort" not in params

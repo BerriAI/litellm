@@ -127,12 +127,12 @@ def _provider_mapped_params(
     params: ResponsesAPIOptionalRequestParams,
     model: str,
     drop_params: bool,
-    declared_reasoning_efforts: Collection[str],
+    declared_reasoning_efforts: Collection[str] | None,
 ) -> Mapping[str, object]:
     from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 
     if (
-        declared_reasoning_efforts
+        declared_reasoning_efforts is not None
         and isinstance(config, OpenAIResponsesAPIConfig)
         and config.honors_declared_reasoning_efforts()
     ):
@@ -283,7 +283,7 @@ class ResponsesAPIRequestUtils:
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         allowed_openai_params: list[str] | None = None,
         drop_params: bool | None = None,
-        declared_reasoning_efforts: Collection[str] = (),
+        declared_reasoning_efforts: Collection[str] | None = None,
     ) -> dict:
         """
         Get optional parameters for the responses API.

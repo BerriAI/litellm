@@ -14,7 +14,10 @@ import pytest
 
 import litellm
 from litellm.llms.bedrock.common_utils import bedrock_supports_openai_responses
-from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig, _without_disabled_reasoning_effort
+from litellm.llms.bedrock.responses.transformation import (
+    BedrockOpenAIResponsesConfig,
+    _without_disabled_reasoning_effort,
+)
 from litellm.responses.file_search.emulated_handler import should_use_emulated_file_search
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders

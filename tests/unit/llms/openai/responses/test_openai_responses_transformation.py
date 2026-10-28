@@ -16,6 +16,7 @@ from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIC
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     ImageGenerationPartialImageEvent,
     IncompleteDetails,
@@ -2388,8 +2389,17 @@ class TestResponsesSurfaceSharesTheEffortRule:
         )
         assert mapped["reasoning"] == {"summary": "auto"}
 
-    def test_dropping_a_refused_effort_logs_one_warning_naming_the_level_and_the_fix(
-        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    @pytest.mark.parametrize(
+        ("declared_reasoning_efforts", "suggests_declared_levels"),
+        [((), True), (None, False)],
+        ids=["responses route reads model_info levels", "compact route reads none"],
+    )
+    def test_dropping_a_refused_effort_logs_one_warning_naming_only_the_fix_its_route_honors(
+        self,
+        local_model_cost_map: None,
+        caplog: pytest.LogCaptureFixture,
+        declared_reasoning_efforts: tuple[str, ...] | None,
+        suggests_declared_levels: bool,
     ) -> None:
         refused: Final = next(
             level
@@ -2397,19 +2407,19 @@ class TestResponsesSurfaceSharesTheEffortRule:
             if litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is False
         )
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-            mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
-                response_api_optional_params={"reasoning": {"effort": refused}},
+            mapped: Final = ResponsesAPIRequestUtils.get_optional_params_responses_api(
                 model="gpt-6.1-sol",
+                responses_api_provider_config=OpenAIResponsesAPIConfig(),
+                response_api_optional_params={"reasoning": {"effort": refused}},
                 drop_params=True,
+                declared_reasoning_efforts=declared_reasoning_efforts,
             )
 
         assert "reasoning" not in mapped
         drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
         assert len(drop_warnings) == 1
-        assert all(
-            fragment in drop_warnings[0]
-            for fragment in (repr(refused), "gpt-6.1-sol", "model_info.reasoning_effort_levels")
-        )
+        assert repr(refused) in drop_warnings[0] and "gpt-6.1-sol" in drop_warnings[0]
+        assert ("model_info.reasoning_effort_levels" in drop_warnings[0]) is suggests_declared_levels
         assert "model_info.base_model" not in drop_warnings[0]
 
     def test_dropping_reasoning_for_a_model_without_supports_reasoning_logs_one_warning(

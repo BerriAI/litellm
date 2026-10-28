@@ -591,7 +591,9 @@ class TestBedrockMantleRefusedEffort:
 
         assert "reasoning" not in params
         drop_warnings: Final = [
-            record.getMessage() for record in caplog.records if f"Dropping reasoning.effort={refused!r}" in record.getMessage()
+            record.getMessage()
+            for record in caplog.records
+            if f"Dropping reasoning.effort={refused!r}" in record.getMessage()
         ]
         assert len(drop_warnings) == 1
         assert "model_info" not in drop_warnings[0]

@@ -382,7 +382,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> dict:
         return dict(
             self.map_openai_params_for_deployment(
-                response_api_optional_params, model, drop_params, declared_reasoning_efforts=()
+                response_api_optional_params, model, drop_params, declared_reasoning_efforts=None
             )
         )
 
@@ -395,7 +395,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         model: str,
         drop_params: bool,
         *,
-        declared_reasoning_efforts: Collection[str],
+        declared_reasoning_efforts: Collection[str] | None,
     ) -> Mapping[str, object]:
         """No mapping applied since inputs are in OpenAI spec already.
 
@@ -435,7 +435,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             if (
                 isinstance(reasoning, dict)
                 and isinstance(requested_effort, str)
-                and requested_effort not in declared_reasoning_efforts
+                and requested_effort not in (declared_reasoning_efforts or ())
                 and self._effort_level_is_disabled(lookup_name, requested_effort)
             ):
                 if not (drop_params or litellm.drop_params):
@@ -445,7 +445,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     )
                 verbose_logger.warning(
                     refused_reasoning_effort_warning(
-                        suggest_declared_levels=self.honors_declared_reasoning_efforts(), suggest_base_model=False
+                        suggest_declared_levels=declared_reasoning_efforts is not None, suggest_base_model=False
                     ),
                     "reasoning.effort",
                     requested_effort,
