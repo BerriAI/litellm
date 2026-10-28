@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import re
 import threading
@@ -32,6 +33,7 @@ from integration.providers._count_tokens_system_lift import (
     LIFTED,
     MID_SYSTEM,
     REMINDER,
+    RESPONSES_REQUEST_OPTIONS,
     RESPONSES_TOOLS,
     STRING_CASE,
     USER,
@@ -1700,6 +1702,43 @@ def test_responses_input_tokens_sends_mantle_the_tool_use_invoke_inference_sends
         assert set(expected) == set(_TOOL_USE_FIELDS), expected
         assert _requests_to(requests, _COUNT_TARGET) == ()
         assert _tool_use_fields(mantle_count) == expected, mantle_count
+
+
+_RUNTIME_COUNTED_OPTIONS: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyType(
+    {**RESPONSES_REQUEST_OPTIONS, "forced-tool-choice": _FORCED_TOOL_CHOICE}
+)
+_RUNTIME_REFUSED_FIELDS: Final = ("thinking", "tool_choice", "toolChoice", "output_config", "output_format")
+
+
+def _runtime_counted_request(count_body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    count_input: Final = _JSON_OBJECT.validate_python(count_body["input"])
+    invoke: Final = count_input.get("invokeModel")
+    if invoke is None:
+        return _JSON_OBJECT.validate_python(count_input["converse"])
+    encoded: Final = _JSON_OBJECT.validate_python(invoke)["body"]
+    assert isinstance(encoded, str), invoke
+    return _JSON_OBJECT.validate_json(base64.b64decode(encoded))
+
+
+@pytest.mark.parametrize("request_body", _RUNTIME_COUNTED_OPTIONS.values(), ids=_RUNTIME_COUNTED_OPTIONS.keys())
+def test_responses_input_tokens_sends_the_runtime_the_tools_without_the_options_it_refuses(
+    counting_proxy: OwnedProxy, mantle_port: int, request_body: dict[str, JsonValue]
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _metadata_deployment(scenario, runtime.url, _SONNET)
+        response: Final = gateway.request("POST", "/v1/responses/input_tokens", {**request_body, "model": model})
+        assert _payload(response)["input_tokens"] == _RUNTIME_COUNT, response.text
+        ((target, count_body),) = _runtime_count_requests(runtime)
+        assert target == f"/model/{_SONNET}/count-tokens", target
+        counted: Final = json.dumps(_runtime_counted_request(count_body))
+        assert [field for field in _RUNTIME_REFUSED_FIELDS if f'"{field}"' in counted] == [], counted
+        assert ('"get_weather"' in counted) is ("tools" in request_body), counted
+        assert mantle.drain() == ()
 
 
 def _counting_every_model(request: Request) -> Reply:
