@@ -4,7 +4,6 @@ import os
 import stat
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -34,6 +33,11 @@ from litellm.proxy.client.cli.commands.agents import (
 from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsError
 from litellm.proxy.client.cli.commands.config import save_config
 from litellm.proxy.client.cli.main import cli as lite
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 AGENTS_MODULE = "litellm.proxy.client.cli.commands.agents"
 CLAUDE_SETTINGS_MODULE = "litellm.proxy.client.cli.commands.claude_settings"
@@ -1340,6 +1344,25 @@ class TestRunAgent:
     def test_empty_command_raises(self):
         with pytest.raises(AgentRunError):
             run_agent("http://localhost:4000", "sk-key", [])
+
+    @pytest.mark.parametrize("subscription", [True, False])
+    def test_codex_stop_hook_is_added_only_when_codex_sends_the_key_as_its_openai_key(self, subscription):
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["codex"],
+            subscription=subscription,
+            base_env={"OPENAI_API_KEY": "sk-users-own-openai-key"},
+            which=lambda name: "/usr/local/bin/codex",
+            verify=lambda *a: None,
+            verify_subscription=lambda *a: None,
+            sync_models=lambda *a: ModelSyncSkipped("not needed"),
+            warn=lambda message: None,
+            launcher=lambda p, a, e: launched.update(args=tuple(a)),
+            preparers={"codex": lambda *a: ("-c", "hooks.Stop=lite")},
+        )
+        assert ("hooks.Stop=lite" in launched["args"]) is not subscription
 
     def test_subscription_launch_probes_with_the_header_and_exports_it(self):
         probed = []

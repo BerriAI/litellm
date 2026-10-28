@@ -911,7 +911,7 @@ def run_agent(
     if isinstance(synced, ModelSyncSkipped):
         warn(f"litellm: not syncing {display_name} models from the proxy: {synced.reason}")
 
-    prepare: Final = preparers.get(os.path.basename(command[0]))
+    prepare: Final = None if subscription else preparers.get(os.path.basename(command[0]))
     prepared_args: Final = tuple(prepare(base_url, api_key, env_before_sync)) if prepare is not None else ()
 
     env: Final = MappingProxyType(
