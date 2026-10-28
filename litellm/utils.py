@@ -2165,6 +2165,14 @@ def client(original_function):
                 logging_obj.failure_handler(
                     e, traceback_exception, start_time, end_time
                 )  # DO NOT MAKE THREADED - router retry fallback relies on this!
+            # All failure callbacks have now been dispatched. Release the stored
+            # exception and the logging object reference so the re-raised exception's
+            # traceback frames cannot pin this request's Logging object (and through
+            # it the request payload) in a reference cycle only a GC pass can help.
+            if logging_obj is not None:
+                logging_obj.model_call_details.pop("exception", None)
+            kwargs.pop("litellm_logging_obj", None)
+            del logging_obj
             raise e
 
     @wraps(original_function)
@@ -2190,6 +2198,7 @@ def client(original_function):
         kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
         _is_litellm_internal_call: Final = is_internal_call.get()
         _deployment_call_end_time: datetime.datetime | None = None
+        uncached_call_kwargs: dict | None = None
 
         try:
             if logging_obj is None:
@@ -2300,6 +2309,8 @@ def client(original_function):
                 and _caching_handler_response.embedding_uncached_input is not None
                 else kwargs
             )
+            if call_kwargs is not kwargs:
+                uncached_call_kwargs = call_kwargs
             try:
                 result = await original_function(*args, **call_kwargs)
             except Exception as deployment_error:
@@ -2486,6 +2497,16 @@ def client(original_function):
 
             timeout: Final = _get_wrapper_timeout(kwargs=kwargs)
             setattr(e, "timeout", timeout)
+            # Same cleanup as the sync wrapper: every failure callback has been
+            # dispatched above, so release the stored exception and our kwargs
+            # references before re-raising. `logging_obj` itself cannot be deleted
+            # here because the finally block below still needs it to restore
+            # correlation contextvars.
+            if logging_obj is not None and not _is_litellm_internal_call:
+                logging_obj.model_call_details.pop("exception", None)
+            kwargs.pop("litellm_logging_obj", None)
+            if uncached_call_kwargs is not None:
+                uncached_call_kwargs.pop("litellm_logging_obj", None)
             raise e
 
         finally:
