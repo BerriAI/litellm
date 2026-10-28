@@ -10,16 +10,17 @@ import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.openai_like.dynamic_config import create_config_class
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 from litellm.types.utils import ModelResponse, Usage
 
-STREAMLAKE_BASE_URL = "https://vanchin.streamlake.ai/api/gateway/v1/endpoints"
-STREAMLAKE_CHAT_URL = f"{STREAMLAKE_BASE_URL}/chat/completions"
+STREAMLAKE_BASE_URL: Final = "https://vanchin.streamlake.ai/api/gateway/v1/endpoints"
+STREAMLAKE_CHAT_URL: Final = f"{STREAMLAKE_BASE_URL}/chat/completions"
 
 REPO_ROOT: Final = Path(__file__).parents[4]
 
 
 class TestStreamlakeProviderConfig:
-    def test_streamlake_provider_resolution(self):
+    def test_streamlake_provider_resolution(self) -> None:
         model, provider, api_key, api_base = get_llm_provider(
             model="streamlake/ep-test-endpoint",
             custom_llm_provider=None,
@@ -32,7 +33,7 @@ class TestStreamlakeProviderConfig:
         assert api_base == STREAMLAKE_BASE_URL
         assert api_key == "sk-test"
 
-    def test_streamlake_api_base_override(self):
+    def test_streamlake_api_base_override(self) -> None:
         model, provider, api_key, api_base = get_llm_provider(
             model="streamlake/ep-test-endpoint",
             custom_llm_provider=None,
@@ -45,8 +46,8 @@ class TestStreamlakeProviderConfig:
         assert api_base == "https://custom.streamlake.example/v1"
         assert api_key == "sk-test"
 
-    def test_streamlake_url_autodetection(self):
-        model, provider, api_key, api_base = get_llm_provider(
+    def test_streamlake_url_autodetection(self) -> None:
+        _, provider, _, api_base = get_llm_provider(
             model="some-public-model",
             custom_llm_provider=None,
             api_base=STREAMLAKE_BASE_URL,
@@ -55,7 +56,7 @@ class TestStreamlakeProviderConfig:
         assert provider == "streamlake"
         assert api_base == STREAMLAKE_BASE_URL
 
-    def test_streamlake_api_key_resolved_from_env(self, monkeypatch):
+    def test_streamlake_api_key_resolved_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("STREAMLAKE_API_KEY", "sk-env-key")
 
         _, provider, api_key, _ = get_llm_provider(
@@ -67,15 +68,12 @@ class TestStreamlakeProviderConfig:
         assert provider == "streamlake"
         assert api_key == "sk-env-key"
 
-    def test_streamlake_validate_environment_sets_bearer(self):
-        from litellm.llms.openai_like.dynamic_config import create_config_class
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-
-        provider = JSONProviderRegistry.get("streamlake")
+    def test_streamlake_validate_environment_sets_bearer(self) -> None:
+        provider: Final = JSONProviderRegistry.get("streamlake")
         assert provider is not None
-        config = create_config_class(provider)()
+        config: Final = create_config_class(provider)()
 
-        headers = config.validate_environment(
+        headers: Final = config.validate_environment(
             headers={},
             model="ep-test-endpoint",
             messages=[{"role": "user", "content": "hi"}],
@@ -86,15 +84,12 @@ class TestStreamlakeProviderConfig:
         )
         assert headers["Authorization"] == "Bearer sk-resolved-key"
 
-    def test_streamlake_complete_url_appends_chat_completions(self):
-        from litellm.llms.openai_like.dynamic_config import create_config_class
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-
-        provider = JSONProviderRegistry.get("streamlake")
+    def test_streamlake_complete_url_appends_chat_completions(self) -> None:
+        provider: Final = JSONProviderRegistry.get("streamlake")
         assert provider is not None
-        config = create_config_class(provider)()
+        config: Final = create_config_class(provider)()
 
-        url = config.get_complete_url(
+        url: Final = config.get_complete_url(
             api_base=None,
             api_key="sk-test",
             model="ep-test-endpoint",
@@ -103,15 +98,12 @@ class TestStreamlakeProviderConfig:
         )
         assert url == STREAMLAKE_CHAT_URL
 
-    def test_streamlake_max_completion_tokens_mapped_to_max_tokens(self):
-        from litellm.llms.openai_like.dynamic_config import create_config_class
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-
-        provider = JSONProviderRegistry.get("streamlake")
+    def test_streamlake_max_completion_tokens_mapped_to_max_tokens(self) -> None:
+        provider: Final = JSONProviderRegistry.get("streamlake")
         assert provider is not None
-        config = create_config_class(provider)()
+        config: Final = create_config_class(provider)()
 
-        optional_params = config.map_openai_params(
+        optional_params: Final = config.map_openai_params(
             non_default_params={"max_completion_tokens": 1024},
             optional_params={},
             model="ep-test-endpoint",
@@ -120,15 +112,12 @@ class TestStreamlakeProviderConfig:
         assert optional_params == {"max_tokens": 1024}
         assert "max_completion_tokens" not in optional_params
 
-    def test_streamlake_chat_params_pass_through(self):
-        from litellm.llms.openai_like.dynamic_config import create_config_class
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-
-        provider = JSONProviderRegistry.get("streamlake")
+    def test_streamlake_chat_params_pass_through(self) -> None:
+        provider: Final = JSONProviderRegistry.get("streamlake")
         assert provider is not None
-        config = create_config_class(provider)()
+        config: Final = create_config_class(provider)()
 
-        optional_params = config.map_openai_params(
+        optional_params: Final = config.map_openai_params(
             non_default_params={"temperature": 0.2, "top_p": 0.9, "stream": True},
             optional_params={},
             model="ep-test-endpoint",
@@ -278,17 +267,17 @@ def test_endpoint_id_call_is_priced_from_the_lowercase_model_streamlake_returns(
     assert keys
 
     for key in keys:
-        info = litellm.get_model_info(model=key)
-        response = ModelResponse(
+        info: Final = litellm.get_model_info(model=key)
+        response: Final = ModelResponse(
             model=key.split("/", 1)[1].lower(),
             usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
         )
-        cost = litellm.completion_cost(
+        cost: Final = litellm.completion_cost(
             completion_response=response,
             model="streamlake/ep-test-endpoint",
             custom_llm_provider="streamlake",
         )
-        expected = 1000 * info["input_cost_per_token"] + 500 * info["output_cost_per_token"]
+        expected: Final = 1000 * info["input_cost_per_token"] + 500 * info["output_cost_per_token"]
         assert cost == pytest.approx(expected), key
 
 
@@ -301,15 +290,13 @@ def test_named_model_params_follow_the_row_and_fall_back_to_the_provider_default
     assert keys
 
     for key in keys:
-        row = litellm.model_cost[key]
-        supported = config.get_supported_openai_params(model=key.split("/", 1)[1].lower())
+        row: Final = litellm.model_cost[key]
+        supported: Final = config.get_supported_openai_params(model=key.split("/", 1)[1].lower())
         assert ("tools" in supported) is (row.get("supports_function_calling") is not False), key
         assert ("reasoning_effort" in supported) is (row.get("supports_reasoning") is not False), key
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
 def test_streamlake_wildcard_expands_to_every_streamlake_row() -> None:
-    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
-
     expanded: Final = get_known_models_from_wildcard("streamlake/*")
     assert set(expanded) == set(_streamlake_keys(litellm.model_cost))

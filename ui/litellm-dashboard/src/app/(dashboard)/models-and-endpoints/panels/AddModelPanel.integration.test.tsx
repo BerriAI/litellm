@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { act, renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
+import { act, fireEvent, renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -293,7 +293,7 @@ describe("AddModelPanel submit payload contract", () => {
     await user.click(await screen.findByText("StreamLake"));
     await user.click(screen.getByRole("combobox", { name: "Select models" }));
     await user.click(await screen.findByText("streamlake/GLM-5.3"));
-    await user.type(screen.getByLabelText("API Key"), "sk-streamlake-test");
+    fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "sk-streamlake-test" } });
     await submit();
 
     expect(lastCreatedModel()).toStrictEqual({

@@ -3764,16 +3764,25 @@
       "url": "https://docs.litellm.ai/docs/providers/openai_compatible",
       "endpoints": {
         "chat_completions": true,
-        "messages": true,
         "responses": true,
+        "text_completion": true,
         "embeddings": false,
         "image_generations": false,
+        "image_edits": false,
         "audio_transcriptions": false,
         "audio_speech": false,
-        "moderations": false,
-        "batches": false,
         "rerank": false,
-        "a2a": false
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": true,
+        "interactions": true,
+        "systemone": false,
+        "a2a": true,
+        "generateContent": true
       }
     },
     "tencent": {
