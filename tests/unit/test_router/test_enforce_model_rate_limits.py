@@ -251,7 +251,7 @@ class TestModelRateLimitingCheckAsync:
         """Test that RateLimitError is raised when RPM limit is exceeded (async)."""
         mock_cache = MagicMock()
         mock_cache.async_get_cache = AsyncMock(return_value=None)
-        mock_cache.async_increment_cache = AsyncMock(return_value=11)  # Over limit
+        mock_cache.async_increment_cache_pipeline = AsyncMock(return_value=[11.0])  # Over limit
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
 
@@ -272,7 +272,7 @@ class TestModelRateLimitingCheckAsync:
         """Test that requests are allowed when under the limit (async)."""
         mock_cache = MagicMock()
         mock_cache.async_get_cache = AsyncMock(return_value=None)
-        mock_cache.async_increment_cache = AsyncMock(return_value=6)
+        mock_cache.async_increment_cache_pipeline = AsyncMock(return_value=[6.0])
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
 
@@ -337,7 +337,7 @@ class TestModelRateLimitingCheckAsync:
     ):
         redis_cache = MagicMock()
         redis_cache.async_get_cache = AsyncMock(side_effect=RedisCircuitBreakerOpenError())
-        redis_cache.async_increment = AsyncMock(return_value=2)
+        redis_cache.async_increment_pipeline = AsyncMock(return_value=[2.0])
         check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, redis_cache))
 
         with pytest.raises(litellm.RateLimitError) as exc_info:
@@ -470,6 +470,7 @@ RPD_DEPLOYMENT = {
     "model_info": {"id": "daily-test-id"},
     "model_name": "daily-model",
 }
+RPM_AND_RPD_DEPLOYMENT = {**RPD_DEPLOYMENT, "litellm_params": {"model": "gpt-4.1-mini", "rpm": 1, "rpd": 2}}
 
 
 class Clock:
@@ -535,6 +536,52 @@ class TestDailyLimits:
             await _async_pre_call(check, deployment)
 
         assert "TPD limit=100, current usage=120" in str(exc_info.value)
+
+    def test_pre_call_check_minute_rejected_request_does_not_spend_rpd(self):
+        clock = Clock(DAY_ONE)
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+
+        assert _pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+        with pytest.raises(litellm.RateLimitError, match="RPM limit=1"):
+            _pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        clock.now = DAY_ONE - timedelta(minutes=1)
+
+        assert _pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+        clock.now = DAY_ONE - timedelta(minutes=2)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
+            _pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_check_minute_rejected_request_does_not_spend_rpd(self):
+        clock = Clock(DAY_ONE)
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+
+        assert await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+        with pytest.raises(litellm.RateLimitError, match="RPM limit=1"):
+            await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        clock.now = DAY_ONE - timedelta(minutes=1)
+
+        assert await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+        clock.now = DAY_ONE - timedelta(minutes=2)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
+            await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_check_increments_rpm_and_rpd_in_one_cache_trip(self):
+        mock_cache = MagicMock()
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_cache.async_increment_cache_pipeline = AsyncMock(return_value=[1.0, 1.0])
+        check = ModelRateLimitingCheck(dual_cache=mock_cache, clock=Clock(DAY_ONE))
+
+        assert await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+
+        assert mock_cache.async_increment_cache_pipeline.await_count == 1
+        operations = mock_cache.async_increment_cache_pipeline.call_args.kwargs["increment_list"]
+        assert [(op["key"], op["ttl"]) for op in operations] == [
+            ("daily-test-id:gpt-4.1-mini:rpm:23-59", 60),
+            ("daily-test-id:gpt-4.1-mini:rpd:2026-10-28", 86400),
+        ]
+        assert not mock_cache.async_increment_cache.called
 
     def test_pre_call_check_reads_the_shared_tpd_count_from_redis(self):
         redis_cache = MagicMock()

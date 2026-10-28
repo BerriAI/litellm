@@ -37,6 +37,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     io_token_refund_failure,
 )
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
+from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.router import RouterErrors
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
@@ -138,6 +139,27 @@ class ModelRateLimitingCheck(CustomLogger):
         )
         return None if count is None else int(count)
 
+    async def _async_increment_request_counts(
+        self, rpm_key: str | None, rpd_key: str | None, parent_otel_span: Span | None
+    ) -> tuple[int | None, int | None]:
+        operations: Final = tuple(
+            RedisPipelineIncrementOperation(key=key, increment_value=1, ttl=ttl)
+            for key, ttl in ((rpm_key, RoutingArgs.ttl), (rpd_key, RoutingArgs.daily_ttl))
+            if key is not None
+        )
+        if not operations:
+            return None, None
+        counts: Final = await self.dual_cache.async_increment_cache_pipeline(
+            increment_list=list(operations), parent_otel_span=parent_otel_span
+        )
+        if counts is None or len(counts) != len(operations):
+            return None, None
+        count_by_key: Final = {op["key"]: int(count) for op, count in zip(operations, counts)}
+        return (
+            None if rpm_key is None else count_by_key.get(rpm_key),
+            None if rpd_key is None else count_by_key.get(rpd_key),
+        )
+
     def _warn_io_token_and_tpm_rpm_coexist_once(self, deployment: dict) -> None:
         tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
         if tpm_limit is None and rpm_limit is None:
@@ -215,22 +237,6 @@ class ModelRateLimitingCheck(CustomLogger):
             if current_rpd > rpd_limit:
                 raise deployment.limit_error("rpd", rpd_limit, current_rpd, now)
 
-    async def _async_check_daily_limits(
-        self, deployment: _DailyLimitDeployment, now: datetime, parent_otel_span: Span | None
-    ) -> None:
-        tpd_limit, rpd_limit = deployment.limits()
-        if tpd_limit is None and rpd_limit is None:
-            return
-        tpd_key, rpd_key = deployment.cache_keys(now.strftime(DAY_FORMAT))
-        if tpd_limit is not None:
-            current_tpd: Final = await self._async_get_current_tpm(tpd_key, tpd_limit, parent_otel_span)
-            if current_tpd is not None and current_tpd >= tpd_limit:
-                raise deployment.limit_error("tpd", tpd_limit, current_tpd, now)
-        if rpd_limit is not None:
-            current_rpd: Final = await self._async_increment(rpd_key, 1, RoutingArgs.daily_ttl, parent_otel_span)
-            if current_rpd is not None and current_rpd > rpd_limit:
-                raise deployment.limit_error("rpd", rpd_limit, current_rpd, now)
-
     def _get_cache_keys(self, deployment: dict, current_minute: str) -> tuple[str, str]:
         """Get the cache keys for TPM and RPM tracking."""
         model_id: Final = deployment.get("model_info", {}).get("id")
@@ -281,13 +287,8 @@ class ModelRateLimitingCheck(CustomLogger):
                 io_reservation_made = True
 
             dt: Final = self.clock()
-            self._check_daily_limits(_DailyLimitDeployment.model_validate(deployment), dt)
-
+            daily: Final = _DailyLimitDeployment.model_validate(deployment)
             tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
-
-            # If no limits are set, allow the request
-            if tpm_limit is None and rpm_limit is None:
-                return deployment
 
             current_minute: Final = dt.strftime("%H-%M")
             tpm_key, rpm_key = self._get_cache_keys(deployment, current_minute)
@@ -334,6 +335,7 @@ class ModelRateLimitingCheck(CustomLogger):
                         ),
                     )
 
+            self._check_daily_limits(daily, dt)
             return deployment
 
         except litellm.RateLimitError:
@@ -364,16 +366,13 @@ class ModelRateLimitingCheck(CustomLogger):
                 io_reservation_made = True
 
             dt: Final = self.clock()
-            await self._async_check_daily_limits(_DailyLimitDeployment.model_validate(deployment), dt, parent_otel_span)
-
+            daily: Final = _DailyLimitDeployment.model_validate(deployment)
+            tpd_limit, rpd_limit = daily.limits()
             tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
-
-            # If no limits are set, allow the request
-            if tpm_limit is None and rpm_limit is None:
-                return deployment
 
             current_minute: Final = dt.strftime("%H-%M")
             tpm_key, rpm_key = self._get_cache_keys(deployment, current_minute)
+            tpd_key, rpd_key = daily.cache_keys(dt.strftime(DAY_FORMAT))
 
             model_id: Final = deployment.get("model_info", {}).get("id")
             model_name: Final = deployment.get("litellm_params", {}).get("model")
@@ -399,10 +398,21 @@ class ModelRateLimitingCheck(CustomLogger):
                         num_retries=0,  # Don't retry - return 429 immediately
                     )
 
-            # Check RPM limit (atomic increment-first to avoid race conditions)
+            if tpd_limit is not None:
+                current_tpd: Final = await self._async_get_current_tpm(tpd_key, tpd_limit, parent_otel_span)
+                if current_tpd is not None and current_tpd >= tpd_limit:
+                    raise daily.limit_error("tpd", tpd_limit, current_tpd, dt)
+
+            # rpm and rpd are incremented in one cache trip; a minute reject hands the rpd count back
+            current_rpm, current_rpd = await self._async_increment_request_counts(
+                rpm_key if rpm_limit is not None else None,
+                rpd_key if rpd_limit is not None else None,
+                parent_otel_span,
+            )
             if rpm_limit is not None:
-                current_rpm: Final = await self._async_increment(rpm_key, 1, RoutingArgs.ttl, parent_otel_span)
                 if current_rpm is not None and current_rpm > rpm_limit:
+                    if current_rpd is not None:
+                        await self._async_increment(rpd_key, -1, RoutingArgs.daily_ttl, parent_otel_span)
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
                         llm_provider="",
@@ -418,6 +428,9 @@ class ModelRateLimitingCheck(CustomLogger):
                         ),
                         num_retries=0,  # Don't retry - return 429 immediately
                     )
+
+            if rpd_limit is not None and current_rpd is not None and current_rpd > rpd_limit:
+                raise daily.limit_error("rpd", rpd_limit, current_rpd, dt)
 
             return deployment
 
