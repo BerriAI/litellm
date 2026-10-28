@@ -14,6 +14,7 @@ from litellm.accounting import (
     MetricName,
     Outcome,
     OutboundUsageEvent,
+    PricingSnapshot,
     measurements_for,
 )
 from litellm.types.utils import CallTypes
@@ -25,6 +26,18 @@ _DIMENSIONS: Final = (
     Dimension(name=DimensionName.TAG, value="alpha"),
     Dimension(name=DimensionName.TAG, value="beta"),
 )
+
+
+def _snapshot(amount: Decimal) -> PricingSnapshot:
+    return PricingSnapshot(
+        calculator_version="test",
+        model="test-model",
+        provider=None,
+        pricing_source="upstream_header",
+        priced_model_key="test-model",
+        upstream_reported_cost=amount,
+        total_cost=amount,
+    )
 
 
 @pytest.mark.parametrize(
@@ -140,6 +153,7 @@ def test_cost_measurements_preserve_authoritative_amount_identity_and_occurrence
         occurred_at=_END,
         dimensions=_DIMENSIONS,
         charges=(Metric(name=MetricName.SPEND, value=amount, unit="USD"),),
+        snapshot=_snapshot(amount),
     )
     assert measurements_for(event) == (
         Measurement(
@@ -192,6 +206,7 @@ def test_billed_retry_and_success_contribute_one_caller_request_and_both_charges
         occurred_at=_START,
         dimensions=_DIMENSIONS,
         charges=(Metric(name=MetricName.SPEND, value=Decimal("0.025"), unit="USD"),),
+        snapshot=_snapshot(Decimal("0.025")),
     )
     success_cost = CostEvent(
         event_id="success-cost",
@@ -199,6 +214,7 @@ def test_billed_retry_and_success_contribute_one_caller_request_and_both_charges
         occurred_at=_START,
         dimensions=_DIMENSIONS,
         charges=(Metric(name=MetricName.SPEND, value=Decimal("0.125"), unit="USD"),),
+        snapshot=_snapshot(Decimal("0.125")),
     )
     measurements = (
         *measurements_for(caller),

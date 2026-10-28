@@ -23,14 +23,18 @@ Instant: TypeAlias = Annotated[AwareDatetime, AfterValidator(_utc)]
 
 
 class MetricName(str, Enum):
+    """Reasoning tokens are included in completion tokens; above-1hr writes are included in cache creation tokens."""
+
     REQUESTS = "requests"
     SUCCESSFUL_REQUESTS = "successful_requests"
     FAILED_REQUESTS = "failed_requests"
     PROMPT_TOKENS = "prompt_tokens"
     COMPLETION_TOKENS = "completion_tokens"
+    REASONING_TOKENS = "reasoning_tokens"
     TOTAL_TOKENS = "total_tokens"
     CACHE_READ_INPUT_TOKENS = "cache_read_input_tokens"
     CACHE_CREATION_INPUT_TOKENS = "cache_creation_input_tokens"
+    CACHE_CREATION_INPUT_TOKENS_ABOVE_1HR = "cache_creation_input_tokens_above_1hr"
     SPEND = "spend"
 
 
@@ -204,11 +208,31 @@ class OutboundUsageEvent(BaseModel):
         return self
 
 
+PricingUnit: TypeAlias = Literal["token", "second", "character", "image", "request"]
+
+
 class Rate(BaseModel):
     model_config = _CONFIG
 
-    token_type: Literal["input", "output", "cache_read", "cache_creation", "reasoning"]
-    usd_per_token: Quantity
+    measure: Identifier
+    unit: PricingUnit
+    usd_per_unit: Quantity
+
+
+class PricedQuantity(BaseModel):
+    """A pricing input in its billing unit. Only seconds may be fractional."""
+
+    model_config = _CONFIG
+
+    measure: Identifier
+    unit: PricingUnit
+    value: Quantity
+
+    @model_validator(mode="after")
+    def validate_discrete_quantity(self) -> Self:
+        if self.unit != "second" and self.value != self.value.to_integral_value():
+            raise ValueError("Discrete priced quantities require integral values")
+        return self
 
 
 class Multiplier(BaseModel):
@@ -231,10 +255,12 @@ class NamedCost(BaseModel):
 
 
 class PricingSnapshot(BaseModel):
-    """Everything the compiler used to price one usage event, so the charge can be reproduced after rates change.
+    """Retained inputs and result of authoritative compilation, reproducible after cost-map rates change.
 
-    Component and adjustment names match ``litellm.types.utils.CostBreakdown``. Components are not required to
-    sum to ``total_cost``: today's values originate as floats and tolerance checks belong to reconciliation.
+    Request-scoped inputs and overrides come from the usage row's versioned payload. Cost-map rates are
+    resolved at compilation, not frozen at capture. Retries reuse the committed charge and snapshot.
+    Component names match ``CostBreakdown``: reasoning_cost is part of output_cost, not an additional charge.
+    Component sums and float tolerances belong to reconciliation, not this structural contract.
     """
 
     model_config = _CONFIG
@@ -247,7 +273,7 @@ class PricingSnapshot(BaseModel):
     priced_model_key: Identifier
     multipliers: tuple[Multiplier, ...] = ()
     rates: tuple[Rate, ...] = ()
-    usage: Metrics = ()
+    usage: tuple[PricedQuantity, ...] = ()
     input_cost: Quantity | None = None
     output_cost: Quantity | None = None
     cache_read_cost: Quantity | None = None
@@ -267,12 +293,16 @@ class PricingSnapshot(BaseModel):
 
     @model_validator(mode="after")
     def validate_snapshot(self) -> Self:
-        if len(frozenset(rate.token_type for rate in self.rates)) != len(self.rates):
-            raise ValueError("Duplicate rate token types")
+        rate_keys: Final = frozenset((rate.measure, rate.unit) for rate in self.rates)
+        quantity_keys: Final = frozenset((quantity.measure, quantity.unit) for quantity in self.usage)
+        if len(rate_keys) != len(self.rates):
+            raise ValueError("Duplicate rate measures and units")
+        if len(quantity_keys) != len(self.usage):
+            raise ValueError("Duplicate priced quantity measures and units")
+        if not rate_keys.issubset(quantity_keys):
+            raise ValueError("Every rate requires one priced quantity with the same measure and unit")
         if len(frozenset(cost.name for cost in self.additional_costs)) != len(self.additional_costs):
             raise ValueError("Duplicate additional cost names")
-        if any(metric.name in _CALLER_METRICS or metric.name is MetricName.SPEND for metric in self.usage):
-            raise ValueError("Snapshot usage holds only the token metrics that were priced")
         return self
 
 
@@ -284,7 +314,7 @@ class CostEvent(BaseModel):
     occurred_at: Instant
     dimensions: Dimensions
     charges: Metrics
-    snapshot: PricingSnapshot | None = None
+    snapshot: PricingSnapshot
 
     @model_validator(mode="after")
     def validate_charge(self) -> Self:
@@ -292,7 +322,7 @@ class CostEvent(BaseModel):
             raise ValueError("A cost event requires one authoritative USD spend metric")
         if self.event_id == self.usage_event_id:
             raise ValueError("Cost and usage events require distinct identities")
-        if self.snapshot is not None and self.snapshot.total_cost != self.charges[0].value:
+        if self.snapshot.total_cost != self.charges[0].value:
             raise ValueError("Snapshot total must equal the authoritative spend")
         return self
 

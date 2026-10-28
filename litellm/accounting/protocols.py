@@ -1,4 +1,12 @@
-"""Contracts only. Implementations own persistence, pricing, projections and live budgets."""
+"""Contracts only. Implementations own persistence, pricing, projections and live budgets.
+
+The event row's ``payload`` is a private envelope versioned by the row's ``schema_version``.
+Usage envelopes retain the public event and request-scoped pricing context: quantities with units,
+model/provider, requested and billed tier/region when known, and per-request/deployment overrides.
+These inputs must survive request teardown. Cost-map rates are resolved at compilation, not capture.
+Cost envelopes retain the public CostEvent, including its required finalized pricing snapshot.
+T5/T6 own envelope serialization; this public API does not introduce a second persisted schema.
+"""
 
 from typing import Protocol
 
@@ -20,6 +28,7 @@ class UsageMeter(Protocol):
     async def record(self, event: InboundUsageEvent | OutboundUsageEvent) -> None:
         """Acknowledge commit, no-op identical IDs and reject conflicting content.
 
+        Persist the event and its request-scoped pricing context before acknowledging.
         HTTP acknowledgement is a separate policy. Unknown usage remains None.
         """
         ...
@@ -29,8 +38,10 @@ class CostCompiler(Protocol):
     async def compile(self, event: OutboundUsageEvent) -> CostEvent | Unpriced:
         """Reuse the committed charge or finalize one charge and its delivery intent.
 
-        Resolve captured pricing context by event identity. Replay must not consume
-        free allowance again. Missing pricing is Unpriced, never an inferred zero.
+        Resolve captured request-scoped context by event identity and cost-map rates
+        at compilation. Persist the resolved inputs in the required snapshot. Replay
+        reuses the committed result and never consumes free allowance again.
+        Missing pricing is Unpriced, never an inferred zero.
         """
         ...
 

@@ -2061,16 +2061,53 @@ model LiteLLM_TelemetryReport {
   @@index([created_at])
 }
 
+enum AccountingEventKind {
+  inbound_usage
+  outbound_usage
+  cost
+}
+
+enum AccountingDeliveryState {
+  pending
+  applied
+  parked
+}
+
+enum AccountingDeliveryTarget {
+  LiteLLM_VerificationToken
+  LiteLLM_UserTable
+  LiteLLM_TeamTable
+  LiteLLM_TeamMembership
+  LiteLLM_OrganizationTable
+  LiteLLM_OrganizationMembership
+  LiteLLM_EndUserTable
+  LiteLLM_TagTable
+  LiteLLM_ProjectTable
+  LiteLLM_ModelAccessGroupBudgetTable
+  LiteLLM_BudgetTable
+  LiteLLM_BudgetWindowSpend
+  LiteLLM_DailyUserSpend
+  LiteLLM_DailyTeamSpend
+  LiteLLM_DailyOrganizationSpend
+  LiteLLM_DailyEndUserSpend
+  LiteLLM_DailyAgentSpend
+  LiteLLM_DailyTagSpend
+  LiteLLM_DailyModelUsage
+  LiteLLM_DailyToolSpend
+  LiteLLM_AutoRouterDailySpend
+}
+
 // Durable accounting ledger. One row per usage or cost event; payload holds the
-// typed event (cost rows include the pricing snapshot) versioned by schema_version.
+// private event envelope versioned by schema_version. Usage rows retain request-scoped
+// pricing context; cost rows include resolved rates and the finalized pricing snapshot.
 model LiteLLM_AccountingEvent {
-  event_id        String   @id
-  kind            String
+  event_id        String              @id
+  kind            AccountingEventKind
   source_event_id String?
   schema_version  Int
   payload_hash    String
   occurred_at     DateTime
-  recorded_at     DateTime @default(now())
+  recorded_at     DateTime            @default(now())
   payload         Json
 
   @@index([recorded_at])
@@ -2081,11 +2118,11 @@ model LiteLLM_AccountingEvent {
 // once applied in the same transaction as the target write, the receipt that stops a retry.
 model LiteLLM_AccountingDelivery {
   event_id        String
-  target          String
+  target          AccountingDeliveryTarget
   version         Int
-  state           String    @default("pending")
-  attempts        Int       @default(0)
-  next_attempt_at DateTime  @default(now())
+  state           AccountingDeliveryState  @default(pending)
+  attempts        Int                      @default(0)
+  next_attempt_at DateTime                 @default(now())
   applied_at      DateTime?
   last_error      String?
 
