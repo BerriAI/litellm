@@ -2081,6 +2081,7 @@ enum AccountingDeliveryTarget {
   LiteLLM_OrganizationTable
   LiteLLM_OrganizationMembership
   LiteLLM_EndUserTable
+  LiteLLM_AgentsTable
   LiteLLM_TagTable
   LiteLLM_ProjectTable
   LiteLLM_ModelAccessGroupBudgetTable

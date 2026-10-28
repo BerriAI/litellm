@@ -1,5 +1,6 @@
 """Accounting values use UTC instants, decimal strings on the wire and USD charges."""
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
@@ -89,6 +90,7 @@ class DeliveryTarget(str, Enum):
     ORGANIZATION_SPEND = "LiteLLM_OrganizationTable"
     ORGANIZATION_MEMBER_SPEND = "LiteLLM_OrganizationMembership"
     END_USER_SPEND = "LiteLLM_EndUserTable"
+    AGENT_SPEND = "LiteLLM_AgentsTable"
     TAG_SPEND = "LiteLLM_TagTable"
     PROJECT_SPEND = "LiteLLM_ProjectTable"
     MODEL_ACCESS_GROUP_SPEND = "LiteLLM_ModelAccessGroupBudgetTable"
@@ -103,6 +105,18 @@ class DeliveryTarget(str, Enum):
     DAILY_MODEL_USAGE = "LiteLLM_DailyModelUsage"
     DAILY_TOOL_SPEND = "LiteLLM_DailyToolSpend"
     AUTOROUTER_DAILY_SPEND = "LiteLLM_AutoRouterDailySpend"
+
+
+_SUBSET_PAIRS: Final = (
+    (MetricName.REASONING_TOKENS, MetricName.COMPLETION_TOKENS),
+    (MetricName.CACHE_CREATION_INPUT_TOKENS_ABOVE_1HR, MetricName.CACHE_CREATION_INPUT_TOKENS),
+)
+
+
+def _check_subsets(values: Mapping[str, Decimal]) -> None:
+    for part, whole in _SUBSET_PAIRS:
+        if part.value in values and whole.value in values and values[part.value] > values[whole.value]:
+            raise ValueError(f"{part.value} cannot exceed {whole.value}")
 
 
 class Metric(BaseModel):
@@ -128,12 +142,15 @@ class Dimension(BaseModel):
     value: Identifier
 
 
+_REPEATABLE_DIMENSIONS: Final = frozenset({DimensionName.TAG, DimensionName.MODEL_ACCESS_GROUP})
+
+
 def _dimensions(values: tuple[Dimension, ...]) -> tuple[Dimension, ...]:
     if len(frozenset(values)) != len(values):
         raise ValueError("Duplicate dimension values")
-    single_names: Final = tuple(value.name for value in values if value.name is not DimensionName.TAG)
+    single_names: Final = tuple(value.name for value in values if value.name not in _REPEATABLE_DIMENSIONS)
     if len(frozenset(single_names)) != len(single_names):
-        raise ValueError("Only tag dimensions may have multiple values")
+        raise ValueError("Only tag and model access group dimensions may have multiple values")
     return values
 
 
@@ -205,6 +222,8 @@ class OutboundUsageEvent(BaseModel):
             metric.name in _CALLER_METRICS or metric.name is MetricName.SPEND for metric in self.metrics
         ):
             raise ValueError("Outbound events own only attempt usage metrics")
+        if self.metrics is not None:
+            _check_subsets({metric.name.value: metric.value for metric in self.metrics})
         return self
 
 
@@ -303,6 +322,9 @@ class PricingSnapshot(BaseModel):
             raise ValueError("Every rate requires one priced quantity with the same measure and unit")
         if len(frozenset(cost.name for cost in self.additional_costs)) != len(self.additional_costs):
             raise ValueError("Duplicate additional cost names")
+        if len(frozenset(multiplier.name for multiplier in self.multipliers)) != len(self.multipliers):
+            raise ValueError("Duplicate multiplier names")
+        _check_subsets({quantity.measure: quantity.value for quantity in self.usage if quantity.unit == "token"})
         return self
 
 

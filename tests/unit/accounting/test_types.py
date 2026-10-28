@@ -153,7 +153,25 @@ def test_outbound_attempts_cannot_own_caller_counts_or_charges(metrics):
         ({"ended_at": _START - timedelta(seconds=1)}, "End must follow start"),
         ({"retry_of_attempt_id": "attempt"}, "cannot retry itself"),
         ({"dimensions": (_TEAM, _TEAM)}, "Duplicate dimension values"),
-        ({"dimensions": (_TEAM, Dimension(name=DimensionName.TEAM, value="other"))}, "Only tag dimensions"),
+        ({"dimensions": (_TEAM, Dimension(name=DimensionName.TEAM, value="other"))}, "Only tag and model access group"),
+        (
+            {
+                "metrics": (
+                    Metric(name=MetricName.COMPLETION_TOKENS, value=Decimal(5)),
+                    Metric(name=MetricName.REASONING_TOKENS, value=Decimal(6)),
+                )
+            },
+            "reasoning_tokens cannot exceed completion_tokens",
+        ),
+        (
+            {
+                "metrics": (
+                    Metric(name=MetricName.CACHE_CREATION_INPUT_TOKENS, value=Decimal(5)),
+                    Metric(name=MetricName.CACHE_CREATION_INPUT_TOKENS_ABOVE_1HR, value=Decimal(6)),
+                )
+            },
+            "cache_creation_input_tokens_above_1hr cannot exceed cache_creation_input_tokens",
+        ),
         ({"event_id": " "}, "pattern"),
         ({"metrics": (_TOKEN, _TOKEN)}, "Duplicate metric names"),
     ],
@@ -436,3 +454,31 @@ def test_prisma_accepts_exactly_the_public_accounting_enum_values(
     declaration: Final = re.search(r"enum " + enum_name + r"\s*\{([^}]+)\}", schema)
     assert declaration is not None, f"Missing persisted enum {enum_name}"
     assert frozenset(declaration[1].split()) == frozenset(member.value for member in python_enum)
+
+
+def test_one_event_carries_every_matched_model_access_group():
+    groups = (
+        Dimension(name=DimensionName.MODEL_ACCESS_GROUP, value="gpt-group"),
+        Dimension(name=DimensionName.MODEL_ACCESS_GROUP, value="claude-group"),
+    )
+    assert _outbound(dimensions=(_TEAM, *groups)).dimensions == (_TEAM, *groups)
+    with pytest.raises(ValidationError, match="Duplicate dimension values"):
+        _outbound(dimensions=(groups[0], groups[0]))
+
+
+def test_snapshots_reject_duplicate_multipliers_and_contradictory_token_counts():
+    multiplier = Multiplier(name="data_residency", value="eu", factor=Decimal("1.1"))
+    with pytest.raises(ValidationError, match="Duplicate multiplier names"):
+        _snapshot(multipliers=(multiplier, multiplier))
+    with pytest.raises(ValidationError, match="reasoning_tokens cannot exceed completion_tokens"):
+        _snapshot(
+            usage=(
+                PricedQuantity(measure="input", unit="token", value=_TOKEN.value),
+                PricedQuantity(measure="completion_tokens", unit="token", value=Decimal(5)),
+                PricedQuantity(measure="reasoning_tokens", unit="token", value=Decimal(6)),
+            )
+        )
+
+
+def test_agent_live_spend_is_a_delivery_target():
+    assert DeliveryTarget.AGENT_SPEND.value == "LiteLLM_AgentsTable"
