@@ -23,6 +23,7 @@ from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_ssl_configuration,
@@ -222,7 +223,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return []
 
     @staticmethod
-    def _iter_schema_string_refs(data: Mapping[str, Any]):
+    def _iter_schema_string_refs(data: Mapping[str, object]):
         """Yield ``(container, key)`` for every non-empty schema string the proxy
         forwards to the model inside tool/function and structured-output schemas:
         each ``tools[].function`` and legacy ``functions[]`` entry plus the
@@ -235,10 +236,10 @@ class CatoNetworksGuardrail(CustomGuardrail):
         list_keys: Final = ("enum", "examples")
 
         stack: Final[list] = []
-        for tool in data.get("tools") or []:
+        for tool in iter_items(data.get("tools") or ()):
             if isinstance(tool, dict) and isinstance(tool.get("function"), dict):
                 stack.append(tool["function"])
-        for function in data.get("functions") or []:
+        for function in iter_items(data.get("functions") or ()):
             if isinstance(function, dict):
                 stack.append(function)
         response_format: Final = data.get("response_format")
