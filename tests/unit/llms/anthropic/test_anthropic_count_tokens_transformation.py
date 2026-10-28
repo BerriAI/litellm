@@ -721,6 +721,22 @@ async def test_counter_rejects_input_chat_translation_would_leave_out_without_ca
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_sends_a_tool_with_a_non_string_type_to_anthropic_as_given(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
+) -> None:
+    tool: Final[dict[str, JsonValue]] = {"type": ["mcp"], "name": "lookup"}
+
+    result, bodies = await _counted_body(
+        counter_type, count_endpoint, [{"role": "user", "content": "Ask the wiki"}], [tool], "openai"
+    )
+
+    assert result is not None
+    assert [body.get("tools") for body in bodies] == [[tool]]
+
 _ANSWER_SCHEMA: Final[dict[str, JsonValue]] = {
     "type": "object",
     "properties": {"answer": {"type": "string"}},
