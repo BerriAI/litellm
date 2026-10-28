@@ -104,7 +104,9 @@ def test_chat_completions_overlapping_a_cold_openapi_build_all_succeed(gateway: 
                 range(CHATS),
             )
         )
+        chats_returned_during_build: Final = not docs.done()
         docs_response: Final = docs.result()
+    assert chats_returned_during_build, "the chat calls returned only after the cold docs build finished"
     assert [(response.status_code, response.text[:300]) for response in chats if response.status_code != 200] == []
     replies: Final = tuple(JSON_OBJECT.validate_json(response.content) for response in chats)
     assert {reply["object"] for reply in replies} == {"chat.completion"}
@@ -154,8 +156,11 @@ def test_a_lazy_feature_loaded_during_a_cold_openapi_build_shows_its_live_routes
     ):
         docs: Final = pool.submit(lazy.gateway.request, "GET", "/openapi.json")
         warmed: Final = lazy.gateway.request("POST", f"/lazy/warm/{WARMED_FEATURE.name}")
-        assert docs.result().status_code == 200
+        warmed_during_build: Final = not docs.done()
+        during: Final = _warmed_feature_operations(docs.result())
         after: Final = _warmed_feature_operations(lazy.gateway.request("GET", "/openapi.json"))
     assert warmed.status_code == 200, warmed.text
+    assert warmed_during_build, "the feature finished loading only after the cold docs build finished"
     assert live, "the eager proxy published no route of the warmed feature"
+    assert during != live, "the cold docs build started after the feature had already loaded"
     assert after == live
