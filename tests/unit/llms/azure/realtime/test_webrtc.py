@@ -1,8 +1,10 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping
 from datetime import datetime, timezone
 from typing import Final
 
+import httpx
 import pytest
 from pydantic import TypeAdapter
 
@@ -10,8 +12,10 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure.common_utils import AzureOpenAIError
+from litellm.llms.azure.realtime import webrtc
 from litellm.llms.azure.realtime.webrtc import (
     AzureWebRTCObserver,
+    AzureWebRTCObservers,
     AzureWebRTCUsageCollector,
     azure_webrtc_sideband_url,
 )
@@ -203,6 +207,63 @@ async def test_observer_reports_parent_tokens_and_each_asr_model_cost_to_origina
     assert len(frozenset(record["id"] for record in charged)) == 3
     assert recorder.failure == ()
     assert socket.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [OSError("connection refused"), TimeoutError("connection timed out")])
+async def test_unreachable_observer_refuses_call_admission(monkeypatch: pytest.MonkeyPatch, failure: Exception) -> None:
+    async def unavailable(url: str, **kwargs: object) -> _AzureSocket:
+        raise failure
+
+    monkeypatch.setattr(webrtc, "connect", unavailable)
+    response: Final = httpx.Response(201, headers={"location": "/openai/v1/realtime/calls/call_1"})
+    with pytest.raises(AzureOpenAIError, match="Unable to attach Azure WebRTC usage observer") as refused:
+        await AzureWebRTCObservers().attach(
+            response, "https://audio.example", {"api-key": "test-key"}, "rt", {}, _logging(_SpendCapture())
+        )
+    assert refused.value.status_code == 502
+
+
+class _ActiveAzureSocket:
+    def __init__(self) -> None:
+        self.observing: Final = asyncio.Event()
+        self.closed: bool = False
+
+    async def __aiter__(self) -> AsyncIterator[str]:
+        yield json.dumps(_transcription("item-1", 3.0))
+        self.observing.set()
+        await asyncio.Event().wait()
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_closes_observer_and_reports_incomplete_accounting_once(
+    monkeypatch: pytest.MonkeyPatch, priced_models: None
+) -> None:
+    socket: Final = _ActiveAzureSocket()
+
+    async def connected(url: str, **kwargs: object) -> _ActiveAzureSocket:
+        return socket
+
+    monkeypatch.setattr(webrtc, "connect", connected)
+    observers: Final = AzureWebRTCObservers()
+    recorder: Final = _SpendCapture()
+    response: Final = httpx.Response(201, headers={"location": "/openai/v1/realtime/calls/call_1"})
+    await observers.attach(
+        response, "https://audio.example", {"api-key": "test-key"}, "rt", _session("asr-first"), _logging(recorder)
+    )
+    try:
+        await socket.observing.wait()
+    finally:
+        await observers.stop()
+    await observers.stop()
+    assert socket.closed
+    assert tuple(record["response_cost"] for record in recorder.success) == pytest.approx((3 * 0.01,))
+    assert len(recorder.failure) == 1
+    metadata: Final = _OBJECT.validate_python(recorder.failure[0]["metadata"])
+    assert _OBJECT.validate_python(metadata["spend_logs_metadata"])["webrtc_accounting_status"] == "observer_shutdown"
 
 
 @pytest.mark.asyncio
