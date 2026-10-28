@@ -1,16 +1,97 @@
 import copy
 import json
 import os
+from collections.abc import Mapping
+from datetime import datetime, timedelta
+from queue import SimpleQueue
+from threading import get_ident
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
+import responses
 
-from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
 from litellm.llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_HOSTED_TOOLS
 from litellm.types.router import GenericLiteLLMParams
+
+
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("infer_project", (False, True), ids=("explicit-project", "credential-project"))
+@pytest.mark.asyncio
+async def test_messages_auth_load_and_refresh_leave_the_event_loop(stream: bool, infer_project: bool) -> None:
+    config: Final = VertexAIPartnerModelsAnthropicMessagesConfig()
+    loop_thread: Final = get_ident()
+    token_threads: Final[SimpleQueue[int]] = SimpleQueue()
+    now: Final = datetime(2025, 1, 1)
+    model: Final = "claude-sonnet-5"
+    headers: Final = {"Authorization": "Bearer incoming", "anthropic-beta": "retained-beta", "x-request-id": "req-1"}
+    optional_params: Final = {
+        "stream": stream,
+        "tools": [{"type": ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value, "name": "web_search"}],
+    }
+    litellm_params: Final = {
+        "vertex_ai_project": None if infer_project else "auth-project",
+        "vertex_ai_location": "global",
+        "vertex_credentials": json.dumps(
+            {
+                "type": "authorized_user",
+                "client_id": "synthetic-client",
+                "client_secret": "synthetic-secret",
+                "refresh_token": "synthetic-refresh",
+                "quota_project_id": "auth-project",
+            }
+        ),
+    }
+
+    async def validate() -> tuple[Mapping[str, object], str | None]:
+        return await config.avalidate_anthropic_messages_environment(
+            headers=headers, model=model, messages=[], optional_params=optional_params, litellm_params=litellm_params
+        )
+
+    with patch("google.auth._helpers.utcnow", return_value=now) as clock, responses.RequestsMock() as oauth:
+
+        def token_response(_request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+            token_threads.put(get_ident())
+            return 200, {}, json.dumps({"access_token": f"token-{len(oauth.calls) + 1}", "expires_in": 3600})
+
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        cold_headers, cold_url = await validate()
+        assert token_threads.get_nowait() != loop_thread
+        assert cold_headers["Authorization"] == "Bearer token-1"
+        assert await validate() == (cold_headers, cold_url)
+        assert len(oauth.calls) == 1
+
+        clock.return_value = now + timedelta(hours=2)
+        refreshed_headers, refreshed_url = await validate()
+        assert token_threads.get_nowait() != loop_thread
+        assert refreshed_headers["Authorization"] == "Bearer token-2"
+        assert refreshed_url == cold_url
+        assert len(oauth.calls) == 2
+        assert config.validate_anthropic_messages_environment(
+            headers=headers, model=model, messages=[], optional_params=optional_params, litellm_params=litellm_params
+        ) == (refreshed_headers, refreshed_url)
+        assert len(oauth.calls) == 2
+
+    endpoint: Final = "streamRawPredict" if stream else "rawPredict"
+    assert cold_url == (
+        "https://aiplatform.googleapis.com/v1/projects/auth-project/locations/global/"
+        f"publishers/anthropic/models/{model}:{endpoint}"
+    )
+    assert refreshed_headers == {
+        "Authorization": "Bearer token-2",
+        "anthropic-beta": cold_headers["anthropic-beta"],
+        "x-request-id": "req-1",
+        "content-type": "application/json",
+    }
+    beta_header: Final = cold_headers["anthropic-beta"]
+    assert isinstance(beta_header, str)
+    assert set(beta_header.split(",")) == {"retained-beta", ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value}
+    assert headers == {"Authorization": "Bearer incoming", "anthropic-beta": "retained-beta", "x-request-id": "req-1"}
 
 
 def test_validate_environment_uses_vertex_ai_location():
@@ -535,6 +616,44 @@ def test_messages_request_moves_output_format_into_output_config():
 
     assert "output_format" not in result
     assert result["output_config"] == {"effort": "high", "format": output_format}
+
+
+_CALLER_OUTPUT_CONFIG: Final = {
+    "effort": "high",
+    "format": {"type": "json_schema", "schema": {"type": "object", "properties": {"answer": {"type": "integer"}}}},
+}
+
+
+def _messages_request_with_output_format(output_format: object, drop_params: bool) -> Mapping[str, object]:
+    return VertexAIPartnerModelsAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-4-6",
+        messages=[{"role": "user", "content": "What is 6 times 7?"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "output_format": output_format,
+            "output_config": copy.deepcopy(_CALLER_OUTPUT_CONFIG),
+        },
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+
+@pytest.mark.parametrize("output_format", ["json", ["json_schema"], 42])
+def test_messages_request_drops_a_malformed_output_format_under_drop_params(output_format: object):
+    result = _messages_request_with_output_format(output_format, drop_params=True)
+
+    assert "output_format" not in result
+    assert result["output_config"] == _CALLER_OUTPUT_CONFIG
+
+
+@pytest.mark.parametrize("output_format", ["json", ["json_schema"], 42])
+def test_messages_request_rejects_a_malformed_output_format_without_drop_params(output_format: object):
+    import litellm
+
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        _messages_request_with_output_format(output_format, drop_params=False)
+
+    assert error.value.status_code == 400
 
 
 def test_provider_config_manager_reuses_vertex_anthropic_messages_config_instance():

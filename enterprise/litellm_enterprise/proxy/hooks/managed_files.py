@@ -6,6 +6,7 @@ import base64
 import json
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -43,6 +44,7 @@ from litellm.constants import (
 )
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.internal_call_metadata import requests_background
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -132,7 +134,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.proxy.utils import PrismaClient as _PrismaClient
 
-    Span = Union[_Span, Any]
+    Span = _Span
     InternalUsageCache = _InternalUsageCache
     PrismaClient = _PrismaClient
 else:
@@ -416,7 +418,7 @@ def _storable_json_value(value: JsonValue) -> JsonValue:
     return value
 
 
-def _postgres_storable_json(file_object: BaseModel) -> str:
+def postgres_storable_json(file_object: BaseModel) -> str:
     dumped: Final = file_object.model_dump_json()
     if "\\u0000" not in dumped:
         return dumped
@@ -479,7 +481,22 @@ def _with_managed_background_marker(request: Mapping[str, object]) -> dict[str, 
 
 
 _MANAGED_FILES_TARGET: Final = "managed_files"
+_PROVIDER_FILE_ID_KWARGS: Final = MappingProxyType(
+    {
+        CallTypes.acreate_batch: ("input_file_id",),
+        CallTypes.acreate_fine_tuning_job: ("training_file", "validation_file"),
+    }
+)
+_PROVIDER_FILE_ID_KEYS: Final = tuple(dict.fromkeys(chain.from_iterable(_PROVIDER_FILE_ID_KWARGS.values())))
 _PROVIDER_FILE_RETRIEVE_RETRY_DELAYS_SECONDS: Final = (0.5, 1.0, 2.0)
+
+
+class _SupportsKeyedGet(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+def _keyed_get(source: object, key: str, default: object = None) -> object:
+    return require_attributes(source, _SupportsKeyedGet, "get").get(key, default)
 
 
 class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
@@ -650,7 +667,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
         # FIX: Update status and file_object on every operation to keep state in sync
         update_columns: Final = {
-            "file_object": _postgres_storable_json(stored_object),
+            "file_object": postgres_storable_json(stored_object),
             "status": file_object.status,
             "updated_by": user_api_key_dict.user_id,
         }
@@ -666,7 +683,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             data={
                 "create": {
                     "unified_object_id": unified_object_id,
-                    "file_object": _postgres_storable_json(stored_object),
+                    "file_object": postgres_storable_json(stored_object),
                     "model_object_id": model_object_id,
                     "file_purpose": file_purpose,
                     "created_by": resolve_resource_owner_id(user_api_key_dict),
@@ -702,7 +719,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "unified_object_id": response_id,
                     "model_object_id": decrypted_response_id(response_id),
                     "file_purpose": "response",
-                    "file_object": _postgres_storable_json(_without_model_output(response)),
+                    "file_object": postgres_storable_json(_without_model_output(response)),
                     "status": PENDING_RESPONSE_STATUSES[0],
                     "created_by": resolve_resource_owner_id(user_api_key_dict),
                     "team_id": user_api_key_dict.team_id,
@@ -1562,6 +1579,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 if isinstance(file_id, str) and file_id
             )
             await self.check_file_ids_access(fine_tuning_file_ids, user_api_key_dict)
+            if fine_tuning_file_ids:
+                data["model_file_id_mapping"] = await self.get_model_file_id_mapping(
+                    fine_tuning_file_ids, user_api_key_dict.parent_otel_span
+                )
 
         return data
 
@@ -1576,50 +1597,49 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if request_kwargs is None:
             return healthy_deployments
 
-        input_file_id = cast(Optional[str], request_kwargs.get("input_file_id"))
-        model_file_id_mapping = cast(
-            Optional[Dict[str, Dict[str, str]]],
-            request_kwargs.get("model_file_id_mapping"),
+        request: Final = cast(Mapping[str, object], request_kwargs)
+        model_file_id_mapping: Final = cast(Mapping[str, Mapping[str, str]], request.get("model_file_id_mapping") or {})
+        requested_file_ids: Final = (request.get(key) for key in _PROVIDER_FILE_ID_KEYS)
+        model_ids_per_file: Final = tuple(
+            frozenset(model_file_id_mapping[file_id])
+            for file_id in requested_file_ids
+            if isinstance(file_id, str) and file_id in model_file_id_mapping
         )
-        allowed_model_ids = []
-        if input_file_id and model_file_id_mapping:
-            model_id_dict = model_file_id_mapping.get(input_file_id, {})
-            allowed_model_ids = list(model_id_dict.keys())
+        allowed_model_ids: Final[frozenset[str]] = (
+            model_ids_per_file[0].intersection(*model_ids_per_file[1:]) if model_ids_per_file else frozenset()
+        )
 
         if len(allowed_model_ids) == 0:
             return healthy_deployments
 
-        return [
+        holders: Final[list[dict[str, object]]] = [
             deployment
             for deployment in healthy_deployments
             if deployment.get("model_info", {}).get("id") in allowed_model_ids
         ]
+        return holders if holders or "input_file_id" in request else healthy_deployments
 
     async def async_pre_call_deployment_hook(
-        self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
+        self, kwargs: dict[str, object], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
         """
         Allow modifying the request just before it's sent to the deployment.
         """
-        accessor_key: Optional[str] = None
-        if call_type and call_type == CallTypes.acreate_batch:
-            accessor_key = "input_file_id"
-        elif call_type and call_type == CallTypes.acreate_fine_tuning_job:
-            accessor_key = "training_file"
-        else:
+        accessor_keys: Final = _PROVIDER_FILE_ID_KWARGS.get(call_type) if call_type else None
+        if accessor_keys is None:
             return kwargs
 
-        if accessor_key:
+        model_file_id_mapping = cast(Optional[Dict[str, Dict[str, str]]], kwargs.get("model_file_id_mapping"))
+        # model_info may be at top-level or nested under litellm_metadata
+        # (batch/file operations use litellm_metadata)
+        model_id = cast(Optional[str], _keyed_get(kwargs.get("model_info", {}), "id"))
+        if model_id is None:
+            model_id = cast(
+                Optional[str],
+                _keyed_get(_keyed_get(kwargs.get("litellm_metadata", {}), "model_info", {}), "id"),
+            )
+        for accessor_key in accessor_keys:
             input_file_id = cast(Optional[str], kwargs.get(accessor_key))
-            model_file_id_mapping = cast(Optional[Dict[str, Dict[str, str]]], kwargs.get("model_file_id_mapping"))
-            # model_info may be at top-level or nested under litellm_metadata
-            # (batch/file operations use litellm_metadata)
-            model_id = cast(Optional[str], kwargs.get("model_info", {}).get("id", None))
-            if model_id is None:
-                model_id = cast(
-                    Optional[str],
-                    kwargs.get("litellm_metadata", {}).get("model_info", {}).get("id", None),
-                )
             mapped_file_id: Optional[str] = None
             if input_file_id and model_file_id_mapping and model_id:
                 mapped_file_id = model_file_id_mapping.get(input_file_id, {}).get(model_id, None)
@@ -1813,7 +1833,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     ),
                 )
 
-    async def get_model_file_id_mapping(self, file_ids: List[str], litellm_parent_otel_span: Span) -> dict:
+    async def get_model_file_id_mapping(self, file_ids: Sequence[str], litellm_parent_otel_span: Span | None) -> dict:
         """
         Get model-specific file IDs for a list of proxy file IDs.
         Returns a dictionary mapping litellm_proxy/ file_id -> model_id -> model_file_id
@@ -1855,7 +1875,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         llm_router: Optional[Router],
         _create_file_request: CreateFileRequest,
         target_model_names_list: List[str],
-        litellm_parent_otel_span: Span,
+        litellm_parent_otel_span: Span | None,
     ) -> List[OpenAIFileObject]:
         if llm_router is None:
             raise Exception("LLM Router not initialized. Ensure models added to proxy.")
@@ -1871,7 +1891,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         create_file_request: CreateFileRequest,
         llm_router: Router,
         target_model_names_list: List[str],
-        litellm_parent_otel_span: Span,
+        litellm_parent_otel_span: Span | None,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> OpenAIFileObject:
         responses = await self.create_file_for_each_model(
@@ -1938,7 +1958,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         file_objects: List[OpenAIFileObject],
         create_file_request: CreateFileRequest,
         internal_usage_cache: InternalUsageCache,
-        litellm_parent_otel_span: Span,
+        litellm_parent_otel_span: Span | None,
         target_model_names_list: List[str],
     ) -> OpenAIFileObject:
         ## GET THE FILE TYPE FROM THE CREATE FILE REQUEST
@@ -2641,7 +2661,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 # Continue with other files even if one fails
                 continue
 
-    def _get_content_type_from_file_object(self, file_object: Optional[Any]) -> str:
+    def _get_content_type_from_file_object(self, file_object: object) -> str:
         """
         Determine content type from file object.
 

@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
+from pathlib import Path
 from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final, cast
@@ -14,8 +15,10 @@ import httpcore
 import httpx
 import psutil
 import pytest
+import yaml
 from anthropic.types import MessageParam
-from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
+from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
+from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from integration.providers._count_tokens_system_lift import (
@@ -32,18 +35,24 @@ from integration.providers._count_tokens_system_lift import (
     MID_SYSTEM,
     REJECTION,
     REMINDER,
+    RESPONSES_REQUEST_OPTIONS,
+    RESPONSES_TOOL_USE,
     STRING_CASE,
     TOKEN_COUNTING_BETA,
     TOOLS,
     USER,
     USER_TEXT,
+    WEATHER_QUESTION,
     LiftCase,
     accepts_count_body,
     anthropic_client,
     async_anthropic_client,
     async_openai_client,
     count_request,
+    count_request_fields,
+    counted_fields,
     expected_count_body,
+    inference_count_fields,
     openai_client,
 )
 from pydantic import JsonValue, TypeAdapter
@@ -274,7 +283,7 @@ def test_messages_count_tokens_lifts_the_leading_system_run(
 ) -> None:
     with _listening(deployment) as peer:
         response: Final = _count(gateway, count_request(deployment.model, case))
-        assert _payload(response) == {"input_tokens": _COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _COUNT, "litellm_count_source": "provider"}, response.text
         assert _bodies(peer, deployment.provider) == (expected_count_body(_MODEL, case),)
 
 
@@ -329,7 +338,11 @@ def test_responses_input_tokens_lifts_instructions(deployment: _Deployment, gate
             "/v1/responses/input_tokens",
             {"model": deployment.model, "input": USER_TEXT, "instructions": INSTRUCTION},
         )
-        assert _payload(response) == {"object": "response.input_tokens", "input_tokens": _COUNT}, response.text
+        assert _payload(response) == {
+            "object": "response.input_tokens",
+            "input_tokens": _COUNT,
+            "litellm_count_source": "provider",
+        }, response.text
         assert _bodies(peer, deployment.provider) == (_STRING_BODY,)
 
 
@@ -342,7 +355,11 @@ def test_responses_input_tokens_lifts_instructions_ahead_of_a_leading_system_ite
             "/v1/responses/input_tokens",
             {"model": deployment.model, "input": [MID_SYSTEM, USER], "instructions": INSTRUCTION},
         )
-        assert _payload(response) == {"object": "response.input_tokens", "input_tokens": _COUNT}, response.text
+        assert _payload(response) == {
+            "object": "response.input_tokens",
+            "input_tokens": _COUNT,
+            "litellm_count_source": "provider",
+        }, response.text
         assert _bodies(peer, deployment.provider) == (
             {"model": _MODEL, "messages": [USER], "system": [LIFTED, {"type": "text", "text": REMINDER}]},
         )
@@ -373,7 +390,7 @@ def test_messages_count_tokens_forwards_tools_beside_the_lifted_system(
 ) -> None:
     with _listening(deployment) as peer:
         response: Final = _count(gateway, {**count_request(deployment.model, STRING_CASE), "tools": TOOLS})
-        assert _payload(response) == {"input_tokens": _COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _COUNT, "litellm_count_source": "provider"}, response.text
         assert _bodies(peer, deployment.provider) == ({**_STRING_BODY, "tools": TOOLS},)
 
 
@@ -386,7 +403,7 @@ def test_messages_count_tokens_keeps_a_mid_conversation_system_in_place(
             "messages": [LEADING, USER, MID_SYSTEM, ASSISTANT, FOLLOW_UP],
         }
         response: Final = _count(gateway, body)
-        assert _payload(response) == {"input_tokens": _COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _COUNT, "litellm_count_source": "provider"}, response.text
         assert _bodies(peer, deployment.provider) == (
             {"model": _MODEL, "messages": [USER, MID_SYSTEM, ASSISTANT, FOLLOW_UP], "system": [LIFTED]},
         )
@@ -418,7 +435,7 @@ def test_messages_count_tokens_repeated_request_lifts_each_time(deployment: _Dep
         answers: Final = tuple(
             _payload(_count(gateway, count_request(deployment.model, STRING_CASE))) for _ in range(2)
         )
-        assert answers == ({"input_tokens": _COUNT},) * 2
+        assert answers == ({"input_tokens": _COUNT, "litellm_count_source": "provider"},) * 2
         assert _bodies(peer, deployment.provider) == (_STRING_BODY,) * 2
 
 
@@ -432,7 +449,7 @@ def test_messages_count_tokens_surfaces_the_counting_error_for_a_leading_system_
         assert "input_tokens" not in response.text, response.text
         assert peer.drain() == ()
         follow_up: Final = _count(gateway, count_request(deployment.model, STRING_CASE))
-        assert _payload(follow_up) == {"input_tokens": _COUNT}, follow_up.text
+        assert _payload(follow_up) == {"input_tokens": _COUNT, "litellm_count_source": "provider"}, follow_up.text
         assert _bodies(peer, deployment.provider) == (_STRING_BODY,)
 
 
@@ -447,7 +464,7 @@ def test_messages_count_tokens_duplicate_messages_key_lifts_the_last_value(
             content=f'{{"model": "{deployment.model}", "messages": {first}, "messages": {last}}}',
             headers={"Authorization": f"Bearer {gateway.key}", "Content-Type": "application/json"},
         )
-        assert _payload(response) == {"input_tokens": _COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _COUNT, "litellm_count_source": "provider"}, response.text
         assert _bodies(peer, deployment.provider) == (_STRING_BODY,)
 
 
@@ -472,9 +489,7 @@ def test_messages_count_tokens_unauthenticated_request_never_reaches_the_peer(
         assert peer.drain() == ()
 
 
-def test_peer_outage_between_concurrent_waves_errors_then_recovers(
-    deployment: _Deployment, gateway: Gateway
-) -> None:
+def test_peer_outage_between_concurrent_waves_errors_then_recovers(deployment: _Deployment, gateway: Gateway) -> None:
     with ExitStack() as stack:
         clients: Final = _clients(stack, str(gateway.client.base_url), 8)
         pool: Final = stack.enter_context(ThreadPoolExecutor(max_workers=len(clients)))
@@ -565,3 +580,164 @@ def test_chat_completions_on_the_same_deployment_keeps_a_mid_conversation_system
             {"role": "assistant", "content": [{"type": "text", "text": "One."}]},
             {"role": "user", "content": [{"type": "text", "text": "Again"}]},
         ], body
+
+
+_GENERATED: Final[dict[str, JsonValue]] = {
+    "id": "msg_generated",
+    "type": "message",
+    "role": "assistant",
+    "model": _MODEL,
+    "content": [{"type": "text", "text": "done"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 12, "output_tokens": 3},
+}
+
+
+def _generating(provider: _Provider) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        if request.target == provider.target.removesuffix("/count_tokens"):
+            return _json_reply(200, _GENERATED)
+        return _peer(provider)(request)
+
+    return respond
+
+
+@pytest.mark.parametrize("request_body", RESPONSES_TOOL_USE.values(), ids=RESPONSES_TOOL_USE.keys())
+def test_responses_input_tokens_counts_what_responses_inference_sends(
+    deployment: _Deployment, gateway: Gateway, request_body: dict[str, JsonValue]
+) -> None:
+    with wire_server(_generating(deployment.provider), port=deployment.port) as peer:
+        generated: Final = gateway.request(
+            "POST", "/v1/responses", {**request_body, "model": deployment.model, "max_output_tokens": 16}
+        )
+        assert generated.status_code == 200, generated.text
+        response: Final = gateway.request(
+            "POST", "/v1/responses/input_tokens", {**request_body, "model": deployment.model}
+        )
+        assert _payload(response)["input_tokens"] == _COUNT, response.text
+        inference, counted = (counted_fields(JSON_OBJECT.validate_json(request.body)) for request in peer.drain())
+        assert counted == inference, (counted, inference)
+
+
+def _inference_and_count(peer: Wire) -> tuple[dict[str, JsonValue], dict[str, JsonValue]]:
+    inference, counted = (JSON_OBJECT.validate_json(request.body) for request in peer.drain())
+    return inference, counted
+
+
+@pytest.mark.parametrize("request_body", RESPONSES_REQUEST_OPTIONS.values(), ids=RESPONSES_REQUEST_OPTIONS.keys())
+def test_responses_input_tokens_counts_the_request_options_responses_inference_sends(
+    deployment: _Deployment, gateway: Gateway, request_body: dict[str, JsonValue]
+) -> None:
+    with wire_server(_generating(deployment.provider), port=deployment.port) as peer:
+        generated: Final = gateway.request(
+            "POST", "/v1/responses", {**request_body, "model": deployment.model, "max_output_tokens": 4096}
+        )
+        assert generated.status_code == 200, generated.text
+        response: Final = gateway.request(
+            "POST", "/v1/responses/input_tokens", {**request_body, "model": deployment.model}
+        )
+        assert _payload(response)["input_tokens"] == _COUNT, response.text
+        inference, counted = _inference_and_count(peer)
+        assert count_request_fields(counted) == inference_count_fields(inference), (counted, inference)
+
+
+def _text_blocks(message: JsonValue) -> JsonValue:
+    if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+        return message
+    return {**message, "content": [{"type": "text", "text": message["content"]}]}
+
+
+def _with_text_blocks(fields: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    messages: Final = fields["messages"]
+    assert isinstance(messages, list), fields
+    return {**fields, "messages": [_text_blocks(message) for message in messages]}
+
+
+def test_responses_input_tokens_leaves_tool_choice_out_when_drop_params_drops_every_tool(
+    deployment: _Deployment, gateway: Gateway
+) -> None:
+    request_body: Final[dict[str, JsonValue]] = {
+        "input": WEATHER_QUESTION,
+        "tools": [5],
+        "tool_choice": "required",
+        "drop_params": True,
+    }
+    with wire_server(_generating(deployment.provider), port=deployment.port) as peer:
+        generated: Final = gateway.request(
+            "POST", "/v1/responses", {**request_body, "model": deployment.model, "max_output_tokens": 16}
+        )
+        assert generated.status_code == 200, generated.text
+        response: Final = gateway.request(
+            "POST", "/v1/responses/input_tokens", {**request_body, "model": deployment.model}
+        )
+        assert _payload(response)["input_tokens"] == _COUNT, response.text
+        inference, counted = _inference_and_count(peer)
+        assert "tools" not in counted and "tool_choice" not in counted, counted
+        assert _with_text_blocks(count_request_fields(counted)) == inference_count_fields(inference), (
+            counted,
+            inference,
+        )
+
+
+def _config_storing_prompts(directory: Path) -> Path:
+    config: Final = object_value(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    general_settings: Final = object_value(config["general_settings"])
+    path: Final = directory / "store-prompts.yaml"
+    path.write_text(
+        yaml.safe_dump({**config, "general_settings": {**general_settings, "store_prompts_in_spend_logs": True}})
+    )
+    return path
+
+
+def _replying(answer: str) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        if request.target == _ANTHROPIC.target:
+            return _counted(request)
+        if request.target == "/v1/messages":
+            return _json_reply(
+                200,
+                {**_GENERATED, "id": f"msg_{uuid.uuid4().hex}", "content": [{"type": "text", "text": answer}]},
+            )
+        return _json_reply(404, {"error": f"unscripted target {request.target}"})
+
+    return respond
+
+
+def _spend_rows_with(prompt_gateway: Gateway, marker: str) -> list[dict[str, JsonValue]]:
+    return prompt_gateway.rows(
+        'SELECT request_id FROM "LiteLLM_SpendLogs" WHERE proxy_server_request::text LIKE %s', (f"%{marker}%",)
+    )
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_responses_input_tokens_counts_the_turns_previous_response_id_replays(gateway: Gateway, tmp_path: Path) -> None:
+    first_prompt: Final = f"Remember the number {uuid.uuid4().hex}"
+    answer: Final = f"Remembered {uuid.uuid4().hex}"
+    follow_up: Final[dict[str, JsonValue]] = {"input": "What number did I ask you to remember?"}
+    port: Final = allocate_port()
+    with (
+        wire_server(_replying(answer), port=port) as peer,
+        owned_proxy(gateway, tmp_path, {}, config=_config_storing_prompts(tmp_path), workers=1) as prompt_gateway,
+        prompt_gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model_info=None, model=f"anthropic/{_MODEL}", api_base=f"http://127.0.0.1:{port}", api_key=_API_KEY
+        )
+        first: Final = prompt_gateway.request(
+            "POST", "/v1/responses", {"model": model, "input": first_prompt, "max_output_tokens": 16}
+        )
+        assert first.status_code == 200, first.text
+        previous: Final = {
+            **follow_up,
+            "model": model,
+            "previous_response_id": JSON_OBJECT.validate_json(first.content)["id"],
+        }
+        eventually(lambda: _spend_rows_with(prompt_gateway, first_prompt), lambda rows: len(rows) == 1, seconds=70)
+        response: Final = prompt_gateway.request("POST", "/v1/responses/input_tokens", previous)
+        assert _payload(response)["input_tokens"] == _COUNT, response.text
+        generated: Final = prompt_gateway.request("POST", "/v1/responses", {**previous, "max_output_tokens": 16})
+        assert generated.status_code == 200, generated.text
+        _, counted, inference = (JSON_OBJECT.validate_json(request.body) for request in peer.drain())
+        assert first_prompt in json.dumps(inference["messages"]) and answer in json.dumps(inference["messages"])
+        assert counted_fields(counted) == counted_fields(inference), (counted, inference)

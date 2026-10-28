@@ -33,7 +33,7 @@ from tests.integration._support.client import (
     string_value,
 )
 from tests.integration._support.database import read_rows, write_rows
-from tests.integration._support.process import owned_proxy_process
+from tests.integration._support.process import graceful_stop_seconds, owned_proxy_process
 
 LARGE_ROSTER: Final = 250
 POOL_LIMIT: Final = 5
@@ -53,6 +53,13 @@ SELECT encode(sha256(convert_to(%s || '-' || n::text, 'UTF8')), 'hex'), %s, '{}'
 FROM generate_series(1, %s::int) AS n
 """
 TAKE_TEAM_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext(%s))"
+LOCK_MODEL_ROW_SQL: Final = 'SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s FOR UPDATE'
+LOCK_HELD_PAST_DEFAULT_TRANSACTION_SECONDS: Final = 7
+OLDEST_TRANSACTION_BLOCKED_BY_SQL: Final = """
+SELECT coalesce(max(extract(epoch FROM clock_timestamp() - xact_start)), 0)::float AS age
+FROM pg_stat_activity
+WHERE %s::int = ANY(pg_blocking_pids(pid))
+"""
 # Sessions blocked on the advisory lock the given backend holds, and nothing else on the shared rig.
 WAITERS_ON_HELD_LOCK_SQL: Final = """
 SELECT count(*)::int AS waiting
@@ -124,11 +131,25 @@ def _roster_user_ids(roster: JsonValue) -> list[str]:
     return sorted(string_value(object_value(member)["user_id"]) for member in roster)
 
 
+def _deleted_audit_rows(object_id: str, table_name: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT before_value FROM "LiteLLM_AuditLog" WHERE object_id = %s AND table_name = %s AND action = %s',
+        (object_id, table_name, "deleted"),
+    )
+
+
 def _waiters_on_lock_held_by(backend_pid: int) -> int:
     rows: Final = read_rows(WAITERS_ON_HELD_LOCK_SQL, ("%pg_advisory_xact_lock%", str(backend_pid)))
     waiting: Final = rows[0]["waiting"]
     assert isinstance(waiting, int)
     return waiting
+
+
+def _oldest_transaction_blocked_by(backend_pid: int) -> float:
+    rows: Final = read_rows(OLDEST_TRANSACTION_BLOCKED_BY_SQL, (str(backend_pid),))
+    age: Final = rows[0]["age"]
+    assert isinstance(age, float)
+    return age
 
 
 def _remove_team_by_sql(team_id: str) -> None:
@@ -159,6 +180,38 @@ def _create_team(scenario: Scenario, **fields: JsonValue) -> str:
     team_id: Final = string_value(created["team_id"])
     scenario.cleanups.callback(_remove_team_if_present, scenario.gateway, team_id)
     return team_id
+
+
+def _create_team_model(scenario: Scenario, team_id: str) -> str:
+    created: Final = scenario.gateway.post(
+        "/model/new",
+        {
+            "model_name": f"integration-{uuid.uuid4().hex}",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-integration"},
+            "model_info": {"team_id": team_id},
+        },
+    )
+    model_id: Final = string_value(object_value(created["model_info"])["id"])
+    scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (model_id,))
+    return model_id
+
+
+def _team_model_rows(model_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows('SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (model_id,))
+
+
+def _delete_while_locked(gateway: Gateway, team_id: str, lock_sql: str, lock_target: str) -> httpx.Response:
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with psycopg.connect(os.environ["DATABASE_URL"]) as holder:
+            holder.execute(lock_sql, (lock_target,))
+            pending: Final = _post_in_background(pool, gateway, "/team/delete", {"team_ids": [team_id]})
+            eventually(
+                lambda: _oldest_transaction_blocked_by(holder.info.backend_pid),
+                lambda age: age > LOCK_HELD_PAST_DEFAULT_TRANSACTION_SECONDS,
+                seconds=30,
+            )
+            assert not pending.done(), "delete returned while the lock was still held"
+        return pending.result(timeout=60)
 
 
 def _generate_key(scenario: Scenario, **fields: JsonValue) -> str:
@@ -392,6 +445,36 @@ def test_delete_waits_for_the_team_advisory_lock_and_completes_after_release(
         assert len(_tombstones(team)) == 1, _tombstones(team)
 
 
+def test_delete_completes_after_waiting_on_a_locked_team_model_row_past_the_default_transaction_timeout(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = _create_team(scenario)
+        model_id: Final = _create_team_model(scenario, team)
+        response: Final = _delete_while_locked(gateway, team, LOCK_MODEL_ROW_SQL, model_id)
+        assert response.status_code == 200, response.text
+        assert response.json() == {"deleted_teams": [team]}
+        assert _team_rows(team) == []
+        assert _team_model_rows(model_id) == []
+        assert len(_tombstones(team)) == 1, _tombstones(team)
+
+
+def test_delete_completes_after_waiting_on_the_team_lock_past_the_default_transaction_timeout(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        user: Final = scenario.user()
+        team: Final = _create_team(scenario)
+        _bulk_member_add(gateway, team, [user])
+        response: Final = _delete_while_locked(gateway, team, TAKE_TEAM_LOCK_SQL, team)
+        assert response.status_code == 200, response.text
+        assert response.json() == {"deleted_teams": [team]}
+        assert _team_rows(team) == []
+        assert _membership_user_ids(team) == []
+        assert _user_teams(user) == []
+        assert len(_tombstones(team)) == 1, _tombstones(team)
+
+
 def test_deleting_two_teams_sharing_a_member_in_one_call_clears_both_from_the_member(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         user: Final = scenario.user()
@@ -473,6 +556,41 @@ def test_delete_writes_one_audit_row_for_the_team_and_one_per_key(gateway: Gatew
             {"table_name": "LiteLLM_TeamTable", "action": "deleted", "object_id": team},
             {"table_name": "LiteLLM_VerificationToken", "action": "deleted", "object_id": hashed},
         ]
+
+
+@pytest.mark.timeout(int(2 * graceful_stop_seconds() + 120))
+def test_two_deletes_racing_on_one_team_write_one_tombstone_and_one_audit_row(gateway: Gateway, tmp_path: Path) -> None:
+    with (
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": os.environ["DATABASE_URL"], "LITELLM_STORE_AUDIT_LOGS": "true"},
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+        ThreadPoolExecutor(max_workers=2) as pool,
+    ):
+        user: Final = scenario.user()
+        team: Final = _create_team(scenario)
+        _bulk_member_add(owned.gateway, team, [user])
+
+        with psycopg.connect(os.environ["DATABASE_URL"]) as holder:
+            holder.execute(TAKE_TEAM_LOCK_SQL, (team,))
+            deletes: Final = tuple(
+                _post_in_background(pool, owned.gateway, "/team/delete", {"team_ids": [team]}) for _ in range(2)
+            )
+            eventually(
+                lambda: _waiters_on_lock_held_by(holder.info.backend_pid), lambda waiting: waiting == 2, seconds=30
+            )
+
+        assert [delete.result(timeout=60).status_code for delete in deletes] == [200, 200]
+        tombstones: Final = _tombstones(team)
+        assert [row["team_id"] for row in tombstones] == [team]
+        assert _roster_user_ids(tombstones[0]["members_with_roles"]) == sorted([PROXY_ADMIN, user])
+
+    team_audit_rows: Final = _deleted_audit_rows(team, "LiteLLM_TeamTable")
+    assert len(team_audit_rows) == 1, team_audit_rows
+    assert object_value(team_audit_rows[0]["before_value"])["team_id"] == team
 
 
 def test_second_delete_of_the_same_team_is_404_with_one_tombstone(gateway: Gateway) -> None:
@@ -651,7 +769,7 @@ def _models_status(proxy: Gateway, key: str) -> int:
 
 
 def _statuses(proxy: Gateway, keys: Sequence[str]) -> dict[int, int]:
-    with ThreadPoolExecutor(max_workers=16) as pool:
+    with ThreadPoolExecutor(max_workers=2) as pool:
         statuses: Final = tuple(pool.map(lambda key: _models_status(proxy, key), keys))
     return {status: statuses.count(status) for status in frozenset(statuses)}
 

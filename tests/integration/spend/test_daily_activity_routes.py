@@ -37,6 +37,8 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 def _delete_organization(gateway: Gateway, organization_id: str) -> None:
     response: Final = gateway.request("DELETE", "/organization/delete", {"organization_ids": [organization_id]})

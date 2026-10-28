@@ -20,6 +20,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
@@ -68,7 +69,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         if api_base:
             clean_api_base: Final = api_base.rstrip("/")
             if not clean_api_base.endswith("/embeddings"):
-                return f"{clean_api_base}/v1/embeddings"
+                return join_api_base(clean_api_base, "v1/embeddings")
             return clean_api_base
         return "https://api.perplexity.ai/v1/embeddings"
 
