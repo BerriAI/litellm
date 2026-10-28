@@ -7037,6 +7037,203 @@ async def test_aresponses_fallback_attempt_does_not_replay_held_lifecycle_events
     assert outcome == [fallback_created, fallback_error]
 
 
+_BACKGROUND_PRIMARY_URL: Final = "https://api.openai.com/v1/responses"
+_BACKGROUND_BACKUP_URL: Final = "https://backup.openai.test/v1/responses"
+
+
+def _background_sse_frame(event: Mapping[str, object]) -> bytes:
+    return f"data: {json.dumps(event)}\n\n".encode()
+
+
+def _background_response_body(status: str, background: bool) -> dict[str, object]:
+    return {
+        "id": "resp_upstream_run",
+        "object": "response",
+        "created_at": 0,
+        "status": status,
+        "model": "gpt-6.1-terra",
+        "background": background,
+        "output": [],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2} if status == "completed" else None,
+    }
+
+
+def _paused_background_stream(
+    output_may_start: asyncio.Event, background: bool, after_pause: tuple[dict[str, object], ...]
+) -> httpx.Response:
+    async def body() -> AsyncIterator[bytes]:
+        yield _background_sse_frame(
+            {"type": "response.created", "sequence_number": 0, "response": _background_response_body("queued", background)}
+        )
+        yield _background_sse_frame(
+            {"type": "response.queued", "sequence_number": 1, "response": _background_response_body("queued", background)}
+        )
+        await output_may_start.wait()
+        for event in after_pause:
+            yield _background_sse_frame(event)
+
+    return httpx.Response(200, content=body(), headers={"content-type": "text/event-stream"})
+
+
+def _background_output_then_completed(background: bool) -> tuple[dict[str, object], ...]:
+    return (
+        {"type": "response.output_text.delta", "sequence_number": 2, "item_id": "msg_1", "delta": "41"},
+        {"type": "response.completed", "sequence_number": 3, "response": _background_response_body("completed", background)},
+    )
+
+
+def _background_router(model_name: str, litellm_params: dict[str, object], fallbacks: list | None) -> Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": model_name, "litellm_params": litellm_params},
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-6.1-terra",
+                    "api_key": "backup-key",
+                    "api_base": "https://backup.openai.test/v1",
+                },
+            },
+        ],
+        fallbacks=fallbacks,
+        num_retries=0,
+    )
+
+
+async def _arrived_before_output(first: "asyncio.Future[object]", wait_seconds: float) -> bool:
+    done, _ = await asyncio.wait({first}, timeout=wait_seconds)
+    return first in done
+
+
+@pytest.mark.parametrize(
+    ("fallbacks", "request_kwargs"),
+    [
+        pytest.param(None, {}, id="no-fallback-configured"),
+        pytest.param([{"gpt-bg": ["backup"]}], {"disable_fallbacks": True}, id="fallbacks-disabled-for-the-request"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_aresponses_background_stream_hands_the_response_id_to_the_client_before_output(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, fallbacks: list | None, request_kwargs: dict
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    output_may_start: Final = asyncio.Event()
+    respx_mock.post(_BACKGROUND_PRIMARY_URL).mock(
+        return_value=_paused_background_stream(output_may_start, True, _background_output_then_completed(True))
+    )
+    router: Final = _background_router("gpt-bg", {"model": "openai/gpt-6.1-terra", "api_key": "k"}, fallbacks)
+
+    stream: Final = await router.aresponses(
+        model="gpt-bg", input="hi", background=True, stream=True, **request_kwargs
+    )
+    first: Final = asyncio.ensure_future(anext(stream))
+    arrived_before_output: Final = await _arrived_before_output(first, wait_seconds=5)
+    output_may_start.set()
+    created: Final = await first
+    rest: Final = [event async for event in stream]
+
+    assert arrived_before_output is True
+    assert created.type == "response.created"
+    assert [event.type for event in rest] == [
+        "response.queued",
+        "response.output_text.delta",
+        "response.completed",
+    ]
+    assert rest[-1].response.id == created.response.id
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "background", "fallbacks"),
+    [
+        pytest.param(
+            {"model": "openai/gpt-6.1-terra", "api_key": "k"}, False, None, id="foreground-request"
+        ),
+        pytest.param(
+            {"model": "openai/gpt-6.1-terra", "api_key": "k"}, True, [{"gpt-bg": ["backup"]}], id="fallback-configured"
+        ),
+        pytest.param(
+            {
+                "model": "azure/gpt-6.1-terra",
+                "api_key": "k",
+                "api_base": "https://bg-resource.openai.azure.com",
+                "api_version": "preview",
+            },
+            True,
+            None,
+            id="azure-deployment",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_aresponses_stream_keeps_holding_lifecycle_events_until_output_off_the_eligible_background_route(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_params: dict[str, object],
+    background: bool,
+    fallbacks: list | None,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    output_may_start: Final = asyncio.Event()
+    respx_mock.route(method="POST", path__regex=r"/responses$").mock(
+        return_value=_paused_background_stream(
+            output_may_start, background, _background_output_then_completed(background)
+        )
+    )
+    router: Final = _background_router("gpt-bg", litellm_params, fallbacks)
+
+    stream: Final = await router.aresponses(model="gpt-bg", input="hi", background=background, stream=True)
+    first: Final = asyncio.ensure_future(anext(stream))
+    arrived_before_output: Final = await _arrived_before_output(first, wait_seconds=0.5)
+    output_may_start.set()
+    events: Final = [await first, *[event async for event in stream]]
+
+    assert arrived_before_output is False
+    assert [event.type for event in events] == [
+        "response.created",
+        "response.queued",
+        "response.output_text.delta",
+        "response.completed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_aresponses_background_stream_surfaces_a_later_error_instead_of_a_fallback_once_its_id_is_out(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    output_may_start: Final = asyncio.Event()
+    backup_output_may_start: Final = asyncio.Event()
+    backup_output_may_start.set()
+    server_error: Final = {
+        "type": "error",
+        "sequence_number": 2,
+        "error": {"type": "server_error", "code": "server_error", "message": "upstream died", "param": None},
+    }
+    primary_route: Final = respx_mock.post(_BACKGROUND_PRIMARY_URL).mock(
+        return_value=_paused_background_stream(output_may_start, True, (server_error,))
+    )
+    backup_route: Final = respx_mock.post(_BACKGROUND_BACKUP_URL).mock(
+        return_value=_paused_background_stream(backup_output_may_start, True, _background_output_then_completed(True))
+    )
+    router: Final = _background_router("gpt-bg", {"model": "openai/gpt-6.1-terra", "api_key": "k"}, None)
+
+    stream: Final = await router.aresponses(model="gpt-bg", input="hi", background=True, stream=True)
+    first: Final = asyncio.ensure_future(anext(stream))
+    arrived_before_output: Final = await _arrived_before_output(first, wait_seconds=5)
+    router.fallbacks = [{"gpt-bg": ["backup"]}]
+    output_may_start.set()
+    created: Final = await first
+    rest: Final = [item async for item in _events_until_error(stream)]
+
+    assert arrived_before_output is True
+    assert created.type == "response.created"
+    assert [item.type for item in rest[:-1]] == ["response.queued"]
+    assert isinstance(rest[-1], litellm.InternalServerError)
+    assert "upstream died" in str(rest[-1])
+    assert primary_route.call_count == 1
+    assert backup_route.call_count == 0
+
+
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_partial_content_injects_continuation():
     """Mid-stream error: input is rewritten to include user prompt +
@@ -17297,9 +17494,9 @@ def _anthropic_messages_two_order_primary_model_list() -> list:
         pytest.param({"fallbacks": None, "enable_weighted_failover": True}, {"model": "primary"}, True, id="weighted-failover"),
     ],
 )
-def test_anthropic_messages_stream_can_fall_back_direct_call(router_kwargs, request_kwargs, expected):
+def test_stream_can_fall_back_direct_call(router_kwargs, request_kwargs, expected):
     router = _anthropic_messages_make_router(**router_kwargs)
-    assert router._anthropic_messages_stream_can_fall_back("primary", request_kwargs) is expected
+    assert router._stream_can_fall_back("primary", request_kwargs) is expected
 
 
 @pytest.mark.parametrize(
@@ -17309,7 +17506,7 @@ def test_anthropic_messages_stream_can_fall_back_direct_call(router_kwargs, requ
         pytest.param([1, 1], False, id="same-order-cannot-fall-back"),
     ],
 )
-def test_anthropic_messages_stream_can_fall_back_order_levels(orders, expected):
+def test_stream_can_fall_back_order_levels(orders, expected):
     router = Router(
         model_list=[
             {
@@ -17320,7 +17517,7 @@ def test_anthropic_messages_stream_can_fall_back_order_levels(orders, expected):
         ],
         fallbacks=None,
     )
-    assert router._anthropic_messages_stream_can_fall_back("primary", {"model": "primary"}) is expected
+    assert router._stream_can_fall_back("primary", {"model": "primary"}) is expected
 
 
 @pytest.mark.parametrize(
@@ -17336,9 +17533,9 @@ def test_anthropic_messages_stream_can_fall_back_order_levels(orders, expected):
         ),
     ],
 )
-def test_anthropic_messages_stream_can_fall_back_order_target(request_kwargs, expected):
+def test_stream_can_fall_back_order_target(request_kwargs, expected):
     router = Router(model_list=_anthropic_messages_two_order_primary_model_list(), fallbacks=None)
-    assert router._anthropic_messages_stream_can_fall_back("primary", request_kwargs) is expected
+    assert router._stream_can_fall_back("primary", request_kwargs) is expected
 
 
 def test_anthropic_messages_order_levels_direct_call():

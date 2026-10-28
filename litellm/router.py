@@ -956,6 +956,10 @@ def _responses_stream_holds_event(item: object, held_event_count: int) -> bool:
     return getattr(item, "type", None) in PRE_OUTPUT_LIFECYCLE_EVENT_TYPES
 
 
+def _responses_event_announces_background_run(item: object) -> bool:
+    return getattr(getattr(item, "response", None), "background", None) is True
+
+
 class FallbackAwareAnthropicMessagesStream:
     """
     Bare async generators can't carry the `_hidden_params` attribute the
@@ -4178,11 +4182,16 @@ class Router:
 
         async def stream_with_fallbacks():
             held_lifecycle_events: tuple[object, ...] = ()  # rebind-ok: flushed at first output, dropped on fallback
+            response_id_exposed = False  # rebind-ok: set once, before an early-released lifecycle event is yielded
             try:
                 async for item in cast(  # cast-ok: response iterators are async streams
                     AsyncIterator[object], source_iterator
                 ):
-                    if _responses_stream_holds_event(item, len(held_lifecycle_events)):
+                    if not response_id_exposed and self._aresponses_background_stream_can_release(
+                        item, source_iterator, initial_kwargs
+                    ):
+                        response_id_exposed = True
+                    if not response_id_exposed and _responses_stream_holds_event(item, len(held_lifecycle_events)):
                         held_lifecycle_events = (*held_lifecycle_events, item)
                         continue
                     for held_event in held_lifecycle_events:
@@ -4192,6 +4201,8 @@ class Router:
                 for held_event in held_lifecycle_events:
                     yield held_event
             except MidStreamFallbackError as e:
+                if response_id_exposed:
+                    raise e.original_exception or e
                 async with contextlib.aclosing(
                     self._aresponses_fallback_attempt(
                         e, source_iterator, initial_kwargs, wrapper.adopt_fallback_headers, held_lifecycle_events
@@ -4216,6 +4227,24 @@ class Router:
 
         wrapper: Final = FallbackResponsesStreamWrapper(stream_with_fallbacks())
         return wrapper
+
+    def _aresponses_background_stream_can_release(
+        self,
+        item: object,
+        source_iterator: "BaseResponsesAPIStreamingIterator",
+        kwargs: Mapping[str, object],
+    ) -> bool:
+        from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+        if (
+            type(source_iterator) is not ResponsesAPIStreamingIterator
+            or source_iterator.custom_llm_provider != "openai"
+        ):
+            return False
+        if not _responses_event_announces_background_run(item):
+            return False
+        model_group: Final = kwargs.get("model")
+        return isinstance(model_group, str) and not self._stream_can_fall_back(model_group, kwargs)
 
     async def _aresponses_fallback_attempt(
         self,
@@ -6492,7 +6521,7 @@ class Router:
             model: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
             has_generated_content = not (  # rebind-ok: set once real content is seen, the buffer cap is hit, or neither a retry nor a fallback can take over
                 self._anthropic_messages_stream_can_retry(initial_kwargs)
-                or self._anthropic_messages_stream_can_fall_back(model, initial_kwargs)
+                or self._stream_can_fall_back(model, initial_kwargs)
             )
             buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
             try:
@@ -6715,7 +6744,7 @@ class Router:
         budget, _ = self._stream_retry_budget(frame_error, kwargs)
         if budget > attempted_retries_for_request(kwargs):
             return frame_error
-        if self._anthropic_messages_stream_can_fall_back(model_group, kwargs):
+        if self._stream_can_fall_back(model_group, kwargs):
             return frame_error
         return None
 
@@ -9896,7 +9925,7 @@ class Router:
             )
         )
 
-    def _anthropic_messages_stream_can_fall_back(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
+    def _stream_can_fall_back(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
         """
         Whether async_function_with_fallbacks_common_utils could still route a
         MidStreamFallbackError somewhere for this request (order levels, weighted
