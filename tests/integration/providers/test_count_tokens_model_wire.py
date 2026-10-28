@@ -171,6 +171,7 @@ def _mantle(request: Request) -> Reply:
         return _json_reply(200, {"input_tokens": _COUNT_MODEL_COUNT})
     error_type: Final = {
         401: "authentication_error",
+        403: "permission_error",
         404: "not_found_error",
         429: "rate_limit_error",
     }[status]
@@ -418,14 +419,30 @@ def test_framing_is_added_to_the_local_estimate_when_a_shipped_runtime_count_mod
         assert _mantle_models(mantle) == (count_model, count_model)
 
 
+_OPUS_4_7_PINNED: Final = (
+    _OPUS_4_7,
+    _REGION,
+    _shipped_token_count_model_field(_OPUS_4_7, "region"),
+    "anthropic.claude-opus-4-7",
+)
+
+
 @pytest.mark.parametrize(
-    ("model", "deployment_region", "count_region", "count_model"),
+    ("model", "deployment_region", "count_region", "count_model", "count_model_status"),
     [
-        (_SONNET, _REGION, _COUNT_REGION, _OPUS_BASE),
-        (_SONNET_BASE, "ca-central-1", "ca-central-1", _OPUS_BASE),
-        (_OPUS_4_7, _REGION, _shipped_token_count_model_field(_OPUS_4_7, "region"), "anthropic.claude-opus-4-7"),
+        (_SONNET, _REGION, _COUNT_REGION, _OPUS_BASE, 404),
+        (_SONNET_BASE, "ca-central-1", "ca-central-1", _OPUS_BASE, 404),
+        (*_OPUS_4_7_PINNED, 404),
+        (*_OPUS_4_7_PINNED, 401),
+        (*_OPUS_4_7_PINNED, 403),
     ],
-    ids=["sonnet_5_5_in_its_pinned_region", "sonnet_5_5_outside_the_pinned_geography", "opus_4_7_in_its_pinned_region"],
+    ids=[
+        "sonnet_5_5_in_its_pinned_region",
+        "sonnet_5_5_outside_the_pinned_geography",
+        "opus_4_7_in_its_pinned_region",
+        "opus_4_7_pinned_region_denies_the_key",
+        "opus_4_7_pinned_region_denies_the_account",
+    ],
 )
 def test_framing_is_added_to_the_local_estimate_when_a_shipped_mantle_count_model_cannot_count(
     counting_proxy: OwnedProxy,
@@ -435,6 +452,7 @@ def test_framing_is_added_to_the_local_estimate_when_a_shipped_mantle_count_mode
     deployment_region: str,
     count_region: str,
     count_model: str,
+    count_model_status: int,
 ) -> None:
     gateway: Final = counting_proxy.gateway
     assert _shipped_token_count_model_field(model, "litellm_provider") == "bedrock_mantle"
@@ -447,20 +465,42 @@ def test_framing_is_added_to_the_local_estimate_when_a_shipped_mantle_count_mode
             gateway,
             _deployment(scenario, runtime_port, model, {"token_count_framing": _FRAMING}, deployment_region),
             200,
-            count_model_status=404,
+            count_model_status=count_model_status,
         )
         unframed: Final = _count(
             gateway,
             _deployment(scenario, runtime_port, model, {"token_count_framing": 0}, deployment_region),
             200,
-            count_model_status=404,
+            count_model_status=count_model_status,
         )
         assert (framed.model_extra, unframed.model_extra) == (_LOCAL_SOURCE, _LOCAL_SOURCE), (framed, unframed)
         assert framed.input_tokens - unframed.input_tokens == _FRAMING, (framed, unframed)
         assert _runtime_counts(runtime) == ()
         assert (
             _mantle_count_requests(mantle)
-            == (((_ACCESS_KEY, count_region), _mantle_body(_prompt(200, 404), count_model)),) * 2
+            == (((_ACCESS_KEY, count_region), _mantle_body(_prompt(200, count_model_status), count_model)),) * 2
+        )
+
+
+def test_framing_keeps_the_403_when_the_shipped_count_model_runs_in_the_deployment_region(
+    counting_proxy: OwnedProxy, runtime_port: int, mantle_port: int
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    with (
+        wire_server(_runtime, port=runtime_port) as runtime,
+        wire_server(_mantle, port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        with pytest.raises(anthropic.PermissionDeniedError, match=re.escape(f"scripted mantle 403 for {_OPUS_BASE}")):
+            _count(
+                gateway,
+                _deployment(scenario, runtime_port, _SONNET_BASE, {"token_count_framing": _FRAMING}, "ca-central-1"),
+                200,
+                count_model_status=403,
+            )
+        assert _runtime_counts(runtime) == ()
+        assert _mantle_count_requests(mantle) == (
+            ((_ACCESS_KEY, "ca-central-1"), _mantle_body(_prompt(200, 403))),
         )
 
 
