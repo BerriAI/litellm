@@ -16,6 +16,7 @@ following the OpenAI Response API format.
 
 import asyncio
 import json
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, Mock, patch
@@ -1597,7 +1598,9 @@ class TestBackgroundStreamingTerminalEvents:
             (429, "Too Many Requests", {"code": "rate_limit_exceeded", "message": None}),
         ],
     )
-    async def test_a_first_chunk_error_polls_failed_like_a_late_one(self, status_code, body, expected_error):
+    async def test_a_first_chunk_error_polls_failed_like_a_late_one(
+        self, status_code: int, body: str, expected_error: Mapping[str, str | None]
+    ):
         from fastapi import Response
 
         from litellm.proxy.response_polling.background_streaming import (
