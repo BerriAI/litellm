@@ -173,16 +173,19 @@ def test_explicit_v1_api_base_keeps_responses_api_version_selection(
             "2025-04-01-preview",
             "https://x.openai.azure.com/openai/v1/responses/compact",
         ),
-        ("https://x.openai.azure.com", "2024-10-21", "https://x.openai.azure.com/openai/v1/responses/compact"),
-        ("https://x.openai.azure.com", "preview", "https://x.openai.azure.com/openai/v1/responses/compact"),
+        (
+            "https://x.openai.azure.com",
+            "preview",
+            "https://x.openai.azure.com/openai/v1/responses/compact?api-version=preview",
+        ),
         (
             "https://gw.example.com/foundry/openai/openai/v1?tenant=example",
             "v1",
-            "https://gw.example.com/foundry/openai/openai/v1/responses/compact?tenant=example",
+            "https://gw.example.com/foundry/openai/openai/v1/responses/compact?tenant=example&api-version=v1",
         ),
     ],
 )
-def test_compact_reaches_the_v1_route_whatever_the_api_version(
+def test_compact_reaches_the_v1_route_and_drops_only_a_dated_api_version(
     api_base: str, api_version: str, expected_url: str
 ) -> None:
     config: Final = AzureOpenAIResponsesAPIConfig()

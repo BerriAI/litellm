@@ -78,7 +78,6 @@ _COMPACT_REJECTED_PARAMS: Final = frozenset(
         "prompt",
         "safety_identifier",
         "store",
-        "stream",
         "stream_options",
         "temperature",
         "tool_choice",

@@ -4348,3 +4348,17 @@ def test_compact_request_drops_params_compact_rejects_under_drop_params(
         "include": ["reasoning.encrypted_content"],
         "text": {"format": {"type": "text"}},
     }
+
+
+@pytest.mark.parametrize(("config", "api_base"), _COMPACT_CONFIGS)
+def test_compact_request_keeps_stream_under_drop_params(config: OpenAIResponsesAPIConfig, api_base: str) -> None:
+    _, data = config.transform_compact_response_api_request(
+        model="gpt-5.4-mini",
+        input="hi",
+        response_api_optional_request_params={"stream": True, "stream_options": {"include_obfuscation": False}},
+        api_base=api_base,
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert {key: data[key] for key in data if key != "input"} == {"model": "gpt-5.4-mini", "stream": True}

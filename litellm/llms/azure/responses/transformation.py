@@ -265,8 +265,11 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return False
 
     def compact_url(self, api_base: str) -> str:
-        v1_url: Final = _v1_responses_url(api_base).copy_with(params=httpx.URL(api_base).params.remove("api-version"))
-        return super().compact_url(str(v1_url))
+        params: Final = httpx.URL(api_base).params
+        v1_params: Final = (
+            params if BaseAzureLLM.is_azure_v1_api_version(params.get("api-version")) else params.remove("api-version")
+        )
+        return super().compact_url(str(_v1_responses_url(api_base).copy_with(params=v1_params)))
 
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
