@@ -148,7 +148,7 @@ def test_cohere_embedding_body_that_is_not_an_object_is_rejected(payload):
 
 
 def test_cohere_embedding_body_without_embeddings_is_rejected():
-    with pytest.raises(KeyError):
+    with pytest.raises(ValidationError):
         _transform({"meta": {"billed_units": {"input_tokens": 1}}})
 
 

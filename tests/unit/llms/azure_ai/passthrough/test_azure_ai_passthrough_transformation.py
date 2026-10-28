@@ -519,6 +519,55 @@ def test_cohere_rerank_relay_is_costed_per_search_unit():
     assert logging_obj.response_cost_calculator(result=result) == pytest.approx(2 * per_query)
 
 
+COHERE_EMBED_BODY = {
+    "id": "embed-1",
+    "texts": ["hello world"],
+    "embeddings": {"float": [[0.1, 0.2]]},
+    "meta": {"api_version": {"version": "2"}, "billed_units": {"input_tokens": 2, "image_tokens": 0}},
+    "response_type": "embeddings_by_type",
+}
+
+
+def _cohere_embed_relay_result(body):
+    return _relay_logging_result(AzureAIPassthroughConfig(), "embed-v-4-0", "providers/cohere/v2/embed", body)
+
+
+def test_native_cohere_embed_relay_is_costed_per_billed_input_token():
+    result, logging_obj = _cohere_embed_relay_result(COHERE_EMBED_BODY)
+    per_token = litellm.get_model_info("azure_ai/embed-v-4-0")["input_cost_per_token"]
+
+    assert isinstance(result, EmbeddingResponse)
+    assert logging_obj.call_type == "aembedding"
+    assert per_token > 0
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(2 * per_token)
+
+
+def test_native_cohere_embed_relay_without_billed_units_is_costed_from_the_echoed_texts():
+    body = {**COHERE_EMBED_BODY, "texts": ["hello world", "a longer second text"], "meta": {}}
+    result, logging_obj = _cohere_embed_relay_result(body)
+    per_token = litellm.get_model_info("azure_ai/embed-v-4-0")["input_cost_per_token"]
+    echoed_tokens = sum(len(litellm.encoding.encode(text)) for text in body["texts"])
+
+    assert logging_obj.call_type == "aembedding"
+    assert echoed_tokens > 0
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(echoed_tokens * per_token)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"message": "no embeddings here"},
+        {**COHERE_EMBED_BODY, "embeddings": [[0.1, 0.2]]},
+        {**COHERE_EMBED_BODY, "texts": "hello world"},
+    ],
+)
+def test_native_cohere_embed_relay_with_a_non_embed_body_keeps_the_passthrough_object_and_call_type(body):
+    result, logging_obj = _cohere_embed_relay_result(body)
+
+    assert result == {"response": body}
+    assert logging_obj.call_type == "allm_passthrough_route"
+
+
 def test_image_generation_relay_is_costed_per_image():
     result, logging_obj = _relay_logging_result(
         AzureAIPassthroughConfig(), "FLUX.2-pro", "openai/deployments/FLUX.2-pro/images/generations", IMAGE_BODY

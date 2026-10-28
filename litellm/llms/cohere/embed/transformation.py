@@ -10,11 +10,12 @@ Convers
 Docs - https://docs.cohere.com/v2/reference/embed
 """
 
-from collections.abc import Iterable, Mapping, Sized
+from collections.abc import Iterable, Iterator, Mapping, Sequence, Sized
+from itertools import chain
 from typing import Final, Protocol, cast
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 import litellm
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
@@ -32,7 +33,6 @@ from litellm.utils import is_base64_encoded
 from ..common_utils import CohereError
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
-_EMBEDDINGS_BY_TYPE: Final = TypeAdapter(Mapping[str, Iterable[object]], config=ConfigDict(hide_input_in_errors=True))
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
@@ -40,6 +40,59 @@ class _SupportsEncode(Protocol):
     """Tokenizer handle: the embedding usage path only encodes text to measure its token length."""
 
     def encode(self, text: str, /) -> Sized: ...
+
+
+class _CohereBilledUnits(BaseModel):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+    input_tokens: int | None = None
+    images: int | None = None
+
+
+class _CohereEmbedMeta(BaseModel):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+    billed_units: _CohereBilledUnits = Field(default_factory=_CohereBilledUnits)
+
+
+class _CohereEmbedBody(BaseModel):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+    embeddings: Mapping[str, Sequence[object]]
+    meta: _CohereEmbedMeta = Field(default_factory=_CohereEmbedMeta)
+
+
+def _embedding_rows(vectors: Sequence[object]) -> Iterator[Mapping[str, object]]:
+    return ({"object": "embedding", "index": index, "embedding": vector} for index, vector in enumerate(vectors))
+
+
+def _cohere_embed_usage(
+    billed_units: _CohereBilledUnits, input_texts: Iterable[str], encoding: _SupportsEncode
+) -> Usage:
+    if billed_units.input_tokens is None and billed_units.images is None:
+        encoded_tokens: Final = sum(len(encoding.encode(text)) for text in input_texts)
+        return Usage(prompt_tokens=encoded_tokens, completion_tokens=0, total_tokens=encoded_tokens)
+    billed_tokens: Final = (billed_units.input_tokens or 0) + (billed_units.images or 0)
+    return Usage(
+        prompt_tokens=billed_tokens,
+        completion_tokens=0,
+        total_tokens=billed_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            image_tokens=billed_units.images,
+            text_tokens=billed_units.input_tokens,
+        ),
+    )
+
+
+def cohere_embedding_response(
+    body: Mapping[str, object], model: str | None, encoding: _SupportsEncode, input_texts: Iterable[str]
+) -> EmbeddingResponse:
+    cohere_body: Final = _CohereEmbedBody.model_validate(body)
+    return EmbeddingResponse(
+        model=model,
+        data=list(chain.from_iterable(map(_embedding_rows, cohere_body.embeddings.values()))),
+        usage=_cohere_embed_usage(cohere_body.meta.billed_units, input_texts, encoding),
+    )
 
 
 class CohereEmbeddingConfig(BaseEmbeddingConfig):
@@ -145,41 +198,12 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             ),
         )
 
-    def _calculate_usage(self, input: list[str], encoding: _SupportsEncode, meta: dict) -> Usage:
-        input_tokens = 0
-
-        text_tokens: Final[int | None] = meta.get("billed_units", {}).get("input_tokens")
-
-        image_tokens: Final[int | None] = meta.get("billed_units", {}).get("images")
-
-        prompt_tokens_details: PromptTokensDetailsWrapper | None = None
-        if image_tokens is None and text_tokens is None:
-            for text in input:
-                input_tokens += len(encoding.encode(text))
-        else:
-            prompt_tokens_details = PromptTokensDetailsWrapper(
-                image_tokens=image_tokens,
-                text_tokens=text_tokens,
-            )
-            if image_tokens:
-                input_tokens += image_tokens
-            if text_tokens:
-                input_tokens += text_tokens
-
-        return Usage(
-            prompt_tokens=input_tokens,
-            completion_tokens=0,
-            total_tokens=input_tokens,
-            prompt_tokens_details=prompt_tokens_details,
-        )
-
     def _transform_response(
         self,
         response: httpx.Response,
         api_key: str | None,
         logging_obj: LiteLLMLoggingObj,
         data: dict | CohereEmbeddingRequest,
-        model_response: EmbeddingResponse,
         model: str,
         encoding: _SupportsEncode,
         input: list,
@@ -192,37 +216,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             additional_args={"complete_input_dict": data},
             original_response=response_json,
         )
-        """
-            response 
-            {
-                'object': "list",
-                'data': [
-                
-                ]
-                'model', 
-                'usage'
-            }
-        """
-        payload: Final = _JSON_OBJECT.validate_python(response_json)
-        embeddings: Final = _EMBEDDINGS_BY_TYPE.validate_python(payload["embeddings"])
-        output_data: Final = []
-        for k, embedding_list in embeddings.items():
-            for idx, embedding in enumerate(embedding_list):
-                output_data.append({"object": "embedding", "index": idx, "embedding": embedding})
-        model_response.object = "list"
-        model_response.data = output_data
-        model_response.model = model
-        input_tokens = 0
-        for text in input:
-            input_tokens += len(encoding.encode(text))
-
-        setattr(
-            model_response,
-            "usage",
-            self._calculate_usage(input, encoding, dict(_JSON_OBJECT.validate_python(payload.get("meta", {})))),
-        )
-
-        return model_response
+        return cohere_embedding_response(_JSON_OBJECT.validate_python(response_json), model, encoding, input)
 
     def transform_embedding_response(
         self,
@@ -240,7 +234,6 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             api_key=api_key,
             logging_obj=logging_obj,
             data=request_data,
-            model_response=model_response,
             model=model,
             encoding=litellm.encoding,
             input=logging_obj.model_call_details["input"],
