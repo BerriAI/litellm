@@ -1439,16 +1439,17 @@ def _field_of(value: object, name: str) -> object:
     return getattr(value, name, None)
 
 
-def _delta_reasoning_items(delta: object) -> Sequence[object]:
-    items: Final = _field_of(delta, "reasoning_items")
+def _delta_reasoning_items(delta: object, field: str = "reasoning_items") -> Sequence[object]:
+    items: Final = _field_of(delta, field)
     return cast(Sequence[object], items) if isinstance(items, list) else ()  # cast-ok: items forwarded verbatim
 
 
-def _chunk_reasoning_items(chunk: object) -> Sequence[object]:
+def _chunk_reasoning_items(chunk: object, field: str = "reasoning_items") -> Sequence[object]:
     choices: Final = _field_of(chunk, "choices")
     if not isinstance(choices, list) or not choices:
         return ()
-    return _delta_reasoning_items(_field_of(cast(Sequence[object], choices)[0], "delta"))  # cast-ok: untyped chunk
+    delta: Final = _field_of(cast(Sequence[object], choices)[0], "delta")  # cast-ok: untyped chunk
+    return _delta_reasoning_items(delta, field)
 
 
 _NON_TEXT_DELTA_FIELDS: Final = (
@@ -1456,6 +1457,7 @@ _NON_TEXT_DELTA_FIELDS: Final = (
     "function_call",
     "reasoning_content",
     "reasoning_items",
+    "reasoning_details",
     "thinking_blocks",
     "annotations",
     "audio",
@@ -1759,6 +1761,19 @@ def stream_chunk_builder(
             if combined_provider_fields:
                 _choice = response.choices[0]
                 _choice.message.provider_specific_fields = combined_provider_fields
+
+        # Keep every streamed reasoning_details entry in arrival order, as the
+        # non-streaming response does. Do not merge by index: some providers
+        # send whole entries that all have index 0.
+        reasoning_details: Final = tuple(
+            chain.from_iterable(_chunk_reasoning_items(chunk, "reasoning_details") for chunk in typed_chunks)
+        )
+        if reasoning_details:
+            message: Final = response.choices[0].message
+            message.provider_specific_fields = {
+                **(message.provider_specific_fields or {}),
+                "reasoning_details": list(reasoning_details),
+            }
 
         completion_output = get_content_from_model_response(response)
 
