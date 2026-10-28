@@ -1,15 +1,15 @@
-use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
-use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
-
-use litellm_auth::{InputSource, SecretValue, Sourced, TokenProviderHandle};
-use litellm_core_utils::{call_arguments::CallArguments, settings::ProcessEnvironment};
-use litellm_http::outbound::{OutboundRequest, RequestSigner};
-use litellm_secrets::source::Secrets;
 use serde::{
     Serialize,
     de::{DeserializeOwned, IntoDeserializer},
 };
 use serde_json::{Map, Value};
+use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
+
+use litellm_auth::{InputSource, SecretValue, Sourced, TokenProviderHandle};
+use litellm_core_utils::{call_arguments::CallArguments, settings::ProcessEnvironment};
+use litellm_http::outbound::RequestSigner;
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
+use litellm_secrets::source::Secrets;
 
 use crate::base_llm::ocr::{
     error::Error,
@@ -391,7 +391,7 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         request: &PreparedOcrRequest,
         client: &OcrClient,
         hooks: &dyn CallHooks<Error>,
-    ) -> impl Future<Output = Result<OutboundRequest, Error>> + Send {
+    ) -> impl Future<Output = Result<reqwest::Request, Error>> + Send {
         async move {
             let params = self.map_ocr_params(&request.optional_params, &request.model)?;
             let environment = self.validate_environment(request, client).await?;

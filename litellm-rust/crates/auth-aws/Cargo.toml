@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 litellm-auth-types.workspace = true
 litellm-http.workspace = true
+reqwest.workspace = true
 
 moka = { workspace = true, features = ["sync"] }
 serde.workspace = true
@@ -26,5 +27,6 @@ aws-smithy-runtime-api = "1.13.0"
 [dev-dependencies]
 rstest.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
-reqwest.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
 tokio.workspace = true
