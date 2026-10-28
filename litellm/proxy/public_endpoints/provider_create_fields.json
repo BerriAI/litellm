@@ -3400,6 +3400,34 @@
     "default_model_placeholder": "reka/reka-flash"
   },
   {
+    "provider": "HEABSY",
+    "provider_display_name": "Heabsy",
+    "litellm_provider": "heabsy",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.heabsy.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "heabsy/qwen38"
+  },
+  {
     "provider": "Sail",
     "provider_display_name": "Sail",
     "litellm_provider": "sail",
