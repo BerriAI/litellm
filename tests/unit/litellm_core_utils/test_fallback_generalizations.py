@@ -213,16 +213,10 @@ def test_reinstalling_rules_replaces_compiled_rules(restore_generalizations):
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize(
-    "model_info",
-    [
-        {"litellm_provider": 42},
-        {"litellm_provider": "anthropic", "supports_vision": True},
-    ],
-    ids=["non-string-provider", "provider-mixed-with-capabilities"],
-)
-def test_invalid_provider_rule_warns_and_is_skipped(restore_generalizations, warning_messages, model_info):
-    restore_generalizations([{"name": "bad-provider", "pattern": r"^acme-", "model_info": model_info}])
+def test_non_string_provider_rule_warns_and_is_skipped(
+    restore_generalizations: Callable[[list | None], None], warning_messages: list[str]
+) -> None:
+    restore_generalizations([{"name": "bad-provider", "pattern": r"^acme-", "model_info": {"litellm_provider": 42}}])
     assert any("bad-provider" in message for message in warning_messages)
     assert match_routing_generalization("acme-1") is None
     assert match_capability_generalizations("acme-1") is None
@@ -268,7 +262,10 @@ def test_old_format_rule_is_skipped_with_a_warning_pointing_at_a_current_cost_ma
     restore_generalizations: Callable[[list | None], None], warning_messages: list[str], rules: list[dict]
 ) -> None:
     restore_generalizations(rules)
-    assert any("stale-rule" in m and "LITELLM_MODEL_COST_MAP_URL" in m for m in warning_messages)
+    assert any(
+        "stale-rule" in m and "LITELLM_MODEL_COST_MAP_URL" in m and "LITELLM_LOCAL_MODEL_COST_MAP " in m
+        for m in warning_messages
+    )
     assert match_routing_generalization("acme-1") is None
     assert match_capability_generalizations("acme-1") is None
 

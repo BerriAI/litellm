@@ -95,7 +95,8 @@ def _parse_fill_missing_for_providers(rule: Mapping[str, object], pattern_label:
 def _warn_old_format_rule(rule_label: str, reason: str) -> None:
     verbose_logger.warning(
         "LiteLLM: skipping fallback generalization rule %s, written in the old cost map rule format (%s). "
-        "Point LITELLM_MODEL_COST_MAP_URL at a current cost map.",
+        "Point LITELLM_MODEL_COST_MAP_URL at a current cost map, or with LITELLM_LOCAL_MODEL_COST_MAP set, "
+        "replace the bundled backup with a current one.",
         rule_label,
         reason,
     )
