@@ -2060,3 +2060,35 @@ model LiteLLM_TelemetryReport {
   @@index([window_end])
   @@index([created_at])
 }
+
+// Durable accounting ledger. One row per usage or cost event; payload holds the
+// typed event (cost rows include the pricing snapshot) versioned by schema_version.
+model LiteLLM_AccountingEvent {
+  event_id        String   @id
+  kind            String
+  source_event_id String?
+  schema_version  Int
+  payload_hash    String
+  occurred_at     DateTime
+  recorded_at     DateTime @default(now())
+  payload         Json
+
+  @@index([recorded_at])
+  @@index([kind, source_event_id])
+}
+
+// One row per (event, target table, version): pending work for the projector and,
+// once applied in the same transaction as the target write, the receipt that stops a retry.
+model LiteLLM_AccountingDelivery {
+  event_id        String
+  target          String
+  version         Int
+  state           String    @default("pending")
+  attempts        Int       @default(0)
+  next_attempt_at DateTime  @default(now())
+  applied_at      DateTime?
+  last_error      String?
+
+  @@id([event_id, target, version])
+  @@index([target, state, next_attempt_at])
+}
