@@ -28,7 +28,7 @@ from typing import (
 
 import httpx
 from openai._streaming import SSEDecoder
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypeIs
 
 import litellm
@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
 from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
@@ -165,6 +166,7 @@ def _typed_gets_litellm_params(fn: _GetsLitellmParams) -> _GetsLitellmParams:
 
 _SHOULD_STORE_RESULT_IN_CACHE_ATTR: Final = "_should_store_result_in_cache"
 _UNMASK_PII_TEXT_ATTR: Final = "_unmask_pii_text"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _load_json_object(payload: str | bytes) -> dict[str, object]:
@@ -174,7 +176,7 @@ def _load_json_object(payload: str | bytes) -> dict[str, object]:
 
 def _load_json_value(payload: str | bytes) -> object:
     """Parse a JSON payload whose top-level shape the caller narrows itself."""
-    return json.loads(payload)
+    return _DECODED_JSON.validate_python(json.loads(payload))
 
 
 def _model_id_from_metadata(litellm_metadata: Mapping[str, object] | None) -> str | None:
@@ -366,6 +368,7 @@ class BaseResponsesAPIStreamingIterator:
     """
 
     _pending_logging_tasks: tuple[asyncio.Task[object], ...] = ()
+    _earlier_rounds_spend: BilledRoundsSpend | None = None
 
     def __init__(
         self,
@@ -708,18 +711,22 @@ class BaseResponsesAPIStreamingIterator:
         if usage_obj is None:
             return
         try:
-            self.logging_obj.model_call_details["combined_usage_object"] = (
-                ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)
-            )
+            failed_usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)
         except (TypeError, ValueError) as usage_error:
             verbose_logger.debug(
                 "could not record usage for failed responses stream: %s",
                 usage_error,
             )
             return
-        self.logging_obj.model_call_details["response_cost"] = (
-            self.logging_obj.response_cost_calculator(result=response_obj) or 0.0
-        )
+        failed_cost: Final = self.logging_obj.response_cost_calculator(result=response_obj) or 0.0
+        if self._earlier_rounds_spend is None:
+            self.logging_obj.model_call_details["combined_usage_object"] = failed_usage
+            self.logging_obj.model_call_details["response_cost"] = failed_cost
+            return
+        self.logging_obj.record_failure_after_earlier_rounds(self._earlier_rounds_spend, failed_usage, failed_cost)
+
+    def bill_failure_after_earlier_rounds(self, earlier: BilledRoundsSpend) -> None:
+        self._earlier_rounds_spend = earlier
 
     def _map_error_event_exception(self, error_obj: object) -> Exception:
         return _map_stream_error_to_exception(
@@ -1704,6 +1711,7 @@ def _estimate_usage_from_text(
     messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
         input=request_input,  # pyright: ignore[reportArgumentType]  # the raw Responses API input is a str or ResponseInputParam list, matching the helper's declared union
         responses_api_request=dict(responses_api_request),
+        only_since_compaction=True,
     )
     input_tokens: Final = litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is untyped
         model=model, messages=messages

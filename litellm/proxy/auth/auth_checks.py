@@ -15,6 +15,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
@@ -47,6 +48,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
+    MODEL_LIST_ROUTES,
     RBAC_ROLES,
     UI_TEAM_ID,
     CallInfo,
@@ -393,7 +395,7 @@ def _member_allowed_models(membership: _TeamMembershipModelScope) -> Sequence[st
 
 
 class _RawCacheRead(Protocol):
-    async def async_get_cache(self, *, key: str) -> object: ...
+    async def async_get_cache(self, *, key: str, local_only: bool = ...) -> object: ...
 
 
 def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
@@ -910,8 +912,7 @@ def _global_proxy_budget_check(global_proxy_spend: float | None, skip_budget_che
         and not skip_budget_checks
         and global_proxy_spend is not None
         and RouteChecks.is_llm_api_route(route=route)
-        and route != "/v1/models"
-        and route != "/models"
+        and route not in MODEL_LIST_ROUTES
     ):
         if math.isfinite(litellm.max_budget) and global_proxy_spend > litellm.max_budget:
             raise litellm.BudgetExceededError(
@@ -1028,8 +1029,7 @@ async def check_tools_allowlist(
 # budget cannot reach side-effectful routes like /health/services (Slack/email/webhook). See #27923.
 MODEL_DISCOVERY_ROUTES: Final = frozenset(
     {
-        "/v1/models",
-        "/models",
+        *MODEL_LIST_ROUTES,
         "/model/info",
         "/v1/model/info",
         "/v2/model/info",
@@ -1798,6 +1798,20 @@ async def get_team_member_default_budget(
     )
 
     return budget
+
+
+def resolve_effective_team_member_budget(
+    member_budget: LiteLLM_BudgetTable | None,
+    team_default_budget: LiteLLM_BudgetTable | None,
+    now: datetime,
+) -> float | None:
+    if member_budget is not None and member_budget.max_budget is not None:
+        return member_budget.effective_max_budget(now)
+    if team_default_budget is None or team_default_budget.max_budget is None or team_default_budget.max_budget <= 0:
+        return None
+    return team_default_budget.max_budget + (
+        member_budget.active_temp_budget_increase(now) if member_budget is not None else 0.0
+    )
 
 
 async def resolve_default_end_user_budget(
@@ -2712,7 +2726,7 @@ async def get_team_membership(
             use_writer=True,
         )
 
-    l1_cached: Final[object] = await user_api_key_cache.async_get_cache(key=_key, local_only=True)
+    l1_cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=_key, local_only=True)
     l1_membership: Final = _membership_from_cached_payload(l1_cached)
     if not isinstance(l1_membership, _TeamMembershipCacheMiss):
         return l1_membership
@@ -6447,8 +6461,29 @@ def _search_tool_deny_by_default(general_settings: Mapping[str, object]) -> bool
         return True
 
 
+def _is_dashboard_session(valid_token: UserAPIKeyAuth | None) -> bool:
+    return valid_token is not None and valid_token.team_id == UI_TEAM_ID
+
+
+def _is_search_tool_strict_identity(valid_token: UserAPIKeyAuth) -> bool:
+    if not _is_dashboard_session(valid_token):
+        return _is_strict_grant_identity(valid_token)
+    return valid_token.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    )
+
+
+def _search_tool_strict_layers(
+    valid_token: UserAPIKeyAuth, team_object: LiteLLM_TeamTable | None
+) -> frozenset[GrantLayer]:
+    if _is_dashboard_session(valid_token):
+        return frozenset(("user",))
+    return _strict_grant_layers(True, valid_token, team_object)
+
+
 def is_search_tool_deny_by_default_applied(valid_token: UserAPIKeyAuth, general_settings: Mapping[str, object]) -> bool:
-    return _search_tool_deny_by_default(general_settings) and _is_strict_grant_identity(valid_token)
+    return _search_tool_deny_by_default(general_settings) and _is_search_tool_strict_identity(valid_token)
 
 
 def _search_tool_denied(object_type: GrantLayer, message: str) -> ProxyException:
@@ -6492,12 +6527,12 @@ async def resolve_search_tool_grants(
     load_team_object: TeamObjectLoader,
 ) -> SearchToolGrants:
     """
-    Without `general_settings.search_tool_deny_by_default`, or for the master key and dashboard sessions,
+    Without `general_settings.search_tool_deny_by_default`, or for the master key and admin dashboard sessions,
     the key and team lists only restrict when nonempty. With it, the identities `_strict_grant_layers` names
     must each list the tool, and a missing record, `null`, `[]`, or a team or user that fails to load grants nothing
     """
     if not is_search_tool_deny_by_default_applied(valid_token, general_settings):
-        team_object: Final = await load_team_object()
+        team_object: Final = await load_team_object() if not _is_dashboard_session(valid_token) else None
         return SearchToolGrants(
             grants=MappingProxyType(
                 {"key": valid_token.object_permission, "team": team_object.object_permission if team_object else None}
@@ -6507,8 +6542,10 @@ async def resolve_search_tool_grants(
 
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
-    strict_team_object: Final = await _strict_team_object(load_team_object)
-    strict_layers: Final = _strict_grant_layers(True, valid_token, strict_team_object)
+    strict_team_object: Final = (
+        await _strict_team_object(load_team_object) if not _is_dashboard_session(valid_token) else None
+    )
+    strict_layers: Final = _search_tool_strict_layers(valid_token, strict_team_object)
     if prisma_client is None:
         return SearchToolGrants(grants=MappingProxyType({}), strict_layers=strict_layers)
     user_object: Final = (
@@ -6593,7 +6630,7 @@ def check_unregistered_search_fallback(
     """The unregistered provider fallback names no search tool that a grant could list, so deny-by-default denies it"""
     if not is_search_tool_deny_by_default_applied(valid_token, general_settings):
         return True
-    layer: Final = min(_strict_grant_layers(True, valid_token, None), key=("key", "team", "user").index)
+    layer: Final = min(_search_tool_strict_layers(valid_token, None), key=("key", "team", "user").index)
     raise _search_tool_denied(
         layer,
         "No registered search tool is available and search_tool_deny_by_default is enabled",
@@ -7035,29 +7072,24 @@ async def _check_team_member_budget(
 
         # Per-member override wins; otherwise fall back to the team-level
         # default configured via team.metadata["team_member_budget_id"].
-        team_member_budget: float | None = None
         member_budget_row: Final = loaded_membership.litellm_budget_table if loaded_membership is not None else None
         now: Final = get_utc_datetime()
-        if member_budget_row is not None and member_budget_row.max_budget is not None:
-            team_member_budget = member_budget_row.effective_max_budget(now=now)
-        else:
-            default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
-            if isinstance(default_budget_id, str):
-                default_budget: Final = await get_team_member_default_budget(
-                    budget_id=default_budget_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                )
-                # Treat 0 on the team default as "no cap".
-                # Per-member rows still respect 0 as an explicit admin disable.
-                if (
-                    default_budget is not None
-                    and default_budget.max_budget is not None
-                    and default_budget.max_budget > 0
-                ):
-                    team_member_budget = default_budget.max_budget + (
-                        member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
-                    )
+        default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
+        team_default_budget: Final = (
+            await get_team_member_default_budget(
+                budget_id=default_budget_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+            if (member_budget_row is None or member_budget_row.max_budget is None)
+            and isinstance(default_budget_id, str)
+            else None
+        )
+        team_member_budget: Final = resolve_effective_team_member_budget(
+            member_budget=member_budget_row,
+            team_default_budget=team_default_budget,
+            now=now,
+        )
 
         if team_member_budget is not None:
             team_member_spend = (loaded_membership.spend if loaded_membership is not None else 0.0) or 0.0

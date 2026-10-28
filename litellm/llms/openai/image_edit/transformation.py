@@ -6,6 +6,7 @@ from httpx._types import RequestFiles
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import (
@@ -184,7 +185,4 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
             or "https://api.openai.com/v1"
         )
 
-        # Remove trailing slashes
-        api_base = api_base.rstrip("/")
-
-        return f"{api_base}/images/edits"
+        return join_api_base(api_base, "images/edits")

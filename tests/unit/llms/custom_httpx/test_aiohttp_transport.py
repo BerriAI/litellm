@@ -1,8 +1,10 @@
 import aiohttp as aiohttp_aiohttp_handler, asyncio, importlib, litellm
 import concurrent.futures
+import gc
 import socket
 import sys
 import struct
+import threading
 from typing import Final
 
 import aiohttp
@@ -1415,3 +1417,74 @@ async def test_payload_error_still_maps_to_read_error_when_buffer_drain_breaks()
     assert received == b"chunk1"
     assert isinstance(error, httpx.ReadError)
     assert mock_response.closed is True
+
+
+async def _new_session() -> aiohttp.ClientSession:
+    return aiohttp.ClientSession()
+
+
+async def _until_closed(session: aiohttp.ClientSession) -> None:
+    while not session.closed:
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_a_collected_transport_closes_the_session_it_owns():
+    """An SDK client evicted from the cache is collected long before the closer's grace window ends."""
+    session = aiohttp.ClientSession()
+    transport = LiteLLMAiohttpTransport(client=session)
+
+    del transport
+    gc.collect()
+    await asyncio.gather(*LiteLLMAiohttpTransport._background_close_tasks)
+
+    assert session.closed, "the owned session outlived the transport that was collected before closing it"
+
+
+@pytest.mark.asyncio
+async def test_a_collected_transport_leaves_a_shared_session_open():
+    session = aiohttp.ClientSession()
+    try:
+        transport = LiteLLMAiohttpTransport(client=session, owns_session=False)
+
+        del transport
+        gc.collect()
+        await asyncio.gather(*LiteLLMAiohttpTransport._background_close_tasks)
+
+        assert not session.closed, "a transport closed a session it does not own"
+    finally:
+        await session.close()
+
+
+def test_a_transport_collected_after_its_loop_closed_still_closes_its_session(caplog: pytest.LogCaptureFixture):
+    """asyncio.run() closes the loop the session lives on before the evicted client is collected."""
+    loop = asyncio.new_event_loop()
+    session = loop.run_until_complete(_new_session())
+    loop.close()
+    transport = LiteLLMAiohttpTransport(client=session)
+
+    del transport
+    gc.collect()
+
+    assert session.closed, "the owned session stayed open after its transport was collected on a closed loop"
+    del session
+    gc.collect()
+    assert "Unclosed client session" not in caplog.text, caplog.text
+
+
+def test_a_transport_collected_while_its_loop_runs_elsewhere_closes_its_session_on_that_loop():
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    session = asyncio.run_coroutine_threadsafe(_new_session(), loop).result(timeout=10)
+    transport = LiteLLMAiohttpTransport(client=session)
+    try:
+        del transport
+        gc.collect()
+        asyncio.run_coroutine_threadsafe(_until_closed(session), loop).result(timeout=10)
+
+        assert session.closed, "the owned session stayed open after its transport was collected from another thread"
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=10)
+        loop.close()
