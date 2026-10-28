@@ -1,4 +1,0 @@
-[package]
-name = "litellm"
-version = "0.0.1"
-edition.workspace = true

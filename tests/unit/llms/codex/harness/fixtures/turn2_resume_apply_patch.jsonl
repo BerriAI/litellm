@@ -1,7 +1,0 @@
-{"type":"thread.started","thread_id":"01a0f341-fe37-7072-93b3-055358e8147f"}
-{"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll patch `hello.txt` directly, then I’ll reply exactly as requested."}}
-{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"apply_patch '*** Begin Patch\n*** Delete File: hello.txt\n*** Add File: hello.txt\n+hello world\n*** End Patch'\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"apply_patch '*** Begin Patch\n*** Delete File: hello.txt\n*** Add File: hello.txt\n+hello world\n*** End Patch'\"","aggregated_output":"Success. Updated the following files:\nA hello.txt\nD hello.txt\n","exit_code":0,"status":"completed"}}
-{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"done"}}
-{"type":"turn.completed","usage":{"input_tokens":49569,"cached_input_tokens":38236,"output_tokens":204,"reasoning_output_tokens":0}}

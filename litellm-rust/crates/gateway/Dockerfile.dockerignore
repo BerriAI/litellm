@@ -1,9 +1,0 @@
-**
-!Cargo.toml
-!Cargo.lock
-!crates/
-!crates/**
-**/.env
-**/.env.*
-**/target/
-**/.DS_Store

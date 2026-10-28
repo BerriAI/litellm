@@ -1,1 +1,0 @@
-Utility functions for proxy types.py

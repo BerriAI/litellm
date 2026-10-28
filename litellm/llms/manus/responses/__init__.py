@@ -1,1 +1,0 @@
-# Manus Responses API implementation

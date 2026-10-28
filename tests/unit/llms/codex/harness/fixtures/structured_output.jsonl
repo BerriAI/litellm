@@ -1,6 +1,0 @@
-{"type":"thread.started","thread_id":"01a0f344-34bf-7b82-9025-bc6db70f867e"}
-{"type":"turn.started"}
-{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"/bin/zsh -lc \"rg --files -g 'AGENTS.md' -g 'hello.txt' . && printf '\\\\n---\\\\n' && cat hello.txt\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"/bin/zsh -lc \"rg --files -g 'AGENTS.md' -g 'hello.txt' . && printf '\\\\n---\\\\n' && cat hello.txt\"","aggregated_output":"./hello.txt\n\n---\nhello world\n","exit_code":0,"status":"completed"}}
-{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{\"file\":\"hello.txt\",\"content\":\"Name: `hello.txt`\\nContent: `hello world`\"}"}}
-{"type":"turn.completed","usage":{"input_tokens":24271,"cached_input_tokens":3758,"output_tokens":96,"reasoning_output_tokens":0}}

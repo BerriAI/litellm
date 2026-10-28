@@ -1,1 +1,0 @@
-"""Soniox audio transcription implementation."""

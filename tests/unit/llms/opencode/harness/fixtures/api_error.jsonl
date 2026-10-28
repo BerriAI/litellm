@@ -1,1 +1,0 @@
-{"type":"error","timestamp":1790788205744,"sessionID":"ses_f0cb48565ffeMWhVl1J584kSti","error":{"name":"APIError","data":{"message":"litellm.BadRequestError: You passed in model=no-such-model-xyz. There are no healthy deployments for this model","statusCode":400,"isRetryable":false}}}
