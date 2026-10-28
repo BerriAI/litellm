@@ -34,7 +34,7 @@ from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAcc
 from litellm.litellm_core_utils.prompt_templates.factory import (
     encode_tool_call_id_with_signature,
 )
-from litellm.litellm_core_utils.tool_fields import tools_without_hosted_mcp
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -252,7 +252,6 @@ _GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
 
 
 _SPEECH_CONFIG_ITEMS: Final = TypeAdapter(list[object])
-_TOOLS_AS_SENT: Final = TypeAdapter(list[object])
 
 
 def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> Mapping[str, object]:
@@ -1027,9 +1026,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
-    def _map_function(
-        self, value: Sequence[object], optional_params: dict, send_integer_enums: bool = False
-    ) -> list[Tools]:
+    def _map_function(self, value: list[dict], optional_params: dict, send_integer_enums: bool = False) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
 
@@ -1621,9 +1618,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         drop_params: bool,
         allow_integer_enums: bool = True,
     ) -> dict:
-        self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
+        request_params: Final = tool_params_without_hosted_mcp(
+            non_default_params, model=model, route=self._route, drop_params=drop_params
+        )
+        self._apply_include_server_side_tool_invocations(request_params, optional_params)
         supports_sampling_params: Final = self.supports_sampling_params(model)
-        for param, value in non_default_params.items():
+        for param, value in request_params.items():
             if param in ("temperature", "top_p", "top_k") and not supports_sampling_params:
                 continue
             if param == "temperature":
@@ -1673,19 +1673,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "top_logprobs":
                 optional_params["logprobs"] = value
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
-                gemini_tools = list(
-                    tools_without_hosted_mcp(
-                        tools=_TOOLS_AS_SENT.validate_python(value),
-                        model=model,
-                        route=self._route,
-                        drop_params=drop_params,
-                    )
-                )
-                if not gemini_tools:
-                    continue
                 # Pass optional_params so _map_function can add toolConfig if needed
                 mapped_tools = with_integer_enums_that_fit(
-                    partial(self._map_function, gemini_tools, optional_params),
+                    partial(self._map_function, value, optional_params),
                     allow_integer_enums and self._is_gemini_3_or_newer(model),
                 )
                 optional_params = self._add_tools_to_optional_params(optional_params, mapped_tools)
@@ -1697,7 +1687,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
             elif param == "parallel_tool_calls":
-                tools_list = non_default_params.get("tools", non_default_params.get("functions"))
+                tools_list = request_params.get("tools", request_params.get("functions"))
                 num_tools = len(tools_list) if isinstance(tools_list, list) else 0
                 # Gemini does not support parallel_tool_calls=False with multiple
                 # tools. Drop the param instead of failing — Responses API clients

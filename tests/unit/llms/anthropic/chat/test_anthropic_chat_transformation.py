@@ -9878,10 +9878,11 @@ def test_claude_routes_without_the_mcp_connector_send_no_tools_when_drop_params_
 ):
     monkeypatch.setattr(litellm, "drop_params", False)
     mapped: Final = config_class().map_openai_params(
-        non_default_params={"tools": [_HOSTED_MCP_TOOL]},
+        non_default_params={"tools": [_HOSTED_MCP_TOOL], "tool_choice": "required"},
         optional_params={},
         model="claude-haiku-5-5",
         drop_params=True,
     )
     assert "tools" not in mapped
     assert "mcp_servers" not in mapped
+    assert "tool_choice" not in mapped

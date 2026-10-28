@@ -623,10 +623,10 @@ def test_gigachat_drops_a_hosted_mcp_tool_under_drop_params_and_keeps_the_functi
 def test_gigachat_sends_no_functions_when_drop_params_drops_every_hosted_mcp_tool(monkeypatch):
     monkeypatch.setattr(litellm, "drop_params", False)
     mapped: Final = GigaChatConfig().map_openai_params(
-        non_default_params={"tools": [_HOSTED_MCP_TOOL]},
+        non_default_params={"tools": [_HOSTED_MCP_TOOL], "tool_choice": "auto"},
         optional_params={},
         model="GigaChat-2-Max",
         drop_params=True,
     )
     assert "functions" not in mapped
-    assert "tools" not in mapped
+    assert "function_call" not in mapped

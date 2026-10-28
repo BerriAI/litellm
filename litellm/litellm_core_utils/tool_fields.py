@@ -1,4 +1,5 @@
 from collections.abc import Callable, Mapping, Sequence
+from copy import copy
 from dataclasses import dataclass
 from functools import reduce
 from typing import Annotated, Final, TypeAlias, TypeVar
@@ -203,3 +204,24 @@ def tools_without_hosted_mcp(tools: Sequence[_ToolT], model: str, route: str, dr
         )
     verbose_logger.warning(HOSTED_MCP_DROP_WARNING, named_servers, model, route)
     return [tool for tool in tools if _hosted_mcp_server_label(tool) is None]
+
+
+_TOOL_SELECTION_PARAMS: Final = frozenset({"tools", "tool_choice", "parallel_tool_calls"})
+_ParamsT: Final = TypeVar("_ParamsT", bound=dict[str, object])
+
+
+def tool_params_without_hosted_mcp(params: _ParamsT, model: str, route: str, drop_params: bool) -> _ParamsT:
+    tools: Final = params.get("tools")
+    if not isinstance(tools, list) or not tools:
+        return params
+    sent_tools: Final = _TOOLS.validate_python(tools)
+    kept_tools: Final = tools_without_hosted_mcp(tools=sent_tools, model=model, route=route, drop_params=drop_params)
+    if len(kept_tools) == len(sent_tools):
+        return params
+    kept_params: Final = copy(params)
+    if kept_tools:
+        kept_params["tools"] = list(kept_tools)
+        return kept_params
+    for key in _TOOL_SELECTION_PARAMS:
+        _ = kept_params.pop(key, None)
+    return kept_params

@@ -17,7 +17,7 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.tool_fields import tools_without_hosted_mcp
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.gigachat.utils import convert_usage, get_api_base
@@ -39,7 +39,6 @@ else:
 
 _EMPTY_FUNCTION: Final[Mapping[str, object]] = MappingProxyType({})
 _JSON_VALUE: Final = TypeAdapter(object)
-_TOOLS_AS_SENT: Final = TypeAdapter(list[object])
 
 
 def is_valid_json(value: str) -> bool:
@@ -162,7 +161,10 @@ class GigaChatConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:  # mutable-ok: base class contract returns dict
         """Map OpenAI parameters to GigaChat parameters."""
-        for param, value in non_default_params.items():
+        request_params: Final = tool_params_without_hosted_mcp(
+            dict(non_default_params), model=model, route="gigachat", drop_params=drop_params
+        )
+        for param, value in request_params.items():
             if param == "stream":
                 optional_params["stream"] = value
             elif param == "temperature":
@@ -181,14 +183,7 @@ class GigaChatConfig(BaseConfig):
             elif param == "tools":
                 # Convert tools to functions format
                 if isinstance(value, Sequence):
-                    gigachat_tools = tools_without_hosted_mcp(
-                        tools=_TOOLS_AS_SENT.validate_python(value),
-                        model=model,
-                        route="gigachat",
-                        drop_params=drop_params,
-                    )
-                    if gigachat_tools:
-                        optional_params["functions"] = self._convert_tools_to_functions(gigachat_tools)
+                    optional_params["functions"] = self._convert_tools_to_functions(value)
             elif param == "tool_choice":
                 # Map OpenAI tool_choice to GigaChat function_call
                 if isinstance(value, (str, Mapping)):

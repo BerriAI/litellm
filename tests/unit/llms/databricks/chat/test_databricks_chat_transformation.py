@@ -2784,9 +2784,10 @@ def test_databricks_claude_drops_a_hosted_mcp_tool_under_drop_params_and_keeps_t
 def test_databricks_claude_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(monkeypatch):
     monkeypatch.setattr(litellm, "drop_params", False)
     mapped: Final = DatabricksConfig().map_openai_params(
-        non_default_params={"tools": [_HOSTED_MCP_TOOL]},
+        non_default_params={"tools": [_HOSTED_MCP_TOOL], "tool_choice": "required"},
         optional_params={},
         model="databricks-claude-opus-5-5",
         drop_params=True,
     )
     assert "tools" not in mapped
+    assert "tool_choice" not in mapped

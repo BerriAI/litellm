@@ -10712,9 +10712,10 @@ def test_gemini_drops_a_hosted_mcp_tool_under_drop_params_and_keeps_the_function
 def test_gemini_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(monkeypatch, config_class, route):
     monkeypatch.setattr(litellm, "drop_params", False)
     mapped: Final = config_class().map_openai_params(
-        non_default_params={"tools": [_HOSTED_MCP_TOOL]},
+        non_default_params={"tools": [_HOSTED_MCP_TOOL], "tool_choice": "required"},
         optional_params={},
         model="gemini-3.8-flash",
         drop_params=True,
     )
     assert "tools" not in mapped
+    assert "tool_choice" not in mapped
