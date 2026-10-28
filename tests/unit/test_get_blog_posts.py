@@ -190,8 +190,9 @@ def test_get_blog_posts_ttl_expired_refetches():
     assert len(posts) == 2
 
 
-def test_get_blog_posts_local_env_var_skips_remote(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_BLOG_POSTS", "true")
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_BLOG_POSTS", "LITELLM_OFFLINE_MODE"])
+def test_get_blog_posts_local_env_var_skips_remote(monkeypatch, flag):
+    monkeypatch.setenv(flag, "true")
     with patch("litellm.litellm_core_utils.get_blog_posts.httpx.get") as mock_get:
         posts = get_blog_posts(url=litellm.blog_posts_url)
     mock_get.assert_not_called()
