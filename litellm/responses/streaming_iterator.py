@@ -486,6 +486,7 @@ class BaseResponsesAPIStreamingIterator:
                     if isinstance(_delta, str):
                         self._generated_content += _delta
                 elif _event_type in _TOOL_ARGUMENTS_DELTA_EVENTS:
+                    self._started_tool_call = True
                     _args_delta: Final = getattr(openai_responses_api_chunk, "delta", None)
                     if isinstance(_args_delta, str):
                         self._generated_tool_arguments += _args_delta

@@ -1576,28 +1576,27 @@ async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream
         router.discard()
 
 
-def _openai_stream_cut_mid_tool_call(preamble: str) -> httpx.Response:
-    return _sse(
-        {
-            "type": "response.output_text.delta", "sequence_number": 0,
-            "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": preamble,
+def _openai_stream_cut_mid_tool_call(preamble: str, *, announce_item: bool = True) -> httpx.Response:
+    text: Final = {
+        "type": "response.output_text.delta", "sequence_number": 0,
+        "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": preamble,
+    }
+    item_added: Final = {
+        "type": "response.output_item.added", "sequence_number": 1, "output_index": 1,
+        "item": {
+            "type": "function_call", "id": "fc_primary", "call_id": "call_primary",
+            "name": "lookup", "arguments": "", "status": "in_progress",
         },
-        {
-            "type": "response.output_item.added", "sequence_number": 1, "output_index": 1,
-            "item": {
-                "type": "function_call", "id": "fc_primary", "call_id": "call_primary",
-                "name": "lookup", "arguments": "", "status": "in_progress",
-            },
-        },
-        {
-            "type": "response.function_call_arguments.delta", "sequence_number": 2,
-            "item_id": "fc_primary", "output_index": 1, "delta": '{"city": "Par',
-        },
-        {
-            "type": "error", "sequence_number": 3,
-            "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
-        },
-    )
+    }
+    arguments: Final = {
+        "type": "response.function_call_arguments.delta", "sequence_number": 2,
+        "item_id": "fc_primary", "output_index": 1, "delta": '{"city": "Par',
+    }
+    error: Final = {
+        "type": "error", "sequence_number": 3,
+        "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
+    }
+    return _sse(*((text, item_added, arguments, error) if announce_item else (text, arguments, error)))
 
 
 def _anthropic_stream_cut_mid_tool_call(preamble: str) -> httpx.Response:
@@ -1618,12 +1617,13 @@ def _anthropic_stream_cut_mid_tool_call(preamble: str) -> httpx.Response:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("announce_item", [True, False], ids=["announced_item", "arguments_only"])
 async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream_began_a_tool_call(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    announce_item: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=_openai_stream_cut_mid_tool_call("Let me look that up. ")
+        return_value=_openai_stream_cut_mid_tool_call("Let me look that up. ", announce_item=announce_item)
     )
     fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
         return_value=_anthropic_stream("It is sunny in Paris.")
