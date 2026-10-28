@@ -1,4 +1,5 @@
 use litellm_auth::SecretValue;
+use litellm_core_utils::decline::Decline;
 use litellm_core_utils::{
     core_helpers::{finish_reason_for, unix_now, usage_from_parts},
     prompt_templates::factory::{Conversation, build_conversation},
@@ -14,23 +15,19 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     Error,
-    anthropic::{
-        chat::handler::ModelResponseIterator,
-        common_utils::{
-            API_KEY_PLACEMENT, complete_anthropic_url, forwarded_oauth_bearer,
-            resolve_anthropic_api_key,
-        },
+    anthropic::common_utils::{
+        API_KEY_PLACEMENT, complete_anthropic_url, forwarded_oauth_bearer,
+        resolve_anthropic_api_key,
     },
     base_llm::{
         auth::AuthScheme,
         chat::{
-            streaming::{ChatStream, StreamShape},
+            streaming::StreamShape,
             transformation::{
                 BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-                Unsupported, ValidatedEnvironment, unsupported_message, unsupported_param,
+                ValidatedEnvironment, unsupported_message, unsupported_param,
             },
         },
-        messages::streaming::event_stream as messages_event_stream,
     },
 };
 
@@ -130,15 +127,14 @@ impl BaseConfig for AnthropicConfig {
             serde_json::from_value(response.body).map_err(|error| {
                 Error::InvalidResponse(crate::ErrorDetail::invalid("messages response", error))
             })?;
-        // The route declines tool and thinking requests, so a non-text block
-        // means the response carries something this path never asked for.
-        // Decline rather than silently dropping it; the host falls back.
         if body
             .content
             .iter()
             .any(|block| matches!(block, TextResponseBlock::Other))
         {
-            return Err(Error::Unsupported("non-text response content block"));
+            return Err(Error::InvalidResponse(crate::ErrorDetail::Unhandled(
+                "non-text response content block",
+            )));
         }
         let text: String = body
             .content
@@ -194,13 +190,6 @@ impl BaseConfig for AnthropicConfig {
         Ok(ValidatedEnvironment { headers, auth })
     }
 
-    fn model_response_iterator(&self, shape: StreamShape) -> Option<ChatStream> {
-        Some(ChatStream::new(
-            messages_event_stream,
-            ModelResponseIterator::new(shape),
-        ))
-    }
-
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         DEFAULT_HEADERS
     }
@@ -214,7 +203,7 @@ impl BaseConfig for AnthropicConfig {
         &self,
         messages: &[ChatMessage],
         optional_params: &Map<String, Value>,
-    ) -> Option<Unsupported> {
+    ) -> Option<Decline> {
         unsupported_param(self.supported_openai_param_mappings(), &[], optional_params)
             .or_else(|| messages.iter().find_map(unsupported_message))
             // Anthropic rejects a request whose first turn is not a user turn.
@@ -222,7 +211,7 @@ impl BaseConfig for AnthropicConfig {
             // core cannot observe, so decline instead of guessing.
             .or_else(|| {
                 (!build_conversation(messages).opens_on_user_turn())
-                    .then_some(Unsupported("conversation does not open on a user turn"))
+                    .then_some(Decline::new("conversation does not open on a user turn"))
             })
     }
 }
@@ -271,9 +260,10 @@ mod tests {
         anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
         base_llm::{
             auth::AuthScheme,
-            chat::transformation::{BaseConfig, ProviderChatResponseData, Unsupported},
+            chat::transformation::{BaseConfig, ProviderChatResponseData},
         },
     };
+    use litellm_core_utils::decline::Decline;
     use litellm_llms_types::formats::chat_completions::{ChatCompletionsResponse, ChatMessage};
     use rstest::rstest;
     use serde_json::{Map, Value, json};
@@ -301,7 +291,7 @@ mod tests {
             .transform_response("claude-sonnet-4-5", ProviderChatResponseData { body })
     }
 
-    fn reason(msgs: Value, opts: Value) -> Option<Unsupported> {
+    fn reason(msgs: Value, opts: Value) -> Option<Decline> {
         ANTHROPIC_CHAT_COMPLETIONS_CONFIG.unsupported_reason(&messages(msgs), &params(opts))
     }
 
@@ -409,7 +399,7 @@ mod tests {
                 json!([{"role": "user", "content": "hi"}]),
                 json!({"top_k": 40})
             ),
-            Some(Unsupported("unrecognized request parameter"))
+            Some(Decline::new("unrecognized request parameter"))
         );
     }
 
@@ -420,7 +410,7 @@ mod tests {
                 json!([{"role": "user", "content": "hi"}]),
                 json!({"stream": true, "max_tokens": 16})
             ),
-            Some(Unsupported("streaming"))
+            Some(Decline::new("streaming"))
         );
     }
 
@@ -445,7 +435,7 @@ mod tests {
     fn declines_any_param_outside_the_allowlist(#[case] param: Value) {
         assert_eq!(
             reason(json!([{"role": "user", "content": "hi"}]), param.clone()),
-            Some(Unsupported("unrecognized request parameter")),
+            Some(Decline::new("unrecognized request parameter")),
             "expected {param} to decline"
         );
     }
@@ -463,7 +453,7 @@ mod tests {
                 ]),
                 json!({})
             ),
-            Some(Unsupported("unrecognized message field"))
+            Some(Decline::new("unrecognized message field"))
         );
         assert_eq!(
             reason(
@@ -473,7 +463,7 @@ mod tests {
                 ]),
                 json!({})
             ),
-            Some(Unsupported("unrecognized message field"))
+            Some(Decline::new("unrecognized message field"))
         );
         assert_eq!(
             reason(
@@ -483,7 +473,7 @@ mod tests {
                 ]}]),
                 json!({})
             ),
-            Some(Unsupported("non-text message content"))
+            Some(Decline::new("non-text message content"))
         );
         assert_eq!(
             reason(
@@ -493,7 +483,7 @@ mod tests {
                 ]}]),
                 json!({})
             ),
-            Some(Unsupported("non-text message content"))
+            Some(Decline::new("non-text message content"))
         );
     }
 
@@ -504,7 +494,7 @@ mod tests {
         // than declining to Python before it.
         assert_eq!(
             reason(json!([{"role": "user", "content": []}]), json!({})),
-            Some(Unsupported("message without content"))
+            Some(Decline::new("message without content"))
         );
         assert_eq!(
             reason(
@@ -525,7 +515,7 @@ mod tests {
                 ]),
                 json!({})
             ),
-            Some(Unsupported("conversation does not open on a user turn"))
+            Some(Decline::new("conversation does not open on a user turn"))
         );
     }
 
@@ -658,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn declines_a_response_carrying_a_non_text_block() {
+    fn a_response_carrying_a_non_text_block_is_invalid() {
         let err = transform_response(json!({
             "model": "claude-sonnet-4-5",
             "content": [{"type": "tool_use", "id": "t1", "name": "f", "input": {}}],
@@ -666,7 +656,12 @@ mod tests {
             "usage": {"input_tokens": 1, "output_tokens": 1}
         }))
         .expect_err("non-text block");
-        assert_eq!(err, Error::Unsupported("non-text response content block"));
+        assert_eq!(
+            err,
+            Error::InvalidResponse(crate::ErrorDetail::Unhandled(
+                "non-text response content block"
+            ))
+        );
     }
 
     #[rstest::rstest]
@@ -676,16 +671,11 @@ mod tests {
     #[case::missing_model(json!({"content": [], "usage": {"input_tokens": 1, "output_tokens": 1}}))]
     fn errors_on_a_response_missing_required_fields(#[case] body: Value) {
         let error = transform_response(body).expect_err("invalid response");
-        assert!(matches!(error, Error::InvalidResponse(_)));
-        let source = std::iter::successors(Some(&error as &dyn std::error::Error), |error| {
-            error.source()
-        })
-        .find_map(|error| error.downcast_ref::<serde_json::Error>())
-        .expect("the JSON decoding source is preserved");
-        assert_eq!(
-            error.to_string(),
-            format!("invalid response: invalid messages response: {source}")
-        );
+        assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
+        let cause = litellm_error::find::<serde_json::Error>(&error).expect("JSON cause");
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(report.contains("invalid messages response"), "{report}");
+        assert_eq!(report.matches(&cause.to_string()).count(), 1, "{report}");
     }
 
     #[test]

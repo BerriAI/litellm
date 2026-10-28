@@ -15,6 +15,7 @@ litellm-core-utils.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+url.workspace = true
 veil.workspace = true
 percent-encoding = "2.3"
 

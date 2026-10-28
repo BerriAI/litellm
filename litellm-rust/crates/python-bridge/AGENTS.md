@@ -111,8 +111,11 @@ GIL handling to `litellm-host-python`.
 - Avoid copying large payloads more than needed. The current JSON round-trip is
   acceptable for the first scaffold, but future performance work should evaluate
   direct PyO3 conversion before expanding Rust coverage to image-heavy paths.
-- Do not expose raw Rust errors that include document contents or upstream
-  bodies.
+- Render a Rust error for Python only in its mapping function, with
+  `litellm_error::Report`, never `Debug` or a document's contents. An upstream
+  body reaches Python intact as the `RustUpstreamError` args for provider error
+  mapping. The 256-character cap applies only to HTTP error diagnostics, not
+  response bodies. Do not log those args.
 
 ## Tests
 

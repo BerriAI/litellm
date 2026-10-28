@@ -38,7 +38,7 @@ fn recording_host(
         .with_before_send(move |wire, _| {
             interceptions.fetch_add(1, Ordering::SeqCst);
             match block {
-                true => Err(Error::InvalidRequest("blocked".into())),
+                true => Err(Error::MissingField("blocked")),
                 false => Ok(wire),
             }
         })
@@ -95,10 +95,7 @@ async fn a_blocking_before_send_prevents_the_call_and_emits_one_failure() {
     .await
     .unwrap_err();
 
-    assert!(
-        matches!(&error, Error::InvalidRequest(message) if message == "blocked"),
-        "{error:?}"
-    );
+    assert!(matches!(error, Error::MissingField("blocked")), "{error:?}");
     assert_eq!(interceptions.load(Ordering::SeqCst), 1);
     assert_eq!(*events.lock().unwrap(), ["started", "failure"]);
     assert!(received(&upstream).await.is_empty());
