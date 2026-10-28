@@ -35705,6 +35705,8 @@ export interface components {
             vertex_project?: string | null;
             /** Watsonx Region Name */
             watsonx_region_name?: string | null;
+            /** Weight */
+            weight?: number | null;
         } & {
             [key: string]: unknown;
         };
@@ -51091,6 +51093,8 @@ export interface components {
             vertex_project?: string | null;
             /** Watsonx Region Name */
             watsonx_region_name?: string | null;
+            /** Weight */
+            weight?: number | null;
         } & {
             [key: string]: unknown;
         };
