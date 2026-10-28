@@ -28402,7 +28402,6 @@
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
-        "deprecation_date": "2027-06-28",
         "input_cost_per_image": 0.00028,
         "input_cost_per_token": 2.5e-07,
         "input_cost_per_token_batches": 1.25e-07,
@@ -47103,6 +47102,7 @@
     },
     "together_ai/MiniMaxAI/MiniMax-M3": {
         "cache_read_input_token_cost": 6e-08,
+        "deprecation_date": "2026-11-06",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 524288,
@@ -47296,6 +47296,7 @@
     },
     "together_ai/thinkingmachines/Inkling": {
         "cache_read_input_token_cost": 1.7e-07,
+        "deprecation_date": "2026-11-06",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 524288,
@@ -50878,7 +50879,6 @@
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
-        "deprecation_date": "2027-06-28",
         "input_cost_per_image": 0.00028,
         "input_cost_per_token": 2.5e-07,
         "input_cost_per_token_batches": 1.25e-07,
@@ -57959,7 +57959,7 @@
             "search_context_size_medium": 0.012
         },
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
@@ -58002,7 +58002,7 @@
             "search_context_size_medium": 0.012
         },
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
@@ -58110,7 +58110,7 @@
             "search_context_size_medium": 0.012
         },
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
@@ -58150,7 +58150,7 @@
         "output_cost_per_token_above_272k_tokens": 3.3e-05,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html",
@@ -58186,7 +58186,7 @@
         "output_cost_per_token_above_272k_tokens": 3e-05,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html",
@@ -58222,7 +58222,7 @@
         "output_cost_per_token_above_272k_tokens": 1.98e-05,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-terra.html",
@@ -58258,7 +58258,7 @@
         "output_cost_per_token_above_272k_tokens": 1.8e-05,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-terra.html",
@@ -58294,7 +58294,7 @@
         "output_cost_per_token_above_272k_tokens": 1.98e-06,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-luna.html",
@@ -58327,7 +58327,7 @@
         "output_cost_per_token_above_272k_tokens": 2.475e-05,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.html",
@@ -58358,7 +58358,7 @@
         "output_cost_per_token_above_272k_tokens": 2.25e-05,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.html",
@@ -58389,7 +58389,7 @@
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html",
@@ -58420,7 +58420,7 @@
         "output_cost_per_token_above_272k_tokens": 4.5e-05,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html",
@@ -58454,7 +58454,7 @@
         "output_cost_per_token_above_272k_tokens": 1.8e-06,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-luna.html",
@@ -58494,7 +58494,7 @@
         "output_cost_per_token": 5.5e-05,
         "output_cost_per_token_above_272k_tokens": 8.25e-05,
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token_above_272k_tokens_ultrafast": 0.000495,
@@ -58534,7 +58534,7 @@
         "output_cost_per_token": 1.1e-05,
         "output_cost_per_token_above_272k_tokens": 1.65e-05,
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
@@ -58572,7 +58572,7 @@
         "output_cost_per_token": 5.5e-07,
         "output_cost_per_token_above_272k_tokens": 8.25e-07,
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
@@ -58618,7 +58618,7 @@
         "output_cost_per_token_above_272k_tokens": 8.25e-05,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token_above_272k_tokens_ultrafast": 0.000495,
@@ -58658,7 +58658,7 @@
         "output_cost_per_token_above_272k_tokens": 1.65e-05,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "supported_modalities": [
@@ -58696,7 +58696,7 @@
         "output_cost_per_token_above_272k_tokens": 8.25e-07,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "supported_modalities": [
@@ -58740,7 +58740,7 @@
         "output_cost_per_token_above_272k_tokens": 7.5e-05,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token_above_272k_tokens_ultrafast": 0.00045,
@@ -58779,7 +58779,7 @@
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "supported_modalities": [
@@ -58813,7 +58813,7 @@
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "supported_modalities": [
@@ -58850,7 +58850,7 @@
         "output_cost_per_token_above_272k_tokens": 7.5e-07,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "supported_modalities": [
@@ -58884,7 +58884,7 @@
         "output_cost_per_token_above_272k_tokens": 7.5e-07,
         "litellm_provider": "bedrock_converse",
         "supports_bedrock_converse_tool_result_images": false,
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "supported_modalities": [
@@ -58923,7 +58923,7 @@
             "search_context_size_medium": 0.012
         },
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
@@ -58962,7 +58962,7 @@
             "search_context_size_medium": 0.012
         },
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
@@ -59183,7 +59183,8 @@
         "prompt_cache_min_tokens": 512,
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html",
         "thinking_always_on": true,
-        "supports_forced_tool_use": false
+        "supports_forced_tool_use": false,
+        "token_count_model": {"model":"anthropic.claude-opus-5-5","litellm_provider":"bedrock_mantle","region":"us-east-1"}
     },
     "bedrock_mantle/anthropic.claude-sonnet-5-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -66038,7 +66039,7 @@
     },
     "bedrock_mantle/us-gov-west-1/openai.gpt-5.6-terra": {
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
@@ -66073,7 +66074,7 @@
     },
     "bedrock_mantle/us-gov-west-1/openai.gpt-5.6-luna": {
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
@@ -66108,7 +66109,7 @@
     },
     "bedrock_mantle/us-gov-west-1/openai.gpt-5.4": {
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
@@ -66299,7 +66300,8 @@
         "supports_xhigh_reasoning_effort": true,
         "thinking_always_on": true,
         "supports_forced_tool_use": false,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html",
+        "token_count_model": {"model":"anthropic.claude-opus-5-5","litellm_provider":"bedrock_mantle","region":"us-gov-west-1"}
     },
     "bedrock_mantle/us-gov-west-1/anthropic.claude-sonnet-5-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -66338,7 +66340,7 @@
     },
     "bedrock_mantle/us-gov-east-1/openai.gpt-5.4": {
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
@@ -66362,7 +66364,8 @@
         "supports_vision": true,
         "input_cost_per_token": 3.3e-06,
         "cache_read_input_token_cost": 3.3e-07,
-        "output_cost_per_token": 1.98e-05
+        "output_cost_per_token": 1.98e-05,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.md"
     },
     "bedrock_mantle/us-gov-east-1/xai.grok-4.6": {
         "use_openai_responses_path": true,
@@ -76005,5 +76008,43 @@
             "high",
             "max"
         ]
+    },
+    "bedrock_mantle/openai.gpt-6.1-terra": {
+        "cache_creation_input_token_cost": 1.375e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.75e-06,
+        "cache_read_input_token_cost": 5.5e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 1.1e-07,
+        "input_cost_per_token": 1.1e-06,
+        "input_cost_per_token_above_272k_tokens": 2.2e-06,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 5.5e-06,
+        "output_cost_per_token_above_272k_tokens": 8.25e-06,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-terra.html",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": true,
+        "supports_prompt_cache_breakpoint": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "use_openai_responses_path": true
     }
 }

@@ -6354,7 +6354,7 @@ def is_flat_responses_tool(tool: Mapping[str, object]) -> bool:
 
 
 def chat_completion_tools_for(tool: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
-    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+    from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
     from litellm.responses.litellm_completion_transformation.transformation import (
         LiteLLMCompletionResponsesConfig,
     )

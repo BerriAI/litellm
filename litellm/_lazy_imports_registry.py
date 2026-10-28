@@ -170,9 +170,11 @@ LLM_CONFIG_NAMES: Final = (
     "StrandsDeciderDecisionsConfig",
     "DatabricksDecisionsConfig",
     "HostedVLLMDecisionsConfig",
+    "LMStudioDecisionsConfig",
     "LayaDecisionsConfig",
     "BespokeDecisionsConfig",
     "OpenAIDecisionsConfig",
+    "AzureDecisionsConfig",
     "AzureAIDecisionsConfig",
     "NvidiaNimRerankConfig",
     "NvidiaNimRankingConfig",
@@ -746,9 +748,11 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.hosted_vllm.decisions.transformation",
         "HostedVLLMDecisionsConfig",
     ),
+    "LMStudioDecisionsConfig": (".llms.lm_studio.decisions.transformation", "LMStudioDecisionsConfig"),
     "LayaDecisionsConfig": (".llms.laya.decisions.transformation", "LayaDecisionsConfig"),
     "BespokeDecisionsConfig": (".llms.bespoke.decisions.transformation", "BespokeDecisionsConfig"),
     "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
+    "AzureDecisionsConfig": (".llms.azure.decisions.transformation", "AzureDecisionsConfig"),
     "AzureAIDecisionsConfig": (".llms.azure_ai.decisions.transformation", "AzureAIDecisionsConfig"),
     "NvidiaNimRerankConfig": (
         ".llms.nvidia_nim.rerank.transformation",
@@ -797,7 +801,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     ),
     "CohereChatConfig": (".llms.cohere.chat.transformation", "CohereChatConfig"),
     "AnthropicMessagesConfig": (
-        ".llms.anthropic.pass_through.messages.transformation",
+        ".llms.anthropic.messages.native.transformation",
         "AnthropicMessagesConfig",
     ),
     "BedrockClaudePlatformMessagesConfig": (

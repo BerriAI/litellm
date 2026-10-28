@@ -234,6 +234,7 @@ bedrock_neutralize_orphaned_tool_blocks: bool = True
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
 )  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
+anthropic_messages_estimate_initial_input_tokens: bool = False
 # When True, strip the OpenAI-flavored `usage.total_tokens` field that
 # LiteLLM injects into non-streaming /v1/messages responses, bringing the
 # wire response into line with the Anthropic spec (matches the streaming
@@ -1729,6 +1730,9 @@ if TYPE_CHECKING:
     from .llms.hosted_vllm.decisions.transformation import (
         HostedVLLMDecisionsConfig as HostedVLLMDecisionsConfig,
     )
+    from .llms.lm_studio.decisions.transformation import (
+        LMStudioDecisionsConfig as LMStudioDecisionsConfig,
+    )
     from .llms.laya.decisions.transformation import (
         LayaDecisionsConfig as LayaDecisionsConfig,
     )
@@ -1737,6 +1741,9 @@ if TYPE_CHECKING:
     )
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
+    )
+    from .llms.azure.decisions.transformation import (
+        AzureDecisionsConfig as AzureDecisionsConfig,
     )
     from .llms.azure_ai.decisions.transformation import (
         AzureAIDecisionsConfig as AzureAIDecisionsConfig,
@@ -1782,7 +1789,7 @@ if TYPE_CHECKING:
         SagemakerNovaConfig as SagemakerNovaConfig,
     )
     from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
-    from .llms.anthropic.pass_through.messages.transformation import (
+    from .llms.anthropic.messages.native.transformation import (
         AnthropicMessagesConfig as AnthropicMessagesConfig,
     )
     from .llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (

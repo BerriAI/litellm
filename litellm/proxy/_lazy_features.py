@@ -163,7 +163,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         # /.well-known/oauth-authorization-server: the root document is the
         # gateway's own authorization server metadata (token endpoint /token).
         name="mcp_discoverable",
-        module_path="litellm.proxy._experimental.mcp_server.discoverable_endpoints",
+        module_path="litellm.proxy.mcp_server.discoverable_endpoints",
         path_prefixes=(
             "/oauth/client-metadata.json",
             "/.well-known/oauth-",
@@ -185,19 +185,19 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         # No /mcp/oauth prefix here: the mounted /mcp sub-app would
         # shadow it, and there are no actual routes there anyway.
         name="mcp_byok_oauth",
-        module_path="litellm.proxy._experimental.mcp_server.byok_oauth_endpoints",
+        module_path="litellm.proxy.mcp_server.byok_oauth_endpoints",
         path_prefixes=("/v1/mcp/oauth", "/.well-known/oauth-"),
     ),
     LazyFeature(
         name="mcp_rest",
-        module_path="litellm.proxy._experimental.mcp_server.rest_endpoints",
+        module_path="litellm.proxy.mcp_server.rest_endpoints",
         path_prefixes=("/mcp-rest",),
     ),
     LazyFeature(
         # Hardcoded /mcp matches BASE_MCP_ROUTE; importing the constant
         # here would defeat lazy loading.
         name="mcp_app",
-        module_path="litellm.proxy._experimental.mcp_server.server",
+        module_path="litellm.proxy.mcp_server.server",
         path_prefixes=("/mcp",),
         register_fn=_mount_app("/mcp", attr_name="app"),
         persistent_swagger_stub=True,
