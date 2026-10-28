@@ -481,6 +481,7 @@ def test_device_authorization_polls_complete_sso_and_mints_a_model_restricted_be
                         f"The requested model '{model_b}' is not available for this API key, or the model name is "
                         "invalid. Check the models available to you and try again."
                     ),
+                    "litellm_error_type": "team_model_access_denied",
                 },
             }, model_b_response.text
             assert upstream.drain() == ()

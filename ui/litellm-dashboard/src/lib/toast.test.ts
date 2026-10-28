@@ -109,14 +109,55 @@ describe("toast", () => {
     });
 
     it.each([
-      [403, "permission_error", sonner.error, "Access Denied"],
-      [401, "authentication_error", sonner.error, "Authentication Error"],
-      [429, "rate_limit_error", sonner.warning, "Rate Limit Exceeded"],
-      [422, "invalid_request_error", sonner.error, "Request Error"],
-    ] as const)(
-      "titles an Anthropic SDK %s error on the Messages playground by its %s type",
-      (status, type, fn, title) => {
-        const body = JSON.stringify({ type: "error", error: { type, message: "Team not allowed to access model" } });
+      {
+        status: 403,
+        type: "permission_error",
+        litellmType: "team_model_access_denied",
+        fn: sonner.error,
+        title: "Access Denied",
+      },
+      {
+        status: 401,
+        type: "authentication_error",
+        litellmType: "auth_error",
+        fn: sonner.error,
+        title: "Authentication Error",
+      },
+      {
+        status: 422,
+        type: "invalid_request_error",
+        litellmType: "budget_exceeded",
+        fn: sonner.warning,
+        title: "Budget Exceeded",
+      },
+      {
+        status: 503,
+        type: "api_error",
+        litellmType: "no_db_connection",
+        fn: sonner.error,
+        title: "Service Unavailable",
+      },
+      {
+        status: 429,
+        type: "rate_limit_error",
+        litellmType: undefined,
+        fn: sonner.warning,
+        title: "Rate Limit Exceeded",
+      },
+      {
+        status: 422,
+        type: "invalid_request_error",
+        litellmType: undefined,
+        fn: sonner.error,
+        title: "Validation Error",
+      },
+    ])(
+      "titles an Anthropic SDK $status $type error from the Messages playground by its proxy type $litellmType, else its status",
+      ({ status, type, litellmType, fn, title }) => {
+        const body = JSON.stringify({
+          type: "error",
+          error: { type, message: "Team not allowed to access model", litellm_error_type: litellmType },
+        });
         toast.fromError(
           `Error occurred while generating model response. Please try again. Error: Error: ${status} ${body}`,
         );
@@ -126,6 +167,11 @@ describe("toast", () => {
         });
       },
     );
+
+    it("titles an Anthropic error body with no status by its Anthropic type", () => {
+      toast.fromError(JSON.stringify({ type: "error", error: { type: "permission_error", message: "denied" } }));
+      expect(sonner.error).toHaveBeenCalledWith("Access Denied", { description: "denied", duration: 6000 });
+    });
 
     it("leaves a string alone when its braces are not a JSON envelope", () => {
       toast.fromError("Template {name} is invalid");

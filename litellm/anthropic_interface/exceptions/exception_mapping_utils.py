@@ -16,16 +16,18 @@ from .exceptions import AnthropicErrorDetail, AnthropicErrorResponse, AnthropicE
 _PARSED_ERROR_BODY: Final = TypeAdapter(object)
 
 # HTTP status code -> Anthropic error type
-# Source: https://docs.anthropic.com/en/api/errors
+# Source: https://platform.claude.com/docs/en/api/errors
 ANTHROPIC_ERROR_TYPE_MAP: Final[dict[int, AnthropicErrorType]] = {
     400: "invalid_request_error",
     401: "authentication_error",
+    402: "billing_error",
     403: "permission_error",
     404: "not_found_error",
+    409: "conflict_error",
     413: "request_too_large",
-    422: "invalid_request_error",
     429: "rate_limit_error",
     500: "api_error",
+    504: "timeout_error",
     529: "overloaded_error",
 }
 
@@ -40,7 +42,10 @@ class AnthropicExceptionMapping:
     @staticmethod
     def get_error_type(status_code: int) -> AnthropicErrorType:
         """Map HTTP status code to Anthropic error type."""
-        return ANTHROPIC_ERROR_TYPE_MAP.get(status_code, "api_error")
+        named: Final = ANTHROPIC_ERROR_TYPE_MAP.get(status_code)
+        if named is not None:
+            return named
+        return "invalid_request_error" if 400 <= status_code < 500 else "api_error"
 
     @staticmethod
     def create_error_response(

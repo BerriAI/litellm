@@ -258,7 +258,10 @@ class _CountRoute:
 _MESSAGES_ROUTE: Final = _CountRoute(
     path=lambda _model: "/v1/messages/count_tokens",
     body=_bare,
-    rejection=lambda message: {"type": "error", "error": {"type": "invalid_request_error", "message": message}},
+    rejection=lambda message: {
+        "type": "error",
+        "error": {"type": "invalid_request_error", "message": message, "litellm_error_type": "token_counting_error"},
+    },
     count_field="input_tokens",
 )
 _RESPONSES_ROUTE: Final = _CountRoute(

@@ -12,12 +12,14 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from litellm.anthropic_interface.exceptions import AnthropicErrorType, AnthropicExceptionMapping
 from litellm.constants import (
     MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB,
     MAX_DECOMPRESSED_REQUEST_BODY_SIZE_MB,
     MAX_REQUEST_BODY_DECOMPRESSION_RATIO,
 )
 from litellm.proxy.auth.auth_utils import get_request_route
+from litellm.proxy.common_utils.anthropic_error_payload import route_error_content
 from litellm.proxy.middleware.request_size_limit_middleware import MaxRequestSizeGetter, send_request_too_large
 
 RFC_9659_ZSTD_WINDOW_LOG_MAX: Final = 23
@@ -291,13 +293,24 @@ def _replay_body(body: bytes, receive: Receive, more_body: bool = False) -> Rece
 
 
 def _error_response(
+    scope: Scope,
     message: str,
     status_code: int,
     error_type: str = "invalid_request_error",
     headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
+    anthropic_type: Final[AnthropicErrorType] = (
+        "overloaded_error"
+        if error_type == "overloaded_error"
+        else AnthropicExceptionMapping.get_error_type(status_code)
+    )
     return JSONResponse(
-        {"error": {"message": message, "type": error_type, "param": None, "code": str(status_code)}},
+        route_error_content(
+            scope,
+            anthropic_type,
+            message,
+            {"error": {"message": message, "type": error_type, "param": None, "code": str(status_code)}},
+        ),
         status_code=status_code,
         headers=headers,
     )
@@ -356,6 +369,7 @@ class RequestBodyDecompressionMiddleware:
         if codec is None:
             supported: Final = ", ".join(sorted(self.codecs))
             await _error_response(
+                scope,
                 f"This proxy cannot decode {coding} request bodies. Supported encodings: {supported}",
                 415,
                 headers={"accept-encoding": supported},
@@ -372,7 +386,7 @@ class RequestBodyDecompressionMiddleware:
             case _Body(data=data):
                 await self._decode_within_budget(scope, receive, send, codec, data, limits)
             case _TooLarge():
-                await send_request_too_large(send=send, max_request_size_mb=max_mb)
+                await send_request_too_large(scope=scope, send=send, max_request_size_mb=max_mb)
             case _ClientDisconnected():
                 return
 
@@ -382,6 +396,7 @@ class RequestBodyDecompressionMiddleware:
         reservation: Final = _max_decoded_length(codec, data, limits)
         if not self.budget.try_reserve(reservation):
             await _error_response(
+                scope,
                 "The proxy is decoding too many compressed request bodies right now. "
                 "Retry later, or send this body uncompressed",
                 503,
@@ -407,12 +422,12 @@ class RequestBodyDecompressionMiddleware:
             case _Body(data=body):
                 await self.app(_identity_scope(scope, len(body)), _replay_body(body, receive), send)
             case _DecodedTooLarge():
-                await _error_response(f"Request body is larger than {limits.max_mb:g} MB when decoded", 413)(
+                await _error_response(scope, f"Request body is larger than {limits.max_mb:g} MB when decoded", 413)(
                     scope, receive, send
                 )
             case _OverRatio():
-                await _error_response(f"Request body expands more than {limits.max_ratio} times when decoded", 413)(
-                    scope, receive, send
-                )
+                await _error_response(
+                    scope, f"Request body expands more than {limits.max_ratio} times when decoded", 413
+                )(scope, receive, send)
             case _Undecodable(message=message):
-                await _error_response(message, 400)(scope, receive, send)
+                await _error_response(scope, message, 400)(scope, receive, send)

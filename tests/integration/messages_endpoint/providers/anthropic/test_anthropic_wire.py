@@ -357,10 +357,14 @@ def test_anthropic_messages_preserves_cli_beta_safeguards_and_result(gateway: Ga
 
 
 @pytest.mark.parametrize(
-    ("status", "error_type", "error_class", "litellm_error"),
+    ("status", "error_type", "error_class", "litellm_error", "litellm_error_type"),
     [
-        pytest.param(429, "rate_limit_error", anthropic.RateLimitError, "RateLimitError", id="rate_limit"),
-        pytest.param(400, "invalid_request_error", anthropic.BadRequestError, "BadRequestError", id="invalid_request"),
+        pytest.param(
+            429, "rate_limit_error", anthropic.RateLimitError, "RateLimitError", "throttling_error", id="rate_limit"
+        ),
+        pytest.param(
+            400, "invalid_request_error", anthropic.BadRequestError, "BadRequestError", None, id="invalid_request"
+        ),
     ],
 )
 def test_anthropic_messages_preserves_upstream_error_status_and_body(
@@ -369,6 +373,7 @@ def test_anthropic_messages_preserves_upstream_error_status_and_body(
     error_type: str,
     error_class: type[anthropic.APIStatusError],
     litellm_error: str,
+    litellm_error_type: str | None,
 ) -> None:
     message: Final = f"synthetic {error_type}"
     expected_error: Final = {"type": "error", "error": {"type": error_type, "message": message}}
@@ -416,6 +421,7 @@ def test_anthropic_messages_preserves_upstream_error_status_and_body(
                     f"litellm.{litellm_error}: AnthropicException - {json.dumps(expected_error)}\n\n"
                     f"LiteLLM: model group '{model}' failed with the error above. No fallback was attempted."
                 ),
+                **({"litellm_error_type": litellm_error_type} if litellm_error_type else {}),
             },
         }, caught.value.response.text
         assert len(wire.drain()) == 1
@@ -470,6 +476,7 @@ def test_anthropic_messages_preserves_upstream_rate_limit_retry_after(gateway: G
                     f"litellm.RateLimitError: AnthropicException - {json.dumps(upstream_error)}\n\n"
                     f"LiteLLM: model group '{model}' failed with the error above. No fallback was attempted."
                 ),
+                "litellm_error_type": "throttling_error",
             },
         }, caught.value.response.text
         assert len(wire.drain()) == 1

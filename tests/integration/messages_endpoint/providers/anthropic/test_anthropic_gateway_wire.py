@@ -276,6 +276,7 @@ def test_enabled_gateway_count_tokens_alias_matches_native_count_tokens_route(en
                     f"The requested model '{restricted_model}' is not available for this API key, or the model name "
                     "is invalid. Check the models available to you and try again."
                 ),
+                "litellm_error_type": "key_model_access_denied",
             },
         }, restricted_response.text
         assert wire.drain() == ()
@@ -292,6 +293,7 @@ def test_enabled_gateway_refuses_model_outside_virtual_key(enabled_gateway: Gate
                 f"The requested model '{result[4]}' is not available for this API key, or the model name is invalid. "
                 "Check the models available to you and try again."
             ),
+            "litellm_error_type": "key_model_access_denied",
         },
     }
     assert result[0] == result[2] == 403, (result[1], result[3])

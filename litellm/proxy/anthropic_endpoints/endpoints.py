@@ -56,11 +56,6 @@ router: Final = APIRouter()
 
 
 def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
-    """The Anthropic error envelope for a failure raised inside a Messages handler.
-
-    Delegates to the shared renderer so a failure raised here and one raised by the auth
-    layer before the handler (see the central ProxyException handler) answer identically.
-    """
     return anthropic_error_json_response(exc, request)
 
 

@@ -1525,6 +1525,7 @@ async def test_count_tokens_without_a_count_api_rejects_a_non_string_tool_result
     assert json.loads(bytes(response.body))["error"] == {
         "type": "invalid_request_error",
         "message": "tool_result toolu_log content.1.text: Input should be a valid string",
+        "litellm_error_type": "token_counting_error",
     }
 
 

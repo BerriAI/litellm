@@ -82,11 +82,16 @@ const proxyEnvelope = (payload: unknown): Record<string, unknown> | undefined =>
 };
 
 const proxyTypeOf = (payload: unknown): string | undefined => {
-  const type = proxyEnvelope(payload)?.type;
+  const envelope = proxyEnvelope(payload);
+  const type = envelope?.litellm_error_type ?? envelope?.type;
   return typeof type === "string" ? type : undefined;
 };
 
 const EMBEDDED_JSON = /\{[\s\S]*\}/;
+const STATUS_BEFORE_JSON = /(\d{3})\s*$/;
+
+const statusBefore = (text: string, embedded: string): number | undefined =>
+  toStatus(text.slice(0, text.indexOf(embedded)).match(STATUS_BEFORE_JSON)?.[1]);
 
 const describeText = (text: string): ErrorFacts => {
   const embedded = text.match(EMBEDDED_JSON)?.[0];
@@ -95,7 +100,7 @@ const describeText = (text: string): ErrorFacts => {
     return { status: undefined, proxyType: undefined, text: unwrapProxyErrorMessage(text) };
   }
   return {
-    status: toStatus(proxyEnvelope(parsed)?.code),
+    status: toStatus(proxyEnvelope(parsed)?.code) ?? statusBefore(text, embedded),
     proxyType: proxyTypeOf(parsed),
     text: text.replace(embedded, unwrapProxyErrorMessage(deriveErrorMessage(parsed))).trim(),
   };

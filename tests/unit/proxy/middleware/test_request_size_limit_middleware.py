@@ -133,3 +133,22 @@ async def test_request_size_limit_middleware_rejects_streamed_body_without_conte
         "more_body": False,
     }
     assert received_body_bytes == 1024 * 1024
+
+
+def test_an_oversized_messages_request_gets_the_anthropic_request_too_large_error():
+    async def app(scope, receive, send):
+        await JSONResponse({"ok": True})(scope, receive, send)
+
+    client = TestClient(
+        RequestSizeLimitMiddleware(app, get_max_request_size_mb=lambda: 1, is_request_size_limit_enabled=lambda: True)
+    )
+
+    response = client.post(
+        "/v1/messages", content=b"x" * (1024 * 1024 + 1), headers={"content-type": "application/json"}
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {
+        "type": "error",
+        "error": {"type": "request_too_large", "message": "Request size is too large. Max size is 1 MB"},
+    }

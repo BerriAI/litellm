@@ -665,3 +665,33 @@ async def test_non_http_scopes_reach_the_app_untouched(scope: Scope):
     [(app_scope, app_receive)] = seen
     assert app_scope is scope
     assert app_receive is receive
+
+
+@pytest.mark.parametrize(
+    ("body", "max_mb", "status_code", "anthropic_type", "message"),
+    [
+        pytest.param(
+            zstd.compress(_low_entropy_text(2 * int(CAP_MB * MIB))),
+            CAP_MB,
+            413,
+            "request_too_large",
+            f"Request body is larger than {CAP_MB:g} MB when decoded",
+            id="decoded-past-the-cap",
+        ),
+        pytest.param(b"not zstd at all", 50.0, 400, "invalid_request_error", None, id="undecodable"),
+    ],
+)
+def test_a_messages_body_the_proxy_cannot_take_gets_the_anthropic_envelope(
+    body: bytes, max_mb: float, status_code: int, anthropic_type: str, message: str | None
+):
+    response: Final = _post(
+        _client(max_decompressed_body_size_mb=max_mb),
+        ZSTD_FRAME_MAGIC + body if message is None else body,
+        ("zstd",),
+        path="/claude_code_gateway/v1/messages",
+    )
+
+    assert response.status_code == status_code
+    assert response.json()["type"] == "error"
+    assert response.json()["error"]["type"] == anthropic_type
+    assert message is None or response.json()["error"]["message"] == message

@@ -6,15 +6,18 @@ from typing import Final
 
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
+from starlette.types import Scope
 
 from litellm.anthropic_interface.exceptions import (
     AnthropicErrorDetail,
     AnthropicErrorResponse,
+    AnthropicErrorType,
     AnthropicExceptionMapping,
 )
 from litellm.proxy._types import ProxyException
+from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy.common_utils.error_body_call_id import error_body_call_id
-from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
+from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER, openai_error_type_for_status
 
 ANTHROPIC_MESSAGES_ROUTES: Final[frozenset[str]] = frozenset(
     {
@@ -25,10 +28,27 @@ ANTHROPIC_MESSAGES_ROUTES: Final[frozenset[str]] = frozenset(
     }
 )
 ANTHROPIC_PASS_THROUGH_PREFIX: Final = "/anthropic/"
+ANTHROPIC_SHAPED_MODEL_LIST_ROUTES: Final[frozenset[str]] = frozenset(
+    {"/v1/models", "/models", "/claude_code_gateway/v1/models"}
+)
 
 
-def uses_anthropic_error_envelope(route: str) -> bool:
-    return route in ANTHROPIC_MESSAGES_ROUTES or route.startswith(ANTHROPIC_PASS_THROUGH_PREFIX)
+def uses_anthropic_error_envelope(request: Request) -> bool:
+    route: Final = get_request_route(request)
+    if route in ANTHROPIC_MESSAGES_ROUTES or route.startswith(ANTHROPIC_PASS_THROUGH_PREFIX):
+        return True
+    return route in ANTHROPIC_SHAPED_MODEL_LIST_ROUTES and "anthropic-version" in request.headers
+
+
+def route_error_content(
+    scope: Scope, anthropic_type: AnthropicErrorType, message: str, openai_content: Mapping[str, object]
+) -> Mapping[str, object]:
+    request: Final = Request(scope)
+    if not uses_anthropic_error_envelope(request):
+        return openai_content
+    content: Final[AnthropicErrorResponse] = {"type": "error", "error": {"type": anthropic_type, "message": message}}
+    request_id: Final = request.headers.get("x-request-id")
+    return content if request_id is None else {**content, "request_id": request_id}
 
 
 def anthropic_error_status_code(exc: ProxyException) -> int:
@@ -45,15 +65,22 @@ def _with_provider_specific_fields(exc: ProxyException, detail: AnthropicErrorDe
     return with_fields
 
 
-def _anthropic_error_detail(
-    exc: ProxyException, detail: AnthropicErrorDetail, call_id: str | None
+def _with_litellm_error_type(
+    exc: ProxyException, status_code: int, detail: AnthropicErrorDetail
 ) -> AnthropicErrorDetail:
+    if not exc.type or exc.type in (detail["type"], openai_error_type_for_status(status_code)):
+        return detail
+    with_type: Final[AnthropicErrorDetail] = {**detail, "litellm_error_type": exc.type}
+    return with_type
+
+
+def _anthropic_error_detail(
+    exc: ProxyException, status_code: int, detail: AnthropicErrorDetail, call_id: str | None
+) -> AnthropicErrorDetail:
+    with_proxy_fields: Final = _with_litellm_error_type(exc, status_code, _with_provider_specific_fields(exc, detail))
     if call_id is None:
-        return _with_provider_specific_fields(exc, detail)
-    with_call_id: Final[AnthropicErrorDetail] = {
-        **_with_provider_specific_fields(exc, detail),
-        "litellm_call_id": call_id,
-    }
+        return with_proxy_fields
+    with_call_id: Final[AnthropicErrorDetail] = {**with_proxy_fields, "litellm_call_id": call_id}
     return with_call_id
 
 
@@ -71,7 +98,7 @@ def anthropic_error_content(
     body_call_id: Final = error_body_call_id(general_settings, exc.headers.get(LITELLM_CALL_ID_HEADER))
     content: Final[AnthropicErrorResponse] = {
         **envelope,
-        "error": _anthropic_error_detail(exc, envelope["error"], body_call_id),
+        "error": _anthropic_error_detail(exc, status_code, envelope["error"], body_call_id),
     }
     return content
 

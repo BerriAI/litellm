@@ -36,9 +36,9 @@ from litellm.proxy.proxy_server import (
 from .conftest import normalize
 
 
-def _make_request(parent_otel_span=None, path="/chat/completions"):
+def _make_request(parent_otel_span=None, path="/chat/completions", headers=()):
     return Request({
-        "type": "http", "method": "POST", "path": path, "headers": [],
+        "type": "http", "method": "POST", "path": path, "headers": list(headers),
         "state": {"parent_otel_span": parent_otel_span},
     })
 
@@ -209,6 +209,7 @@ async def test_openai_exception_handler_answers_the_anthropic_envelope_on_the_me
         "error": {
             "type": "permission_error",
             "message": "Team not allowed to access model. Tried to access gpt-5.6",
+            "litellm_error_type": "team_model_access_denied",
         },
     }
 
@@ -247,6 +248,7 @@ async def test_openai_exception_handler_keeps_the_status_of_a_budget_failure_on_
     assert body["type"] == "error"
     assert body["error"]["type"] == "invalid_request_error"
     assert body["error"]["message"] == "Budget exceeded"
+    assert body["error"]["litellm_error_type"] == "budget_exceeded"
     assert "param" not in body["error"] and "code" not in body["error"]
 
 
@@ -266,6 +268,23 @@ async def test_openai_exception_handler_keeps_the_openai_envelope_off_the_messag
             "code": "403",
         }
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/v1/models", "/models", "/claude_code_gateway/v1/models"))
+async def test_a_model_list_request_answers_errors_in_the_shape_its_listing_takes(path: str) -> None:
+    anthropic: Final = await openai_exception_handler(
+        request=_make_request(path=path, headers=[(b"anthropic-version", b"2023-06-01")]),
+        exc=_model_access_denied_exception(),
+    )
+    openai: Final = await openai_exception_handler(
+        request=_make_request(path=path), exc=_model_access_denied_exception()
+    )
+
+    assert json.loads(anthropic.body)["error"]["type"] == "permission_error"
+    assert json.loads(anthropic.body)["type"] == "error"
+    assert json.loads(openai.body)["error"]["type"] == "team_model_access_denied"
+    assert "type" not in json.loads(openai.body)
 
 
 @pytest.mark.asyncio
@@ -302,6 +321,7 @@ async def test_openai_exception_handler_messages_route_copies_the_call_id_when_o
         "type": "permission_error",
         "message": "denied",
         "provider_specific_fields": {"guardrail": "keyword-block"},
+        "litellm_error_type": "team_model_access_denied",
         "litellm_call_id": "call-8302",
     }
 
@@ -738,7 +758,10 @@ def test_a_get_on_messages_answers_the_anthropic_envelope_and_keeps_the_allow_he
 
     assert response.status_code == 405
     assert response.headers["allow"] == "POST"
-    assert response.json() == {"type": "error", "error": {"type": "api_error", "message": "Method Not Allowed"}}
+    assert response.json() == {
+        "type": "error",
+        "error": {"type": "invalid_request_error", "message": "Method Not Allowed"},
+    }
 
 
 @pytest.mark.asyncio
