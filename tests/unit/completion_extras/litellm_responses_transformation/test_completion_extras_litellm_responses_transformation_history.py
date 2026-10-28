@@ -1,0 +1,410 @@
+import json
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from typing import Final
+
+import httpx
+import pytest
+import respx
+
+import litellm
+from litellm.exceptions import MidStreamFallbackError
+
+OPENAI_RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
+AZURE_API_BASE: Final = "https://litellm-history-test.openai.azure.com"
+MODEL: Final = "gpt-5.6"
+TOOLS: Final = (
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+        },
+    },
+)
+USER: Final = {"role": "user", "content": "Weather in Paris? Narrate as you go."}
+
+COMMENTARY: Final = {
+    "type": "message",
+    "id": "msg_commentary",
+    "status": "completed",
+    "role": "assistant",
+    "phase": "commentary",
+    "content": [{"type": "output_text", "text": "Checking the weather.", "annotations": []}],
+}
+FIRST_REASONING: Final = {
+    "type": "reasoning",
+    "id": "rs_first",
+    "summary": [{"type": "summary_text", "text": "Paris is likely wet."}],
+    "encrypted_content": "enc_first",
+}
+SECOND_REASONING: Final = {"type": "reasoning", "id": "rs_second", "summary": [], "encrypted_content": "enc_second"}
+WEATHER_CALL: Final = {
+    "type": "function_call",
+    "id": "fc_weather",
+    "call_id": "call_weather_paris",
+    "name": "get_weather",
+    "arguments": '{"city":"Paris"}',
+    "status": "completed",
+}
+FINAL_ANSWER: Final = {
+    "type": "message",
+    "id": "msg_final",
+    "status": "completed",
+    "role": "assistant",
+    "phase": "final_answer",
+    "content": [
+        {"type": "output_text", "text": "Paris: ", "annotations": []},
+        {"type": "output_text", "text": "light rain.", "annotations": []},
+    ],
+}
+OUTPUT: Final = (COMMENTARY, FIRST_REASONING, SECOND_REASONING, WEATHER_CALL, FINAL_ANSWER)
+REPLAYED: Final = (
+    {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Checking the weather."}], "phase": "commentary"},
+    {
+        "type": "reasoning",
+        "id": "rs_first",
+        "summary": [{"type": "summary_text", "text": "Paris is likely wet."}],
+        "encrypted_content": "enc_first",
+    },
+    {"type": "reasoning", "id": "rs_second", "summary": [], "encrypted_content": "enc_second"},
+    {"type": "function_call", "call_id": "call_weather_paris", "name": "get_weather", "arguments": '{"city":"Paris"}'},
+    {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Paris: "}, {"type": "output_text", "text": "light rain."}],
+        "phase": "final_answer",
+    },
+)
+TOOL_RESULT: Final = {"role": "tool", "tool_call_id": "call_weather_paris", "content": "light rain"}
+FOLLOW_UP: Final = {
+    "type": "message",
+    "id": "msg_follow_up",
+    "status": "completed",
+    "role": "assistant",
+    "phase": "final_answer",
+    "content": [{"type": "output_text", "text": "Done.", "annotations": []}],
+}
+
+
+def _response(output: Sequence[Mapping[str, object]], status: str = "completed") -> dict[str, object]:
+    return {
+        "id": "resp_history",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": status,
+        "model": MODEL,
+        "output": list(output),
+        "incomplete_details": {"reason": "max_output_tokens"} if status == "incomplete" else None,
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+    }
+
+
+def _added_item(item: Mapping[str, object]) -> Mapping[str, object]:
+    match item.get("type"):
+        case "message":
+            return {**item, "status": "in_progress", "content": []}
+        case "function_call":
+            return {**item, "status": "in_progress", "arguments": ""}
+        case "custom_tool_call":
+            return {**item, "status": "in_progress", "input": ""}
+        case _:
+            return item
+
+
+def _delta_events(index: int, item: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    match item.get("type"):
+        case "message":
+            parts: Final = item["content"]
+            assert isinstance(parts, list)
+            return tuple(
+                {
+                    "type": "response.output_text.delta",
+                    "item_id": item["id"],
+                    "output_index": index,
+                    "content_index": part_index,
+                    "delta": part["text"],
+                }
+                for part_index, part in enumerate(parts)
+            )
+        case "function_call":
+            return (
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": item["id"],
+                    "output_index": index,
+                    "delta": item["arguments"],
+                },
+            )
+        case "custom_tool_call":
+            return (
+                {
+                    "type": "response.custom_tool_call_input.delta",
+                    "item_id": item["id"],
+                    "output_index": index,
+                    "delta": item["input"],
+                },
+            )
+        case _:
+            return ()
+
+
+def _item_events(index: int, item: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return (
+        {"type": "response.output_item.added", "output_index": index, "item": _added_item(item)},
+        *_delta_events(index, item),
+        {"type": "response.output_item.done", "output_index": index, "item": item},
+    )
+
+
+def _sse(output: Sequence[Mapping[str, object]], terminal_event: str | None = "response.completed") -> httpx.Response:
+    item_events: Final = tuple(event for index, item in enumerate(output) for event in _item_events(index, item))
+    terminal: Final = (
+        ()
+        if terminal_event is None
+        else (
+            {
+                "type": terminal_event,
+                "response": _response(output, "completed" if terminal_event == "response.completed" else "incomplete"),
+            },
+        )
+    )
+    events: Final = (
+        {"type": "response.created", "response": {**_response((), "in_progress"), "usage": None}},
+        *item_events,
+        *terminal,
+    )
+    body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+    return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+
+
+def _assistant_turn(
+    output: Sequence[Mapping[str, object]],
+    *,
+    stream: bool,
+    model: str = f"openai/responses/{MODEL}",
+    terminal_event: str | None = "response.completed",
+    status: str = "completed",
+) -> dict[str, object]:
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith=OPENAI_RESPONSES_URL if model.startswith("openai/") else AZURE_API_BASE).mock(
+            return_value=_sse(output, terminal_event) if stream else httpx.Response(200, json=_response(output, status))
+        )
+        response: Final = litellm.completion(
+            model=model,
+            messages=[USER],
+            tools=list(TOOLS),
+            api_key="sk-test",
+            api_base=None if model.startswith("openai/") else AZURE_API_BASE,
+            api_version=None if model.startswith("openai/") else "2025-04-01-preview",
+            stream=stream,
+        )
+        message: Final = (
+            litellm.stream_chunk_builder(list(response), messages=[USER]) if stream else response
+        ).choices[0].message
+    return json.loads(json.dumps(message.model_dump()))
+
+
+def _next_turn_input(
+    assistant: Mapping[str, object], model: str = f"openai/responses/{MODEL}"
+) -> list[Mapping[str, object]]:
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(
+            url__startswith=OPENAI_RESPONSES_URL if model.startswith("openai/") else AZURE_API_BASE
+        ).mock(return_value=httpx.Response(200, json=_response((FOLLOW_UP,))))
+        litellm.completion(
+            model=model,
+            messages=[USER, dict(assistant), TOOL_RESULT],
+            tools=list(TOOLS),
+            api_key="sk-test",
+            api_base=None if model.startswith("openai/") else AZURE_API_BASE,
+            api_version=None if model.startswith("openai/") else "2025-04-01-preview",
+        )
+    return json.loads(upstream.calls[0].request.content)["input"]
+
+
+def _replayed_fields(message: Mapping[str, object]) -> Mapping[str, object]:
+    fields: Final = message.get("provider_specific_fields")
+    return fields if isinstance(fields, Mapping) else {}
+
+
+def _types(items: Sequence[Mapping[str, object]]) -> list[object]:
+    return [item.get("type") for item in items]
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+def test_next_turn_replays_every_item_phase_and_boundary_once_in_order(stream: bool) -> None:
+    assistant: Final = _assistant_turn(OUTPUT, stream=stream)
+
+    sent: Final = _next_turn_input(assistant)
+
+    assert assistant["content"] == "Checking the weather.Paris: light rain."
+    assert _replayed_fields(assistant)["phase"] == "final_answer"
+    assert sent[1:-1] == list(REPLAYED)
+    assert sent[-1]["type"] == "function_call_output"
+    assert sent[-1]["call_id"] == "call_weather_paris"
+
+
+def _edit_content(message: Mapping[str, object]) -> Mapping[str, object]:
+    return {**message, "content": "Checking the weather. Paris: heavy rain."}
+
+
+def _edit_phase(message: Mapping[str, object]) -> Mapping[str, object]:
+    return {**message, "provider_specific_fields": {**_replayed_fields(message), "phase": "commentary"}}
+
+
+def _edit_arguments(message: Mapping[str, object]) -> Mapping[str, object]:
+    tool_calls: Final = message["tool_calls"]
+    assert isinstance(tool_calls, list)
+    edited_call: Final = {**tool_calls[0], "function": {**tool_calls[0]["function"], "arguments": '{"city":"Lyon"}'}}
+    return {**message, "tool_calls": [edited_call]}
+
+
+@pytest.mark.parametrize(
+    ("edit", "expected_text", "expected_phase", "expected_arguments"),
+    [
+        (_edit_content, "Checking the weather. Paris: heavy rain.", "final_answer", '{"city":"Paris"}'),
+        (_edit_phase, "Checking the weather.Paris: light rain.", "commentary", '{"city":"Paris"}'),
+        (_edit_arguments, "Checking the weather.Paris: light rain.", "final_answer", '{"city":"Lyon"}'),
+    ],
+    ids=["content", "phase", "arguments"],
+)
+def test_an_edited_chat_field_wins_over_the_recorded_items(
+    edit: Callable[[Mapping[str, object]], Mapping[str, object]],
+    expected_text: str,
+    expected_phase: str,
+    expected_arguments: str,
+) -> None:
+    sent: Final = _next_turn_input(edit(_assistant_turn(OUTPUT, stream=False)))
+
+    assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
+    assert sent[3]["content"] == [{"type": "output_text", "text": expected_text}]
+    assert sent[3]["phase"] == expected_phase
+    assert sent[4]["arguments"] == expected_arguments
+
+
+def _without_replay(fields: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in fields.items() if key != "openai_responses_replay"}
+
+
+def _with_replay(fields: Mapping[str, object], replay: object) -> Mapping[str, object]:
+    return {**fields, "openai_responses_replay": replay}
+
+
+def _replay_of(fields: Mapping[str, object]) -> Mapping[str, object]:
+    replay: Final = fields["openai_responses_replay"]
+    assert isinstance(replay, Mapping)
+    return replay
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        _without_replay,
+        lambda fields: _with_replay(fields, {**_replay_of(fields), "checksum": "0" * 64}),
+        lambda fields: _with_replay(fields, {**_replay_of(fields), "version": 2}),
+        lambda fields: _with_replay(fields, {**_replay_of(fields), "items": [{"type": "message", "parts": [-1]}]}),
+        lambda fields: _with_replay(fields, "not a replay"),
+    ],
+    ids=["missing", "checksum", "version", "items", "not-a-mapping"],
+)
+def test_missing_or_corrupt_replay_metadata_falls_back_to_the_chat_fields(
+    corrupt: Callable[[Mapping[str, object]], Mapping[str, object]],
+) -> None:
+    assistant: Final = _assistant_turn(OUTPUT, stream=False)
+
+    sent: Final = _next_turn_input({**assistant, "provider_specific_fields": corrupt(_replayed_fields(assistant))})
+
+    assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
+    assert sent[3]["content"] == [{"type": "output_text", "text": "Checking the weather.Paris: light rain."}]
+    assert sent[3]["phase"] == "final_answer"
+
+
+WEB_SEARCH: Final = {"type": "web_search_call", "id": "ws_1", "status": "completed", "action": {"type": "search"}}
+
+
+@pytest.mark.parametrize(
+    ("output", "stream", "terminal_event", "status"),
+    [
+        (OUTPUT, False, "response.completed", "incomplete"),
+        (OUTPUT, True, "response.incomplete", "incomplete"),
+        ((WEB_SEARCH, *OUTPUT), False, "response.completed", "completed"),
+        ((WEB_SEARCH, *OUTPUT), True, "response.completed", "completed"),
+    ],
+    ids=["incomplete-json", "incomplete-stream", "unsupported-item-json", "unsupported-item-stream"],
+)
+def test_an_incomplete_or_unsupported_output_records_no_replay(
+    output: Sequence[Mapping[str, object]], stream: bool, terminal_event: str, status: str
+) -> None:
+    assistant: Final = _assistant_turn(output, stream=stream, terminal_event=terminal_event, status=status)
+
+    sent: Final = _next_turn_input(assistant)
+
+    assert "openai_responses_replay" not in _replayed_fields(assistant)
+    assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
+
+
+def _chunks_before_error(stream: Iterator[object]) -> Iterator[object]:
+    try:
+        yield from stream
+    except MidStreamFallbackError:
+        return
+
+
+def test_an_interrupted_stream_records_no_replay() -> None:
+    with respx.mock(assert_all_called=True) as router:
+        router.post(OPENAI_RESPONSES_URL).mock(return_value=_sse(OUTPUT, terminal_event=None))
+        stream: Final = litellm.completion(
+            model=f"openai/responses/{MODEL}", messages=[USER], tools=list(TOOLS), api_key="sk-test", stream=True
+        )
+        received: Final = tuple(_chunks_before_error(iter(stream)))
+    assistant: Final = litellm.stream_chunk_builder(list(received), messages=[USER]).choices[0].message.model_dump()
+
+    assert assistant["content"] == "Checking the weather.Paris: light rain."
+    assert _replayed_fields(assistant) == {}
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+def test_a_non_openai_route_records_no_phase_or_replay(stream: bool) -> None:
+    assistant: Final = _assistant_turn(OUTPUT, stream=stream, model=f"azure/responses/{MODEL}")
+
+    assert _replayed_fields(assistant) == {}
+
+
+def test_a_non_openai_route_ignores_a_recorded_replay() -> None:
+    sent: Final = _next_turn_input(_assistant_turn(OUTPUT, stream=False), model=f"azure/responses/{MODEL}")
+
+    assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
+    assert all("phase" not in item for item in sent)
+
+
+PATCH_CALL: Final = {
+    "type": "custom_tool_call",
+    "id": "ctc_patch",
+    "call_id": "call_patch_readme",
+    "name": "apply_patch",
+    "input": "*** Begin Patch\n*** End Patch",
+    "status": "completed",
+}
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+def test_a_custom_tool_call_replays_with_its_custom_output(stream: bool) -> None:
+    assistant: Final = _assistant_turn((COMMENTARY, PATCH_CALL), stream=stream)
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(OPENAI_RESPONSES_URL).mock(
+            return_value=httpx.Response(200, json=_response((FOLLOW_UP,)))
+        )
+        litellm.completion(
+            model=f"openai/responses/{MODEL}",
+            messages=[USER, assistant, {"role": "tool", "tool_call_id": "call_patch_readme", "content": "applied"}],
+            tools=[{"type": "custom", "custom": {"name": "apply_patch"}}],
+            api_key="sk-test",
+        )
+    sent: Final = json.loads(upstream.calls[0].request.content)["input"]
+
+    assert sent[1:] == [
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Checking the weather."}], "phase": "commentary"},
+        {"type": "custom_tool_call", "call_id": "call_patch_readme", "name": "apply_patch", "input": PATCH_CALL["input"]},
+        {"type": "custom_tool_call_output", "call_id": "call_patch_readme", "output": "applied"},
+    ]

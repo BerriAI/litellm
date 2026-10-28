@@ -670,6 +670,41 @@ def test_streamed_tool_search_turn_replays_with_its_reasoning_item():
     assert request["input"][5]["namespace"] == "get_weather"
 
 
+@pytest.mark.parametrize(
+    "answer_item",
+    [
+        ResponseFunctionToolCall(
+            type="function_call", id="fc_1", call_id="call_weather", name="get_weather", arguments="{}"
+        ),
+        ResponseOutputMessage(
+            type="message",
+            id="msg_1",
+            role="assistant",
+            status="completed",
+            content=[ResponseOutputText(type="output_text", text="Rain.", annotations=[])],
+        ),
+    ],
+    ids=["tool-call", "message"],
+)
+def test_every_reasoning_item_before_an_answer_reaches_the_chat_message(answer_item: object) -> None:
+    reasoning: Final = tuple(
+        ResponseReasoningItem(
+            type="reasoning",
+            id=f"rs_{name}",
+            summary=[Summary(type="summary_text", text=f"{name.title()}.")],
+            encrypted_content=f"enc_{name}",
+        )
+        for name in ("first", "second")
+    )
+
+    message: Final = (
+        LiteLLMResponsesTransformationHandler._convert_response_output_to_choices([*reasoning, answer_item])[0].message
+    )
+
+    assert [item["id"] for item in message.reasoning_items] == ["rs_first", "rs_second"]
+    assert message.reasoning_content == "First. Second."
+
+
 def test_transform_response_with_reasoning_and_output():
     """Test transform_response handles ResponsesAPIResponse with reasoning items and output messages."""
     from unittest.mock import Mock
