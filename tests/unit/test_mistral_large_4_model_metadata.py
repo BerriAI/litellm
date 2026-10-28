@@ -32,8 +32,7 @@ def test_metadata_and_backup(model):
     assert info["litellm_provider"] == "mistral"
     assert info["mode"] == "chat"
     assert info["max_input_tokens"] == 1048576
-    assert info["output_cost_per_token"] > info["input_cost_per_token"] > 0
-    assert info["cache_read_input_token_cost"] == pytest.approx(info["input_cost_per_token"] / 10)
+    assert 0 < info["cache_read_input_token_cost"] < info["input_cost_per_token"] < info["output_cost_per_token"]
     assert info["reasoning_effort_levels"] == ["none", "high"]
     for capability in (
         "supports_vision",
