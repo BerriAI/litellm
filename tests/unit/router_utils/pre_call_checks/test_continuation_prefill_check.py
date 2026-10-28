@@ -10,6 +10,7 @@ from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     ResponsesContinuation,
     ResponsesContinuationSeam,
     constrains_continuation,
+    constrains_responses_continuation,
     continuation_output_ceilings,
     deployment_supports_prefill,
     deployment_takes_responses_prefill,
@@ -344,6 +345,37 @@ def test_continuation_output_ceilings_decline_once_a_ceiling_has_no_tokens_left(
 )
 def test_constrains_continuation_reads_the_responses_text_format(sent, expected):
     assert constrains_continuation(sent) is expected
+
+
+@pytest.mark.parametrize(
+    "sent,expected",
+    [
+        ({"tool_choice": {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "f"}]}}, False),
+        ({"tool_choice": {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "f"}]}}, True),
+        ({"tool_choice": {"type": "function", "name": "lookup"}}, True),
+        ({"tool_choice": {"type": "web_search_preview"}}, True),
+        ({"tool_choice": "required"}, True),
+        ({"tool_choice": "auto"}, False),
+        (
+            {
+                "tool_choice": {"type": "allowed_tools", "mode": "auto", "tools": []},
+                "text": {"format": {"type": "json_object"}},
+            },
+            True,
+        ),
+    ],
+    ids=[
+        "allowed_tools_auto",
+        "allowed_tools_required",
+        "forced_function",
+        "hosted_tool",
+        "required_tool",
+        "auto_tool",
+        "allowed_tools_auto_with_json",
+    ],
+)
+def test_constrains_responses_continuation_lets_allowed_tools_in_auto_mode_answer_in_text(sent, expected):
+    assert constrains_responses_continuation(sent) is expected
 
 
 @pytest.mark.parametrize(

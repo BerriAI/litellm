@@ -2,7 +2,7 @@
 the output unconstrained, and shapes a Responses API continuation for the deployment that serves it."""
 
 import json
-from collections.abc import AsyncIterable, AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate
 from os.path import commonprefix
@@ -57,21 +57,37 @@ def deployment_supports_prefill(deployment: object) -> bool:
     return model is not None and supports_assistant_prefill(model=model)
 
 
-def constrains_continuation(params: Mapping[str, object]) -> bool:
+def _forces_tool_call(tool_choice: object) -> bool:
+    return tool_choice == "required" or isinstance(tool_choice, Mapping)
+
+
+def _forces_responses_tool_call(tool_choice: object) -> bool:
+    choice: Final = _str_keyed(tool_choice)
+    leaves_text_open: Final = choice.get("type") == "allowed_tools" and choice.get("mode") == "auto"
+    return _forces_tool_call(tool_choice) and not leaves_text_open
+
+
+def _constrains(params: Mapping[str, object], forces_tool_call: Callable[[object], bool]) -> bool:
     sent: Final = {**params, **_str_keyed(params.get("extra_body"))}
     choice_count: Final = sent.get("n")
     response_format: Final = sent.get("response_format")
     text_format: Final = _str_keyed(sent.get("text")).get("format")
-    tool_choice: Final = sent.get("tool_choice")
     return (
         (isinstance(choice_count, int) and choice_count > 1)
         or (response_format is not None and response_format != _UNCONSTRAINED_RESPONSE_FORMAT)
         or (text_format is not None and text_format != _UNCONSTRAINED_RESPONSE_FORMAT)
         or sent.get("text_format") is not None
-        or tool_choice == "required"
-        or isinstance(tool_choice, Mapping)
+        or forces_tool_call(sent.get("tool_choice"))
         or sent.get("merge_reasoning_content_in_choices") is True
     )
+
+
+def constrains_continuation(params: Mapping[str, object]) -> bool:
+    return _constrains(params, _forces_tool_call)
+
+
+def constrains_responses_continuation(params: Mapping[str, object]) -> bool:
+    return _constrains(params, _forces_responses_tool_call)
 
 
 def deployment_can_continue(deployment: object) -> bool:

@@ -310,6 +310,7 @@ from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     ResponsesContinuation,
     ResponsesContinuationSeam,
     constrains_continuation,
+    constrains_responses_continuation,
     continuation_deployments,
     continuation_output_ceilings,
     continued_text,
@@ -4183,7 +4184,7 @@ class Router:
         cut_deployment: Final = (
             self.get_deployment(model_id=cut_deployment_id) if isinstance(cut_deployment_id, str) else None
         )
-        if constrains_continuation(self._params_sent_to_deployment(request_kwargs, cut_deployment)):
+        if constrains_responses_continuation(self._params_sent_to_deployment(request_kwargs, cut_deployment)):
             Router._raise_original_mid_stream_error(e)
         earlier: Final = request_kwargs.get(RESPONSES_CONTINUATION_KWARG)
         if isinstance(earlier, ResponsesContinuation):
