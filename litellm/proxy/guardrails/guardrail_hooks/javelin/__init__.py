@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -16,7 +16,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             "JavelinGuardrailException - Please pass the Javelin guard name via 'litellm_params::guard_name'"
         )
 
-    _javelin_callback = JavelinGuardrail(
+    _javelin_callback: Final = JavelinGuardrail(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         guardrail_name=guardrail.get("guardrail_name", ""),
@@ -27,17 +27,18 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         config=litellm_params.config,
         metadata=litellm_params.metadata,
         application=litellm_params.application,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_javelin_callback)
 
     return _javelin_callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.JAVELIN.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.JAVELIN.value: JavelinGuardrail,
 }

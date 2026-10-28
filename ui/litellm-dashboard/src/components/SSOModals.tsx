@@ -1,106 +1,48 @@
 import React, { useEffect, useState } from "react";
-import { Modal, Form, Input, Button as Button2, Select, Checkbox } from "antd";
-import { Text, TextInput } from "@tremor/react";
+import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
 import { getSSOSettings, updateSSOSettings } from "./networking";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "./shared/errorUtils";
+import { Button } from "@/components/ui/button";
+import { FieldGroup } from "@/components/ui/field";
+import {
+  GroupClaimField,
+  MappingToggleField,
+  ProxyAdminEmailField,
+  ProxyBaseUrlField,
+  RoleMappingTeamFields,
+  SSOProviderSelectField,
+  emptySSOSettingsFormValues,
+  renderProviderFields,
+  submitMountedSSOValues,
+  type SSOSettingsFormValues,
+} from "./Settings/AdminSettings/SSOSettings/Modals/BaseSSOSettingsForm";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface SSOModalsProps {
   isAddSSOModalVisible: boolean;
   isInstructionsModalVisible: boolean;
   handleAddSSOOk: () => void;
   handleAddSSOCancel: () => void;
-  handleShowInstructions: (formValues: Record<string, any>) => void;
+  handleShowInstructions: (formValues: SSOSettingsFormValues) => void;
   handleInstructionsOk: () => void;
   handleInstructionsCancel: () => void;
-  form: any; // Replace with proper Form type if available
+  form: UseFormReturn<SSOSettingsFormValues>;
   accessToken: string | null;
   ssoConfigured?: boolean; // Add optional prop to indicate if SSO is configured
 }
 
-const ssoProviderLogoMap: Record<string, string> = {
-  google: "https://artificialanalysis.ai/img/logos/google_small.svg",
-  microsoft: "https://upload.wikimedia.org/wikipedia/commons/a/a8/Microsoft_Azure_Logo.svg",
-  okta: "https://www.okta.com/sites/default/files/Okta_Logo_BrightBlue_Medium.png",
-  generic: "",
+const detectSSOProvider = (values: Record<string, unknown>): string | null => {
+  if (values.google_client_id) return "google";
+  if (values.microsoft_client_id) return "microsoft";
+  if (values.generic_client_id) {
+    const authEndpoint =
+      typeof values.generic_authorization_endpoint === "string" ? values.generic_authorization_endpoint : "";
+    return authEndpoint.includes("okta") || authEndpoint.includes("auth0") ? "okta" : "generic";
+  }
+  if (values.saml_idp_metadata_url || values.saml_idp_metadata_xml) return "saml";
+  return null;
 };
-
-// Define the SSO provider configuration type
-interface SSOProviderConfig {
-  envVarMap: Record<string, string>;
-  fields: Array<{
-    label: string;
-    name: string;
-    placeholder?: string;
-  }>;
-}
-
-// Define configurations for each SSO provider
-const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
-  google: {
-    envVarMap: {
-      google_client_id: "GOOGLE_CLIENT_ID",
-      google_client_secret: "GOOGLE_CLIENT_SECRET",
-    },
-    fields: [
-      { label: "Google Client ID", name: "google_client_id" },
-      { label: "Google Client Secret", name: "google_client_secret" },
-    ],
-  },
-  microsoft: {
-    envVarMap: {
-      microsoft_client_id: "MICROSOFT_CLIENT_ID",
-      microsoft_client_secret: "MICROSOFT_CLIENT_SECRET",
-      microsoft_tenant: "MICROSOFT_TENANT",
-    },
-    fields: [
-      { label: "Microsoft Client ID", name: "microsoft_client_id" },
-      { label: "Microsoft Client Secret", name: "microsoft_client_secret" },
-      { label: "Microsoft Tenant", name: "microsoft_tenant" },
-    ],
-  },
-  okta: {
-    envVarMap: {
-      generic_client_id: "GENERIC_CLIENT_ID",
-      generic_client_secret: "GENERIC_CLIENT_SECRET",
-      generic_authorization_endpoint: "GENERIC_AUTHORIZATION_ENDPOINT",
-      generic_token_endpoint: "GENERIC_TOKEN_ENDPOINT",
-      generic_userinfo_endpoint: "GENERIC_USERINFO_ENDPOINT",
-    },
-    fields: [
-      { label: "Generic Client ID", name: "generic_client_id" },
-      { label: "Generic Client Secret", name: "generic_client_secret" },
-      {
-        label: "Authorization Endpoint",
-        name: "generic_authorization_endpoint",
-        placeholder: "https://your-domain/authorize",
-      },
-      { label: "Token Endpoint", name: "generic_token_endpoint", placeholder: "https://your-domain/token" },
-      {
-        label: "Userinfo Endpoint",
-        name: "generic_userinfo_endpoint",
-        placeholder: "https://your-domain/userinfo",
-      },
-    ],
-  },
-  generic: {
-    envVarMap: {
-      generic_client_id: "GENERIC_CLIENT_ID",
-      generic_client_secret: "GENERIC_CLIENT_SECRET",
-      generic_authorization_endpoint: "GENERIC_AUTHORIZATION_ENDPOINT",
-      generic_token_endpoint: "GENERIC_TOKEN_ENDPOINT",
-      generic_userinfo_endpoint: "GENERIC_USERINFO_ENDPOINT",
-    },
-    fields: [
-      { label: "Generic Client ID", name: "generic_client_id" },
-      { label: "Generic Client Secret", name: "generic_client_secret" },
-      { label: "Authorization Endpoint", name: "generic_authorization_endpoint" },
-      { label: "Token Endpoint", name: "generic_token_endpoint" },
-      { label: "Userinfo Endpoint", name: "generic_userinfo_endpoint" },
-    ],
-  },
-};
-
 const SSOModals: React.FC<SSOModalsProps> = ({
   isAddSSOModalVisible,
   isInstructionsModalVisible,
@@ -114,6 +56,9 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   ssoConfigured = false, // Default to false if not provided
 }) => {
   const [isClearConfirmModalVisible, setIsClearConfirmModalVisible] = useState(false);
+  const provider = useWatch({ control: form.control, name: "sso_provider" });
+  const useRoleMappings = useWatch({ control: form.control, name: "use_role_mappings" });
+  const showRoleMappingToggle = provider === "okta" || provider === "generic";
 
   // Load existing SSO settings when modal opens
   useEffect(() => {
@@ -121,28 +66,9 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       if (isAddSSOModalVisible && accessToken) {
         try {
           const ssoData = await getSSOSettings(accessToken);
-          console.log("Raw SSO data received:", ssoData); // Debug log
           if (ssoData && ssoData.values) {
-            console.log("SSO values:", ssoData.values); // Debug log
-            console.log("user_email from API:", ssoData.values.user_email); // Debug log
-
             // Determine which SSO provider is configured
-            let selectedProvider = null;
-            if (ssoData.values.google_client_id) {
-              selectedProvider = "google";
-            } else if (ssoData.values.microsoft_client_id) {
-              selectedProvider = "microsoft";
-            } else if (ssoData.values.generic_client_id) {
-              // Check if it looks like Okta based on endpoints
-              if (
-                ssoData.values.generic_authorization_endpoint?.includes("okta") ||
-                ssoData.values.generic_authorization_endpoint?.includes("auth0")
-              ) {
-                selectedProvider = "okta";
-              } else {
-                selectedProvider = "generic";
-              }
-            }
+            const selectedProvider = detectSSOProvider(ssoData.values);
 
             // Extract role mappings if they exist
             let roleMappingFields = {};
@@ -167,22 +93,29 @@ const SSOModals: React.FC<SSOModalsProps> = ({
             }
 
             // Set form values with existing data (excluding UI access control fields)
-            const formValues = {
-              sso_provider: selectedProvider,
+            const formValues: SSOSettingsFormValues = {
+              sso_provider: selectedProvider ?? "",
               proxy_base_url: ssoData.values.proxy_base_url,
               user_email: ssoData.values.user_email,
-              ...ssoData.values,
+              google_client_id: ssoData.values.google_client_id,
+              google_client_secret: ssoData.values.google_client_secret,
+              microsoft_client_id: ssoData.values.microsoft_client_id,
+              microsoft_client_secret: ssoData.values.microsoft_client_secret,
+              microsoft_tenant: ssoData.values.microsoft_tenant,
+              generic_client_id: ssoData.values.generic_client_id,
+              generic_client_secret: ssoData.values.generic_client_secret,
+              generic_authorization_endpoint: ssoData.values.generic_authorization_endpoint,
+              generic_token_endpoint: ssoData.values.generic_token_endpoint,
+              generic_userinfo_endpoint: ssoData.values.generic_userinfo_endpoint,
+              generic_scope: ssoData.values.generic_scope,
+              saml_idp_metadata_url: ssoData.values.saml_idp_metadata_url,
+              saml_idp_metadata_xml: ssoData.values.saml_idp_metadata_xml,
+              saml_sp_entity_id: ssoData.values.saml_sp_entity_id,
               ...roleMappingFields,
+              saml_allow_unsolicited: ssoData.values.saml_allow_unsolicited === "true",
             };
 
-            console.log("Setting form values:", formValues); // Debug log
-
-            // Clear form first, then set values with a small delay to ensure proper initialization
-            form.resetFields();
-            setTimeout(() => {
-              form.setFieldsValue(formValues);
-              console.log("Form values set, current form values:", form.getFieldsValue()); // Debug log
-            }, 100);
+            form.reset({ ...emptySSOSettingsFormValues, ...formValues });
           }
         } catch (error) {
           console.error("Failed to load SSO settings:", error);
@@ -194,9 +127,9 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   }, [isAddSSOModalVisible, accessToken, form]);
 
   // Enhanced form submission handler
-  const handleFormSubmit = async (formValues: Record<string, any>) => {
+  const handleFormSubmit = async (formValues: SSOSettingsFormValues) => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
+      toast.fromError("No access token available");
       return;
     }
 
@@ -212,9 +145,13 @@ const SSOModals: React.FC<SSOModalsProps> = ({
         ...rest
       } = formValues;
 
-      const payload: any = {
+      const payload: Record<string, unknown> = {
         ...rest,
       };
+
+      if (typeof payload.saml_allow_unsolicited === "boolean") {
+        payload.saml_allow_unsolicited = payload.saml_allow_unsolicited ? "true" : "false";
+      }
 
       // Add role mappings if use_role_mappings is checked
       if (use_role_mappings) {
@@ -238,7 +175,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
         payload.role_mappings = {
           provider: "generic",
           group_claim,
-          default_role: defaultRoleMapping[default_role] || "internal_user",
+          default_role: (default_role ? defaultRoleMapping[default_role] : undefined) || "internal_user",
           roles: {
             proxy_admin: splitTeams(proxy_admin_teams),
             proxy_admin_viewer: splitTeams(admin_viewer_teams),
@@ -254,14 +191,14 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       // Continue with the original flow (show instructions)
       handleShowInstructions(formValues);
     } catch (error: unknown) {
-      NotificationsManager.fromBackend("Failed to save SSO settings: " + parseErrorMessage(error));
+      toast.fromError("Failed to save SSO settings: " + parseErrorMessage(error));
     }
   };
 
   // Handle clearing SSO settings
   const handleClearSSO = async () => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
+      toast.fromError("No access token available");
       return;
     }
 
@@ -278,6 +215,11 @@ const SSOModals: React.FC<SSOModalsProps> = ({
         generic_authorization_endpoint: null,
         generic_token_endpoint: null,
         generic_userinfo_endpoint: null,
+        saml_idp_metadata_url: null,
+        saml_idp_metadata_xml: null,
+        saml_sp_entity_id: null,
+        saml_allow_unsolicited: null,
+        generic_scope: null,
         proxy_base_url: null,
         user_email: null,
         sso_provider: null,
@@ -287,7 +229,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       await updateSSOSettings(accessToken, clearSettings);
 
       // Clear the form
-      form.resetFields();
+      form.reset(emptySSOSettingsFormValues);
 
       // Close the confirmation modal
       setIsClearConfirmModalVisible(false);
@@ -295,265 +237,92 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       // Close the main SSO modal and trigger refresh
       handleAddSSOOk();
 
-      NotificationsManager.success("SSO settings cleared successfully");
+      toast.success("SSO settings cleared successfully");
     } catch (error) {
       console.error("Failed to clear SSO settings:", error);
-      NotificationsManager.fromBackend("Failed to clear SSO settings");
+      toast.fromError("Failed to clear SSO settings");
     }
   };
 
   // Helper function to render provider fields
-  const renderProviderFields = (provider: string) => {
-    const config = ssoProviderConfigs[provider];
-    if (!config) return null;
-
-    return config.fields.map((field) => (
-      <Form.Item
-        key={field.name}
-        label={field.label}
-        name={field.name}
-        rules={[{ required: true, message: `Please enter the ${field.label.toLowerCase()}` }]}
-      >
-        {field.name.includes("client") ? <Input.Password /> : <TextInput placeholder={field.placeholder} />}
-      </Form.Item>
-    ));
-  };
-
   return (
     <>
-      <Modal
-        title={ssoConfigured ? "Edit SSO Settings" : "Add SSO"}
-        open={isAddSSOModalVisible}
-        width={800}
-        footer={null}
-        onOk={handleAddSSOOk}
-        onCancel={handleAddSSOCancel}
-      >
-        <Form
-          form={form}
-          onFinish={handleFormSubmit}
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-        >
-          <>
-            <Form.Item
-              label="SSO Provider"
-              name="sso_provider"
-              rules={[{ required: true, message: "Please select an SSO provider" }]}
-            >
-              <Select>
-                {Object.entries(ssoProviderLogoMap).map(([value, logo]) => (
-                  <Select.Option key={value} value={value}>
-                    <div style={{ display: "flex", alignItems: "center", padding: "4px 0" }}>
-                      {logo && (
-                        <img
-                          src={logo}
-                          alt={value}
-                          style={{ height: 24, width: 24, marginRight: 12, objectFit: "contain" }}
-                        />
-                      )}
-                      <span>
-                        {value.toLowerCase() === "okta"
-                          ? "Okta / Auth0"
-                          : value.charAt(0).toUpperCase() + value.slice(1)}{" "}
-                        SSO
-                      </span>
-                    </div>
-                  </Select.Option>
-                ))}
-              </Select>
-            </Form.Item>
-
-            <Form.Item
-              noStyle
-              shouldUpdate={(prevValues, currentValues) => prevValues.sso_provider !== currentValues.sso_provider}
-            >
-              {({ getFieldValue }) => {
-                const provider = getFieldValue("sso_provider");
-                return provider ? renderProviderFields(provider) : null;
+      <Dialog open={isAddSSOModalVisible} onOpenChange={(open) => !open && handleAddSSOCancel()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+          <DialogHeader>
+            <DialogTitle>{ssoConfigured ? "Edit SSO Settings" : "Add SSO"}</DialogTitle>
+          </DialogHeader>
+          <FormProvider {...form}>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitMountedSSOValues(form, "admin-panel", handleFormSubmit)();
               }}
-            </Form.Item>
-
-            <Form.Item
-              label="Proxy Admin Email"
-              name="user_email"
-              rules={[{ required: true, message: "Please enter the email of the proxy admin" }]}
             >
-              <TextInput />
-            </Form.Item>
-            <Form.Item
-              label="Proxy Base URL"
-              name="proxy_base_url"
-              normalize={(value) => value?.trim()}
-              rules={[
-                { required: true, message: "Please enter the proxy base url" },
-                {
-                  pattern: /^https?:\/\/.+/,
-                  message: "URL must start with http:// or https://",
-                },
-                {
-                  validator: (_, value) => {
-                    // Only check for trailing slash if the URL starts with http:// or https://
-                    if (value && /^https?:\/\/.+/.test(value) && value.endsWith("/")) {
-                      return Promise.reject("URL must not end with a trailing slash");
-                    }
-                    return Promise.resolve();
-                  },
-                },
-              ]}
-            >
-              <TextInput placeholder="https://example.com" />
-            </Form.Item>
-
-            <Form.Item
-              noStyle
-              shouldUpdate={(prevValues, currentValues) => prevValues.sso_provider !== currentValues.sso_provider}
-            >
-              {({ getFieldValue }) => {
-                const provider = getFieldValue("sso_provider");
-                return provider === "okta" || provider === "generic" ? (
-                  <Form.Item label="Use Role Mappings" name="use_role_mappings" valuePropName="checked">
-                    <Checkbox />
-                  </Form.Item>
-                ) : null;
-              }}
-            </Form.Item>
-
-            <Form.Item
-              noStyle
-              shouldUpdate={(prevValues, currentValues) =>
-                prevValues.use_role_mappings !== currentValues.use_role_mappings
-              }
-            >
-              {({ getFieldValue }) => {
-                const useRoleMappings = getFieldValue("use_role_mappings");
-                return useRoleMappings ? (
-                  <Form.Item
-                    label="Group Claim"
-                    name="group_claim"
-                    rules={[{ required: true, message: "Please enter the group claim" }]}
-                  >
-                    <TextInput />
-                  </Form.Item>
-                ) : null;
-              }}
-            </Form.Item>
-
-            <Form.Item
-              noStyle
-              shouldUpdate={(prevValues, currentValues) =>
-                prevValues.use_role_mappings !== currentValues.use_role_mappings
-              }
-            >
-              {({ getFieldValue }) => {
-                const useRoleMappings = getFieldValue("use_role_mappings");
-                return useRoleMappings ? (
+              <FieldGroup>
+                <SSOProviderSelectField />
+                {provider ? renderProviderFields(provider) : null}
+                <ProxyAdminEmailField />
+                <ProxyBaseUrlField />
+                {showRoleMappingToggle && <MappingToggleField name="use_role_mappings" label="Use Role Mappings" />}
+                {useRoleMappings && (
                   <>
-                    <Form.Item label="Default Role" name="default_role" initialValue="Internal User">
-                      <Select>
-                        <Select.Option value="internal_user_viewer">Internal Viewer</Select.Option>
-                        <Select.Option value="internal_user">Internal User</Select.Option>
-                        <Select.Option value="proxy_admin_viewer">Admin Viewer</Select.Option>
-                        <Select.Option value="proxy_admin">Proxy Admin</Select.Option>
-                      </Select>
-                    </Form.Item>
-
-                    <Form.Item label="Proxy Admin Teams" name="proxy_admin_teams">
-                      <TextInput />
-                    </Form.Item>
-
-                    <Form.Item label="Admin Viewer Teams" name="admin_viewer_teams">
-                      <TextInput />
-                    </Form.Item>
-
-                    <Form.Item label="Internal User Teams" name="internal_user_teams">
-                      <TextInput />
-                    </Form.Item>
-
-                    <Form.Item label="Internal Viewer Teams" name="internal_viewer_teams">
-                      <TextInput />
-                    </Form.Item>
+                    <GroupClaimField />
+                    <RoleMappingTeamFields />
                   </>
-                ) : null;
-              }}
-            </Form.Item>
-          </>
-          <div
-            style={{
-              textAlign: "right",
-              marginTop: "10px",
-              display: "flex",
-              justifyContent: "flex-end",
-              alignItems: "center",
-              gap: "8px",
-            }}
-          >
-            {ssoConfigured && (
-              <Button2
-                onClick={() => setIsClearConfirmModalVisible(true)}
-                style={{
-                  backgroundColor: "#6366f1",
-                  borderColor: "#6366f1",
-                  color: "white",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = "#5558eb";
-                  e.currentTarget.style.borderColor = "#5558eb";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = "#6366f1";
-                  e.currentTarget.style.borderColor = "#6366f1";
-                }}
-              >
-                Clear
-              </Button2>
-            )}
-            <Button2 htmlType="submit">Save</Button2>
-          </div>
-        </Form>
-      </Modal>
+                )}
+              </FieldGroup>
+              <div className="mt-4 flex items-center justify-end gap-2">
+                {ssoConfigured && (
+                  <Button type="button" variant="secondary" onClick={() => setIsClearConfirmModalVisible(true)}>
+                    Clear
+                  </Button>
+                )}
+                <Button type="submit">Save</Button>
+              </div>
+            </form>
+          </FormProvider>
+        </DialogContent>
+      </Dialog>
 
       {/* Clear Confirmation Modal */}
-      <Modal
-        title="Confirm Clear SSO Settings"
-        open={isClearConfirmModalVisible}
-        onOk={handleClearSSO}
-        onCancel={() => setIsClearConfirmModalVisible(false)}
-        okText="Yes, Clear"
-        cancelText="Cancel"
-        okButtonProps={{
-          danger: true,
-          style: {
-            backgroundColor: "#dc2626",
-            borderColor: "#dc2626",
-          },
-        }}
-      >
-        <p>Are you sure you want to clear all SSO settings? This action cannot be undone.</p>
-        <p>Users will no longer be able to login using SSO after this change.</p>
-      </Modal>
+      <Dialog open={isClearConfirmModalVisible} onOpenChange={(open) => !open && setIsClearConfirmModalVisible(false)}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Confirm Clear SSO Settings</DialogTitle>
+          </DialogHeader>
+          <p>Are you sure you want to clear all SSO settings? This action cannot be undone.</p>
+          <p>Users will no longer be able to login using SSO after this change.</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsClearConfirmModalVisible(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleClearSSO} variant="destructive">
+              Yes, Clear
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-      <Modal
-        title="SSO Setup Instructions"
-        open={isInstructionsModalVisible}
-        width={800}
-        footer={null}
-        onOk={handleInstructionsOk}
-        onCancel={handleInstructionsCancel}
-      >
-        <p>Follow these steps to complete the SSO setup:</p>
-        <Text className="mt-2">1. DO NOT Exit this TAB</Text>
-        <Text className="mt-2">2. Open a new tab, visit your proxy base url</Text>
-        <Text className="mt-2">3. Confirm your SSO is configured correctly and you can login on the new Tab</Text>
-        <Text className="mt-2">4. If Step 3 is successful, you can close this tab</Text>
-        <div style={{ textAlign: "right", marginTop: "10px" }}>
-          <Button2 onClick={handleInstructionsOk}>Done</Button2>
-        </div>
-      </Modal>
+      <Dialog open={isInstructionsModalVisible} onOpenChange={(open) => !open && handleInstructionsCancel()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+          <DialogHeader>
+            <DialogTitle>SSO Setup Instructions</DialogTitle>
+          </DialogHeader>
+          <p>Follow these steps to complete the SSO setup:</p>
+          <p className="text-sm mt-2">1. DO NOT Exit this TAB</p>
+          <p className="text-sm mt-2">2. Open a new tab, visit your proxy base url</p>
+          <p className="text-sm mt-2">3. Confirm your SSO is configured correctly and you can login on the new Tab</p>
+          <p className="text-sm mt-2">4. If Step 3 is successful, you can close this tab</p>
+          <div style={{ textAlign: "right", marginTop: "10px" }}>
+            <Button type="button" onClick={handleInstructionsOk}>
+              Done
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 };
 
-export { ssoProviderConfigs }; // Export for use in other components
 export default SSOModals;

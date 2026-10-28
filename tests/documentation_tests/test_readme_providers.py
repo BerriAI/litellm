@@ -16,6 +16,7 @@ EXCLUDED_PROVIDERS = {
     "langfuse",  # observability, not LLM provider
     "humanloop",  # observability, not LLM provider
     "pg_vector",  # database, not LLM provider
+    "valkey",  # database, not LLM provider
     "dotprompt",  # prompt management, not provider
     "vertex_ai_beta",  # beta variant, not needed in main table
 }

@@ -57,7 +57,6 @@ export const fetchAvailableAgents = async (accessToken: string, customBaseUrl?: 
     }
 
     const agents: Agent[] = await response.json();
-    console.log("Fetched agents:", agents);
 
     // Sort agents alphabetically by name
     agents.sort((a, b) => {

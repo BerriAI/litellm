@@ -4,9 +4,9 @@ Type definitions for Vertex AI Text-to-Speech API
 Reference: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/synthesize
 """
 
-from typing import Optional
+from collections.abc import Sequence
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 
 class VertexTextToSpeechInput(TypedDict, total=False):
@@ -16,8 +16,18 @@ class VertexTextToSpeechInput(TypedDict, total=False):
     Exactly one of text or ssml must be provided.
     """
 
-    text: Optional[str]
-    ssml: Optional[str]
+    text: str | None
+    ssml: str | None
+    prompt: ReadOnly[str | None]
+
+
+class VertexTextToSpeechSpeakerVoiceConfig(TypedDict):
+    speakerAlias: ReadOnly[str]
+    speakerId: ReadOnly[str]
+
+
+class VertexTextToSpeechMultiSpeakerVoiceConfig(TypedDict):
+    speakerVoiceConfigs: ReadOnly[Sequence[VertexTextToSpeechSpeakerVoiceConfig]]
 
 
 class VertexTextToSpeechVoice(TypedDict, total=False):
@@ -31,6 +41,8 @@ class VertexTextToSpeechVoice(TypedDict, total=False):
 
     languageCode: str
     name: str
+    modelName: ReadOnly[str]
+    multiSpeakerVoiceConfig: ReadOnly[VertexTextToSpeechMultiSpeakerVoiceConfig]
 
 
 class VertexTextToSpeechAudioConfig(TypedDict, total=False):
@@ -44,6 +56,7 @@ class VertexTextToSpeechAudioConfig(TypedDict, total=False):
 
     audioEncoding: str
     speakingRate: str
+    sampleRateHertz: ReadOnly[int]
 
 
 class VertexTextToSpeechRequest(TypedDict, total=False):
@@ -55,4 +68,4 @@ class VertexTextToSpeechRequest(TypedDict, total=False):
 
     input: VertexTextToSpeechInput
     voice: VertexTextToSpeechVoice
-    audioConfig: Optional[VertexTextToSpeechAudioConfig]
+    audioConfig: VertexTextToSpeechAudioConfig | None

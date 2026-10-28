@@ -609,7 +609,7 @@ export const claimsCompliancePrompts: CompliancePrompt[] = [
         "Should I remove unrelated pages from my medical record upload?",
         "Is it okay to upload a bank statement as proof of payment?",
         "What personal info should I avoid including when uploading documents?",
-        "Can I blur out my child's SSN on a form before uploading?",
+        "Can I blur-sm out my child's SSN on a form before uploading?",
         "The invoice includes unrelated diagnoses—should I submit it as-is?",
         "How do I safely upload documents from a shared computer?",
         "If I'm submitting for a dependent, what info is required vs optional?",

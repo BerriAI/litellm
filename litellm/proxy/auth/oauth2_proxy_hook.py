@@ -1,4 +1,5 @@
-from typing import Any, Dict, FrozenSet
+from collections.abc import Mapping
+from typing import Final
 
 from fastapi import Request
 
@@ -24,7 +25,7 @@ from litellm.proxy.auth.trusted_proxy_utils import require_trusted_proxy_request
 # Operators who need a trusted upstream to assert anything beyond
 # identity should switch to JWT authentication, which validates a
 # signature on the assertion rather than blindly trusting headers.
-ALLOWED_OAUTH2_PROXY_FIELDS: FrozenSet[str] = frozenset(
+ALLOWED_OAUTH2_PROXY_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "user_id",
         "user_email",
@@ -64,17 +65,13 @@ async def handle_oauth2_proxy_request(request: Request) -> UserAPIKeyAuth:
         feature_name="OAuth2 proxy auth",
     )
 
-    oauth2_config_mappings: Dict[str, str] = (
-        general_settings.get("oauth2_config_mappings") or {}
-    )
-    verbose_proxy_logger.debug(f"Oauth2 config mappings: {oauth2_config_mappings}")
+    oauth2_config_mappings: Final[dict[str, str]] = general_settings.get("oauth2_config_mappings") or {}
+    verbose_proxy_logger.debug("Oauth2 config mappings: %s", oauth2_config_mappings)
 
     if not oauth2_config_mappings:
         raise ValueError("Oauth2 config mappings not found in general_settings")
 
-    disallowed = sorted(
-        set(oauth2_config_mappings.keys()) - ALLOWED_OAUTH2_PROXY_FIELDS
-    )
+    disallowed: Final = sorted(set(oauth2_config_mappings.keys()) - ALLOWED_OAUTH2_PROXY_FIELDS)
     if disallowed:
         raise ValueError(
             "Oauth2 proxy auth refuses to map non-identity UserAPIKeyAuth "
@@ -87,21 +84,17 @@ async def handle_oauth2_proxy_request(request: Request) -> UserAPIKeyAuth:
             "(signature-validated) instead of header-trust."
         )
 
-    auth_data: Dict[str, Any] = {}
-    for key, header in oauth2_config_mappings.items():
-        value = request.headers.get(header)
-        if not value:
-            continue
-        if key == "models":
-            auth_data[key] = [model.strip() for model in value.split(",")]
-        else:
-            auth_data[key] = value
+    auth_data: Final[Mapping[str, str | list[str]]] = {
+        key: [model.strip() for model in value.split(",")] if key == "models" else value
+        for key, header in oauth2_config_mappings.items()
+        if (value := request.headers.get(header))
+    }
 
     verbose_proxy_logger.debug(
         "Auth data before creating UserAPIKeyAuth object: keys=%s",
         list(auth_data.keys()),
     )
-    user_api_key_auth = UserAPIKeyAuth(**auth_data)
+    user_api_key_auth: Final = UserAPIKeyAuth.model_validate(auth_data)
     verbose_proxy_logger.debug(
         "UserAPIKeyAuth object created with keys: %s",
         list(user_api_key_auth.__fields_set__),

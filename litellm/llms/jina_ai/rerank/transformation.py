@@ -6,9 +6,11 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://jina.ai/reranker
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Final
 
 from httpx import URL, Response
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._uuid import uuid
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
@@ -21,6 +23,12 @@ from litellm.types.rerank import (
     RerankTokens,
 )
 from litellm.types.utils import ModelInfo
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_BILLED_UNITS: Final = TypeAdapter(RerankBilledUnits)
+_TOKENS: Final = TypeAdapter(RerankTokens)
+_STR: Final = TypeAdapter(str)
 
 
 class JinaAIRerankConfig(BaseRerankConfig):
@@ -38,16 +46,17 @@ class JinaAIRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
-        custom_llm_provider: Optional[str] = None,
-        top_n: Optional[int] = None,
-        rank_fields: Optional[List[str]] = None,
-        return_documents: Optional[bool] = True,
-        max_chunks_per_doc: Optional[int] = None,
-        max_tokens_per_doc: Optional[int] = None,
-    ) -> Dict:
-        optional_params = {}
-        supported_params = self.get_supported_cohere_rerank_params(model)
+        documents: Sequence[str | Mapping[str, object]],
+        custom_llm_provider: str | None = None,
+        top_n: int | None = None,
+        rank_fields: list[str] | None = None,
+        return_documents: bool | None = True,
+        max_chunks_per_doc: int | None = None,
+        max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
+    ) -> dict:
+        optional_params: Final = {}
+        supported_params: Final = self.get_supported_cohere_rerank_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
                 optional_params[k] = v
@@ -59,27 +68,27 @@ class JinaAIRerankConfig(BaseRerankConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        optional_params: Optional[dict] = None,
+        optional_params: dict | None = None,
     ) -> str:
-        base_path = "/v1/rerank"
+        base_path: Final = "/v1/rerank"
 
         if api_base is None:
             return "https://api.jina.ai/v1/rerank"
-        base = URL(api_base)
+        base: Final = URL(api_base)
         # Reconstruct URL with cleaned path
-        cleaned_base = str(base.copy_with(path=base_path))
+        cleaned_base: Final = str(base.copy_with(path=base_path))
 
         return cleaned_base
 
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Dict,
-        headers: Dict,
-        litellm_params: Optional[dict] = None,
-    ) -> Dict:
+        optional_rerank_params: dict,
+        headers: dict,
+        litellm_params: dict | None = None,
+    ) -> dict:
         return {"model": model, **optional_rerank_params}
 
     def transform_rerank_response(
@@ -88,23 +97,21 @@ class JinaAIRerankConfig(BaseRerankConfig):
         raw_response: Response,
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
-        request_data: Dict = {},
-        optional_params: Dict = {},
-        litellm_params: Dict = {},
+        api_key: str | None = None,
+        request_data: dict = {},
+        optional_params: dict = {},
+        litellm_params: dict = {},
     ) -> RerankResponse:
         if raw_response.status_code != 200:
             raise Exception(raw_response.text)
 
         logging_obj.post_call(original_response=raw_response.text)
 
-        _json_response = raw_response.json()
+        _json_response: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
-        _billed_units = RerankBilledUnits(**_json_response.get("usage", {}))
-        _tokens = RerankTokens(**_json_response.get("usage", {}))
-        rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+        usage: Final = _JSON_OBJECT.validate_python(_json_response.get("usage", {}))
 
-        _results: Optional[List[dict]] = _json_response.get("results")
+        _results: Final = _json_response.get("results")
 
         if _results is None:
             raise ValueError(f"No results found in the response={_json_response}")
@@ -112,8 +119,8 @@ class JinaAIRerankConfig(BaseRerankConfig):
         # Transform Jina AI's response format to match LiteLLM's expected format
         # Jina AI returns: {"index": 0, "relevance_score": 0.72, "document": "hello"}
         # LiteLLM expects: {"index": 0, "relevance_score": 0.72, "document": {"text": "hello"}}
-        transformed_results = []
-        for result in _results:
+        transformed_results: Final = []
+        for result in _JSON_OBJECTS.validate_python(_results):
             transformed_result = {
                 "index": result["index"],
                 "relevance_score": result["relevance_score"],
@@ -126,23 +133,26 @@ class JinaAIRerankConfig(BaseRerankConfig):
                 transformed_result["document"] = result["document"]
             transformed_results.append(transformed_result)
 
+        _billed_units: Final = _BILLED_UNITS.validate_python(usage)
+        _tokens: Final = _TOKENS.validate_python(usage)
+        rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+
         return RerankResponse(
-            id=_json_response.get("id") or str(uuid.uuid4()),
-            results=transformed_results,  # type: ignore
+            id=_STR.validate_python(_json_response.get("id") or str(uuid.uuid4())),
+            results=transformed_results,
             meta=rerank_meta,
         )  # Return response
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        optional_params: Optional[dict] = None,
-    ) -> Dict:
+        api_key: str | None = None,
+        optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict:
         if api_key is None:
-            raise ValueError(
-                "api_key is required. Set via `api_key` parameter or `JINA_API_KEY` environment variable."
-            )
+            raise ValueError("api_key is required. Set via `api_key` parameter or `JINA_API_KEY` environment variable.")
         return {
             "accept": "application/json",
             "content-type": "application/json",
@@ -152,13 +162,10 @@ class JinaAIRerankConfig(BaseRerankConfig):
     def calculate_rerank_cost(
         self,
         model: str,
-        custom_llm_provider: Optional[str] = None,
-        billed_units: Optional[RerankBilledUnits] = None,
-        model_info: Optional[ModelInfo] = None,
-    ) -> Tuple[float, float]:
-        """
-        Jina AI reranker is priced at $0.000000018 per token.
-        """
+        custom_llm_provider: str | None = None,
+        billed_units: RerankBilledUnits | None = None,
+        model_info: ModelInfo | None = None,
+    ) -> tuple[float, float]:
         if (
             model_info is None
             or "input_cost_per_token" not in model_info
@@ -167,9 +174,9 @@ class JinaAIRerankConfig(BaseRerankConfig):
         ):
             return 0.0, 0.0
 
-        total_tokens = billed_units.get("total_tokens")
+        total_tokens: Final = billed_units.get("total_tokens")
         if total_tokens is None:
             return 0.0, 0.0
 
-        input_cost = model_info["input_cost_per_token"] * total_tokens
+        input_cost: Final = model_info["input_cost_per_token"] * total_tokens
         return input_cost, 0.0

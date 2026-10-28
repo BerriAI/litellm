@@ -11,6 +11,8 @@ import warnings
 # Suppress Pydantic serialization warnings for Meta Llama responses
 warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
 
+from typing import Final
+
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
@@ -23,7 +25,7 @@ class LlamaAPIConfig(OpenAIGPTConfig):
         response_format: only json_schema is working
         """
         # Function calling and tool choice are now supported on Llama API
-        optional_params = super().get_supported_openai_params(model)
+        optional_params: Final = super().get_supported_openai_params(model)
         return optional_params
 
     def map_openai_params(
@@ -33,9 +35,7 @@ class LlamaAPIConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        mapped_openai_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
+        mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         # Only json_schema is working for response_format
         if (

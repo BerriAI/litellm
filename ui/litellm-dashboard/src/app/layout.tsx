@@ -2,9 +2,14 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 
-import AntdGlobalProvider from "@/contexts/AntdGlobalProvider";
+import { NuqsAdapter } from "nuqs/adapters/next/app";
+import { ThemeProvider } from "next-themes";
+
 import { AuthProvider } from "@/contexts/AuthContext";
 import ReactQueryProvider from "@/contexts/ReactQueryProvider";
+import HotkeysProvider from "@/contexts/HotkeysProvider";
+import { TerminologyProvider } from "@/contexts/TerminologyContext";
+import { Toaster } from "@/components/ui/sonner";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -20,13 +25,22 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    // next-themes stamps the theme class on <html> before paint, which the exported markup
+    // cannot predict; suppressHydrationWarning confines that mismatch to this element.
+    <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
-        <ReactQueryProvider>
-          <AntdGlobalProvider>
-            <AuthProvider>{children}</AuthProvider>
-          </AntdGlobalProvider>
-        </ReactQueryProvider>
+        <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
+          <NuqsAdapter>
+            <ReactQueryProvider>
+              <TerminologyProvider>
+                <HotkeysProvider>
+                  <AuthProvider>{children}</AuthProvider>
+                </HotkeysProvider>
+              </TerminologyProvider>
+              <Toaster />
+            </ReactQueryProvider>
+          </NuqsAdapter>
+        </ThemeProvider>
       </body>
     </html>
   );

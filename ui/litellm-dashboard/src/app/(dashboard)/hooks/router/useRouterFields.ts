@@ -16,6 +16,7 @@ export interface RouterSettingsField {
 export interface RouterFieldsResponse {
   fields: RouterSettingsField[];
   routing_strategy_descriptions: Record<string, string>;
+  routing_group_strategies?: string[];
 }
 
 const routerFieldsKeys = createQueryKeys("routerFields");
@@ -34,8 +35,6 @@ const getRouterFields = async (accessToken: string): Promise<RouterFieldsRespons
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/router/fields` : `/router/fields`;
 
-    console.log("Fetching router fields from:", url);
-
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -51,7 +50,6 @@ const getRouterFields = async (accessToken: string): Promise<RouterFieldsRespons
     }
 
     const data: RouterFieldsResponse = await response.json();
-    console.log("Fetched router fields:", data);
     return data;
   } catch (error) {
     console.error("Failed to fetch router fields:", error);

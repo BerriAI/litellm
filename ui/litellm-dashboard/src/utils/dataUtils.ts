@@ -1,4 +1,4 @@
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 export function updateExistingKeys<Source extends object>(target: Source, source: object): Source {
   const clonedTarget = structuredClone(target);
@@ -63,6 +63,9 @@ export const getSpendString = (value: number | null | undefined, decimals: numbe
   return `$${formatted}`;
 };
 
+export const formatPerSecondCost = (cost: number): string =>
+  `$${cost.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}/s`;
+
 export const copyToClipboard = async (
   text: string | null | undefined,
   messageText: string = "Copied to clipboard",
@@ -73,7 +76,7 @@ export const copyToClipboard = async (
   if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
     try {
       await navigator.clipboard.writeText(text);
-      NotificationsManager.success(messageText);
+      toast.success(messageText);
       return true;
     } catch (err) {
       console.error("Clipboard API failed: ", err);
@@ -89,6 +92,7 @@ export const copyToClipboard = async (
 // Fallback method using document.execCommand (deprecated but widely supported)
 const fallbackCopyToClipboard = (text: string, messageText: string): boolean => {
   try {
+    const previouslyFocused = document.activeElement;
     const textArea = document.createElement("textarea");
     textArea.value = text;
 
@@ -99,20 +103,22 @@ const fallbackCopyToClipboard = (text: string, messageText: string): boolean => 
     textArea.setAttribute("readonly", "");
 
     document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
+    try {
+      textArea.focus();
+      textArea.select();
 
-    const successful = document.execCommand("copy");
-    document.body.removeChild(textArea);
-
-    if (successful) {
-      NotificationsManager.success(messageText);
-      return true;
-    } else {
-      throw new Error("execCommand failed");
+      if (document.execCommand("copy")) {
+        toast.success(messageText);
+        return true;
+      }
+    } finally {
+      textArea.remove();
+      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
     }
+    toast.fromError("Failed to copy to clipboard");
+    return false;
   } catch (err) {
-    NotificationsManager.fromBackend("Failed to copy to clipboard");
+    toast.fromError("Failed to copy to clipboard");
     console.error("Failed to copy: ", err);
     return false;
   }

@@ -1,8 +1,30 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import {
+  ColumnDef,
+  TableOptions,
+  Updater,
+  functionalUpdate,
+  getCoreRowModel,
+  useReactTable,
+} from "@tanstack/react-table";
+import { ArrowDown, ArrowUp, Pin, PinOff } from "lucide-react";
 import { PlusCircleIcon, PencilIcon, TrashIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { setCallbacksCall } from "./networking";
-import { Card, Title, Text, Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
-import NotificationsManager from "./molecules/notifications_manager";
+import { Card, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { toast } from "@/lib/toast";
+import { readStorage, useStoredValue } from "@/lib/storage";
+import { DataTableSortHeader } from "@/components/shared/DataTable/DataTableSortHeader";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  AliasDisplayPreferences,
+  AliasItem,
+  aliasDisplayStorage,
+  DEFAULT_ALIAS_DISPLAY,
+  movePinnedAlias,
+  orderAliases,
+} from "./model_group_alias_ordering";
 
 type ModelGroupAliasValue = string | { model: string; hidden?: boolean };
 
@@ -10,23 +32,73 @@ interface ModelGroupAliasSettingsProps {
   accessToken: string;
   initialModelGroupAlias?: Record<string, ModelGroupAliasValue>;
   onAliasUpdate?: (updatedAlias: { [key: string]: string }) => void;
+  managedByConfig?: boolean;
+  ownershipLoading?: boolean;
+  preferenceScope: string | null;
 }
 
-interface AliasItem {
-  id: string;
-  aliasName: string;
-  targetModelGroup: string;
+const ALIAS_COLUMNS: ColumnDef<AliasItem>[] = [
+  { accessorKey: "aliasName", sortDescFirst: false },
+  { accessorKey: "targetModelGroup", sortDescFirst: false },
+];
+
+function useAliasDisplayPreferences(preferenceScope: string | null) {
+  const preferenceKey = useMemo(() => aliasDisplayStorage(preferenceScope ?? ""), [preferenceScope]);
+  const [storedPreferences, storePreferences] = useStoredValue(preferenceKey);
+  const [unsavedPreferences, setUnsavedPreferences] = useState<AliasDisplayPreferences | null>(null);
+  const unsavedRef = useRef<AliasDisplayPreferences | null>(null);
+  const preferences = preferenceScope === null ? DEFAULT_ALIAS_DISPLAY : unsavedPreferences ?? storedPreferences;
+  const updatePreferences = (updater: Updater<AliasDisplayPreferences>) => {
+    if (preferenceScope === null) return;
+    const next = functionalUpdate(updater, unsavedRef.current ?? readStorage(preferenceKey));
+    storePreferences(next);
+    const saved = JSON.stringify(readStorage(preferenceKey)) === JSON.stringify(next);
+    // rebind-ok: Async saves need the latest fallback when browser storage refuses writes.
+    unsavedRef.current = saved ? null : next;
+    setUnsavedPreferences(unsavedRef.current);
+  };
+  return { preferences, updatePreferences, unsavedPreferences };
 }
 
 const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
   accessToken,
   initialModelGroupAlias = {},
   onAliasUpdate,
+  managedByConfig = false,
+  ownershipLoading = false,
+  preferenceScope,
 }) => {
+  "use no memo";
+
   const [aliases, setAliases] = useState<AliasItem[]>([]);
   const [newAlias, setNewAlias] = useState({ aliasName: "", targetModelGroup: "" });
   const [editingAlias, setEditingAlias] = useState<AliasItem | null>(null);
+  const writesDisabled = managedByConfig || ownershipLoading;
   const [isExpanded, setIsExpanded] = useState(true);
+  const { preferences, updatePreferences, unsavedPreferences } = useAliasDisplayPreferences(preferenceScope);
+  const displayAliases = useMemo(() => orderAliases(aliases, preferences), [aliases, preferences]);
+  const visiblePins = preferences.pinned.filter((name) => aliases.some((alias) => alias.aliasName === name));
+  const sorting = [{ id: preferences.sortBy, desc: preferences.descending }];
+  const tableOptions: TableOptions<AliasItem> = {
+    data: displayAliases,
+    columns: ALIAS_COLUMNS,
+    getCoreRowModel: getCoreRowModel(),
+    manualSorting: true,
+    enableSorting: preferenceScope !== null,
+    enableSortingRemoval: false,
+    enableMultiSort: false,
+    state: { sorting },
+    onSortingChange: (updater) => {
+      const selected = functionalUpdate(updater, sorting)[0];
+      updatePreferences({
+        ...preferences,
+        sortBy: selected?.id === "targetModelGroup" ? "targetModelGroup" : "aliasName",
+        descending: selected?.desc ?? false,
+      });
+    },
+  };
+  const table = useReactTable(tableOptions);
+  const sortDirection = preferences.descending ? "descending" : "ascending";
 
   useEffect(() => {
     const aliasArray = Object.entries(initialModelGroupAlias).map(([aliasName, value], index) => ({
@@ -57,7 +129,6 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
         },
       };
 
-      console.log("Saving model group alias:", aliasObject);
       await setCallbacksCall(accessToken, payload);
 
       if (onAliasUpdate) {
@@ -67,20 +138,22 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
       return true;
     } catch (error) {
       console.error("Failed to save model group alias settings:", error);
-      NotificationsManager.fromBackend("Failed to save model group alias settings");
+      toast.fromError("Failed to save model group alias settings");
       return false;
     }
   };
 
   const handleAddAlias = async () => {
+    if (writesDisabled) return;
+
     if (!newAlias.aliasName || !newAlias.targetModelGroup) {
-      NotificationsManager.fromBackend("Please provide both alias name and target model group");
+      toast.fromError("Please provide both alias name and target model group");
       return;
     }
 
     // Check for duplicate alias names
     if (aliases.some((alias) => alias.aliasName === newAlias.aliasName)) {
-      NotificationsManager.fromBackend("An alias with this name already exists");
+      toast.fromError("An alias with this name already exists");
       return;
     }
 
@@ -95,34 +168,44 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
     if (await saveAliasesToBackend(updatedAliases)) {
       setAliases(updatedAliases);
       setNewAlias({ aliasName: "", targetModelGroup: "" });
-      NotificationsManager.success("Alias added successfully");
+      toast.success("Alias added successfully");
     }
   };
 
   const handleEditAlias = (alias: AliasItem) => {
+    if (writesDisabled) return;
+
     setEditingAlias({ ...alias });
   };
 
   const handleUpdateAlias = async () => {
+    if (writesDisabled) return;
     if (!editingAlias) return;
 
     if (!editingAlias.aliasName || !editingAlias.targetModelGroup) {
-      NotificationsManager.fromBackend("Please provide both alias name and target model group");
+      toast.fromError("Please provide both alias name and target model group");
       return;
     }
 
     // Check for duplicate alias names (excluding current alias)
     if (aliases.some((alias) => alias.id !== editingAlias.id && alias.aliasName === editingAlias.aliasName)) {
-      NotificationsManager.fromBackend("An alias with this name already exists");
+      toast.fromError("An alias with this name already exists");
       return;
     }
 
     const updatedAliases = aliases.map((alias) => (alias.id === editingAlias.id ? editingAlias : alias));
+    const originalName = aliases.find((alias) => alias.id === editingAlias.id)?.aliasName;
 
     if (await saveAliasesToBackend(updatedAliases)) {
+      if (originalName !== editingAlias.aliasName) {
+        updatePreferences((current) => ({
+          ...current,
+          pinned: current.pinned.map((name) => (name === originalName ? editingAlias.aliasName : name)),
+        }));
+      }
       setAliases(updatedAliases);
       setEditingAlias(null);
-      NotificationsManager.success("Alias updated successfully");
+      toast.success("Alias updated successfully");
     }
   };
 
@@ -131,11 +214,18 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
   };
 
   const deleteAlias = async (aliasId: string) => {
+    if (writesDisabled) return;
+
     const updatedAliases = aliases.filter((alias) => alias.id !== aliasId);
+    const deletedName = aliases.find((alias) => alias.id === aliasId)?.aliasName;
 
     if (await saveAliasesToBackend(updatedAliases)) {
+      updatePreferences((current) => ({
+        ...current,
+        pinned: current.pinned.filter((name) => name !== deletedName),
+      }));
       setAliases(updatedAliases);
-      NotificationsManager.success("Alias deleted successfully");
+      toast.success("Alias deleted successfully");
     }
   };
 
@@ -149,20 +239,20 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
   );
 
   return (
-    <Card className="mb-6">
+    <Card className="mb-6 px-6">
       <div className="flex items-center justify-between cursor-pointer" onClick={() => setIsExpanded(!isExpanded)}>
         <div className="flex flex-col">
-          <Title className="mb-0">Model Group Alias Settings</Title>
-          <p className="text-sm text-gray-500">
+          <CardTitle className="mb-0">Model Group Alias Settings</CardTitle>
+          <p className="text-sm text-muted-foreground">
             Create aliases for your model groups to simplify API calls. For example, you can create an alias
             &apos;gpt-4o&apos; that points to &apos;gpt-4o-mini-openai&apos; model group.
           </p>
         </div>
         <div className="flex items-center">
           {isExpanded ? (
-            <ChevronDownIcon className="w-5 h-5 text-gray-500" />
+            <ChevronDownIcon className="w-5 h-5 text-muted-foreground" />
           ) : (
-            <ChevronRightIcon className="w-5 h-5 text-gray-500" />
+            <ChevronRightIcon className="w-5 h-5 text-muted-foreground" />
           )}
         </div>
       </div>
@@ -170,13 +260,19 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
       {isExpanded && (
         <div className="mt-4">
           <div className="mb-6">
-            <Text className="text-sm font-medium text-gray-700 mb-2">Add New Alias</Text>
+            {managedByConfig && (
+              <p className="mb-2 text-sm text-muted-foreground">
+                These aliases are defined in config.yaml and are read-only here. Edit the config file to change them.
+              </p>
+            )}
+            <p className="text-sm font-medium text-foreground mb-2">Add New Alias</p>
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Alias Name</label>
+                <label className="block text-xs text-muted-foreground mb-1">Alias Name</label>
                 <input
                   type="text"
                   value={newAlias.aliasName}
+                  disabled={writesDisabled}
                   onChange={(e) =>
                     setNewAlias({
                       ...newAlias,
@@ -184,14 +280,15 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                     })
                   }
                   placeholder="e.g., gpt-4o"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                  className="w-full px-3 py-2 border border-border rounded-md text-sm disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed"
                 />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Target Model Group</label>
+                <label className="block text-xs text-muted-foreground mb-1">Target Model Group</label>
                 <input
                   type="text"
                   value={newAlias.targetModelGroup}
+                  disabled={writesDisabled}
                   onChange={(e) =>
                     setNewAlias({
                       ...newAlias,
@@ -199,14 +296,14 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                     })
                   }
                   placeholder="e.g., gpt-4o-mini-openai"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                  className="w-full px-3 py-2 border border-border rounded-md text-sm disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed"
                 />
               </div>
               <div className="flex items-end">
                 <button
                   onClick={handleAddAlias}
-                  disabled={!newAlias.aliasName || !newAlias.targetModelGroup}
-                  className={`flex items-center px-4 py-2 rounded-md text-sm ${!newAlias.aliasName || !newAlias.targetModelGroup ? "bg-gray-300 text-gray-500 cursor-not-allowed" : "bg-green-600 text-white hover:bg-green-700"}`}
+                  disabled={writesDisabled || !newAlias.aliasName || !newAlias.targetModelGroup}
+                  className={`flex items-center px-4 py-2 rounded-md text-sm ${writesDisabled || !newAlias.aliasName || !newAlias.targetModelGroup ? "bg-border text-muted-foreground cursor-not-allowed" : "bg-success text-success-foreground hover:bg-success/80"}`}
                 >
                   <PlusCircleIcon className="w-4 h-4 mr-1" />
                   Add Alias
@@ -215,21 +312,60 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
             </div>
           </div>
 
-          <Text className="text-sm font-medium text-gray-700 mb-2">Manage Existing Aliases</Text>
+          <p className="text-sm font-medium text-foreground mb-2">Manage Existing Aliases</p>
+          <div className="mb-3 flex flex-wrap items-end gap-3">
+            <div>
+              <label htmlFor="alias-last-prefix" className="mb-1 block text-xs text-muted-foreground">
+                Place aliases with this prefix last
+              </label>
+              <Input
+                id="alias-last-prefix"
+                className="w-64"
+                placeholder="Optional, e.g. subscription/"
+                value={preferences.lastPrefix}
+                disabled={preferenceScope === null}
+                onChange={(event) => updatePreferences({ ...preferences, lastPrefix: event.target.value })}
+              />
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={preferenceScope === null}
+              onClick={() => updatePreferences(DEFAULT_ALIAS_DISPLAY)}
+            >
+              Reset display order
+            </Button>
+          </div>
+          <p className="mb-3 text-xs text-muted-foreground" role={unsavedPreferences ? "status" : undefined}>
+            {unsavedPreferences
+              ? "Display order could not be saved in this browser. Your changes apply until you leave this page."
+              : "Display preferences are saved for your account in this browser. Pinned aliases stay first in your chosen order."}
+          </p>
           <div className="rounded-lg custom-border relative mb-6">
             <div className="overflow-x-auto">
               <Table className="[&_td]:py-0.5 [&_th]:py-1">
-                <TableHead>
+                <TableHeader>
                   <TableRow>
-                    <TableHeaderCell className="py-1 h-8">Alias Name</TableHeaderCell>
-                    <TableHeaderCell className="py-1 h-8">Target Model Group</TableHeaderCell>
-                    <TableHeaderCell className="py-1 h-8">Actions</TableHeaderCell>
+                    <TableHead
+                      className="py-1 h-8"
+                      aria-sort={preferences.sortBy === "aliasName" ? sortDirection : "none"}
+                    >
+                      <DataTableSortHeader column={table.getColumn("aliasName")!} title="Alias Name" />
+                    </TableHead>
+                    <TableHead
+                      className="py-1 h-8"
+                      aria-sort={preferences.sortBy === "targetModelGroup" ? sortDirection : "none"}
+                    >
+                      <DataTableSortHeader column={table.getColumn("targetModelGroup")!} title="Target Model Group" />
+                    </TableHead>
+                    <TableHead className="py-1 h-8">Display order</TableHead>
+                    <TableHead className="py-1 h-8">Actions</TableHead>
                   </TableRow>
-                </TableHead>
+                </TableHeader>
                 <TableBody>
-                  {aliases.map((alias) => (
+                  {displayAliases.map((alias) => (
                     <TableRow key={alias.id} className="h-8">
-                      {editingAlias && editingAlias.id === alias.id ? (
+                      {editingAlias && !writesDisabled && editingAlias.id === alias.id ? (
                         <>
                           <TableCell className="py-0.5">
                             <input
@@ -241,7 +377,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                                   aliasName: e.target.value,
                                 })
                               }
-                              className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
+                              className="w-full px-2 py-1 border border-border rounded-md text-sm"
                             />
                           </TableCell>
                           <TableCell className="py-0.5">
@@ -254,20 +390,21 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                                   targetModelGroup: e.target.value,
                                 })
                               }
-                              className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
+                              className="w-full px-2 py-1 border border-border rounded-md text-sm"
                             />
                           </TableCell>
+                          <TableCell />
                           <TableCell className="py-0.5 whitespace-nowrap">
                             <div className="flex space-x-2">
                               <button
                                 onClick={handleUpdateAlias}
-                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
+                                className="text-xs bg-info/10 text-info px-2 py-1 rounded-sm hover:bg-info/15"
                               >
                                 Save
                               </button>
                               <button
                                 onClick={handleCancelEdit}
-                                className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100"
+                                className="text-xs bg-muted text-muted-foreground px-2 py-1 rounded-sm hover:bg-accent"
                               >
                                 Cancel
                               </button>
@@ -276,19 +413,77 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                         </>
                       ) : (
                         <>
-                          <TableCell className="py-0.5 text-sm text-gray-900">{alias.aliasName}</TableCell>
-                          <TableCell className="py-0.5 text-sm text-gray-500">{alias.targetModelGroup}</TableCell>
+                          <TableCell className="py-0.5 text-sm whitespace-normal text-foreground">
+                            {alias.aliasName}
+                          </TableCell>
+                          <TableCell className="py-0.5 text-sm whitespace-normal text-muted-foreground">
+                            {alias.targetModelGroup}
+                          </TableCell>
+                          <TableCell className="py-0.5">
+                            <div className="flex items-center gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                disabled={preferenceScope === null}
+                                aria-label={`${visiblePins.includes(alias.aliasName) ? "Unpin" : "Pin"} alias ${alias.aliasName}`}
+                                aria-pressed={visiblePins.includes(alias.aliasName)}
+                                onClick={() =>
+                                  updatePreferences({
+                                    ...preferences,
+                                    pinned: visiblePins.includes(alias.aliasName)
+                                      ? visiblePins.filter((name) => name !== alias.aliasName)
+                                      : [...visiblePins, alias.aliasName],
+                                  })
+                                }
+                              >
+                                {visiblePins.includes(alias.aliasName) ? (
+                                  <PinOff className="size-3.5 text-primary" />
+                                ) : (
+                                  <Pin className="size-3.5" />
+                                )}
+                              </Button>
+                              {visiblePins.includes(alias.aliasName) &&
+                                ([-1, 1] as const).map((direction) => (
+                                  <Button
+                                    key={direction}
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    aria-label={`Move ${alias.aliasName} ${direction === -1 ? "up" : "down"}`}
+                                    disabled={
+                                      visiblePins.indexOf(alias.aliasName) + direction < 0 ||
+                                      visiblePins.indexOf(alias.aliasName) + direction >= visiblePins.length
+                                    }
+                                    onClick={() =>
+                                      updatePreferences({
+                                        ...preferences,
+                                        pinned: movePinnedAlias(visiblePins, alias.aliasName, direction),
+                                      })
+                                    }
+                                  >
+                                    {direction === -1 ? (
+                                      <ArrowUp className="size-3.5" />
+                                    ) : (
+                                      <ArrowDown className="size-3.5" />
+                                    )}
+                                  </Button>
+                                ))}
+                            </div>
+                          </TableCell>
                           <TableCell className="py-0.5 whitespace-nowrap">
                             <div className="flex space-x-2">
                               <button
                                 onClick={() => handleEditAlias(alias)}
-                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
+                                disabled={writesDisabled}
+                                aria-label={`Edit alias ${alias.aliasName}`}
+                                className={`text-xs px-2 py-1 rounded-sm ${writesDisabled ? "bg-border text-muted-foreground cursor-not-allowed" : "bg-info/10 text-info hover:bg-info/15"}`}
                               >
                                 <PencilIcon className="w-3 h-3" />
                               </button>
                               <button
                                 onClick={() => deleteAlias(alias.id)}
-                                className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded hover:bg-red-100"
+                                disabled={writesDisabled}
+                                aria-label={`Delete alias ${alias.aliasName}`}
+                                className={`text-xs px-2 py-1 rounded-sm ${writesDisabled ? "bg-border text-muted-foreground cursor-not-allowed" : "bg-destructive/10 text-destructive hover:bg-destructive/15"}`}
                               >
                                 <TrashIcon className="w-3 h-3" />
                               </button>
@@ -300,7 +495,10 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                   ))}
                   {aliases.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={3} className="py-0.5 text-sm text-gray-500 text-center">
+                      <TableCell
+                        colSpan={4}
+                        className="py-0.5 text-sm whitespace-normal text-muted-foreground text-center"
+                      >
                         No aliases added yet. Add a new alias above.
                       </TableCell>
                     </TableRow>
@@ -311,18 +509,18 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
           </div>
 
           {/* Configuration Example */}
-          <Card>
-            <Title className="mb-4">Configuration Example</Title>
-            <Text className="text-gray-600 mb-4">
+          <Card className="px-6">
+            <CardTitle className="mb-4">Configuration Example</CardTitle>
+            <p className="text-muted-foreground mb-4">
               Here&apos;s how your current aliases would look in the config.yaml:
-            </Text>
-            <div className="bg-gray-100 rounded-lg p-4 font-mono text-sm">
-              <div className="text-gray-700">
+            </p>
+            <div className="bg-muted rounded-lg p-4 font-mono text-sm">
+              <div className="text-foreground">
                 router_settings:
                 <br />
                 &nbsp;&nbsp;model_group_alias:
                 {Object.keys(aliasObject).length === 0 ? (
-                  <span className="text-gray-500">
+                  <span className="text-muted-foreground">
                     <br />
                     &nbsp;&nbsp;&nbsp;&nbsp;# No aliases configured yet
                   </span>

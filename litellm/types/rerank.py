@@ -4,47 +4,69 @@ https://docs.cohere.com/reference/rerank
 
 """
 
-from typing import List, Optional, Union
+from typing import Literal
 
-from pydantic import BaseModel, PrivateAttr
-from typing_extensions import Required, TypedDict
+from pydantic import ConfigDict, PrivateAttr
+from typing_extensions import ReadOnly, Required, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class RerankRequest(BaseModel):
+class RerankRequest(LiteLLMBaseModel):
     model: str
     query: str
-    top_n: Optional[int] = None
-    documents: List[Union[str, dict]]
-    rank_fields: Optional[List[str]] = None
-    return_documents: Optional[bool] = None
-    max_chunks_per_doc: Optional[int] = None
-    max_tokens_per_doc: Optional[int] = None
+    top_n: int | None = None
+    documents: list[str | dict]
+    rank_fields: list[str] | None = None
+    return_documents: bool | None = None
+    max_chunks_per_doc: int | None = None
+    max_tokens_per_doc: int | None = None
+    # Optional task/query instruction passed through to providers that support it
+    # (e.g. hosted vLLM / Qwen3-Reranker, DeepInfra). Omitted from the outgoing
+    # request when None, so this is fully backward-compatible.
+    instruction: str | None = None
+    truncate_prompt_tokens: int | None = None
+    truncation_side: Literal["left", "right"] | None = None
+    max_tokens_per_query: int | None = None
+
+
+class HostedVLLMRerankTruncationParams(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    truncate_prompt_tokens: int | None = None
+    truncation_side: Literal["left", "right"] | None = None
+    max_tokens_per_query: int | None = None
+    max_tokens_per_doc: int | None = None
 
 
 class OptionalRerankParams(TypedDict, total=False):
     query: str
-    top_n: Optional[int]
-    documents: List[Union[str, dict]]
-    rank_fields: Optional[List[str]]
-    return_documents: Optional[bool]
-    max_chunks_per_doc: Optional[int]
-    max_tokens_per_doc: Optional[int]
+    top_n: int | None
+    documents: list[str | dict]
+    rank_fields: list[str] | None
+    return_documents: bool | None
+    max_chunks_per_doc: int | None
+    max_tokens_per_doc: int | None
+    instruction: str | None
+    truncate_prompt_tokens: ReadOnly[int | None]
+    truncation_side: ReadOnly[Literal["left", "right"] | None]
+    max_tokens_per_query: ReadOnly[int | None]
 
 
 class RerankBilledUnits(TypedDict, total=False):
-    search_units: Optional[int]
-    total_tokens: Optional[int]
+    search_units: int | None
+    total_tokens: int | None
 
 
 class RerankTokens(TypedDict, total=False):
-    input_tokens: Optional[int]
-    output_tokens: Optional[int]
+    input_tokens: int | None
+    output_tokens: int | None
 
 
 class RerankResponseMeta(TypedDict, total=False):
-    api_version: Optional[dict]
-    billed_units: Optional[RerankBilledUnits]
-    tokens: Optional[RerankTokens]
+    api_version: dict | None
+    billed_units: RerankBilledUnits | None
+    tokens: RerankTokens | None
 
 
 class RerankResponseDocument(TypedDict):
@@ -57,15 +79,21 @@ class RerankResponseResult(TypedDict, total=False):
     document: RerankResponseDocument
 
 
-class RerankResponse(BaseModel):
-    id: Optional[str] = None
-    results: Optional[List[RerankResponseResult]] = (
-        None  # Contains index and relevance_score
-    )
-    meta: Optional[RerankResponseMeta] = None  # Contains api_version and billed_units
+class RerankResponse(LiteLLMBaseModel):
+    id: str | None = None
+    results: list[RerankResponseResult] | None = None  # Contains index and relevance_score
+    meta: RerankResponseMeta | None = None  # Contains api_version and billed_units
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __getitem__(self, key):
         return self.__dict__[key]
@@ -73,5 +101,5 @@ class RerankResponse(BaseModel):
     def get(self, key, default=None):
         return self.__dict__.get(key, default)
 
-    def __contains__(self, key):
+    def __contains__(self, key) -> bool:
         return key in self.__dict__

@@ -1,14 +1,17 @@
 # duplicate -> https://github.com/confident-ai/deepeval/blob/main/deepeval/confident/api.py
 import logging
-import httpx
 from enum import Enum
+from typing import Final
+
+import httpx
+
 from litellm._logging import verbose_logger
 
-DEEPEVAL_BASE_URL = "https://deepeval.confident-ai.com"
-DEEPEVAL_BASE_URL_EU = "https://eu.deepeval.confident-ai.com"
-API_BASE_URL = "https://api.confident-ai.com"
-API_BASE_URL_EU = "https://eu.api.confident-ai.com"
-retryable_exceptions = httpx.HTTPError
+DEEPEVAL_BASE_URL: Final = "https://deepeval.confident-ai.com"
+DEEPEVAL_BASE_URL_EU: Final = "https://eu.deepeval.confident-ai.com"
+API_BASE_URL: Final = "https://api.confident-ai.com"
+API_BASE_URL_EU: Final = "https://eu.api.confident-ai.com"
+retryable_exceptions: Final = httpx.HTTPError
 
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
@@ -18,12 +21,12 @@ from litellm.llms.custom_httpx.http_handler import (
 
 
 def log_retry_error(details):
-    exception = details.get("exception")
-    tries = details.get("tries")
+    exception: Final = details.get("exception")
+    tries: Final = details.get("tries")
     if exception:
-        logging.error(f"Confident AI Error: {exception}. Retrying: {tries} time(s)...")
+        logging.error("Confident AI Error: %s. Retrying: %s time(s)...", exception, tries)
     else:
-        logging.error(f"Retrying: {tries} time(s)...")
+        logging.error("Retrying: %s time(s)...", tries)
 
 
 class HttpMethods(Enum):
@@ -58,13 +61,9 @@ class Api:
         # using the global non-eu variable for base url
         self.base_api_url = base_url or API_BASE_URL
         self.sync_http_handler = HTTPHandler()
-        self.async_http_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self.async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
-    def _http_request(
-        self, method: str, url: str, headers=None, json=None, params=None
-    ):
+    def _http_request(self, method: str, url: str, headers=None, json=None, params=None):
         if method != "POST":
             raise Exception("Only POST requests are supported")
         try:
@@ -79,11 +78,9 @@ class Api:
         except Exception as e:
             raise e
 
-    def send_request(
-        self, method: HttpMethods, endpoint: Endpoints, body=None, params=None
-    ):
-        url = f"{self.base_api_url}{endpoint.value}"
-        res = self._http_request(
+    def send_request(self, method: HttpMethods, endpoint: Endpoints, body=None, params=None):
+        url: Final = f"{self.base_api_url}{endpoint.value}"
+        res: Final = self._http_request(
             method=method.value,
             url=url,
             headers=self._headers,
@@ -100,13 +97,11 @@ class Api:
             verbose_logger.debug(res.json())
             raise Exception(res.json().get("error", res.text))
 
-    async def a_send_request(
-        self, method: HttpMethods, endpoint: Endpoints, body=None, params=None
-    ):
+    async def a_send_request(self, method: HttpMethods, endpoint: Endpoints, body=None, params=None):
         if method != HttpMethods.POST:
             raise Exception("Only POST requests are supported")
 
-        url = f"{self.base_api_url}{endpoint.value}"
+        url: Final = f"{self.base_api_url}{endpoint.value}"
         try:
             await self.async_http_handler.post(
                 url=url,

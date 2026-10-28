@@ -1,5 +1,7 @@
 #### Search Endpoints #####
 
+from typing import Final
+
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
@@ -8,8 +10,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 @router.post(
@@ -40,7 +43,7 @@ async def search(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    search_tool_name: Optional[str] = None,
+    search_tool_name: str | None = None,
 ):
     """
     Search endpoint for performing web searches.
@@ -55,7 +58,7 @@ async def search(
     Example with search_tool_name in URL (recommended - keeps body Perplexity-compatible):
     ```bash
     curl -X POST "http://localhost:4000/v1/search/litellm-search" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "query": "latest AI developments 2024",
@@ -68,7 +71,7 @@ async def search(
     Example with search_tool_name in body:
     ```bash
     curl -X POST "http://localhost:4000/v1/search" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "search_tool_name": "litellm-search",
@@ -125,74 +128,46 @@ async def search(
     )
 
     # Read request body
-    body = await request.body()
-    data = orjson.loads(body)
+    body: Final = await request.body()
+    data: Final = orjson.loads(body)
 
     # If search_tool_name is provided in URL path, use it (takes precedence over body)
     if search_tool_name is not None:
         data["search_tool_name"] = search_tool_name
 
+    from litellm.proxy.auth.auth_checks import can_token_call_search_tool
+    from litellm.proxy.common_utils.http_parsing_utils import resolve_inference_model
+
+    routed_search_tool_name: Final = data.get("search_tool_name") or resolve_inference_model(
+        data.get("model"), general_settings, user_model
+    )
+    if not isinstance(routed_search_tool_name, str) or not routed_search_tool_name:
+        raise ProxyMissingRequiredParamError(route="/search", param="search_tool_name")
+    try:
+        await can_token_call_search_tool(search_tool_name=routed_search_tool_name, valid_token=user_api_key_dict)
+    except ProxyException as e:
+        verbose_proxy_logger.debug("Search tool authorization denied: %s", e.type)
+        raise
+
     if "search_tool_name" in data and data["search_tool_name"]:
         data["model"] = data["search_tool_name"]
-        search_tool_name_value = data["search_tool_name"]
-
-        # Authorization check: verify key can access this search tool
-        from litellm.proxy.auth.auth_checks import (
-            can_key_call_search_tool,
-            can_team_call_search_tool,
-            get_team_object,
-        )
-
-        try:
-            # Check key-level access
-            await can_key_call_search_tool(
-                search_tool_name=search_tool_name_value,
-                valid_token=user_api_key_dict,
-            )
-
-            # Check team-level access if key is associated with a team
-            if user_api_key_dict.team_id:
-                from litellm.proxy.proxy_server import (
-                    prisma_client,
-                    proxy_logging_obj,
-                    user_api_key_cache,
-                )
-
-                team_object = await get_team_object(
-                    team_id=user_api_key_dict.team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=user_api_key_dict.parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-                await can_team_call_search_tool(
-                    search_tool_name=search_tool_name_value,
-                    team_object=team_object,
-                )
-        except Exception as e:
-            verbose_proxy_logger.error(
-                f"Search tool authorization failed for {search_tool_name_value}: {str(e)}"
-            )
-            raise
+        search_tool_name_value: Final = data["search_tool_name"]
 
         if llm_router is not None and hasattr(llm_router, "search_tools"):
             verbose_proxy_logger.debug(
-                f"Search endpoint - Looking for search_tool_name: {search_tool_name_value}. "
-                f"Available search tools in router: {[tool.get('search_tool_name') for tool in llm_router.search_tools]}. "
-                f"Total search tools: {len(llm_router.search_tools)}"
+                "Search endpoint - Looking for search_tool_name: %s. Available search tools in router: %s. Total search tools: %s",
+                search_tool_name_value,
+                [tool.get("search_tool_name") for tool in llm_router.search_tools],
+                len(llm_router.search_tools),
             )
 
-            matching_tools = [
-                tool
-                for tool in llm_router.search_tools
-                if tool.get("search_tool_name") == search_tool_name_value
+            matching_tools: Final = [
+                tool for tool in llm_router.search_tools if tool.get("search_tool_name") == search_tool_name_value
             ]
 
             if matching_tools:
-                search_tool = matching_tools[0]
-                search_provider = search_tool.get("litellm_params", {}).get(
-                    "search_provider"
-                )
+                search_tool: Final = matching_tools[0]
+                search_provider: Final = search_tool.get("litellm_params", {}).get("search_provider")
 
                 if search_provider:
                     data["custom_llm_provider"] = search_provider
@@ -212,7 +187,7 @@ async def search(
         data["metadata"]["user_api_key_team_id"] = user_api_key_dict.team_id
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -233,7 +208,7 @@ async def search(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -267,7 +242,7 @@ async def list_search_tools(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/search/tools" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     
     Response:
@@ -287,15 +262,13 @@ async def list_search_tools(
     from litellm.proxy.proxy_server import llm_router
 
     try:
-        search_tools_list = []
+        search_tools_list: Final = []
 
         if llm_router is not None and hasattr(llm_router, "search_tools"):
             for tool in llm_router.search_tools:
                 tool_info = {
                     "search_tool_name": tool.get("search_tool_name"),
-                    "search_provider": tool.get("litellm_params", {}).get(
-                        "search_provider"
-                    ),
+                    "search_provider": tool.get("litellm_params", {}).get("search_provider"),
                 }
 
                 # Add description if available
@@ -310,5 +283,5 @@ async def list_search_tools(
     except Exception as e:
         from litellm._logging import verbose_proxy_logger
 
-        verbose_proxy_logger.exception(f"Error listing search tools: {e}")
+        verbose_proxy_logger.exception("Error listing search tools: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

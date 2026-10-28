@@ -2,13 +2,15 @@
 Configuration models for the QualityRouter.
 """
 
-from typing import Dict, List, Optional
+from typing import Final
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 # Default mapping from ComplexityTier name (string) to quality tier (int).
 # Higher tier = higher capability requirement.
-DEFAULT_COMPLEXITY_TO_QUALITY: Dict[str, int] = {
+DEFAULT_COMPLEXITY_TO_QUALITY: Final[dict[str, int]] = {
     "SIMPLE": 1,
     "MEDIUM": 2,
     "COMPLEX": 3,
@@ -16,10 +18,10 @@ DEFAULT_COMPLEXITY_TO_QUALITY: Dict[str, int] = {
 }
 
 
-class QualityRouterConfig(BaseModel):
+class QualityRouterConfig(LiteLLMBaseModel):
     """Configuration for the QualityRouter."""
 
-    available_models: List[str] = Field(
+    available_models: list[str] = Field(
         default_factory=list,
         description=(
             "List of candidate model names this router may route to. Each model "
@@ -27,12 +29,12 @@ class QualityRouterConfig(BaseModel):
         ),
     )
 
-    default_model: Optional[str] = Field(
+    default_model: str | None = Field(
         default=None,
         description="Fallback model when no quality tier resolves.",
     )
 
-    complexity_to_quality: Dict[str, int] = Field(
+    complexity_to_quality: dict[str, int] = Field(
         default_factory=lambda: DEFAULT_COMPLEXITY_TO_QUALITY.copy(),
         description="Mapping from ComplexityTier name to quality tier (int).",
     )
@@ -40,7 +42,7 @@ class QualityRouterConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-class RoutingPreferences(BaseModel):
+class RoutingPreferences(LiteLLMBaseModel):
     """Per-deployment routing preferences declared on model_info."""
 
     quality_tier: int = Field(
@@ -48,7 +50,7 @@ class RoutingPreferences(BaseModel):
         description="The quality tier this deployment satisfies.",
     )
 
-    keywords: List[str] = Field(
+    keywords: list[str] = Field(
         default_factory=list,
         description=(
             "Substring keywords (case-insensitive) that, when present in the "
@@ -58,7 +60,7 @@ class RoutingPreferences(BaseModel):
         ),
     )
 
-    order: Optional[int] = Field(
+    order: int | None = Field(
         default=None,
         description=(
             "Explicit priority used to break ties between deployments at the "

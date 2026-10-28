@@ -1,29 +1,27 @@
-from typing import Optional
+from pydantic import Field
 
-from pydantic import BaseModel, Field
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .base import GuardrailConfigModel
 
 
-class PangeaGuardrailConfigModelOptionalParams(BaseModel):
-    pangea_input_recipe: Optional[str] = Field(
+class PangeaGuardrailConfigModelOptionalParams(LiteLLMBaseModel):
+    pangea_input_recipe: str | None = Field(
         default=None,
         description="The Pangea input recipe for the Pangea guardrail. Used for pre-call hook.",
     )
-    pangea_output_recipe: Optional[str] = Field(
+    pangea_output_recipe: str | None = Field(
         default=None,
         description="The Pangea output recipe for the Pangea guardrail. Used for post-call hook.",
     )
 
 
-class PangeaGuardrailConfigModel(
-    GuardrailConfigModel[PangeaGuardrailConfigModelOptionalParams]
-):
-    api_key: Optional[str] = Field(
+class PangeaGuardrailConfigModel(GuardrailConfigModel[PangeaGuardrailConfigModelOptionalParams]):
+    api_key: str | None = Field(
         default=None,
         description="The Pangea API key. Reads from PANGEA_API_KEY env var if None.",
     )
-    api_base: Optional[str] = Field(
+    api_base: str | None = Field(
         default=None,
         description="The Pangea API base URL. Defaults to https://ai-guard.aws.us.pangea.cloud. Also checks if the PANGEA_API_BASE env var is set.",
     )

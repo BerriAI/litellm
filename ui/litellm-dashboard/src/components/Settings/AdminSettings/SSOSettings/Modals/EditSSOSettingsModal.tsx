@@ -1,13 +1,20 @@
 "use client";
 
-import { Button, Form, Modal, Space } from "antd";
-import React, { useEffect } from "react";
-import BaseSSOSettingsForm from "./BaseSSOSettingsForm";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import React, { useMemo } from "react";
+import BaseSSOSettingsForm, {
+  emptySSOSettingsFormValues,
+  submitMountedSSOValues,
+  useSSOSettingsForm,
+  type SSOSettingsFormValues,
+} from "./BaseSSOSettingsForm";
+import { Button } from "@/components/ui/button";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { processSSOSettingsPayload } from "../utils";
-import { useSSOSettings } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
+import { detectSSOProvider, processSSOSettingsPayload } from "../utils";
+import { useSSOSettings, type SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettings";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface EditSSOSettingsModalProps {
   isVisible: boolean;
@@ -15,49 +22,39 @@ interface EditSSOSettingsModalProps {
   onSuccess: () => void;
 }
 
-const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, onCancel, onSuccess }) => {
-  const [form] = Form.useForm();
+const joinTeams = (teams: string[] | undefined): string => {
+  if (!teams || teams.length === 0) return "";
+  return teams.join(", ");
+};
 
-  // Use react-query hooks for SSO settings
-  const ssoSettings = useSSOSettings();
-  const { mutateAsync, isPending } = useEditSSOSettings();
-  useEffect(() => {
-    if (isVisible && ssoSettings.data && ssoSettings.data.values) {
-      const ssoData = ssoSettings.data;
-      console.log("Raw SSO data received:", ssoData); // Debug log
-      console.log("SSO values:", ssoData.values); // Debug log
-      console.log("user_email from API:", ssoData.values.user_email); // Debug log
+export const toSSOFormValues = (values: SSOSettingsValues): SSOSettingsFormValues => {
+  const roleMappings = values.role_mappings;
+  const teamMappings = values.team_mappings;
 
-      // Determine which SSO provider is configured
-      let selectedProvider = null;
-      if (ssoData.values.google_client_id) {
-        selectedProvider = "google";
-      } else if (ssoData.values.microsoft_client_id) {
-        selectedProvider = "microsoft";
-      } else if (ssoData.values.generic_client_id) {
-        // Check if it looks like Okta based on endpoints
-        if (
-          ssoData.values.generic_authorization_endpoint?.includes("okta") ||
-          ssoData.values.generic_authorization_endpoint?.includes("auth0")
-        ) {
-          selectedProvider = "okta";
-        } else {
-          selectedProvider = "generic";
-        }
-      }
-
-      // Extract role mappings if they exist
-      let roleMappingFields = {};
-      if (ssoData.values.role_mappings) {
-        const roleMappings = ssoData.values.role_mappings;
-
-        // Helper function to join arrays into comma-separated strings
-        const joinTeams = (teams: string[] | undefined): string => {
-          if (!teams || teams.length === 0) return "";
-          return teams.join(", ");
-        };
-
-        roleMappingFields = {
+  return {
+    ...emptySSOSettingsFormValues,
+    sso_provider: detectSSOProvider(values) ?? "",
+    google_client_id: values.google_client_id ?? "",
+    google_client_secret: values.google_client_secret ?? "",
+    microsoft_client_id: values.microsoft_client_id ?? "",
+    microsoft_client_secret: values.microsoft_client_secret ?? "",
+    microsoft_tenant: values.microsoft_tenant ?? "",
+    generic_client_id: values.generic_client_id ?? "",
+    generic_client_secret: values.generic_client_secret ?? "",
+    generic_authorization_endpoint: values.generic_authorization_endpoint ?? "",
+    generic_token_endpoint: values.generic_token_endpoint ?? "",
+    generic_userinfo_endpoint: values.generic_userinfo_endpoint ?? "",
+    generic_scope: values.generic_scope ?? undefined,
+    saml_idp_metadata_url: values.saml_idp_metadata_url ?? undefined,
+    saml_idp_metadata_xml: values.saml_idp_metadata_xml ?? undefined,
+    saml_sp_entity_id: values.saml_sp_entity_id ?? undefined,
+    user_email: values.user_email ?? "",
+    proxy_base_url: values.proxy_base_url ?? "",
+    ...(values.saml_allow_unsolicited != null
+      ? { saml_allow_unsolicited: values.saml_allow_unsolicited === "true" }
+      : {}),
+    ...(roleMappings
+      ? {
           use_role_mappings: true,
           group_claim: roleMappings.group_claim,
           default_role: roleMappings.default_role || "internal_user",
@@ -65,82 +62,75 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
           admin_viewer_teams: joinTeams(roleMappings.roles?.proxy_admin_viewer),
           internal_user_teams: joinTeams(roleMappings.roles?.internal_user),
           internal_viewer_teams: joinTeams(roleMappings.roles?.internal_user_viewer),
-        };
-      }
-
-      // Extract team mappings if they exist
-      let teamMappingFields = {};
-      if (ssoData.values.team_mappings) {
-        const teamMappings = ssoData.values.team_mappings;
-        teamMappingFields = {
+        }
+      : {}),
+    ...(teamMappings
+      ? {
           use_team_mappings: true,
           team_ids_jwt_field: teamMappings.team_ids_jwt_field,
-        };
-      }
+        }
+      : {}),
+  };
+};
 
-      // Set form values with existing data (excluding UI access control fields)
-      const formValues = {
-        sso_provider: selectedProvider,
-        ...ssoData.values,
-        ...roleMappingFields,
-        ...teamMappingFields,
-      };
+const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, onCancel, onSuccess }) => {
+  const ssoSettings = useSSOSettings();
+  const { mutateAsync, isPending } = useEditSSOSettings();
 
-      console.log("Setting form values:", formValues); // Debug log
+  const seededValues = useMemo(
+    () => (ssoSettings.data?.values ? toSSOFormValues(ssoSettings.data.values) : emptySSOSettingsFormValues),
+    [ssoSettings.data],
+  );
 
-      // Clear form first, then set values with a small delay to ensure proper initialization
-      form.resetFields();
-      setTimeout(() => {
-        form.setFieldsValue(formValues);
-        console.log("Form values set, current form values:", form.getFieldsValue()); // Debug log
-      }, 100);
-    }
-  }, [isVisible, ssoSettings.data, form]);
+  const form = useSSOSettingsForm("sso-settings", seededValues);
 
-  // Enhanced form submission handler
-  const handleFormSubmit = async (formValues: Record<string, any>) => {
+  const handleFormSubmit = async (formValues: SSOSettingsFormValues) => {
     try {
       const payload = processSSOSettingsPayload(formValues);
 
       await mutateAsync(payload, {
         onSuccess: () => {
-          NotificationsManager.success("SSO settings updated successfully");
+          toast.success("SSO settings updated successfully");
           onSuccess();
         },
         onError: (error) => {
-          NotificationsManager.fromBackend("Failed to save SSO settings: " + parseErrorMessage(error));
+          toast.fromError("Failed to save SSO settings: " + parseErrorMessage(error));
         },
       });
     } catch (error) {
-      // Handle processing errors gracefully
-      NotificationsManager.fromBackend("Failed to process SSO settings: " + parseErrorMessage(error));
+      toast.fromError("Failed to process SSO settings: " + parseErrorMessage(error));
     }
   };
 
   const handleCancel = () => {
-    form.resetFields();
+    form.reset(seededValues);
     onCancel();
   };
 
   return (
-    <Modal
-      title="Edit SSO Settings"
-      open={isVisible}
-      width={800}
-      footer={
-        <Space>
-          <Button onClick={handleCancel} disabled={isPending}>
-            Cancel
-          </Button>
-          <Button loading={isPending} onClick={() => form.submit()}>
-            {isPending ? "Saving..." : "Save"}
-          </Button>
-        </Space>
-      }
-      onCancel={handleCancel}
-    >
-      <BaseSSOSettingsForm form={form} onFormSubmit={handleFormSubmit} />
-    </Modal>
+    <Dialog open={isVisible} onOpenChange={(open) => !open && handleCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+        <DialogHeader>
+          <DialogTitle>Edit SSO Settings</DialogTitle>
+        </DialogHeader>
+        <BaseSSOSettingsForm form={form} onFormSubmit={handleFormSubmit} />
+        <DialogFooter>
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="outline" onClick={handleCancel} disabled={isPending}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={isPending}
+              onClick={submitMountedSSOValues(form, "sso-settings", handleFormSubmit)}
+            >
+              {isPending && <UiLoadingSpinner className="size-4 mr-1" />}
+              {isPending ? "Saving..." : "Save"}
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

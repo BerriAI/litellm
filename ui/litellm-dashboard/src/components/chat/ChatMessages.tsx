@@ -1,19 +1,27 @@
 "use client";
 
-import { ToolOutlined, CopyOutlined, CheckOutlined, EditOutlined } from "@ant-design/icons";
-import { Collapse, Tooltip } from "antd";
+import { Wrench, Copy, Check, Pencil } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Button } from "@/components/ui/button";
+import { Bubble, BubbleContent } from "@/components/ui/Bubble";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
+import { Skeleton } from "@/components/ui/skeleton";
 import React, { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import ReasoningContent from "@/components/chat_ui/ReasoningContent";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
-import { ChatMessage } from "./types";
+import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
+import { ChatAttachment, ChatImageAttachment, ChatMessage } from "./types";
+import ChatFileChip from "./ChatFileChip";
+import { isChatImageUrl } from "./imageHelpers";
 
-const { Panel } = Collapse;
-
-// Keys whose values must be redacted in tool args display
 const REDACTED_KEY_PATTERNS = /token|key|secret|password|auth/i;
 
 function redactSensitiveValues(obj: Record<string, unknown>): Record<string, unknown> {
@@ -43,45 +51,110 @@ function formatTimestamp(ts: number): string {
   return `${hh}:${mm}`;
 }
 
-// Shared markdown code renderer matching ReasoningContent style.
-// react-markdown v9 removed the `inline` prop; detect fenced blocks via language className.
 function MarkdownCodeRenderer({
   node,
   className,
   children,
   ...props
 }: React.ComponentPropsWithoutRef<"code"> & { node?: unknown }) {
+  const syntaxTheme = useSyntaxTheme(coy);
   const match = /language-(\w+)/.exec(className || "");
   return match ? (
-    <SyntaxHighlighter
-      style={coy as Record<string, React.CSSProperties>}
-      language={match[1]}
-      PreTag="div"
-      className="rounded-md my-2"
-      {...(props as Record<string, unknown>)}
-    >
+    <SyntaxHighlighter {...props} style={syntaxTheme} language={match[1]} PreTag="div" className="rounded-md my-2">
       {String(children).replace(/\n$/, "")}
     </SyntaxHighlighter>
   ) : (
-    <code className={`${className ?? ""} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} {...props}>
+    <code className={`${className ?? ""} px-1.5 py-0.5 rounded bg-muted text-sm font-mono`} {...props}>
       {children}
     </code>
   );
 }
 
-// ------- Sub-components -------
+const markdownComponents: Components = {
+  code: MarkdownCodeRenderer,
+  pre: ({ node, ...props }) => <pre className="max-w-full overflow-x-auto" {...props} />,
+  h1: ({ node, ...props }) => <h1 className="mt-6 mb-2 text-xl font-semibold tracking-tight first:mt-0" {...props} />,
+  h2: ({ node, ...props }) => <h2 className="mt-6 mb-2 text-lg font-semibold tracking-tight first:mt-0" {...props} />,
+  h3: ({ node, ...props }) => <h3 className="mt-5 mb-2 text-base font-semibold tracking-tight first:mt-0" {...props} />,
+  p: ({ node, ...props }) => <p className="my-3 first:mt-0 last:mb-0" {...props} />,
+  blockquote: ({ node, ...props }) => <blockquote className="my-3 border-l-2 pl-4 text-muted-foreground" {...props} />,
+  ul: ({ node, ...props }) => <ul className="my-3 list-disc space-y-1 pl-5" {...props} />,
+  ol: ({ node, ...props }) => <ol className="my-3 list-decimal space-y-1 pl-5" {...props} />,
+  table: ({ node, ...props }) => <Table {...props} />,
+  thead: ({ node, ...props }) => <TableHeader {...props} />,
+  tbody: ({ node, ...props }) => <TableBody {...props} />,
+  tr: ({ node, ...props }) => <TableRow {...props} />,
+  th: ({ node, ...props }) => <TableHead className="whitespace-normal py-2" {...props} />,
+  td: ({ node, ...props }) => <TableCell {...props} />,
+};
+
+const markdownWithoutImages: Components = {
+  ...markdownComponents,
+  img: ({ alt }) => <span>{alt || "Image omitted"}</span>,
+};
+
+function ChatImage({ image, allowImages }: { image: ChatImageAttachment; allowImages: boolean }) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  if (!allowImages) return <span className="text-sm text-muted-foreground">{image.name}</span>;
+  if (!isChatImageUrl(image.url) || failedUrl === image.url) {
+    return (
+      <div className="rounded-xl border bg-muted p-4 text-sm text-muted-foreground">
+        {image.name} — image unavailable. Start a new chat and attach a saved copy to use it again.
+      </div>
+    );
+  }
+  return (
+    <figure className="m-0 min-w-0 space-y-1.5">
+      {/* User-supplied and generated images may be data URLs or come from any configured provider. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={image.url}
+        alt={image.name}
+        className="max-h-96 w-full rounded-xl border object-contain"
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        onError={() => setFailedUrl(image.url)}
+      />
+      <Button
+        variant="ghost"
+        size="xs"
+        nativeButton={false}
+        role="link"
+        render={<a href={image.url} target="_blank" rel="noopener noreferrer" download={image.name} />}
+      >
+        Open image
+      </Button>
+    </figure>
+  );
+}
+
+function ChatImages({ images, allowImages }: { images?: ChatAttachment[]; allowImages: boolean }) {
+  if (!images?.length) return null;
+  return (
+    <div className={`grid gap-3 ${images.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
+      {images.map((image) =>
+        image.kind === "file" ? (
+          <ChatFileChip key={image.id} file={image} />
+        ) : (
+          <ChatImage key={image.id} image={image} allowImages={allowImages} />
+        ),
+      )}
+    </div>
+  );
+}
 
 interface UserBubbleProps {
   message: ChatMessage;
+  allowImages: boolean;
   onEdit?: (messageId: string, newContent: string) => void;
   isStreaming?: boolean;
 }
 
-function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
-  const [hovered, setHovered] = useState(false);
+function UserBubble({ message, allowImages, onEdit, isStreaming }: UserBubbleProps) {
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(message.content);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const showEditAction = !isStreaming && Boolean(onEdit);
 
   useEffect(() => {
     if (editing && textareaRef.current) {
@@ -90,7 +163,6 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
     }
   }, [editing]);
 
-  // Auto-resize textarea
   useEffect(() => {
     const ta = textareaRef.current;
     if (!ta) return;
@@ -100,7 +172,8 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
 
   const handleSave = () => {
     const trimmed = editValue.trim();
-    if (trimmed && trimmed !== message.content && onEdit) {
+    const hasContent = Boolean(trimmed || message.attachments?.length);
+    if (hasContent && trimmed !== message.content && onEdit) {
       onEdit(message.id, trimmed);
     }
     setEditing(false);
@@ -119,79 +192,35 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
 
   if (editing) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-        <div
-          style={{
-            width: "72%",
-            background: "#fff",
-            border: "1.5px solid #1677ff",
-            borderRadius: 12,
-            overflow: "hidden",
-            boxShadow: "0 0 0 3px rgba(22,119,255,0.1)",
-          }}
-        >
-          <textarea
+      <div className="flex flex-col items-end">
+        <div className="w-[72%] bg-background border-2 border-primary rounded-xl overflow-hidden shadow-[0_0_0_3px_rgba(var(--primary)/0.1)]">
+          {message.attachments?.length ? (
+            <div className="p-3">
+              <ChatImages images={message.attachments} allowImages={allowImages} />
+            </div>
+          ) : null}
+          <Textarea
             ref={textareaRef}
+            aria-label="Edit message"
             value={editValue}
             onChange={(e) => setEditValue(e.target.value)}
             onKeyDown={handleKeyDown}
-            style={{
-              width: "100%",
-              padding: "10px 14px",
-              border: "none",
-              outline: "none",
-              resize: "none",
-              fontSize: 14,
-              lineHeight: "1.6",
-              color: "#111827",
-              fontFamily: "inherit",
-              background: "transparent",
-              boxSizing: "border-box",
-              minHeight: 40,
-            }}
+            className="w-full px-3.5 py-2.5 border-none outline-none resize-none text-sm leading-relaxed text-foreground font-[inherit] bg-transparent box-border min-h-[40px]"
           />
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "flex-end",
-              gap: 8,
-              padding: "6px 10px 8px",
-              borderTop: "1px solid #f0f0f0",
-            }}
-          >
-            <button
+          <div className="flex justify-end gap-2 px-2.5 py-1.5 border-t">
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => {
                 setEditValue(message.content);
                 setEditing(false);
               }}
-              style={{
-                padding: "4px 12px",
-                borderRadius: 6,
-                border: "1px solid #d1d5db",
-                background: "#fff",
-                color: "#374151",
-                fontSize: 13,
-                cursor: "pointer",
-              }}
             >
               Cancel
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={!editValue.trim()}
-              style={{
-                padding: "4px 12px",
-                borderRadius: 6,
-                border: "none",
-                background: editValue.trim() ? "#1677ff" : "#f3f4f6",
-                color: editValue.trim() ? "#fff" : "#9ca3af",
-                fontSize: 13,
-                fontWeight: 500,
-                cursor: editValue.trim() ? "pointer" : "not-allowed",
-              }}
-            >
-              Save &amp; Send
-            </button>
+            </Button>
+            <Button size="sm" onClick={handleSave} disabled={!editValue.trim() && !message.attachments?.length}>
+              Save & Send
+            </Button>
           </div>
         </div>
       </div>
@@ -199,106 +228,96 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
   }
 
   return (
-    <div
-      style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", width: "100%" }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 6, maxWidth: "72%" }}>
-        {/* Edit button — appears on hover, to the left of the bubble */}
-        {hovered && !isStreaming && onEdit && (
-          <Tooltip title="Edit message">
-            <button
-              onClick={() => {
-                setEditValue(message.content);
-                setEditing(true);
-              }}
-              style={{
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                padding: "4px 6px",
-                borderRadius: 5,
-                color: "#9ca3af",
-                fontSize: 13,
-                flexShrink: 0,
-                display: "flex",
-                alignItems: "center",
-                transition: "color 0.15s",
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.color = "#6b7280";
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.color = "#9ca3af";
-              }}
-            >
-              <EditOutlined />
-            </button>
-          </Tooltip>
+    <div className="group/user-message flex flex-col items-end w-full">
+      <div className="moyai-chat-user-row flex min-w-0 items-end gap-1.5">
+        {showEditAction && (
+          <TooltipProvider delay={300}>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Edit message"
+                    onClick={() => {
+                      setEditValue(message.content);
+                      setEditing(true);
+                    }}
+                    className="text-muted-foreground hover:text-foreground shrink-0 opacity-0 group-hover/user-message:opacity-100 group-focus-within/user-message:opacity-100 [@media(hover:none)]:opacity-100"
+                  >
+                    <Pencil className="size-3.5" />
+                  </Button>
+                }
+              />
+              <TooltipContent>
+                <p>Edit message</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
-        <div
-          style={{
-            backgroundColor: "#f0f2f5",
-            borderRadius: 16,
-            padding: "10px 14px",
-            fontSize: 14,
-            lineHeight: "1.6",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            color: "#111827",
-          }}
-        >
-          {message.content}
-        </div>
+        <Bubble variant="muted" align="end" className="moyai-chat-user-bubble max-w-full">
+          <BubbleContent className="space-y-3 whitespace-pre-wrap">
+            <ChatImages images={message.attachments} allowImages={allowImages} />
+            {message.content && <div>{message.content}</div>}
+          </BubbleContent>
+        </Bubble>
       </div>
-      <span style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>{formatTimestamp(message.timestamp)}</span>
+      <span className="text-[11px] text-muted-foreground mt-1">{formatTimestamp(message.timestamp)}</span>
     </div>
   );
 }
 
 interface AssistantBubbleProps {
   message: ChatMessage;
+  allowImages: boolean;
   isLastMessage: boolean;
   isStreaming: boolean;
   isTypingIndicator: boolean;
-  /** MCP events stored on the message — rendered inline below the response. */
   mcpEvents?: ChatMessage["mcpEvents"];
+  actions?: React.ReactNode;
 }
 
-function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicator, mcpEvents }: AssistantBubbleProps) {
-  // Ref to control ReasoningContent collapse on streaming end.
-  // ReasoningContent manages its own expanded state; we use a key to
-  // remount it (collapsed by default) when streaming finishes.
-  const reasoningKeyRef = useRef<number>(0);
+function AssistantBubble({
+  message,
+  allowImages,
+  isLastMessage,
+  isStreaming,
+  isTypingIndicator,
+  mcpEvents,
+  actions,
+}: AssistantBubbleProps) {
+  const [reasoningKey, setReasoningKey] = useState(0);
   const prevStreamingRef = useRef<boolean>(isStreaming);
 
   useEffect(() => {
     if (prevStreamingRef.current && !isStreaming) {
-      // Streaming just stopped — bump the key to remount ReasoningContent
-      // with isExpanded default (false won't work since it starts expanded).
-      // ReasoningContent always starts expanded on mount; we accept that
-      // behaviour and leave collapse-on-finish as a best-effort remount.
-      reasoningKeyRef.current += 1;
+      setReasoningKey((k) => k + 1);
     }
     prevStreamingRef.current = isStreaming;
   }, [isStreaming]);
 
-  const showReasoningPlaceholder = isLastMessage && isStreaming && !message.reasoningContent;
-
+  const isReceivingResponse = isLastMessage && isStreaming;
+  const showReasoningPlaceholder = isReceivingResponse && !message.reasoningContent && !message.imageGeneration;
   const showReasoning = !!message.reasoningContent || showReasoningPlaceholder;
 
   if (isTypingIndicator) {
+    if (message.imageGeneration) {
+      return (
+        <div role="status" className="w-full max-w-sm space-y-3">
+          <Skeleton className="aspect-square w-full rounded-2xl" />
+          <p className="text-sm text-muted-foreground">Creating your image…</p>
+        </div>
+      );
+    }
     return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "10px 4px" }}>
+      <div className="flex flex-col items-start">
+        <div className="flex items-center gap-1 px-1 py-2.5">
           <TypingDots />
         </div>
       </div>
     );
   }
 
-  // Split content at trailing "[stopped]"
   let mainContent = message.content;
   let stoppedSuffix = false;
   if (mainContent.endsWith("[stopped]")) {
@@ -307,40 +326,38 @@ function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicato
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", maxWidth: "80%" }}>
+    <Bubble variant="ghost" className="moyai-chat-assistant-bubble w-full items-start">
       {showReasoning &&
         (showReasoningPlaceholder ? (
           <ThinkingPlaceholder />
         ) : (
-          <ReasoningContent key={reasoningKeyRef.current} reasoningContent={message.reasoningContent!} />
+          <ReasoningContent key={reasoningKey} reasoningContent={message.reasoningContent!} />
         ))}
 
-      <div
-        style={{
-          fontSize: 14,
-          lineHeight: "1.7",
-          color: "#111827",
-          wordBreak: "break-word",
-        }}
-      >
+      <BubbleContent className="w-full text-foreground">
+        <ChatImages images={message.generatedImages} allowImages={allowImages} />
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
-          components={{
-            code: MarkdownCodeRenderer as React.ComponentType<React.ComponentPropsWithoutRef<"code">>,
-          }}
+          components={allowImages ? markdownComponents : markdownWithoutImages}
         >
           {mainContent}
         </ReactMarkdown>
-        {stoppedSuffix && <span style={{ color: "#9ca3af", fontStyle: "italic" }}> [stopped]</span>}
-      </div>
+        {stoppedSuffix && <span className="text-muted-foreground italic"> [stopped]</span>}
+      </BubbleContent>
 
-      <CopyButton text={mainContent} />
+      {actions ?? (mainContent.trim() && <CopyButton text={mainContent} />)}
       {mcpEvents && mcpEvents.length > 0 && (
-        <div style={{ marginTop: 8, maxWidth: "100%" }}>
+        <div className="mt-2 max-w-full">
           <MCPEventsDisplay events={mcpEvents} />
         </div>
       )}
-    </div>
+
+      <ResponseMetrics
+        timeToFirstToken={message.timeToFirstToken}
+        totalLatency={message.totalLatency}
+        usage={message.usage}
+      />
+    </Bubble>
   );
 }
 
@@ -354,39 +371,31 @@ function CopyButton({ text }: { text: string }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       })
-      .catch(() => {
-        // clipboard not available (non-HTTPS or permission denied) — silently no-op
-      });
+      .catch(() => {});
   };
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 6 }}>
-      <Tooltip title={copied ? "Copied!" : "Copy"}>
-        <button
-          onClick={handleCopy}
-          style={{
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            padding: "4px 6px",
-            borderRadius: 5,
-            color: copied ? "#52c41a" : "#9ca3af",
-            fontSize: 13,
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            transition: "color 0.15s",
-          }}
-          onMouseEnter={(e) => {
-            if (!copied) (e.currentTarget as HTMLButtonElement).style.color = "#6b7280";
-          }}
-          onMouseLeave={(e) => {
-            if (!copied) (e.currentTarget as HTMLButtonElement).style.color = "#9ca3af";
-          }}
-        >
-          {copied ? <CheckOutlined /> : <CopyOutlined />}
-        </button>
-      </Tooltip>
+    <div className="flex items-center gap-1 mt-1.5">
+      <TooltipProvider delay={300}>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={copied ? "Copied message" : "Copy message"}
+                onClick={handleCopy}
+                className={copied ? "text-success" : "text-muted-foreground hover:text-foreground"}
+              >
+                {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+              </Button>
+            }
+          />
+          <TooltipContent>
+            <p>{copied ? "Copied!" : "Copy"}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
   );
 }
@@ -403,21 +412,8 @@ function ThinkingPlaceholder() {
           animation: thinking-pulse 1.4s ease-in-out infinite;
         }
       `}</style>
-      <div
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "4px 10px",
-          marginBottom: 8,
-          backgroundColor: "#f9fafb",
-          border: "1px solid #e5e7eb",
-          borderRadius: 8,
-          fontSize: 12,
-          color: "#6b7280",
-        }}
-      >
-        <span className="chat-thinking-text">Thinking...</span>
+      <div className="inline-flex items-center gap-1.5 px-2.5 mb-2 bg-muted/50 border rounded-lg text-xs text-muted-foreground">
+        <span className="chat-thinking-text py-1">Thinking...</span>
       </div>
     </>
   );
@@ -435,7 +431,7 @@ function TypingDots() {
           width: 7px;
           height: 7px;
           border-radius: 50%;
-          background-color: #9ca3af;
+          background-color: var(--color-muted-foreground);
           animation: chat-typing-bounce 1.2s ease-in-out infinite;
         }
         .chat-dot:nth-child(2) { animation-delay: 0.2s; }
@@ -454,95 +450,42 @@ interface ToolCardProps {
 
 function ToolCard({ message }: ToolCardProps) {
   const redactedArgs = message.toolArgs ? redactSensitiveValues(message.toolArgs) : undefined;
+  const [open, setOpen] = useState(false);
 
   return (
-    <div style={{ maxWidth: "80%" }}>
-      <Collapse
-        size="small"
-        style={{
-          backgroundColor: "#fafafa",
-          border: "1px solid #e5e7eb",
-          borderRadius: 8,
-        }}
-      >
-        <Panel
-          header={
-            <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
-              <ToolOutlined style={{ color: "#6b7280" }} />
-              <span style={{ color: "#374151", fontWeight: 500 }}>{message.toolName ?? "Tool call"}</span>
-            </span>
-          }
-          key="tool"
-        >
+    <div className="max-w-[80%]">
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger className="flex items-center gap-1.5 text-[13px] px-3 py-2 border rounded-lg bg-muted/50 hover:bg-muted transition-colors w-full text-left">
+          <Wrench className="h-3.5 w-3.5 text-muted-foreground" />
+          <span className="font-medium text-foreground">{message.toolName ?? "Tool call"}</span>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="border border-t-0 rounded-b-lg px-3 py-2 bg-muted/30">
           {redactedArgs !== undefined && (
-            <div style={{ marginBottom: message.toolResult ? 12 : 0 }}>
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 600,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.05em",
-                  color: "#9ca3af",
-                  marginBottom: 4,
-                }}
-              >
+            <div className={message.toolResult ? "mb-3" : ""}>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
                 Arguments
               </div>
-              <pre
-                style={{
-                  margin: 0,
-                  padding: "8px 10px",
-                  backgroundColor: "#f3f4f6",
-                  borderRadius: 6,
-                  fontSize: 12,
-                  fontFamily:
-                    'ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                  color: "#374151",
-                }}
-              >
+              <pre className="m-0 p-2 bg-muted rounded-md text-xs font-mono whitespace-pre-wrap break-words text-foreground">
                 {JSON.stringify(redactedArgs, null, 2)}
               </pre>
             </div>
           )}
-
           {message.toolResult && (
             <div>
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 600,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.05em",
-                  color: "#9ca3af",
-                  marginBottom: 4,
-                }}
-              >
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
                 Result
               </div>
-              <div
-                style={{
-                  fontSize: 13,
-                  color: "#374151",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                  fontFamily:
-                    'ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-                }}
-              >
+              <div className="text-[13px] text-foreground whitespace-pre-wrap break-words font-mono">
                 {message.toolResult}
               </div>
             </div>
           )}
-        </Panel>
-      </Collapse>
-      <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>{formatTimestamp(message.timestamp)}</div>
+        </CollapsibleContent>
+      </Collapsible>
+      <div className="text-[11px] text-muted-foreground mt-1">{formatTimestamp(message.timestamp)}</div>
     </div>
   );
 }
-
-// ------- Main component -------
 
 interface Props {
   messages: ChatMessage[];
@@ -550,39 +493,57 @@ interface Props {
   onEditMessage?: (messageId: string, newContent: string) => void;
 }
 
-const ChatMessages: React.FC<Props> = ({ messages, isStreaming, onEditMessage }) => {
-  // Scrolling is managed by ChatPage.tsx (scroll lock during streaming,
-  // scroll-to-bottom on new message). No auto-scroll here.
+interface ChatMessageContentProps {
+  message: ChatMessage;
+  actions?: React.ReactNode;
+  allowImages?: boolean;
+  isStreaming?: boolean;
+  isLastMessage?: boolean;
+  onEditMessage?: (messageId: string, newContent: string) => void;
+}
 
-  const lastIndex = messages.length - 1;
-  const lastMsg = messages[lastIndex] ?? null;
-  const isTypingIndicator = isStreaming && lastMsg !== null && lastMsg.role === "assistant" && lastMsg.content === "";
+export function ChatMessageContent({
+  message,
+  allowImages = true,
+  isStreaming = false,
+  isLastMessage = true,
+  onEditMessage,
+  actions,
+}: ChatMessageContentProps) {
+  if (message.role === "user") {
+    return <UserBubble message={message} allowImages={allowImages} onEdit={onEditMessage} isStreaming={isStreaming} />;
+  }
 
+  if (message.role === "tool") {
+    return <ToolCard message={message} />;
+  }
+
+  const isEmptyResponse = message.content === "" && !message.generatedImages?.length;
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {messages.map((msg, idx) => {
-        const isLastMessage = idx === lastIndex;
+    <AssistantBubble
+      message={message}
+      allowImages={allowImages}
+      isLastMessage={isLastMessage}
+      isStreaming={isStreaming}
+      isTypingIndicator={isLastMessage && isStreaming && isEmptyResponse}
+      mcpEvents={message.mcpEvents}
+      actions={actions}
+    />
+  );
+}
 
-        if (msg.role === "user") {
-          return <UserBubble key={msg.id} message={msg} onEdit={onEditMessage} isStreaming={isStreaming} />;
-        }
-
-        if (msg.role === "tool") {
-          return <ToolCard key={msg.id} message={msg} />;
-        }
-
-        // assistant
-        return (
-          <AssistantBubble
-            key={msg.id}
-            message={msg}
-            isLastMessage={isLastMessage}
-            isStreaming={isStreaming}
-            isTypingIndicator={isLastMessage && isTypingIndicator}
-            mcpEvents={msg.mcpEvents}
-          />
-        );
-      })}
+const ChatMessages: React.FC<Props> = ({ messages, isStreaming, onEditMessage }) => {
+  return (
+    <div className="flex flex-col gap-4">
+      {messages.map((message, index) => (
+        <ChatMessageContent
+          key={message.id}
+          message={message}
+          isLastMessage={index === messages.length - 1}
+          isStreaming={isStreaming}
+          onEditMessage={onEditMessage}
+        />
+      ))}
     </div>
   );
 };

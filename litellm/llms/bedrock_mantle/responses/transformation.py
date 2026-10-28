@@ -15,27 +15,36 @@ role / access key / profile / web identity), signed via the shared
 BaseAWSLLM._sign_request after the request body is finalized.
 """
 
-import re
-from typing import Optional, Tuple
+from collections.abc import Mapping, Sequence
+from typing import Final, cast  # noqa: TID251  # map_openai_params returns the filtered params as a bare dict
 
-from botocore.exceptions import (
-    CredentialRetrievalError,
-    NoCredentialsError,
-    PartialCredentialsError,
-    ProfileNotFound,
-)
+import httpx
 
+import litellm
+from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
+from litellm.llms.base_llm.responses.transformation import ReasoningSummaryLevel
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock_mantle.common_utils import (
+    MANTLE_HOST_RE,
+    BedrockMantleAuthMixin,
+)
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import (
+    ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
-BEDROCK_MANTLE_DEFAULT_REGION = "us-east-1"
-
 # Checked longest/most-specific first so a full endpoint URL collapses to host
 # in one pass and the appended path never doubles.
-_BASE_SUFFIXES_TO_STRIP = (
+_BASE_SUFFIXES_TO_STRIP: Final = (
     "/openai/v1/responses",
     "/v1/responses",
     "/responses",
@@ -43,16 +52,19 @@ _BASE_SUFFIXES_TO_STRIP = (
     "/v1",
 )
 
-# Standard Mantle host: https://bedrock-mantle.<region>.api.aws (group 1 = region).
-_MANTLE_HOST_RE = re.compile(
-    r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws", re.IGNORECASE
+# Per Bedrock Mantle Responses API validation errors.
+_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
+    {"function", "mcp", "custom", "namespace", "tool_search", "web_search"}
 )
 
+_BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
+_BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES: Final = frozenset({"auto"})
 
-class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig):
+
+class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPIConfig):
     def __init__(
         self,
-        aws_signer: Optional[BaseAWSLLM] = None,
+        aws_signer: BaseAWSLLM | None = None,
         use_openai_path: bool = True,
     ):
         super().__init__()
@@ -63,34 +75,21 @@ class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK_MANTLE
 
-    @staticmethod
-    def _resolve_region(params: dict) -> str:
-        region = params.get("aws_region_name")
-        if region:
-            return region
-        base = params.get("api_base") or get_secret_str("BEDROCK_MANTLE_API_BASE")
-        if base:
-            match = _MANTLE_HOST_RE.match(base.rstrip("/"))
-            if match:
-                return match.group(1)
-        return (
-            get_secret_str("BEDROCK_MANTLE_REGION")
-            or get_secret_str("AWS_REGION_NAME")
-            or get_secret_str("AWS_REGION")
-            or BEDROCK_MANTLE_DEFAULT_REGION
-        )
+    def auto_reasoning_summary(self) -> ReasoningSummaryLevel:
+        return "auto" if self.use_openai_path else super().auto_reasoning_summary()
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
-        region = self._resolve_region({**litellm_params, "api_base": api_base})
-        base = (
-            api_base
-            or get_secret_str("BEDROCK_MANTLE_API_BASE")
-            or f"https://bedrock-mantle.{region}.api.aws"
-        )
+        region: Final = self._resolve_region({**litellm_params, "api_base": api_base})
+        base = api_base or get_secret_str("BEDROCK_MANTLE_API_BASE") or f"https://bedrock-mantle.{region}.api.aws"
         base = base.rstrip("/")
         for suffix in _BASE_SUFFIXES_TO_STRIP:
             if base.endswith(suffix):
@@ -99,22 +98,16 @@ class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # For the standard Mantle host (including the default-region base that
         # responses/main.py auto-injects into litellm_params.api_base), pin to the
         # single resolved region so aws_region_name wins; preserve custom proxy hosts.
-        if _MANTLE_HOST_RE.match(base):
+        if MANTLE_HOST_RE.match(base):
             base = f"https://bedrock-mantle.{region}.api.aws"
-        path = "/openai/v1/responses" if self.use_openai_path else "/v1/responses"
-        return f"{base}{path}"
+        path: Final = "/openai/v1/responses" if self.use_openai_path else "/v1/responses"
+        return join_api_base(base, path)
 
-    def validate_environment(
-        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = (
-            litellm_params.api_key
-            or get_secret_str("BEDROCK_MANTLE_API_KEY")
-            or get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
-        )
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        bearer: Final = self._resolve_bearer_token(litellm_params.api_key)
+        if bearer:
+            headers["Authorization"] = f"Bearer {bearer}"
         if litellm_params.aws_bedrock_project_id:
             headers["OpenAI-Project"] = litellm_params.aws_bedrock_project_id
         return headers
@@ -125,57 +118,145 @@ class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def supports_native_websocket(self) -> bool:
         return False
 
-    def sign_request(
-        self,
-        headers: dict,
-        optional_params: dict,
-        request_data: dict,
-        api_base: str,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        stream: Optional[bool] = None,
-        fake_stream: Optional[bool] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
-        bearer = (
-            api_key
-            or get_secret_str("BEDROCK_MANTLE_API_KEY")
-            or get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
-        )
-        if not bearer:
-            # SigV4 path. Pin the credential-scope region to the region of the actual
-            # signing URL (api_base, already region-resolved by get_complete_url) so the
-            # SigV4 scope and the URL host can never disagree. Resolve from api_base first,
-            # then fall back to the regular precedence. Also drop any caller Authorization
-            # so _sign_request's restore-original-Authorization step cannot override the
-            # SigV4 header.
-            optional_params = {
-                **optional_params,
-                "aws_region_name": self._resolve_region(
-                    {**optional_params, "api_base": api_base}
-                ),
-            }
-            headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
-        try:
-            return self._aws_signer._sign_request(
-                service_name="bedrock",
-                headers=headers,
-                optional_params=optional_params,
-                request_data=request_data,
-                api_base=api_base,
-                api_key=bearer,
-                model=model,
-                stream=stream,
-                fake_stream=fake_stream,
+    @staticmethod
+    def _filter_unsupported_tools(tools: "Sequence[object]") -> "list[object]":
+        """Keep only tool types Mantle's Responses API accepts."""
+        kept, dropped_types = drop_unsupported_tools(tools, _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES)
+        if dropped_types:
+            verbose_logger.warning(
+                "Bedrock Mantle Responses API: dropping unsupported tool type(s) %s (supported: %s).",
+                list(dropped_types),
+                sorted(_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES),
             )
-        except (
-            NoCredentialsError,
-            PartialCredentialsError,
-            ProfileNotFound,
-            CredentialRetrievalError,
-        ) as e:
-            raise ValueError(
-                "Bedrock Mantle auth failed: no Bearer token and no usable AWS "
-                "credentials. Set BEDROCK_MANTLE_API_KEY (or AWS_BEARER_TOKEN_BEDROCK) "
-                "or pass api_key for Bearer auth, or provide AWS credentials "
-                "(IAM role / access key / profile / web identity) for SigV4."
-            ) from e
+        return list(kept)
+
+    @staticmethod
+    def _handle_unsupported_service_tier(params: dict, drop_params: bool) -> dict:
+        service_tier: Final = params.get("service_tier")
+        if service_tier is None or service_tier in _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS:
+            return params
+        if not drop_params:
+            raise litellm.utils.UnsupportedParamsError(
+                status_code=400,
+                message=(
+                    f"bedrock_mantle does not support service_tier={service_tier!r}; the Bedrock Mantle "
+                    "Responses API only accepts 'auto' or 'default'. Set `drop_params: true` (litellm_settings "
+                    "or this deployment's litellm_params) to have LiteLLM drop it, or remove service_tier from "
+                    "the client (Codex CLI sends it when a speed tier is set in ~/.codex/config.toml)."
+                ),
+            )
+        verbose_logger.warning(
+            "Bedrock Mantle Responses API: dropping unsupported service_tier %r (supported: %s).",
+            service_tier,
+            sorted(_BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS),
+        )
+        return {key: value for key, value in params.items() if key != "service_tier"}
+
+    def _handle_unsupported_reasoning_summary(
+        self, params: dict[str, object], model: str, drop_params: bool
+    ) -> dict[str, object]:
+        reasoning: Final = params.get("reasoning")
+        if not self.use_openai_path or not isinstance(reasoning, dict):
+            return params
+        summary: Final = reasoning.get("summary")
+        if summary is None or (
+            isinstance(summary, str) and summary in _BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES
+        ):
+            return params
+        if not drop_params:
+            raise litellm.utils.UnsupportedParamsError(
+                status_code=400,
+                message=(
+                    f"bedrock_mantle does not support reasoning.summary={summary!r} for {model!r}; the Bedrock Mantle "
+                    "OpenAI Responses path only accepts 'auto'. Set `drop_params: true` (litellm_settings or this "
+                    'deployment\'s litellm_params) to have LiteLLM drop it, or set `model_reasoning_summary = "auto"` '
+                    "in the client (Codex CLI: ~/.codex/config.toml)."
+                ),
+            )
+        verbose_logger.warning(
+            "Bedrock Mantle Responses API: dropping unsupported reasoning.summary %r (supported: %s).",
+            summary,
+            sorted(_BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES),
+        )
+        stripped: Final = {key: value for key, value in reasoning.items() if key != "summary"}
+        return (
+            {**params, "reasoning": stripped}
+            if stripped
+            else {key: value for key, value in params.items() if key != "reasoning"}
+        )
+
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: "str | ResponseInputParam",
+        response_api_optional_request_params: dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> dict:
+        params: Final = cast(  # cast-ok: the base signature leaves the params dict untyped
+            "ResponsesAPIOptionalRequestParams", response_api_optional_request_params
+        )
+        hoisted: Final = hoist_additional_tools(input, params.get("tools"))
+        normalized_input, rewritten_types = normalize_codex_input_items(hoisted.input)
+        if rewritten_types:
+            verbose_logger.warning(
+                "Bedrock Mantle Responses API: rewrote Codex input item type(s) %s that Mantle rejects.",
+                list(rewritten_types),
+            )
+        request_params: Final = (
+            self._params_with_hoisted_tools(params, hoisted)
+            if hoisted.hoisted
+            else response_api_optional_request_params
+        )
+        return super().transform_responses_api_request(
+            model=model,
+            input=normalized_input,
+            response_api_optional_request_params=request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+    @classmethod
+    def _params_with_hoisted_tools(
+        cls, params: Mapping[str, object], hoisted: HoistedAdditionalTools
+    ) -> dict[str, object]:
+        supported_tools: Final = cls._filter_unsupported_tools(list(hoisted.tools))
+        if supported_tools:
+            return {**params, "tools": supported_tools}
+        return {key: value for key, value in params.items() if key != "tools"}
+
+    @staticmethod
+    def _model_map_lookup_name(model: str) -> str:
+        return model.split("/")[-1].removeprefix("openai.")
+
+    def map_openai_params(
+        self,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        params: Final = self._handle_unsupported_reasoning_summary(
+            self._handle_unsupported_service_tier(
+                super().map_openai_params(
+                    response_api_optional_params=response_api_optional_params,
+                    model=model,
+                    drop_params=drop_params,
+                ),
+                drop_params=drop_params,
+            ),
+            model=model,
+            drop_params=drop_params,
+        )
+
+        tools: Final = params.get("tools")
+        if not tools:
+            return params
+
+        tools_list: Final = tools if isinstance(tools, list) else [tools]
+        filtered: Final = self._filter_unsupported_tools(tools_list)
+        if filtered:
+            params["tools"] = filtered
+        else:
+            params.pop("tools", None)
+
+        return params

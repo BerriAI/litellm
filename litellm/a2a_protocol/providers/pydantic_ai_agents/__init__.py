@@ -13,4 +13,4 @@ from litellm.a2a_protocol.providers.pydantic_ai_agents.transformation import (
     PydanticAITransformation,
 )
 
-__all__ = ["PydanticAIHandler", "PydanticAITransformation", "PydanticAIProviderConfig"]
+__all__ = ["PydanticAIHandler", "PydanticAIProviderConfig", "PydanticAITransformation"]
