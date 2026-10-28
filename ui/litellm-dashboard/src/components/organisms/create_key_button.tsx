@@ -1,4 +1,5 @@
 "use client";
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
@@ -227,6 +228,12 @@ export const fetchUserModels = async (
  */
 const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOpenCreate, prefillData }) => {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const term = useTerminology();
+  const keyTypeOptions = KEY_TYPE_OPTIONS.map((option) => ({
+    ...option,
+    label: term(option.label),
+    hint: term(option.hint),
+  }));
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const canViewPolicies = useCan("viewPolicies");
   const canViewPrompts = useCan("viewPrompts");
@@ -294,6 +301,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const keyOwner = effectiveKeyOwner(requestedKeyOwner, ownerScope);
   const ownerLimitedToTeamMembers = keyOwner === "another_user" && ownerScope === "team_members";
   const memberOwnerOptions = teamMemberOwnerOptions(selectedCreateKeyTeam, userID);
+  const createKeyOwner = form.watch("user_id");
+  useEffect(() => {
+    form.setValue("allowed_mcp_servers_and_groups", { servers: [], accessGroups: [] });
+    form.setValue("mcp_tool_permissions", {});
+  }, [createKeyOwner, form]);
   const ownerRequiresTeam = keyOwner === "service_account" || ownerLimitedToTeamMembers;
   const handleCancel = () => {
     setIsModalVisible(false);
@@ -474,7 +486,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       const response =
         endpoint === "service_account"
           ? await keyCreateServiceAccountCall(accessToken, payload)
-          : await keyCreateCall(accessToken, userID, payload);
+          : await keyCreateCall(accessToken, userID ?? "", payload);
 
       // Add the data to the state in the parent component
       // Also directly update the keys list in VirtualKeysTable without an API call
@@ -527,6 +539,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
     // Clear MCP server selection when team changes (available servers may differ)
     form.setValue("allowed_mcp_servers_and_groups", { servers: [], accessGroups: [] });
+    form.setValue("mcp_tool_permissions", {});
   }, [selectedCreateKeyTeam, selectedProjectId, accessToken, userID, userRole, form]);
 
   // Apply deferred model prefill once the available model list arrives.
@@ -988,7 +1001,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   >
                     {(control) => (
                       <Select
-                        items={KEY_TYPE_OPTIONS}
+                        items={keyTypeOptions}
                         value={control.value as string | undefined}
                         onValueChange={(value: string | null) =>
                           value != null && changeKeyType(control.onChange)(value)
@@ -1003,7 +1016,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <SelectValue placeholder="Select key type" />
                         </SelectTrigger>
                         <SelectContent>
-                          {KEY_TYPE_OPTIONS.map((option) => (
+                          {keyTypeOptions.map((option) => (
                             <SelectItem key={option.value} value={option.value}>
                               <div className="py-1">
                                 <div className="font-medium">{option.label}</div>
@@ -1615,6 +1628,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                 value={control.value as McpSelectorValue | undefined}
                                 accessToken={accessToken}
                                 teamId={selectedCreateKeyTeam?.team_id ?? null}
+                                userId={typeof createKeyOwner === "string" ? createKeyOwner : null}
                                 placeholder="Select MCP servers or access groups (optional)"
                                 allowNoMcpServers
                               />
@@ -1895,7 +1909,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
               <DialogTitle>Create New User</DialogTitle>
             </DialogHeader>
             <CreateUserButton
-              userID={userID}
+              userID={userID ?? ""}
               accessToken={accessToken}
               possibleUIRoles={possibleUIRoles}
               onUserCreated={handleUserCreated}
@@ -1907,7 +1921,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
       {apiKey && (
         <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
-          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
             <div className="grid grid-cols-1 gap-2 w-full">
               <DialogTitle className="text-lg font-medium text-foreground">Save your Key</DialogTitle>
               {apiKey != null ? (

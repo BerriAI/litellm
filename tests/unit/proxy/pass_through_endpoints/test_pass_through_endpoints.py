@@ -1857,6 +1857,32 @@ def test_resolve_llm_passthrough_timeout_validates_only_the_winning_value(
     assert resolve_llm_passthrough_timeout(kwargs=kwargs, litellm_params=litellm_params) == expected
 
 
+def test_resolve_llm_passthrough_timeout_uses_the_deployment_timeout_for_the_requests_service_tier():
+    litellm_params = {
+        "timeout": 610,
+        "stream_timeout": 30,
+        "timeout_by_service_tier": {"flex": 900},
+        "stream_timeout_by_service_tier": {"flex": 950},
+    }
+    assert resolve_llm_passthrough_timeout(kwargs={"service_tier": "flex"}, litellm_params=litellm_params) == 900.0
+    assert resolve_llm_passthrough_timeout(kwargs={"service_tier": "default"}, litellm_params=litellm_params) == 610.0
+    assert (
+        resolve_llm_passthrough_timeout(kwargs={"service_tier": "flex", "timeout": 20}, litellm_params=litellm_params)
+        == 20.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(kwargs={"service_tier": "flex", "stream": True}, litellm_params=litellm_params)
+        == 950.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"service_tier": "flex", "stream": True},
+            litellm_params={"timeout": 610, "stream_timeout": 30, "timeout_by_service_tier": {"flex": 900}},
+        )
+        == 30.0
+    )
+
+
 def test_resolve_llm_passthrough_timeout_rejects_a_non_numeric_winner():
     with pytest.raises(ValidationError):
         resolve_llm_passthrough_timeout(kwargs={"timeout": httpx.Timeout(30.0)})
@@ -1894,6 +1920,40 @@ async def test_pass_through_request_uses_resolved_timeout():
 
             mock_get_client.assert_called_once()
             assert mock_get_client.call_args[1]["params"]["timeout"] == 1500
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allow_client_pricing_override", [True, False])
+async def test_pass_through_request_strips_client_guardrail_information(allow_client_pricing_override: bool):
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=RuntimeError("stop before upstream"))
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException):
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(
+                    metadata={"allow_client_pricing_override": allow_client_pricing_override}
+                ),
+                custom_body={
+                    "model": "gpt-4o",
+                    "input_cost_per_token": 0.5,
+                    "metadata": {
+                        "trace_id": "keep-me",
+                        "standard_logging_guardrail_information": [{"guardrail_name": "forged", "guardrail_cost": 5.0}],
+                    },
+                },
+            )
+
+    hooked_body: Final = mock_proxy_logging.pre_call_hook.call_args.kwargs["data"]
+    assert hooked_body["metadata"] == {"trace_id": "keep-me"}
+    assert ("input_cost_per_token" in hooked_body) is allow_client_pricing_override
 
 
 @pytest.mark.asyncio
@@ -8452,7 +8512,9 @@ _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 _PROXY_SERVER_REQUEST: Final = TypeAdapter(dict[str, object])
 
 
-def _split_pass_through_body(body: str) -> _PassThroughSplit:
+def _split_pass_through_body(
+    body: str, user_api_key_dict: UserAPIKeyAuth = UserAPIKeyAuth(api_key="hashed-key")
+) -> _PassThroughSplit:
     mock_request: Final = MagicMock(spec=Request)
     mock_request.method = "POST"
     mock_request.url = httpx.URL("http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent")
@@ -8462,7 +8524,7 @@ def _split_pass_through_body(body: str) -> _PassThroughSplit:
     init_kwargs_for_pass_through_endpoint: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # untyped legacy helper
     kwargs: Final = init_kwargs_for_pass_through_endpoint(
         request=mock_request,
-        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        user_api_key_dict=user_api_key_dict,
         passthrough_logging_payload=MagicMock(),
         logging_obj=MagicMock(),
         _parsed_body=json.loads(body),
@@ -8500,6 +8562,7 @@ def test_passthrough_moves_every_litellm_owned_key_from_the_forwarded_body_into_
     assert split.forwarded_body == json.loads(GEMINI_BODY)
 
 
+PRICING_MODEL_OVERRIDE_NAMES: Final = frozenset(("base_model",))
 PROXY_STAMPED_NAMES: Final = frozenset(
     (
         "proxy_server_request",
@@ -8507,6 +8570,7 @@ PROXY_STAMPED_NAMES: Final = frozenset(
         "litellm_trusted_callback_vars",
         "_litellm_addressed_response_id",
         "_litellm_strip_stream_usage",
+        "_litellm_stream_usage_injected",
         "client_side_timeout",
         "model_file_id_mapping",
     )
@@ -8515,7 +8579,12 @@ PROXY_STAMPED_NAMES: Final = frozenset(
 
 @pytest.mark.parametrize(
     "name",
-    sorted(frozenset(litellm.all_litellm_params) - frozenset(("metadata", "litellm_metadata")) - PROXY_STAMPED_NAMES),
+    sorted(
+        frozenset(litellm.all_litellm_params)
+        - frozenset(("metadata", "litellm_metadata"))
+        - PROXY_STAMPED_NAMES
+        - PRICING_MODEL_OVERRIDE_NAMES
+    ),
 )
 def test_passthrough_keeps_each_registered_litellm_owned_name_out_of_the_forwarded_body(name: str) -> None:
     split: Final = _split_pass_through_body(json.dumps({name: "owned", **json.loads(GEMINI_BODY)}))
@@ -8523,6 +8592,41 @@ def test_passthrough_keeps_each_registered_litellm_owned_name_out_of_the_forward
     assert frozenset(split.litellm_params) == frozenset((name, "metadata", "proxy_server_request"))
     assert split.litellm_params[name] == "owned"
     assert split.forwarded_body == json.loads(GEMINI_BODY)
+
+
+@pytest.mark.parametrize("allows_client_pricing", [True, False], ids=["key-allows-client-pricing", "plain-key"])
+def test_passthrough_prices_with_a_client_base_model_only_for_keys_that_allow_client_pricing(
+    allows_client_pricing: bool,
+) -> None:
+    key: Final = UserAPIKeyAuth(
+        api_key="hashed-key", metadata={"allow_client_pricing_override": True} if allows_client_pricing else {}
+    )
+
+    split: Final = _split_pass_through_body(
+        json.dumps({"base_model": "vertex_ai/gemini-2.5-flash-lite", **json.loads(GEMINI_BODY)}), key
+    )
+
+    expected: Final = "vertex_ai/gemini-2.5-flash-lite" if allows_client_pricing else None
+    assert split.litellm_params.get("base_model") == expected
+    assert split.forwarded_body == json.loads(GEMINI_BODY)
+
+
+@pytest.mark.parametrize("model_info", ["malformed", ["malformed"], 123])
+def test_passthrough_drops_a_client_model_info_that_is_not_an_object(model_info: object) -> None:
+    key: Final = UserAPIKeyAuth(api_key="hashed-key", metadata={"allow_client_pricing_override": True})
+    plain_metadata: Final = _metadata_of(_split_pass_through_body(json.dumps({"metadata": {"tag": "a"}}), key))
+
+    split: Final = _split_pass_through_body(json.dumps({"metadata": {"tag": "a", "model_info": model_info}}), key)
+
+    assert _metadata_of(split) == plain_metadata
+
+
+def test_passthrough_keeps_a_client_model_info_object_for_keys_that_allow_client_pricing() -> None:
+    key: Final = UserAPIKeyAuth(api_key="hashed-key", metadata={"allow_client_pricing_override": True})
+
+    split: Final = _split_pass_through_body(json.dumps({"metadata": {"model_info": {"base_model": "gemini/x"}}}), key)
+
+    assert _metadata_of(split)["model_info"] == {"base_model": "gemini/x"}
 
 
 @pytest.mark.parametrize("name", sorted(PROXY_STAMPED_NAMES))
@@ -10268,3 +10372,39 @@ def test_init_kwargs_no_authenticated_identity_field_is_client_settable(mock_req
     metadata: Final = result["litellm_params"]["metadata"]
     survived: Final = {key: metadata.get(key) for key in expected if metadata.get(key) != expected[key]}
     assert survived == {}, f"client-supplied values survived for: {sorted(survived)}"
+
+@pytest.mark.asyncio
+async def test_direct_passthrough_keeps_mapped_baggage_tags_outside_upstream_body():
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy.utils import ProxyLogging
+
+    async def receive():
+        return {"type": "http.request", "body": b'{"model":"qa-model"}'}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/openai/v1/chat/completions",
+            "query_string": b"",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"baggage", b"entrypoint=a"),
+                (b"x-litellm-tags", b"existing"),
+            ],
+        },
+        receive,
+    )
+    admitted = await read_request_body(request)
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request,
+        admitted,
+        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        None,
+        UserApiKeyCache(),
+    )
+    metadata = _update_metadata_with_tags_in_header(request, {})
+    assert metadata["tags"] == ["existing", "usecase:a"]
+    assert await read_request_body(request) == {"model": "qa-model"}

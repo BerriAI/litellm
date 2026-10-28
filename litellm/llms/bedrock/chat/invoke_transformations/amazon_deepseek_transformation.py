@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from httpx import Response
 
@@ -80,7 +80,7 @@ class AmazonDeepSeekR1Config(AmazonLlamaConfig):
 
 
 class AmazonDeepseekR1ResponseIterator(BaseModelResponseIterator):
-    def __init__(self, streaming_response: Any, sync_stream: bool) -> None:
+    def __init__(self, streaming_response: object, sync_stream: bool) -> None:
         super().__init__(streaming_response=streaming_response, sync_stream=sync_stream)
         self.has_finished_thinking = False
 

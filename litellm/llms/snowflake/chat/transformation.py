@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 import httpx
 from typing_extensions import ReadOnly
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_process_openai_file_message,
     convert_to_anthropic_tool_result,
@@ -24,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     select_anthropic_content_block_type_for_file,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicStreamParser
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
@@ -184,10 +186,11 @@ def _signed_thinking_blocks(msg: object) -> list[dict[str, object]]:  # mutable-
     blocks: Final = msg.get("thinking_blocks") if isinstance(msg, dict) else getattr(msg, "thinking_blocks", None)
     if not isinstance(blocks, list):
         return []
+    mappings: Final = tuple(filter(None, map(as_str_mapping, blocks)))
     return [
-        dict(block)
-        for block in blocks
-        if isinstance(block, Mapping) and (block.get("signature") or block.get("type") == "redacted_thinking")
+        {key: value for key, value in block.items() if key != "index"}
+        for block in mappings
+        if block.get("signature") or block.get("type") == "redacted_thinking"
     ]
 
 
@@ -237,8 +240,8 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
     ) -> str:
         api_base = self._get_api_base(api_base, optional_params)
         if is_snowflake_claude_model(model):
-            return f"{api_base}/cortex/v1/messages"
-        return f"{api_base}/cortex/v1/chat/completions"
+            return join_api_base(api_base, "cortex/v1/messages")
+        return join_api_base(api_base, "cortex/v1/chat/completions")
 
     def validate_environment(
         self,

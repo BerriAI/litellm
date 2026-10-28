@@ -423,6 +423,7 @@ export interface LiteLLMWellKnownUiConfig {
   is_control_plane?: boolean;
   workers?: WorkerInfo[];
   mcp_stdio_enabled?: boolean;
+  use_si_terminology?: boolean;
 }
 
 export interface CredentialsResponse {
@@ -1465,7 +1466,7 @@ export const teamSpendByUserCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  teamIds: string[],
+  teamIds: readonly string[],
 ): Promise<TeamUserSpendResponse> =>
   apiClient.get<TeamUserSpendResponse>(`/team/spend/by_user`, {
     accessToken,
@@ -1604,6 +1605,8 @@ export const modelInfoCall = async (
   modelName?: string,
   accessGroup?: string,
   wildcardOnly?: boolean,
+  blocked?: boolean,
+  options: { useStoredParams?: boolean } = {},
 ) => {
   /**
    * Get all models on proxy
@@ -1623,6 +1626,9 @@ export const modelInfoCall = async (
     if (modelId && modelId.trim()) {
       params.append("modelId", modelId.trim());
     }
+    if (options.useStoredParams) {
+      params.append("use_stored_params", "true");
+    }
     if (teamId && teamId.trim()) {
       params.append("teamId", teamId.trim());
     }
@@ -1640,6 +1646,9 @@ export const modelInfoCall = async (
     }
     if (wildcardOnly) {
       params.append("wildcard_only", "true");
+    }
+    if (blocked !== undefined) {
+      params.append("blocked", blocked ? "true" : "false");
     }
     if (params.toString()) {
       url += `?${params.toString()}`;
@@ -4229,81 +4238,6 @@ export const enrichPolicyTemplateStream = async (
   }
 };
 
-export interface UsageAiToolCallEvent {
-  tool_name: string;
-  tool_label: string;
-  arguments: Record<string, string>;
-  status: "running" | "complete" | "error";
-  error?: string;
-}
-
-export const usageAiChatStream = async (
-  accessToken: string,
-  messages: { role: string; content: string }[],
-  model: string,
-  onChunk: (content: string) => void,
-  onDone: () => void,
-  onError?: (error: string) => void,
-  onStatus?: (message: string) => void,
-  onToolCall?: (event: UsageAiToolCallEvent) => void,
-  signal?: AbortSignal,
-) => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/usage/ai/chat` : `/usage/ai/chat`;
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ messages, model }),
-    signal,
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json();
-    const errorMessage = deriveErrorMessage(errorData);
-    handleError(errorMessage);
-    throw new Error(errorMessage);
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("No response body");
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  // eslint-disable-next-line no-constant-condition -- stream read loop
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      try {
-        const event = JSON.parse(line.slice(6));
-        if (event.type === "chunk") {
-          onChunk(event.content);
-        } else if (event.type === "status") {
-          onStatus?.(event.message);
-        } else if (event.type === "tool_call") {
-          onToolCall?.(event as UsageAiToolCallEvent);
-        } else if (event.type === "done") {
-          onDone();
-        } else if (event.type === "error") {
-          onError?.(event.message);
-        }
-      } catch {
-        // skip malformed events
-      }
-    }
-  }
-};
-
 export const createPolicyCall = async (accessToken: string, policyData: any) => {
   try {
     const data = await apiClient.post(`/policies`, { accessToken, body: policyData });
@@ -4776,8 +4710,8 @@ export const uiSpendLogDetailsCall = async (accessToken: string, logId: string, 
   try {
     // Construct base URL
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/spend/logs/ui/${logId}?start_date=${encodeURIComponent(start_date)}`
-      : `/spend/logs/ui/${logId}?start_date=${encodeURIComponent(start_date)}`;
+      ? `${proxyBaseUrl}/spend/logs/ui/${encodeURIComponent(logId)}?start_date=${encodeURIComponent(start_date)}`
+      : `/spend/logs/ui/${encodeURIComponent(logId)}?start_date=${encodeURIComponent(start_date)}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -4836,12 +4770,13 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
 };
 
 export interface ConnectFlowStatus {
-  state: "unscoped" | "interactive" | "m2m" | "stale";
+  state: "unscoped" | "interactive" | "m2m" | "multi" | "stale";
   client_origin: string;
   server_id: string | null;
   server_name: string | null;
   connected: boolean | null;
   requested_scopes?: string[];
+  servers: { server_id: string; server_name: string; connected: boolean }[] | null;
 }
 
 /**
@@ -4854,11 +4789,20 @@ export interface ConnectFlowStatus {
 export const fetchConnectFlow = async (flowHandle: string): Promise<ConnectFlowStatus> =>
   apiClient.get(`/authorize/flow`, { query: { flow: flowHandle }, credentials: "include" });
 
-export const fetchMCPServers = async (accessToken: string, teamId?: string | null, connectedAppView?: boolean) => {
+export const fetchMCPServers = async (
+  accessToken: string,
+  teamId?: string | null,
+  connectedAppView?: boolean,
+  userId?: string | null,
+) => {
   try {
     return await apiClient.get(`/v1/mcp/server`, {
       accessToken,
-      query: { team_id: teamId || undefined, connected_app_view: connectedAppView || undefined },
+      query: {
+        team_id: teamId || undefined,
+        connected_app_view: connectedAppView || undefined,
+        user_id: userId || undefined,
+      },
     });
   } catch (error) {
     console.error("Failed to fetch MCP servers:", error);
@@ -5772,7 +5716,7 @@ export const ragIngestCall = async (
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.error?.message || error.detail || "Failed to ingest document");
+      throw new Error(deriveErrorMessage(error));
     }
 
     return await response.json();
@@ -6921,7 +6865,7 @@ export const searchToolQueryCall = async (
     if (!response.ok) {
       const errorData = await response.text();
       await handleError(errorData);
-      return null;
+      throw new Error(errorData);
     }
 
     const data = await response.json();

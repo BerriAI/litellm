@@ -1,30 +1,30 @@
 import asyncio
+import inspect
+import json
 from collections.abc import Mapping
 from contextlib import ExitStack
-from typing import Final
-from types import SimpleNamespace
-import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
-import litellm
 import pytest
 import yaml
-from fastapi.testclient import TestClient
-
-from unittest.mock import AsyncMock, MagicMock, patch
-
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pydantic import JsonValue
 
-import inspect
-
+import litellm
+from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
-    GenerateKeyResponse,
+    CommonProxyErrors,
     GenerateKeyRequest,
+    GenerateKeyResponse,
     KeyManagementRoutes,
-    NewUserRequest,
     LiteLLM_BudgetTable,
     LiteLLM_ObjectPermissionBase,
     LiteLLM_OrganizationTable,
@@ -36,47 +36,43 @@ from litellm.proxy._types import (
     LiteLLMKeyType,
     LitellmUserRoles,
     Member,
+    NewUserRequest,
     ProxyException,
     RegenerateKeyRequest,
     ResetSpendRequest,
     UpdateKeyRequest,
 )
-from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy.auth.auth_checks import (
     delete_cache_key_object,
     jwt_key_mapping_cache_key,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
-from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    KeyProjectBindingError,
     _check_key_project_team,
     _check_key_project_team_on_mutation,
     _check_org_key_limits,
     _check_project_key_limits,
     _check_team_key_limits,
-    _is_team_key,
-    _key_generation_required_param_check,
-    _personal_key_generation_check,
-    _team_key_generation_check,
     _common_key_generation_helper,
-    _member_key_request,
-    _team_admin_requests_member_key,
-    KeyProjectBindingError,
-    _hash_token_if_needed,
     _effective_key_after_update,
     _effective_key_for_generate,
     _enforce_custom_key_policy,
     _enforce_upperbound_key_params,
     _execute_virtual_key_regeneration,
     _get_and_validate_existing_key,
-    list_key_helper,
-    persist_deleted_verification_tokens,
+    _hash_token_if_needed,
+    _is_team_key,
+    _key_generation_required_param_check,
+    _member_key_request,
+    _personal_key_generation_check,
     _process_single_key_update,
     _requested_end_user_budget_id,
     _save_deleted_verification_token_records,
+    _team_admin_requests_member_key,
+    _team_key_generation_check,
     _transform_verification_tokens_to_deleted_records,
     _update_key_row_assigning_project,
     _validate_end_user_budget_id_change,
@@ -92,7 +88,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_service_account_key_fn,
     key_aliases,
     key_generation_check,
+    list_key_helper,
     list_keys,
+    persist_deleted_verification_tokens,
     prepare_key_update_data,
     prepare_metadata_fields,
     reset_key_spend_fn,
@@ -839,7 +837,7 @@ async def test_update_key_grandfathers_existing_mcp_servers(monkeypatch):
     }
     mock_mgr.get_allow_all_keys_server_ids.return_value = []
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         mock_mgr,
     )
 
@@ -2515,6 +2513,51 @@ async def test_prepare_key_update_data_budget_limits_serializes_windows():
     assert windows[0]["reset_at"] is not None
 
 
+def _key_with_weekly_window(reset_at: datetime) -> LiteLLM_VerificationToken:
+    return LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="test-user",
+        metadata={},
+        budget_limits=[{"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}],
+    )
+
+
+async def _updated_windows_by_duration(
+    existing_key: LiteLLM_VerificationToken, budget_limits: list[dict[str, object]]
+) -> dict[str, dict[str, object]]:
+    result: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest.model_validate({"key": "test-token", "budget_limits": budget_limits}),
+        existing_key_row=existing_key,
+    )
+    return {window["budget_duration"]: window for window in json.loads(result["budget_limits"])}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("weekly_cap", [50.0, 40.0, 60.0])
+async def test_prepare_key_update_data_keeps_a_resubmitted_window_mid_period(weekly_cap: float) -> None:
+    open_reset_at: Final = datetime.now(timezone.utc) + timedelta(days=3)
+
+    windows: Final = await _updated_windows_by_duration(
+        _key_with_weekly_window(open_reset_at),
+        [{"budget_duration": "7d", "max_budget": weekly_cap}, {"budget_duration": "1d", "max_budget": 5.0}],
+    )
+
+    assert datetime.fromisoformat(windows["7d"]["reset_at"]) == open_reset_at
+    assert windows["7d"]["max_budget"] == weekly_cap
+    assert datetime.fromisoformat(windows["1d"]["reset_at"]) > datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_restarts_a_resubmitted_window_whose_period_ended() -> None:
+    stale_reset_at: Final = datetime.now(timezone.utc) - timedelta(days=1)
+
+    windows: Final = await _updated_windows_by_duration(
+        _key_with_weekly_window(stale_reset_at), [{"budget_duration": "7d", "max_budget": 50.0}]
+    )
+
+    assert datetime.fromisoformat(windows["7d"]["reset_at"]) > datetime.now(timezone.utc)
+
+
 @pytest.mark.asyncio
 async def test_prepare_key_update_data_disable_global_guardrails_false_no_premium(
     monkeypatch,
@@ -3407,6 +3450,43 @@ async def test_block_key_existing_key_succeeds(monkeypatch):
     assert block_call["where"] == {"token": test_hashed_token}
     assert block_call["data"]["blocked"] is True
     assert result == mock_updated_record
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint_name", ["block_key", "unblock_key"])
+async def test_block_and_unblock_write_no_audit_row_when_the_key_update_fails(monkeypatch, endpoint_name):
+    from litellm.proxy._types import BlockKeyRequest
+    from litellm.proxy.management_endpoints import key_management_endpoints
+    from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
+
+    hashed_token = "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    existing_key_record = MagicMock()
+    existing_key_record.token = hashed_token
+    existing_key_record.model_dump_json.return_value = f'{{"token": "{hashed_token}"}}'
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing_key_record)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(side_effect=RuntimeError("update failed"))
+    audit_writer = AsyncMock()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", audit_writer)
+    monkeypatch.setattr("litellm.store_audit_logs", True)
+
+    with pytest.raises(RuntimeError, match="update failed"):
+        await getattr(key_management_endpoints, endpoint_name)(
+            data=BlockKeyRequest(key=hashed_token),
+            http_request=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin_user"
+            ),
+            litellm_changed_by=None,
+        )
+    await drain_audit_tasks(timeout=1.0)
+
+    assert audit_writer.call_count == 0
 
 
 @pytest.mark.asyncio
@@ -9549,6 +9629,97 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
     ), "api_key must be stored re-encrypted under the new master key, not in plaintext"
 
 
+@pytest.mark.asyncio
+async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
+    from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-master-key")
+    under_another_key = encrypt_value_helper("stored-under-another-key", new_encryption_key="sk-another-master-key")
+    for key in ("ROTATION_TEST_ENCRYPTED", "ROTATION_TEST_PLAINTEXT", "ROTATION_TEST_UNDER_ANOTHER_KEY"):
+        monkeypatch.setenv(key, "restored-by-monkeypatch")
+        monkeypatch.delenv(key)
+    prisma_client = AsyncMock()
+    prisma_client.db = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_config.update = AsyncMock()
+    prisma_client.writer_db.litellm_config.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                param_name="environment_variables",
+                param_value={
+                    "ROTATION_TEST_ENCRYPTED": encrypt_value_helper("stored-encrypted"),
+                    "ROTATION_TEST_PLAINTEXT": "stored-plaintext",
+                    "ROTATION_TEST_UNDER_ANOTHER_KEY": under_another_key,
+                },
+            )
+        ]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+
+    await rotate_master_key(
+        prisma_client=prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"),
+        current_master_key="sk-old-master-key",
+        new_master_key="sk-new-master-key",
+    )
+
+    stored = prisma_client.db.litellm_config.update.call_args.kwargs["data"]["param_value"].data
+    rotated = decrypt_if_encrypted_with(stored["ROTATION_TEST_ENCRYPTED"], "sk-new-master-key")
+    assert {**stored, "ROTATION_TEST_ENCRYPTED": rotated} == {
+        "ROTATION_TEST_ENCRYPTED": "stored-encrypted",
+        "ROTATION_TEST_PLAINTEXT": "stored-plaintext",
+        "ROTATION_TEST_UNDER_ANOTHER_KEY": under_another_key,
+    }
+
+
+@pytest.mark.asyncio
+async def test_rotate_master_key_keeps_an_environment_variable_the_read_replica_has_not_caught_up_on(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
+    from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-master-key")
+    monkeypatch.setenv("ROTATION_TEST_SAVED_A_MOMENT_AGO", "restored-by-monkeypatch")
+    monkeypatch.delenv("ROTATION_TEST_SAVED_A_MOMENT_AGO")
+
+    def rows(values: dict[str, str]) -> list[SimpleNamespace]:
+        return [SimpleNamespace(param_name="environment_variables", param_value=values)]
+
+    prisma_client = AsyncMock()
+    prisma_client.db = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_config.update = AsyncMock()
+    prisma_client.db.litellm_config.find_many = AsyncMock(return_value=rows({}))
+    prisma_client.writer_db.litellm_config.find_many = AsyncMock(
+        return_value=rows({"ROTATION_TEST_SAVED_A_MOMENT_AGO": encrypt_value_helper("saved-a-moment-ago")})
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+
+    await rotate_master_key(
+        prisma_client=prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"),
+        current_master_key="sk-old-master-key",
+        new_master_key="sk-new-master-key",
+    )
+
+    stored = prisma_client.db.litellm_config.update.call_args.kwargs["data"]["param_value"].data
+    assert {key: decrypt_if_encrypted_with(value, "sk-new-master-key") for key, value in stored.items()} == {
+        "ROTATION_TEST_SAVED_A_MOMENT_AGO": "saved-a-moment-ago"
+    }
+
+
 async def test_default_key_generate_params_duration(monkeypatch):
     """
     Test that default_key_generate_params with 'duration' is applied
@@ -10784,10 +10955,10 @@ class TestValidateKeyAliasFormat:
         _validate_key_alias_format("team/user@example.com")
 
     def test_validate_key_alias_format_invalid(self, monkeypatch):
+        from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             _validate_key_alias_format,
         )
-        from litellm.proxy._types import ProxyException
 
         monkeypatch.setattr(litellm, "enable_key_alias_format_validation", True)
         invalid_aliases = [
@@ -12627,13 +12798,13 @@ class TestKeyAliasSkipValidationOnUnchanged:
         Updating a key without changing its key_alias should skip format
         validation — even if the alias wouldn't pass current rules.
         """
+        # Temporarily make the regex reject '@' to simulate stricter rules
+        import re
+
+        from litellm.proxy.management_endpoints import key_management_endpoints as mod
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             _validate_key_alias_format,
         )
-
-        # Temporarily make the regex reject '@' to simulate stricter rules
-        import re
-        from litellm.proxy.management_endpoints import key_management_endpoints as mod
 
         original_pattern = mod._KEY_ALIAS_PATTERN
         mod._KEY_ALIAS_PATTERN = re.compile(
@@ -19469,6 +19640,285 @@ async def _generate_key_and_get_persisted_row(data: GenerateKeyRequest, mock_ins
 
 
 @pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_fills_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    response: Final = await generate_key_fn(
+        data=GenerateKeyRequest(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-internal",
+            user_id="internal-user",
+        ),
+        litellm_changed_by=None,
+    )
+
+    assert response is not None
+    key_call: Final = next(c for c in mock_insert_data.call_args_list if c.kwargs["table_name"] == "key")
+    assert key_call.kwargs["data"]["allowed_routes"] == ["llm_api_routes", "/key/spend/report"]
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_keeps_explicit_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(allowed_routes=["info_routes"]),
+        mock_insert_data,
+    )
+
+    assert key_row["allowed_routes"] == ["info_routes"]
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_extends_key_type_preset_it_covers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import LiteLLMKeyType
+
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    await generate_key_fn(
+        data=GenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-internal",
+            user_id="internal-user",
+        ),
+        litellm_changed_by=None,
+    )
+
+    key_call: Final = next(c for c in mock_insert_data.call_args_list if c.kwargs["table_name"] == "key")
+    assert key_call.kwargs["data"]["allowed_routes"] == ["llm_api_routes", "/key/spend/report"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_type", "preset_routes"),
+    [(LiteLLMKeyType.MANAGEMENT, ["management_routes"]), (LiteLLMKeyType.READ_ONLY, ["info_routes"])],
+)
+async def test_default_key_generate_params_allowed_routes_keeps_management_and_read_only_presets(
+    monkeypatch: pytest.MonkeyPatch, key_type: LiteLLMKeyType, preset_routes: list[str]
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "management_routes", "info_routes", "/key/spend/report"]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(key_type=key_type),
+        mock_insert_data,
+    )
+
+    assert key_row["allowed_routes"] == preset_routes
+
+
+@pytest.mark.parametrize(
+    "data",
+    [GenerateKeyRequest(), GenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API)],
+    ids=["unset", "llm_api"],
+)
+def test_effective_key_for_generate_shows_default_allowed_routes_to_the_policy(
+    monkeypatch: pytest.MonkeyPatch, data: GenerateKeyRequest
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+
+    effective_key: Final = _effective_key_for_generate(data=data, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    assert effective_key.allowed_routes == ["llm_api_routes", "/key/spend/report"]
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_skips_team_service_account_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(team_id="team-a", metadata={"service_account_id": "sa-1"}),
+        mock_insert_data,
+    )
+
+    assert not key_row.get("allowed_routes")
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_skips_full_access_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(key_type=LiteLLMKeyType.DEFAULT),
+        mock_insert_data,
+    )
+
+    assert not key_row.get("allowed_routes")
+
+
+def _owner_route_update_status(existing: list[str], incoming: list[str]) -> int | None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _enforce_allowed_routes_update_permission,
+    )
+
+    try:
+        _enforce_allowed_routes_update_permission(
+            data=UpdateKeyRequest(key="sk-owned", allowed_routes=incoming),
+            existing_key_row=LiteLLM_VerificationToken(
+                token="hashed-owned", user_id="internal-user", allowed_routes=existing
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="internal-user", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+    except HTTPException as exc:
+        return exc.status_code
+    return None
+
+
+@pytest.mark.parametrize(
+    ("existing", "incoming", "expected_status"),
+    [
+        (["llm_api_routes"], [], None),
+        (["llm_api_routes", "/key/spend/report"], [], 403),
+        (["llm_api_routes", "/key/spend/report"], ["llm_api_routes"], 403),
+        (["llm_api_routes", "/key/spend/report"], ["llm_api_routes", "/key/spend/report"], None),
+        (["llm_api_routes", "/key/spend/report"], ["/key/spend/report", "llm_api_routes"], 403),
+        (
+            ["llm_api_routes", "/key/spend/report"],
+            ["llm_api_routes", "/key/spend/report", "/key/spend/report"],
+            403,
+        ),
+        (["/global/spend/report"], ["/global/spend/report"], None),
+    ],
+    ids=[
+        "preset_to_full_access",
+        "default_list_to_full_access",
+        "default_list_to_ai_apis",
+        "default_list_sent_back_unchanged",
+        "default_list_sent_back_reordered",
+        "default_list_sent_back_with_a_duplicate",
+        "admin_set_list_sent_back_unchanged",
+    ],
+)
+def test_owner_cannot_change_the_routes_a_key_got_from_default_key_generate_params(
+    monkeypatch: pytest.MonkeyPatch, existing: list[str], incoming: list[str], expected_status: int | None
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+
+    assert _owner_route_update_status(existing, incoming) == expected_status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("incoming", "written"),
+    [
+        (["llm_api_routes", "/key/spend/report"], None),
+        (["/key/spend/report", "llm_api_routes"], ["/key/spend/report", "llm_api_routes"]),
+        (["llm_api_routes"], ["llm_api_routes"]),
+    ],
+    ids=["unchanged_resend", "reordered", "changed"],
+)
+async def test_key_update_writes_allowed_routes_only_when_they_change(
+    incoming: list[str], written: list[str] | None
+) -> None:
+    existing_key: Final = LiteLLM_VerificationToken(
+        token="hashed", allowed_routes=["llm_api_routes", "/key/spend/report"]
+    )
+
+    update_values: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key="sk-1", key_alias="renamed", allowed_routes=incoming), existing_key_row=existing_key
+    )
+
+    assert (update_values["key_alias"], update_values.get("allowed_routes")) == ("renamed", written)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_data", "expected_routes"),
+    [(GenerateKeyRequest(), []), (GenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API), ["llm_api_routes"])],
+    ids=["no_key_type", "ai_apis"],
+)
+async def test_default_key_generate_params_allowed_routes_with_a_non_string_entry_is_ignored(
+    monkeypatch: pytest.MonkeyPatch, request_data: GenerateKeyRequest, expected_routes: list[str]
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", 123]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(request_data, mock_insert_data)
+
+    assert (key_row.get("allowed_routes") or []) == expected_routes
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_empty_list_treated_as_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(allowed_routes=[]),
+        mock_insert_data,
+    )
+
+    assert key_row["allowed_routes"] == ["llm_api_routes", "/key/spend/report"]
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_ignores_a_string_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "default_key_generate_params", {"allowed_routes": "llm_api_routes"})
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(GenerateKeyRequest(), mock_insert_data)
+
+    assert not key_row.get("allowed_routes")
+
+
+@pytest.mark.asyncio
 async def test_key_generate_explicit_null_budget_duration_beats_default_key_generate_params(monkeypatch):
     """An explicit `"budget_duration": null` asks for a budget that never resets.
 
@@ -19981,7 +20431,6 @@ async def test_regenerate_key_repoints_access_group_assigned_key_ids(monkeypatch
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _execute_virtual_key_regeneration,
     )
-
     from litellm.proxy.utils import hash_token
 
     new_token_hash = hash_token("sk-newtoken1234ab12")
@@ -21194,8 +21643,9 @@ async def test_key_generation_premium_permission_error_precedes_project_ownershi
             team_table=None,
         )
 
-    assert error.value.status_code == 500
-    assert error.value.detail == {"error": "Internal Server Error."}
+    assert error.value.status_code == 403
+    assert "get_spend_routes" in str(error.value.detail)
+    assert CommonProxyErrors.not_premium_user.value in str(error.value.detail).replace("\\n", "\n")
     mock_prisma_client.insert_data.assert_not_awaited()
 
 
@@ -22763,6 +23213,29 @@ async def test_team_admin_creates_an_llm_api_key_owned_by_an_internal_user_teamm
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "default_key_generate_params",
+    [None, {"allowed_routes": ["/chat/completions"]}],
+    ids=["default_off", "default_without_llm_api_routes"],
+)
+async def test_custom_key_policy_sees_the_routes_a_member_key_is_saved_with(
+    monkeypatch: pytest.MonkeyPatch, default_key_generate_params: dict[str, list[str]] | None
+) -> None:
+    monkeypatch.setattr(litellm, "default_key_generate_params", default_key_generate_params)
+    policy: Final = AsyncMock(return_value={"decision": True})
+    generate_key: Final = AsyncMock(return_value={"key": "sk-member", "user_id": "member-1", "team_id": "team-1"})
+
+    with patch("litellm.proxy.proxy_server.user_custom_key_policy", policy):  # test-quality-ok: inject policy hook
+        await _team_admin_generates_member_key(
+            AsyncMock(return_value=MagicMock(user_role=LitellmUserRoles.INTERNAL_USER.value)), generate_key
+        )
+
+    policy_request: Final = policy.await_args.args[0]
+    assert policy_request.effective_key.allowed_routes == ["llm_api_routes"]
+    assert policy_request.effective_key.allowed_routes == generate_key.await_args.kwargs["allowed_routes"]
+
+
+@pytest.mark.asyncio
 async def test_team_admin_cannot_create_a_key_owned_by_a_proxy_admin_teammate():
     generate_key: Final = AsyncMock()
 
@@ -22993,3 +23466,197 @@ async def test_key_generate_reads_the_team_from_the_writer_database_not_the_cach
         )
 
     assert raised.value.message == "Team not found for team_id=1234. Non-admin users cannot create keys for non-existent teams."
+
+
+def test_key_info_unexpected_database_exception_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_prisma: Final = MagicMock()
+    secret_marker: Final = "SECRET_DB_DETAIL: invalid database statement"
+    mock_prisma.db.litellm_verificationtoken.find_unique = AsyncMock(
+        side_effect=RuntimeError(secret_marker)
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+
+    admin_auth: Final = UserAPIKeyAuth(
+        api_key="sk-test-master",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    proxy_server.app.dependency_overrides[user_api_key_auth] = lambda: admin_auth
+
+    try:
+        client: Final = TestClient(proxy_server.app)
+        with caplog.at_level("ERROR"):
+            response: Final = client.get("/key/info?key=sk-target")
+        assert response.status_code == 500
+        assert secret_marker not in response.text
+        assert response.json()["error"]["message"] == "Internal server error from /key/info. Details are in the proxy server logs."
+        assert secret_marker in caplog.text
+    finally:
+        proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.fixture
+def spend_permission_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    prisma_client: Final = _configure_key_endpoints(monkeypatch, UserApiKeyCache())
+    prisma_client.db.litellm_usertable = MagicMock()
+    prisma_client.db.litellm_usertable.count = AsyncMock(return_value=0)
+    monkeypatch.setattr(litellm, "default_key_generate_params", None)
+    monkeypatch.setattr(proxy_server, "premium_user", False)
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin"),
+    )
+    return TestClient(proxy_server.app)
+
+
+@pytest.mark.parametrize("route", ("/key/generate", "/user/new"))
+@pytest.mark.parametrize("permission", ("true", "false", False), ids=("string_true", "string_false", "bool_false"))
+def test_spend_permission_enterprise_error_regression(
+    spend_permission_client: TestClient,
+    route: str,
+    permission: str | bool,
+) -> None:
+    response: Final = spend_permission_client.post(route, json={"permissions": {"get_spend_routes": permission}})
+
+    assert response.status_code == 403, response.text
+    assert "get_spend_routes" in response.text
+    assert CommonProxyErrors.not_premium_user.value in response.json()["error"]["message"].replace("\\n", "\n")
+
+
+@pytest.mark.parametrize(
+    "permissions",
+    ({}, {"other": True}, {"other": "get_spend_routes"}, {"get_spend_routes_extra": True}),
+    ids=("empty", "unrelated", "permission_in_value", "permission_in_other_key"),
+)
+def test_non_enterprise_permissions_guard(
+    spend_permission_client: TestClient,
+    permissions: dict[str, str | bool],
+) -> None:
+    response: Final = spend_permission_client.post("/key/generate", json={"permissions": permissions})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["permissions"] == permissions
+    assert response.json()["key"].startswith("sk-")
+
+
+def test_enterprise_spend_permission_guard(
+    spend_permission_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    response: Final = spend_permission_client.post(
+        "/key/generate", json={"permissions": {"get_spend_routes": True}}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["permissions"] == {"get_spend_routes": True}
+    assert response.json()["key"].startswith("sk-")
+
+
+def test_guardrails_enterprise_error_guard(spend_permission_client: TestClient) -> None:
+    response: Final = spend_permission_client.post("/key/generate", json={"guardrails": ["g"]})
+
+    assert response.status_code == 403, response.text
+    assert "guardrails" in response.text
+    assert CommonProxyErrors.not_premium_user.value in response.json()["error"]["message"].replace("\\n", "\n")
+
+
+def test_key_info_missing_key_preserves_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_deletedverificationtoken.find_first = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+
+    admin_auth: Final = UserAPIKeyAuth(
+        api_key="sk-test-master",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    proxy_server.app.dependency_overrides[user_api_key_auth] = lambda: admin_auth
+
+    try:
+        client: Final = TestClient(proxy_server.app)
+        response: Final = client.get("/key/info?key=sk-nonexistent")
+        assert response.status_code == 404
+        assert response.json()["error"]["message"] == "Key not found in database"
+    finally:
+        proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_key_info_permission_denied_preserves_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_key: Final = MagicMock()
+    mock_key.token = "hashed-other-token"
+    mock_key.user_id = "other-user"
+    mock_key.model_dump.return_value = {
+        "token": "hashed-other-token",
+        "user_id": "other-user",
+        "team_id": None,
+        "blocked": False,
+        "expires": None,
+    }
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=mock_key)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._can_user_query_key_info",
+        AsyncMock(return_value=False),
+    )
+
+    user_auth: Final = UserAPIKeyAuth(
+        api_key="sk-regular-user",
+        user_id="user1",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    proxy_server.app.dependency_overrides[user_api_key_auth] = lambda: user_auth
+
+    try:
+        client: Final = TestClient(proxy_server.app)
+        response: Final = client.get("/key/info?key=sk-other-key")
+        assert response.status_code == 403
+        assert "not allowed to access this key's info" in response.text
+    finally:
+        proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_key_info_database_not_connected_sanitized_500(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    admin_auth: Final = UserAPIKeyAuth(
+        api_key="sk-test-master",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    proxy_server.app.dependency_overrides[user_api_key_auth] = lambda: admin_auth
+
+    try:
+        client: Final = TestClient(proxy_server.app)
+        with caplog.at_level("ERROR"):
+            response: Final = client.get("/key/info?key=sk-target")
+        assert response.status_code == 500
+        assert response.json()["error"]["message"] == "Internal server error from /key/info. Details are in the proxy server logs."
+        assert "Database not connected" in caplog.text
+    finally:
+        proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)

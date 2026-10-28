@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import subprocess
 import sys
 import time
@@ -43,6 +42,7 @@ import httpx
 import pytest
 from tests._master_key import MASTER_KEY
 from tests.integration._support.process import stop_child
+from tests.integration._support.ports import allocate_port
 
 # ---------------------------------------------------------------------------
 # Skip gate
@@ -57,12 +57,6 @@ pytestmark = pytest.mark.skipif(
 CONFIG_PATH = Path(__file__).parent / "oci_proxy_test_config.yaml"
 STARTUP_TIMEOUT_S = 90.0
 REQUEST_TIMEOUT_S = 120.0
-
-
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def _wait_for_health(base_url: str, proc: subprocess.Popen, deadline: float) -> None:
@@ -118,7 +112,7 @@ def _serve(config_path: str) -> Iterator[str]:
     env.pop("DATABASE_URL", None)
     env["STORE_MODEL_IN_DB"] = "False"
 
-    port = _free_port()
+    port = allocate_port()
     base_url = f"http://127.0.0.1:{port}"
 
     # Prefer the `litellm` console script that lives next to the active
