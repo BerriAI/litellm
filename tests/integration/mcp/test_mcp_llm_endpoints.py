@@ -950,6 +950,45 @@ def test_nonstream_failed_follow_up_bills_round_one_on_the_failure_row(
         )
 
 
+NO_CACHE: Final = {"no-cache": True}
+
+
+def _upstream_rounds(rig: Rig) -> tuple[int, int]:
+    answered: Final = tuple(
+        _has_tool_result(JSON_OBJECT.validate_json(request.body))
+        for request in rig.wire.drain()
+        if request.method == "POST"
+    )
+    return answered.count(False), answered.count(True)
+
+
+def _billed_rows(call_id: str, call_type: str, billed: float) -> list[dict[str, JsonValue]]:
+    return eventually(
+        lambda: read_rows(
+            'SELECT status, spend FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s AND call_type=%s',
+            (call_id, call_type),
+        ),
+        lambda found: sum(float(str(row["spend"])) for row in found) >= billed * (1 - 1e-6),
+        seconds=70,
+    )
+
+
+@pytest.mark.parametrize(("surface", "call_type"), (("responses", "aresponses"), ("chat", "acompletion")))
+def test_nonstream_follow_up_failing_on_every_retry_bills_each_attempts_first_round_on_one_failure_row(
+    gateway: Gateway, surface: Surface, call_type: str
+) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND, follow_up_fails=True)
+    with _rig(gateway, surface, billing=billing, prices={**PRICES, "num_retries": 2}) as rig:
+        response: Final = rig.send(_granted_key(rig), [AUTO], cache=NO_CACHE)
+        assert response.status_code == 500 and FOLLOW_UP_OUTAGE in response.text, response.text
+        first_rounds, follow_ups = _upstream_rounds(rig)
+        assert first_rounds == follow_ups > 1, (first_rounds, follow_ups)
+        paid: Final = _price(*(FIRST_ROUND,) * first_rounds)
+        rows: Final = _billed_rows(response.headers["x-litellm-call-id"], call_type, paid)
+        assert [row["status"] for row in rows] == ["failure"], rows
+        assert float(str(rows[0]["spend"])) == pytest.approx(paid), rows
+
+
 def _tool_rows(call_id: str, expected: int) -> list[dict[str, JsonValue]]:
     return eventually(
         lambda: read_rows(

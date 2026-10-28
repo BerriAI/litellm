@@ -35,6 +35,7 @@ from litellm.router_utils.cooldown_handlers import (
     cast_exception_status_to_int,
     get_cooldown_deployments,
     mark_advisor_orchestration_failure,
+    set_cooldown_deployments,
     should_cooldown_based_on_allowed_fails_policy,
 )
 from litellm.router_utils.fallback_event_handlers import (
@@ -53,6 +54,40 @@ from litellm.types.router import (
 )
 from litellm.types.utils import CooldownDeploymentInfo, CredentialItem
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception_type", "expected_cooldown"),
+    (
+        (litellm.APIConnectionError, False),
+        (litellm.UnsupportedEndpointError, False),
+        (litellm.BadRequestError, True),
+    ),
+)
+async def test_unsupported_endpoint_preserves_cooldown_exclusion_with_bad_request_policy(
+    exception_type: type[litellm.APIConnectionError | litellm.BadRequestError], expected_cooldown: bool
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "not-needed"},
+                "model_info": {"id": "deployment", "allowed_fails_policy": {"BadRequestErrorAllowedFails": 0}},
+            }
+        ],
+    )
+    exception: Final = exception_type(message="Request failed", model="claude-sonnet-5-5", llm_provider="anthropic")
+    set_cooldown_deployments(
+        litellm_router_instance=router,
+        original_exception=exception,
+        exception_status=exception.status_code,
+        deployment="deployment",
+        time_to_cooldown=60,
+    )
+    assert await async_get_cooldown_deployments(router, parent_otel_span=None) == (
+        ["deployment"] if expected_cooldown else []
+    )
 
 
 class TestGetDeploymentCooldownPolicy:
