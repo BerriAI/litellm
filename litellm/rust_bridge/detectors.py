@@ -128,7 +128,7 @@ def _custom_loggers(callbacks: Iterable[object]) -> tuple[CustomLogger, ...]:
 
 
 def overridden(method: str, callbacks: Iterable[object]) -> bool:
-    base: Final = getattr(CustomLogger, method)
+    base: Final[object] = getattr(CustomLogger, method)
     return any(getattr(type(callback), method, base) is not base for callback in _custom_loggers(callbacks))
 
 

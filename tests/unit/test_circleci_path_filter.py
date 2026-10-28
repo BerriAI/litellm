@@ -51,7 +51,7 @@ CI = [".github/workflows/test-unit.yml"]
     [
         ("mcp-dependencies", ["pyproject.toml"], "run"),
         ("mcp-dependencies", ["uv.lock"], "run"),
-        ("mcp-dependencies", ["litellm/experimental_mcp_client/client.py"], "run"),
+        ("mcp-dependencies", ["litellm/mcp_client/client.py"], "run"),
         ("mcp-dependencies", ["tests/e2e/mcp/datadog_mcp.py"], "run"),
         ("mcp-dependencies", ["litellm-proxy-extras/pyproject.toml"], "run"),
         ("mcp-dependencies", ["scripts/check_mcp_sdk_install.py"], "run"),
@@ -96,7 +96,6 @@ CI = [".github/workflows/test-unit.yml"]
         ("ui", BACKEND + CLIENT, "run"),
         ("cost-map-only", ["model_prices_and_context_window.json"], "run"),
         ("cost-map-only", ["litellm/model_prices_and_context_window_backup.json"], "run"),
-        ("cost-map-only", ["model_prices_and_context_window.schema.json"], "run"),
         (
             "cost-map-only",
             ["model_prices_and_context_window.json", "tests/unit/proxy/test_y.py"],

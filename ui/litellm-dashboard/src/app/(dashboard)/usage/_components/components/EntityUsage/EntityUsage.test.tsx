@@ -154,6 +154,12 @@ vi.mock("@/components/common_components/team_multi_select", () => ({
   ),
 }));
 
+vi.mock("@/components/common_components/CustomerMultiSelect", () => ({
+  default: ({ value, onChange }: { value: readonly string[]; onChange: (ids: string[]) => void }) => (
+    <button onClick={() => onChange(["customer-1", "customer-2"])}>Customer Multi Select {value.join(",")}</button>
+  ),
+}));
+
 // Mock useTeams hook
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(() => ({
@@ -914,6 +920,36 @@ describe("EntityUsage", () => {
 
     await waitFor(() => {
       expect(screen.getAllByText("Tag 1").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("uses customer aliases from activity metadata without loading the customer directory", async () => {
+    mockCustomerDailyActivityCall.mockResolvedValue({
+      ...mockSpendData,
+      results: mockSpendData.results.map((day) => ({
+        ...day,
+        breakdown: {
+          ...day.breakdown,
+          entities: {
+            "customer-1": {
+              ...day.breakdown.entities["tag-1"],
+              metadata: { alias: "Selected Customer" },
+            },
+          },
+        },
+      })),
+    });
+    render(<StatefulEntityUsage {...defaultProps} entityType="customer" entityList={null} />);
+    expect(await screen.findByText("Selected Customer")).toBeInTheDocument();
+  });
+
+  it("passes multiple selected customers to the activity request", async () => {
+    render(<StatefulEntityUsage {...defaultProps} entityType="customer" entityList={null} />);
+    fireEvent.click(screen.getByRole("button", { name: "Customer Multi Select" }));
+    await waitFor(() => {
+      expect(mockCustomerDailyActivityCall).toHaveBeenLastCalledWith(
+        expect.objectContaining({ entityIds: ["customer-1", "customer-2"] }),
+      );
     });
   });
 

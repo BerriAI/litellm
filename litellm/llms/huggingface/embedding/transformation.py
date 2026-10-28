@@ -447,14 +447,13 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         except Exception:
             # this should remain non blocking we should not block a response returning if calculating usage fails
             pass
-        output_text: Final = model_response["choices"][0]["message"].get("content", "")
+        first_message: Final = model_response.choices[0].message
+        output_text: Final = first_message.content
         if output_text is not None and len(output_text) > 0:
             completion_tokens = 0
             try:
                 if encoding is not None:
-                    completion_tokens = len(
-                        encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-                    )  ##[TODO] use the llama2 tokenizer here
+                    completion_tokens = len(encoding.encode(output_text))  ##[TODO] use the llama2 tokenizer here
             except Exception:
                 # this should remain non blocking we should not block a response returning if calculating usage fails
                 pass

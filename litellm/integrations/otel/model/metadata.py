@@ -59,6 +59,15 @@ if TYPE_CHECKING:
 
 _INTERNAL_CALL_ORIGINS: Final[frozenset[str]] = frozenset(get_args(InternalCallOrigin))
 _AUTH_ATTRIBUTE: Final = TypeAdapter(object)
+_EXPORTED_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
+IDENTITY_METADATA_FIELDS: Final = (
+    "user_api_key_alias",
+    "user_api_key_user_id",
+    "user_api_key_end_user_id",
+    "user_api_key_team_id",
+    "user_api_key_team_alias",
+    "user_api_key_org_id",
+)
 
 REQUESTER_METADATA_KEY: Final = "requester_metadata"
 REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
@@ -332,7 +341,7 @@ def caller_session_id(kwargs: Mapping[str, object], trace: TraceControls) -> str
     return (None if echoes_trace_id else explicit) or trace.session_id or None
 
 
-def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
+def time_to_first_chunk_seconds(kwargs: Mapping[str, object]) -> float | None:
     """Seconds from the upstream request being issued (``api_call_start_time``)
     to the first streamed chunk (``completion_start_time``); ``None`` for
     non-streaming calls, where ``completion_start_time`` is backfilled with the
@@ -340,8 +349,8 @@ def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
     optional_params: Final = cast(Mapping[str, object], kwargs.get("optional_params") or {})
     if not optional_params.get("stream"):
         return None
-    api_call_start: Final = to_seconds(kwargs.get("api_call_start_time"))
-    completion_start: Final = to_seconds(kwargs.get("completion_start_time"))
+    api_call_start: Final = _epoch_seconds(kwargs.get("api_call_start_time"))
+    completion_start: Final = _epoch_seconds(kwargs.get("completion_start_time"))
     if api_call_start is None or completion_start is None:
         return None
     return completion_start - api_call_start
@@ -469,6 +478,23 @@ def _model_info_id(model_info: object) -> str | None:
     if isinstance(model_info, Mapping):
         return as_str(model_info.get("id"))
     return None
+
+
+def exported_request_metadata(metadata: Mapping[str, object]) -> Mapping[str, str]:
+    """The non-empty string ``IDENTITY_METADATA_FIELDS`` of ``metadata``, with ``user_api_key_*`` dropped when
+    ``litellm.redact_user_api_key_info`` is on, as the ``langfuse`` callback does."""
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_user_api_key_info as _redact_user_api_key_info,  # pyright: ignore[reportUnknownVariableType]  # helper uses bare dict
+    )
+
+    redact_metadata: Final = cast(  # cast-ok: adapter validates the helper's output below
+        Callable[[dict[str, str]], object],
+        _redact_user_api_key_info,
+    )
+    present: Final = {
+        field: value for field in IDENTITY_METADATA_FIELDS if isinstance(value := metadata.get(field), str) and value
+    }
+    return MappingProxyType(dict(_EXPORTED_METADATA_ADAPTER.validate_python(redact_metadata(present))))
 
 
 def _team_metadata_dict(value: object) -> Mapping[str, object] | None:
