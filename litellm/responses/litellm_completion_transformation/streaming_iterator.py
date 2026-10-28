@@ -48,6 +48,7 @@ from litellm.types.llms.openai import (
     ResponseIncompleteEvent,
     ResponseInProgressEvent,
     ResponseInputParam,
+    ResponsePartAddedEvent,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
@@ -842,6 +843,28 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             chunk_dict["usage"] = hidden_params["usage"]
         return chunk_dict
 
+    def create_reasoning_summary_part_added_event(self, reasoning_item_id: str) -> ResponsePartAddedEvent:
+        """
+        Create response.reasoning_summary_part.added event, which opens the summary part
+        that the following response.reasoning_summary_text.delta events append to.
+
+        Example:
+        {
+            "type": "response.reasoning_summary_part.added",
+            "item_id": "rs_0c5dae30e53172980069708ba2f59c8197b71ca9820edad07c",
+            "output_index": 0,
+            "summary_index": 0,
+            "part": {"type": "summary_text", "text": ""}
+        }
+        """
+        return ResponsePartAddedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_PART_ADDED,
+            item_id=reasoning_item_id,
+            output_index=self._reasoning_index(),
+            summary_index=0,
+            part={"type": "summary_text", "text": ""},
+        )
+
     def create_reasoning_summary_text_done_event(
         self,
         reasoning_item_id: str,
@@ -1129,12 +1152,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         "id": self._cached_reasoning_item_id,
                         "type": "reasoning",
                         "status": "in_progress",
-                        "summary": None,
+                        "summary": [],
                     }
                 ),
             )
             event.__dict__["sequence_number"] = self._sequence_number
-            self._pending_response_events.append(event)
+            self._pending_response_events.extend(
+                [event, self.create_reasoning_summary_part_added_event(self._cached_reasoning_item_id)]
+            )
             return
 
         # Tool-first
@@ -1357,6 +1382,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
                 item_id=self._cached_reasoning_item_id,
                 output_index=self._reasoning_index(),
+                summary_index=0,
                 delta=reasoning_content,
             )
 

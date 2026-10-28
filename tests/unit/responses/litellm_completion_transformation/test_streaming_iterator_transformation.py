@@ -11,11 +11,13 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 """
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from openai.types.responses.response_reasoning_item import Summary as OpenAIReasoningSummaryPart
+from pydantic import TypeAdapter
 
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -1239,6 +1241,67 @@ async def test_reasoning_item_closes_before_message_item_opens(stream_chunks: St
     assert _event_text(events, ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA) == "Hello!"
 
 
+def _split_reasoning_then_text_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_reasoning_chunk("let me "), _reasoning_chunk("think"), _chunk("Hello!", finish_reason="stop"))
+
+
+def _streamed_reasoning_text(chunks: Sequence[ModelResponseStream]) -> str:
+    return "".join(getattr(chunk.choices[0].delta, "reasoning_content", None) or "" for chunk in chunks)
+
+
+def _proxy_sse_payload(event: BaseLiteLLMOpenAIResponseObject) -> Mapping[str, object]:
+    """The same dump litellm.proxy.proxy_server._serialize_streaming_chunk puts on the SSE wire."""
+    return json.loads(event.model_dump_json(exclude_none=True, exclude_unset=True))
+
+
+def _reasoning_summary_as_the_openai_sdk_accumulates_it(
+    payloads: Sequence[Mapping[str, object]],
+) -> Sequence[Mapping[str, str]]:
+    """Replays openai-node ResponseAccumulator's lookups, so a key or index missing on the wire raises as the SDK throws."""
+    items: Final = {}
+    for payload in payloads:
+        match payload["type"]:
+            case "response.output_item.added":
+                items[payload["output_index"]] = payload["item"]
+            case "response.reasoning_summary_part.added":
+                items[payload["output_index"]]["summary"].append(payload["part"])
+            case "response.reasoning_summary_text.delta":
+                items[payload["output_index"]]["summary"][payload["summary_index"]]["text"] += payload["delta"]
+    reasoning_item: Final = next(item for item in items.values() if item["type"] == "reasoning")
+    return reasoning_item["summary"]
+
+
+def _reasoning_item(items: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+    return next(item for item in items if item["type"] == "reasoning")
+
+
+@pytest.mark.parametrize(
+    "stream_chunks",
+    [_split_reasoning_then_text_chunks, _reasoning_and_text_in_one_chunk, _signed_thinking_and_text_in_one_chunk],
+    ids=[
+        "split_reasoning_then_text_chunks",
+        "reasoning_and_text_in_one_chunk",
+        "signed_thinking_and_text_in_one_chunk",
+    ],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_sdk_stream_readers_can_place_every_reasoning_summary_delta(stream_chunks: StreamChunks, sync_mode: bool):
+    chunks: Final = stream_chunks()
+    iterator: Final = _build_iterator(chunks)
+
+    payloads: Final = [_proxy_sse_payload(event) for event in await _collect_events(iterator, sync_mode)]
+
+    accumulated: Final = _reasoning_summary_as_the_openai_sdk_accumulates_it(payloads)
+    done_items: Final = [payload["item"] for payload in payloads if payload["type"] == "response.output_item.done"]
+    completed_payload: Final = next(payload for payload in payloads if payload["type"] == "response.completed")
+    completed_summary: Final = _reasoning_item(completed_payload["response"]["output"])["summary"]
+    assert "".join(part["text"] for part in accumulated) == _streamed_reasoning_text(chunks)
+    assert _reasoning_item(done_items)["summary"] == accumulated
+    assert "".join(part["text"] for part in completed_summary) == _streamed_reasoning_text(chunks)
+    TypeAdapter(list[OpenAIReasoningSummaryPart]).validate_python([*accumulated, *completed_summary])
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_tool_then_reasoning_then_text_gives_message_its_own_output_index(sync_mode: bool):
@@ -1421,9 +1484,7 @@ async def test_anthropic_tool_search_call_streams_as_tool_search_call_item(sync_
             model="claude-sonnet-5-5",
             object="chat.completion.chunk",
             choices=[
-                StreamingChoices(
-                    index=0, delta=delta, finish_reason="tool_calls" if index == len(deltas) - 1 else None
-                )
+                StreamingChoices(index=0, delta=delta, finish_reason="tool_calls" if index == len(deltas) - 1 else None)
             ],
         )
         for index, delta in enumerate(deltas)

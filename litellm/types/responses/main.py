@@ -158,6 +158,13 @@ class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     phase: Phase = None
 
 
+class ReasoningSummaryText(BaseLiteLLMOpenAIResponseObject):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["summary_text"]
+    text: str
+
+
 class DeleteResponseResult(BaseLiteLLMOpenAIResponseObject):
     """
     Result of a delete response request

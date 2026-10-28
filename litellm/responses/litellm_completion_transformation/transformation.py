@@ -113,6 +113,7 @@ from litellm.types.responses.main import (
     OutputImageGenerationCall,
     OutputText,
     OutputToolSearchCall,
+    ReasoningSummaryText,
 )
 from litellm.types.utils import (
     ChatCompletionAnnotation,
@@ -3437,23 +3438,30 @@ class LiteLLMCompletionResponsesConfig:
                 if reasoning_content or encrypted_content:
                     # Only check the first choice for reasoning content
                     return [
-                        GenericResponseOutputItem(
-                            type="reasoning",
-                            id=mint_reasoning_item_id(),
-                            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                                choice.finish_reason
-                            ),
-                            role="assistant",
-                            content=[
-                                OutputText(
-                                    type="output_text",
-                                    text=text,
-                                    annotations=[],
-                                )
-                                for text in (reasoning_content,)
-                                if text
-                            ],
-                            encrypted_content=encrypted_content,
+                        GenericResponseOutputItem.model_validate(
+                            {
+                                "type": "reasoning",
+                                "id": mint_reasoning_item_id(),
+                                "status": LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                                    choice.finish_reason
+                                ),
+                                "role": "assistant",
+                                "content": [
+                                    OutputText(
+                                        type="output_text",
+                                        text=text,
+                                        annotations=[],
+                                    )
+                                    for text in (reasoning_content,)
+                                    if text
+                                ],
+                                "summary": [
+                                    ReasoningSummaryText(type="summary_text", text=text)
+                                    for text in (reasoning_content,)
+                                    if text
+                                ],
+                                "encrypted_content": encrypted_content,
+                            }
                         )
                     ]
         return []
