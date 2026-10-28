@@ -13,6 +13,7 @@ from pydantic import JsonValue
 
 COUNTED_TOKENS: Final = 7
 RELEVANCE: Final = 0.75
+AZURE_DEPLOYMENT: Final = "gpt-url-join"
 _USAGE: Final = {"input_tokens": 3, "output_tokens": 2}
 
 
@@ -146,12 +147,20 @@ def _cohere_rerank(request: Request) -> Reply:
     )
 
 
+def _titan_embedding(_: Request) -> Reply:
+    return _json({"embedding": list(VECTOR), "inputTextTokenCount": 2})
+
+
 _BY_PREFIX: Final[Mapping[str, Callable[[Request], Reply]]] = MappingProxyType(
     {
         "an": _anthropic,
         "bi": lambda request: _json(anthropic_message(marker_of(request))),
         "bc": _bedrock_converse,
+        "be": _titan_embedding,
         "gm": _gemini,
+        "vx": _gemini,
+        "fd": _anthropic,
+        "az": _openai_like(AZURE_DEPLOYMENT),
         "mi": _openai_like("mistral-small-latest"),
         "db": _openai_like("databricks-meta-llama-3-3-70b-instruct"),
         "co": _cohere_rerank,
