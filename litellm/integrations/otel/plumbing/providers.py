@@ -35,7 +35,8 @@ from opentelemetry.sdk.trace.export import (
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from opentelemetry.trace import Span, SpanContext, SpanKind, Status, StatusCode, Tracer
+from opentelemetry.sdk.trace.sampling import Decision, Sampler, SamplingResult
+from opentelemetry.trace import Link, Span, SpanContext, SpanKind, Status, StatusCode, Tracer, TraceState
 from opentelemetry.util.re import parse_env_headers
 from opentelemetry.util.types import Attributes, AttributeValue
 
@@ -68,6 +69,7 @@ from litellm.integrations.otel.model.semconv import (
 from litellm.integrations.otel.model.spans import LiteLLMSpanKind
 from litellm.integrations.otel.plumbing.context import (
     request_destinations,
+    request_traces_excluded,
     suppressed_backends,
 )
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
@@ -1499,6 +1501,28 @@ def _spec_processor(
     return _MessageContentFilter(scoped) if strip_message_content else scoped
 
 
+class _RequestExclusionSampler(Sampler):
+    def __init__(self, delegate: Sampler) -> None:
+        self.delegate = delegate
+
+    def should_sample(
+        self,
+        parent_context: Context | None,
+        trace_id: int,
+        name: str,
+        kind: SpanKind | None = None,
+        attributes: Attributes = None,
+        links: Sequence[Link] | None = None,
+        trace_state: TraceState | None = None,
+    ) -> SamplingResult:
+        if request_traces_excluded():
+            return SamplingResult(Decision.DROP)
+        return self.delegate.should_sample(parent_context, trace_id, name, kind, attributes, links, trace_state)
+
+    def get_description(self) -> str:
+        return f"RequestExclusion({self.delegate.get_description()})"
+
+
 def build_tracer_provider(
     config: OpenTelemetryV2Config,
     exporter: SpanExporter | None = None,
@@ -1531,6 +1555,7 @@ def build_tracer_provider(
     destination asked for.
     """
     provider: Final = TracerProvider(resource=build_resource(config))
+    provider.sampler = _RequestExclusionSampler(provider.sampler)
     if baggage_processor is None:
         baggage_processor = LiteLLMBaggageSpanProcessor(allowed_keys=config.baggage_promoted_keys)
     provider.add_span_processor(baggage_processor)
