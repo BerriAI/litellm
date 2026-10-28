@@ -126,6 +126,59 @@ def test_vispark_chat_completion_request_maps_max_completion_tokens():
     assert response.choices[0].message.content == "Hello from Vispark"
 
 
+def test_vispark_strips_additional_properties_from_a_json_schema_response_format():
+    schema: Final = {
+        "type": "object",
+        "properties": {"city": {"type": "object", "properties": {"name": {"type": "string"}}, "additionalProperties": False}},
+        "required": ["city"],
+        "additionalProperties": False,
+    }
+    response_format: Final = {"type": "json_schema", "json_schema": {"name": "City", "schema": schema, "strict": True}}
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        litellm.completion(
+            model="vispark/vision-medium",
+            messages=[{"role": "user", "content": "Capital of France as JSON"}],
+            response_format=response_format,
+            api_key="vispark-test-key",
+        )
+
+    sent_format: Final = json.loads(route.calls.last.request.content)["response_format"]
+    assert "additionalProperties" not in json.dumps(sent_format)
+    assert sent_format["json_schema"]["strict"] is True
+    assert sent_format["json_schema"]["schema"]["properties"]["city"]["properties"] == {"name": {"type": "string"}}
+    assert schema["additionalProperties"] is False
+
+
+def test_vispark_sends_a_pdf_file_part_as_an_image_url():
+    pdf_data_url: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        litellm.completion(
+            model="vispark/vision-medium",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What code is in this PDF?"},
+                        {"type": "file", "file": {"file_data": pdf_data_url}},
+                    ],
+                }
+            ],
+            api_key="vispark-test-key",
+        )
+
+    sent_content: Final = json.loads(route.calls.last.request.content)["messages"][0]["content"]
+    assert sent_content[0] == {"type": "text", "text": "What code is in this PDF?"}
+    assert sent_content[1]["type"] == "image_url"
+    assert sent_content[1]["image_url"]["url"] == pdf_data_url
+    assert all(part["type"] != "file" for part in sent_content)
+
+
 def test_vispark_text_completion_request():
     with respx.mock() as upstream:
         route: Final = upstream.post("https://api.lab.vispark.in/v1/completions").respond(200, json=_TEXT_COMPLETION)
@@ -144,16 +197,32 @@ def test_vispark_text_completion_request():
 
 def test_vispark_cost_follows_the_cost_map():
     cost_entry: Final = litellm.model_cost["vispark/vision-large"]
+    prompt_tokens: Final = cost_entry["min_billed_input_tokens"] + 1_000
 
     prompt_cost, completion_cost = litellm.cost_per_token(
         model="vision-large",
         custom_llm_provider="vispark",
-        prompt_tokens=1_000,
+        prompt_tokens=prompt_tokens,
         completion_tokens=500,
     )
 
-    assert prompt_cost == pytest.approx(1_000 * cost_entry["input_cost_per_token"])
+    assert prompt_cost == pytest.approx(prompt_tokens * cost_entry["input_cost_per_token"])
     assert completion_cost == pytest.approx(500 * cost_entry["output_cost_per_token"])
+
+
+@pytest.mark.parametrize("model", ["vision-small", "vision-medium", "vision-large"])
+def test_vispark_bills_a_short_prompt_at_its_minimum_input_tokens(model: str):
+    cost_entry: Final = litellm.model_cost[f"vispark/{model}"]
+    minimum: Final = cost_entry["min_billed_input_tokens"]
+
+    prompt_cost, _ = litellm.cost_per_token(
+        model=model,
+        custom_llm_provider="vispark",
+        prompt_tokens=minimum // 2,
+        completion_tokens=1,
+    )
+
+    assert prompt_cost == pytest.approx(minimum * cost_entry["input_cost_per_token"])
 
 
 def test_vispark_models_are_listed_for_the_provider():

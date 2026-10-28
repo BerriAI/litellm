@@ -100,6 +100,38 @@ def test_generic_cost_per_token_bills_cache_reads_at_input_rate_when_no_cache_re
 
 
 @pytest.mark.parametrize(
+    ("prompt_tokens", "billed_prompt_tokens"),
+    [(10, 600), (600, 600), (900, 900)],
+    ids=["below_the_minimum_bills_the_minimum", "at_the_minimum", "above_the_minimum_bills_as_reported"],
+)
+def test_generic_cost_per_token_bills_at_least_the_minimum_input_tokens(
+    prompt_tokens: int, billed_prompt_tokens: int
+) -> None:
+    model_info: Final[ModelInfo] = {
+        "key": "minimum-input-fixture",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 5e-6,
+        "min_billed_input_tokens": 600,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supported_openai_params": None,
+    }
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="minimum-input-fixture",
+        usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=7, total_tokens=prompt_tokens + 7),
+        custom_llm_provider="openai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(billed_prompt_tokens * 2e-6)
+    assert completion_cost == pytest.approx(7 * 5e-6)
+
+
+@pytest.mark.parametrize(
     ("model_info", "expected_prompt_cost"),
     [
         ({"input_cost_per_token": 1e-7, "input_cost_per_character": 2.5e-8, "output_cost_per_token": 0.0}, 35 * 2.5e-8),

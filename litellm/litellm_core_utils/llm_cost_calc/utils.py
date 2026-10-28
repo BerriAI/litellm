@@ -1560,14 +1560,20 @@ def generic_cost_per_token(
         base_costs.cache_read_rate if resolved_cache_read_cost is None else resolved_cache_read_cost
     )
 
-    prompt_cost = _calculate_input_cost(
-        prompt_tokens_details=prompt_tokens_details,
-        model_info=resolved_model_info,
-        prompt_base_cost=base_costs.input_rate,
-        cache_read_cost=effective_cache_read_cost,
-        cache_creation_cost=base_costs.cache_creation_rate,
-        cache_creation_cost_by_ttl=base_costs.cache_creation_rates_by_ttl,
-        service_tier=service_tier,
+    unbilled_minimum_input_tokens: Final = max(
+        (resolved_model_info.get("min_billed_input_tokens") or 0) - usage.prompt_tokens, 0
+    )
+    prompt_cost = (
+        _calculate_input_cost(
+            prompt_tokens_details=prompt_tokens_details,
+            model_info=resolved_model_info,
+            prompt_base_cost=base_costs.input_rate,
+            cache_read_cost=effective_cache_read_cost,
+            cache_creation_cost=base_costs.cache_creation_rate,
+            cache_creation_cost_by_ttl=base_costs.cache_creation_rates_by_ttl,
+            service_tier=service_tier,
+        )
+        + unbilled_minimum_input_tokens * base_costs.input_rate
     )
 
     ## CALCULATE OUTPUT COST

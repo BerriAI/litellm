@@ -265,6 +265,10 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
+    "special_handling": {
+      "convert_file_parts_to_image_url": true,
+      "remove_additional_properties_from_response_format": true
+    },
     "supported_endpoints": ["/v1/chat/completions", "/v1/completions"]
   }
 }

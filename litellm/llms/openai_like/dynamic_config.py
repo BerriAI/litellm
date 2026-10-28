@@ -2,23 +2,40 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import TYPE_CHECKING, Final, Literal, overload
+
+from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
+    migrate_file_to_image_url,
 )
 from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.utils import remove_additional_properties
 
 from .json_loader import SimpleProviderConfig
 
+_JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_REQUESTED_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
 if TYPE_CHECKING:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+
+
+def _with_file_parts_as_image_url(message: AllMessageValues) -> AllMessageValues:
+    if message["role"] != "user" or not isinstance(message["content"], list):
+        return message
+    content: Final = [
+        migrate_file_to_image_url(part) if part["type"] == "file" else part for part in message["content"]
+    ]
+    updated: Final[ChatCompletionUserMessage] = {**message, "content": content}
+    return updated
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -46,14 +63,19 @@ def create_config_class(provider: SimpleProviderConfig):
         ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
             """Transform messages based on special_handling config"""
 
-            # Handle content list to string conversion if configured
-            if provider.special_handling.get("convert_content_list_to_string"):
-                messages = handle_messages_with_content_list_to_str_conversion(messages)
-
+            content_flattened: Final = (
+                handle_messages_with_content_list_to_str_conversion(messages)
+                if provider.special_handling.get("convert_content_list_to_string")
+                else messages
+            )
+            transformed: Final = (
+                [_with_file_parts_as_image_url(message) for message in content_flattened]
+                if provider.special_handling.get("convert_file_parts_to_image_url")
+                else content_flattened
+            )
             if is_async:
-                return super()._transform_messages(messages=messages, model=model, is_async=True)
-            else:
-                return super()._transform_messages(messages=messages, model=model, is_async=False)
+                return super()._transform_messages(messages=transformed, model=model, is_async=True)
+            return super()._transform_messages(messages=transformed, model=model, is_async=False)
 
         def _get_openai_compatible_provider_info(
             self, api_base: str | None, api_key: str | None
@@ -140,12 +162,18 @@ def create_config_class(provider: SimpleProviderConfig):
             supported_params: Final = self.get_supported_openai_params(model)
 
             # Apply supported params
-            for param, value in non_default_params.items():
+            requested_params: Final = _REQUESTED_PARAMS_ADAPTER.validate_python(non_default_params)
+            for param, value in requested_params.items():
                 # Check parameter mappings first
                 if param in provider.param_mappings:
                     optional_params[provider.param_mappings[param]] = value
                 elif param in supported_params:
-                    optional_params[param] = value
+                    optional_params[param] = (
+                        remove_additional_properties(_JSON_VALUE_ADAPTER.validate_python(value))
+                        if param == "response_format"
+                        and provider.special_handling.get("remove_additional_properties_from_response_format")
+                        else value
+                    )
 
             # Apply temperature constraints if present
             if "temperature" in optional_params:
