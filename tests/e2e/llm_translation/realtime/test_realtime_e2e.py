@@ -4,7 +4,10 @@ Each test opens a websocket through the proxy, speaks the OpenAI GA realtime
 event schema, and asserts the proxy normalizes the provider's stream into that
 schema: the session lifecycle, the canonical response event sequence with a
 reconstructed transcript and usage, and a full tool-call round-trip (call ->
-tool result -> a follow-up response that uses the result).
+tool result -> a follow-up response that uses the result). The audio tests
+stream the spoken weather question into /v1/realtime/translations and into a
+/v1/realtime?intent=transcription session, and assert the translated or
+transcribed output and the session's spend row.
 
 One GA-speaking client validates every provider; only the model alias changes.
 Every provider is provisioned at session start, so a missing realtime alias is a
@@ -12,19 +15,28 @@ hard failure, not a skip; once configured, a protocol failure is likewise a hard
 failure. See REALTIME_COVERAGE_MATRIX.md.
 """
 
+import base64
+import wave
+from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import pytest
 from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
-from models import LiteLLMParamsBody
+from models import LiteLLMParamsBody, SpendLogRow
 from pydantic import BaseModel
 from realtime_client import (
     PROVIDERS,
+    TRANSLATIONS_ROUTE,
     ConversationItemCreate,
+    DeltaEvent,
     FunctionCallArgumentsDone,
     FunctionCallOutputItem,
     FunctionTool,
+    InputAudioBufferAppend,
+    InputAudioBufferCommit,
+    InputTranscription,
     JsonSchema,
     JsonSchemaProperty,
     RealtimeClient,
@@ -35,8 +47,18 @@ from realtime_client import (
     ResponseDone,
     ServerEnvelope,
     SessionConfig,
+    SessionInputAudioBufferAppend,
     SessionUpdate,
+    TranscriptionAudio,
+    TranscriptionAudioInput,
+    TranscriptionSessionConfig,
+    TranscriptionSessionUpdate,
+    TranslationAudio,
+    TranslationOutput,
+    TranslationSessionConfig,
+    TranslationSessionUpdate,
     as_text,
+    events_of_type,
     parse_last,
     realtime_model,
     transcript,
@@ -262,3 +284,205 @@ def test_upstream_handshake_refusal_is_an_error_event_and_policy_close(
 
     assert closed.value.rcvd is not None
     assert closed.value.rcvd.code == 1008, closed.value
+
+
+WEATHER_WAV: Final = Path(__file__).parent / "fixtures" / "weather_question_24k.wav"
+PCM_RATE: Final = 24000
+CHUNK_SECONDS: Final = 0.1
+CHUNK_BYTES: Final = int(PCM_RATE * CHUNK_SECONDS) * 2
+SILENCE_B64: Final = base64.b64encode(bytes(CHUNK_BYTES)).decode()
+REGISTRY_ROUTES: Final = MappingProxyType({"openai": "openai", "azure": "azure_openai"})
+
+
+def weather_pcm_chunks() -> tuple[str, ...]:
+    with wave.open(str(WEATHER_WAV), "rb") as wav:
+        assert (wav.getnchannels(), wav.getsampwidth(), wav.getframerate()) == (1, 2, PCM_RATE), (
+            "fixture must be mono PCM16 at 24 kHz"
+        )
+        pcm: Final = wav.readframes(wav.getnframes())
+    return tuple(base64.b64encode(pcm[i : i + CHUNK_BYTES]).decode() for i in range(0, len(pcm), CHUNK_BYTES))
+
+
+def has_billed_row(rows: list[SpendLogRow]) -> bool:
+    return any((row.spend or 0) > 0 for row in rows)
+
+
+def audio_marks(provider: RealtimeProvider, capability: str) -> tuple[pytest.MarkDecorator, ...]:
+    return (
+        pytest.mark.covers(f"llm.realtime.{REGISTRY_ROUTES[provider.id]}.{capability}.stream.works"),
+        meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.REALTIME,
+                providers=(Provider(provider.id),),
+                models=(provider.litellm_params.model,),
+                capabilities=(Capability.AUDIO_INPUT,),
+                mode=Mode.WEBSOCKET,
+            )
+        ),
+    )
+
+
+TRANSLATION_PROVIDERS: Final = (
+    RealtimeProvider(
+        "openai",
+        "openai-translate",
+        LiteLLMParamsBody(model="openai/gpt-realtime-translate", api_key="os.environ/OPENAI_API_KEY"),
+    ),
+    RealtimeProvider(
+        "azure",
+        "azure-translate",
+        LiteLLMParamsBody(
+            model="azure/gpt-realtime-translate",
+            api_base="os.environ/AZURE_API_BASE",
+            api_key="os.environ/AZURE_API_KEY",
+        ),
+    ),
+)
+
+LIVE_TRANSCRIPTION_PROVIDERS: Final = (
+    RealtimeProvider(
+        "openai",
+        "openai-live-transcribe",
+        LiteLLMParamsBody(model="openai/gpt-live-transcribe", api_key="os.environ/OPENAI_API_KEY"),
+    ),
+    RealtimeProvider(
+        "azure",
+        "azure-live-transcribe",
+        LiteLLMParamsBody(
+            model="azure/gpt-live-transcribe",
+            api_base="os.environ/AZURE_API_BASE",
+            api_key="os.environ/AZURE_API_KEY",
+        ),
+    ),
+)
+
+TRANSLATION_PARAMS: Final = tuple(
+    pytest.param(p, id=p.id, marks=audio_marks(p, "translation")) for p in TRANSLATION_PROVIDERS
+)
+LIVE_TRANSCRIPTION_PARAMS: Final = tuple(
+    pytest.param(p, id=p.id, marks=audio_marks(p, "transcription")) for p in LIVE_TRANSCRIPTION_PROVIDERS
+)
+AZURE_GA_PROVIDER: Final = next(p for p in PROVIDERS if p.id == "azure")
+
+
+class TranscriptionCompleted(BaseModel):
+    type: str
+    transcript: str
+
+
+class TestRealtimeTranslation:
+    @pytest.mark.parametrize("provider", TRANSLATION_PARAMS)
+    def test_spoken_english_comes_back_as_french_audio_and_transcript_and_is_billed(
+        self,
+        client: RealtimeClient,
+        resources: ResourceManager,
+        scoped_key: str,
+        provider: RealtimeProvider,
+    ) -> None:
+        model, model_id = client.provision(provider)
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+
+        with client.connect(key=scoped_key, model=model, route=TRANSLATIONS_ROUTE) as session:
+            session.send(
+                TranslationSessionUpdate(
+                    session=TranslationSessionConfig(audio=TranslationAudio(output=TranslationOutput(language="fr")))
+                )
+            )
+            session.collect_until("session.updated", timeout=30)
+            events: Final = session.stream_and_collect(
+                tuple(SessionInputAudioBufferAppend(audio=chunk) for chunk in weather_pcm_chunks()),
+                tail=SessionInputAudioBufferAppend(audio=SILENCE_B64),
+                interval=CHUNK_SECONDS,
+                idle=8,
+                timeout=60,
+            )
+
+        types: Final = tuple(e.type for e in events)
+        audio_bytes: Final = sum(
+            len(base64.b64decode(DeltaEvent.model_validate_json(e.payload).delta))
+            for e in events_of_type(events, "session.output_audio.delta")
+        )
+        assert audio_bytes > 0, f"translation returned no translated audio; types={types}"
+        translated: Final = "".join(
+            DeltaEvent.model_validate_json(e.payload).delta
+            for e in events_of_type(events, "session.output_transcript.delta")
+        ).lower()
+        assert "temps" in translated or "météo" in translated, (
+            f"the spoken weather question did not come back in French: {translated!r}"
+        )
+
+        rows: Final = client.proxy.poll_logs_for_key(scoped_key, predicate=has_billed_row)
+        assert has_billed_row(rows), f"the translation session was not billed: {rows}"
+
+
+class TestRealtimeLiveTranscription:
+    @pytest.mark.parametrize("provider", LIVE_TRANSCRIPTION_PARAMS)
+    def test_spoken_question_streams_transcript_deltas_that_match_the_completed_transcript(
+        self,
+        client: RealtimeClient,
+        resources: ResourceManager,
+        scoped_key: str,
+        provider: RealtimeProvider,
+    ) -> None:
+        model, model_id = client.provision(provider)
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+
+        with client.connect(key=scoped_key, model=model, intent="transcription") as session:
+            session.send(
+                TranscriptionSessionUpdate(
+                    session=TranscriptionSessionConfig(
+                        audio=TranscriptionAudio(
+                            input=TranscriptionAudioInput(transcription=InputTranscription(model=model))
+                        )
+                    )
+                )
+            )
+            session.collect_until("session.updated", timeout=30)
+            for chunk in weather_pcm_chunks():
+                session.send(InputAudioBufferAppend(audio=chunk))
+            session.send(InputAudioBufferCommit())
+            events: Final = session.collect_until("conversation.item.input_audio_transcription.completed", timeout=60)
+
+        completed: Final = TranscriptionCompleted.model_validate_json(events[-1].payload)
+        assert "weather" in completed.transcript.lower(), (
+            f"transcript of a spoken weather question does not mention weather: {completed.transcript!r}"
+        )
+        streamed: Final = "".join(
+            DeltaEvent.model_validate_json(e.payload).delta
+            for e in events_of_type(events, "conversation.item.input_audio_transcription.delta")
+        )
+        assert streamed.strip() == completed.transcript.strip(), (
+            f"streamed deltas {streamed!r} do not add up to the completed transcript {completed.transcript!r}"
+        )
+
+        rows: Final = client.proxy.poll_logs_for_key(scoped_key, predicate=has_billed_row)
+        assert has_billed_row(rows), f"the live transcription session was not billed: {rows}"
+
+
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.REALTIME,
+        providers=(Provider.AZURE,),
+        models=(AZURE_GA_PROVIDER.litellm_params.model,),
+        mode=Mode.WEBSOCKET,
+    )
+)
+def test_azure_ga_text_turn_is_answered_and_billed(
+    client: RealtimeClient, resources: ResourceManager, scoped_key: str
+) -> None:
+    model, model_id = client.provision(AZURE_GA_PROVIDER)
+    resources.defer(lambda: client.proxy.delete_model(model_id))
+
+    with client.connect(key=scoped_key, model=model) as session:
+        session.collect_until("session.created", timeout=20)
+        session.send(SessionUpdate(session=SessionConfig(instructions="Reply with the single word hello.")))
+        session.collect_until("session.updated", timeout=20)
+        session.send(user_message("Say the single word hello."))
+        session.send(ResponseCreate())
+        events: Final = session.collect_until("response.done", timeout=60)
+
+    assert "hello" in transcript(events).lower(), f"Azure GA realtime did not answer the turn: {transcript(events)!r}"
+    rows: Final = client.proxy.poll_logs_for_key(scoped_key, predicate=has_billed_row)
+    assert has_billed_row(rows), f"the Azure GA realtime turn was not billed: {rows}"
