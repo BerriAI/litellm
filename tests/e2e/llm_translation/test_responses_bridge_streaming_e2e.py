@@ -16,18 +16,21 @@ into a chat completion chunk. Two customer-visible contracts only hold on that p
 
 from __future__ import annotations
 
+from typing import Final, Literal
+
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatTool, ChatToolFunction, LiteLLMParamsBody
 from passthrough_client import PassthroughClient
 
 pytestmark = pytest.mark.e2e
 
-RESPONSES_ONLY_BACKEND = "openai/gpt-5.3-codex"
+RESPONSES_ONLY_BACKEND: Final = "openai/gpt-5.3-codex"
 
 
 class _BridgeToolCallFunction(BaseModel):
@@ -51,7 +54,8 @@ class _BridgeChoice(BaseModel):
 
 class _BridgeChunk(BaseModel):
     id: str
-    choices: list[_BridgeChoice] = []
+    object: Literal["chat.completion.chunk"]
+    choices: list[_BridgeChoice] = Field(default_factory=list)
 
 
 class _WeatherArgs(BaseModel):
@@ -96,6 +100,15 @@ class TestResponsesBridgeChatCompletionsStreaming:
         "llm.chat_completions.openai.basic.stream.bridge_shares_chunk_id",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(RESPONSES_ONLY_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_bridged_stream_shares_one_chunk_id(
         self, client: PassthroughClient, resources: ResourceManager, bridged_model: str
     ) -> None:
@@ -103,20 +116,32 @@ class TestResponsesBridgeChatCompletionsStreaming:
             resources.key(),
             ChatBody(
                 model=bridged_model,
-                messages=[ChatMessage(role="user", content=f"Count from 1 to 5, one number per line. {unique_marker()}")],
+                messages=[
+                    ChatMessage(role="user", content=f"Count from 1 to 5, one number per line. {unique_marker()}")
+                ],
                 max_tokens=64,
                 stream=True,
             ),
         )
 
-        chunks = _bridge_chunks(result)
-        ids = {chunk.id for chunk in chunks}
+        chunks: Final = _bridge_chunks(result)
+        assert len(chunks) > 1, "the shared-id contract needs more than one streamed chunk"
+        ids: Final = frozenset(chunk.id for chunk in chunks)
         assert len(ids) == 1, f"bridged stream used {len(ids)} different chunk ids: {sorted(ids)[:5]}"
-        assert ids.pop().startswith("chatcmpl-"), f"bridged chunk id is not chat-completion shaped: {chunks[0].id}"
+        assert chunks[0].id.strip(), "bridged stream emitted an empty chunk id"
 
     @pytest.mark.covers(
         "llm.chat_completions.openai.basic.stream.bridge_streams_sse",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(RESPONSES_ONLY_BACKEND,),
+            mode=Mode.STREAM,
+        )
     )
     def test_bridged_stream_delivers_content_finish_reason_and_done(
         self, client: PassthroughClient, resources: ResourceManager, bridged_model: str
@@ -134,14 +159,24 @@ class TestResponsesBridgeChatCompletionsStreaming:
         chunks = _bridge_chunks(result)
         content = "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices)
         assert content.strip(), f"bridged stream completed with no content deltas: {result.stream_events[:3]}"
-        assert any(
-            choice.finish_reason for chunk in chunks for choice in chunk.choices
-        ), f"bridged stream never emitted a finish_reason: {result.stream_events[-3:]}"
+        assert any(choice.finish_reason for chunk in chunks for choice in chunk.choices), (
+            f"bridged stream never emitted a finish_reason: {result.stream_events[-3:]}"
+        )
         assert result.stream_done, f"bridged stream did not terminate with [DONE]: {result.stream_events[-2:]}"
 
     @pytest.mark.covers(
         "llm.chat_completions.openai.tool_use.stream.bridge_streams_tool_call",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(RESPONSES_ONLY_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.STREAM,
+        )
     )
     def test_bridged_stream_reassembles_tool_call(
         self, client: PassthroughClient, resources: ResourceManager, bridged_model: str

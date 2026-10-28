@@ -10,12 +10,15 @@
 ## LiteLLM versions of the OpenAI Exception Types
 
 import enum
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 import httpx
 import openai
 
+import litellm
 from litellm.types.utils import LiteLLMCommonStrings
+from litellm.types.vector_stores import VectorStoreSearchFailure
 
 
 class RateLimitErrorCategory(str, enum.Enum):
@@ -85,7 +88,7 @@ _RATE_LIMIT_CATEGORY_VALUES: Final = frozenset(c.value for c in RateLimitErrorCa
 _RATE_LIMIT_TYPE_VALUES: Final = frozenset(t.value for t in RateLimitType)
 
 
-def validate_rate_limit_category(value: Any) -> str | None:
+def validate_rate_limit_category(value: object) -> str | None:
     """Return ``value`` only if it matches a known :class:`RateLimitErrorCategory`.
 
     Used at duck-typed read sites (StandardLoggingPayload extraction, Prometheus
@@ -100,7 +103,7 @@ def validate_rate_limit_category(value: Any) -> str | None:
     return None
 
 
-def validate_rate_limit_type(value: Any) -> str | None:
+def validate_rate_limit_type(value: object) -> str | None:
     """Return ``value`` only if it matches a known :class:`RateLimitType`.
 
     See :func:`validate_rate_limit_category` for the rationale.
@@ -169,6 +172,12 @@ class AuthenticationError(openai.AuthenticationError):
         return _message
 
 
+class CallerCredentialAuthenticationError(AuthenticationError):
+    """401 raised when the CALLING user's own stored provider credential is
+    missing or rejected (e.g. a per-user OAuth connection). Scoped to one
+    caller's credential, so routers must not cool down the shared deployment."""
+
+
 # raise when invalid models passed, example gpt-8
 class NotFoundError(openai.NotFoundError):
     def __init__(
@@ -223,7 +232,7 @@ class BadRequestError(openai.BadRequestError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 400
         self.message = f"litellm.BadRequestError: {message}"
@@ -232,14 +241,7 @@ class BadRequestError(openai.BadRequestError):
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        # Use response if it's a valid httpx.Response with a request, otherwise use minimal error response
-        # Note: We check _request (not .request property) to avoid RuntimeError when _request is None
-        if (
-            response is not None
-            and isinstance(response, httpx.Response)
-            and hasattr(response, "_request")
-            and getattr(response, "_request", None) is not None
-        ):
+        if response is not None and getattr(response, "_request", None) is not None:
             self.response = response
         else:
             self.response = _get_minimal_error_response()
@@ -274,7 +276,7 @@ class ImageFetchError(BadRequestError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         super().__init__(
             message=message,
@@ -286,6 +288,37 @@ class ImageFetchError(BadRequestError):
             num_retries=num_retries,
             body=body,
         )
+
+
+VECTOR_STORE_SEARCH_FAILED_CODE: Final = "vector_store_search_failed"
+
+
+class VectorStoreSearchError(BadRequestError):
+    def __init__(
+        self,
+        failures: Sequence[VectorStoreSearchFailure],
+        model: str | None = None,
+        llm_provider: str | None = None,
+    ) -> None:
+        self.failures: Final[tuple[VectorStoreSearchFailure, ...]] = tuple(failures)
+        detail: Final = "; ".join(f"{failure['vector_store_id']}: {failure['error']}" for failure in self.failures)
+        super().__init__(
+            message=(
+                "The request could not be grounded in every configured vector store. "
+                f"{len(self.failures)} vector store search(es) failed: {detail}"
+            ),
+            model=model,
+            llm_provider=llm_provider,
+            body={"type": "invalid_request_error", "code": VECTOR_STORE_SEARCH_FAILED_CODE},
+        )
+
+
+class MalformedRequestFieldError(BadRequestError):
+    pass
+
+
+class UnsupportedEndpointError(BadRequestError):
+    pass
 
 
 class UnprocessableEntityError(openai.UnprocessableEntityError):
@@ -328,6 +361,8 @@ class UnprocessableEntityError(openai.UnprocessableEntityError):
 
 
 class Timeout(openai.APITimeoutError):
+    request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+
     def __init__(
         self,
         message,
@@ -338,6 +373,7 @@ class Timeout(openai.APITimeoutError):
         num_retries: int | None = None,
         headers: dict | None = None,
         exception_status_code: int | None = None,
+        response: httpx.Response | None = None,
     ):
         request: Final = httpx.Request(
             method="POST",
@@ -352,6 +388,8 @@ class Timeout(openai.APITimeoutError):
         self.max_retries = max_retries
         self.num_retries = num_retries
         self.headers = headers
+        if response is not None:
+            self.response = response
 
     # custom function to convert to str
     def __str__(self):
@@ -423,6 +461,9 @@ class RateLimitError(openai.RateLimitError):
     :class:`RateLimitErrorCategory` for the available values.
     """
 
+    response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
+    request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+
     def __init__(
         self,
         message,
@@ -435,7 +476,8 @@ class RateLimitError(openai.RateLimitError):
         category: str | RateLimitErrorCategory = (RateLimitErrorCategory.VENDOR_RATE_LIMIT),
         rate_limit_type: str | RateLimitType | None = None,
         headers: dict[str, str] | None = None,
-        detail: Any = None,
+        detail: object = None,
+        body: object | None = None,
     ):
         self.status_code = 429
         self.message = f"litellm.RateLimitError: {message}"
@@ -472,13 +514,16 @@ class RateLimitError(openai.RateLimitError):
         self.response = httpx.Response(
             status_code=429,
             headers=_response_headers,
+            content=response.content if response is not None else None,
             request=httpx.Request(
                 method="POST",
                 url=" https://cloud.google.com/vertex-ai/",
             ),
         )
         super().__init__(
-            self.message, response=self.response, body=None
+            self.message,
+            response=self.response,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
+            body=body,
         )  # Call the base class constructor with the parameters it needs
         self.code = "429"
         self.type = "throttling_error"
@@ -500,6 +545,12 @@ class RateLimitError(openai.RateLimitError):
         return _message
 
 
+class CallerCredentialRateLimitError(RateLimitError):
+    """429 raised when a per-user credential exchange is rate limited by the
+    provider (e.g. GitHub's token endpoint). Scoped to one caller's
+    credential, so routers must not cool down the shared deployment."""
+
+
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
 class ContextWindowExceededError(BadRequestError):
     def __init__(
@@ -509,6 +560,7 @@ class ContextWindowExceededError(BadRequestError):
         llm_provider,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 400
         self.model = model
@@ -520,6 +572,7 @@ class ContextWindowExceededError(BadRequestError):
             llm_provider=self.llm_provider,
             response=response,
             litellm_debug_info=self.litellm_debug_info,
+            body=body,
         )  # Call the base class constructor with the parameters it needs
 
         # set after, to make it clear the raised error is a context window exceeded error
@@ -540,6 +593,49 @@ class ContextWindowExceededError(BadRequestError):
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
+
+
+class PaymentRequiredError(BadRequestError):
+    def __init__(
+        self,
+        message: str,
+        model: str,
+        llm_provider: str,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+    ) -> None:
+        response_is_valid: Final = response is not None and getattr(response, "_request", None) is not None
+        response_for_parent: Final = (
+            response
+            if response_is_valid
+            else httpx.Response(
+                status_code=402,
+                request=httpx.Request(method="GET", url="https://litellm.ai"),
+            )
+        )
+        super().__init__(
+            message=message,
+            model=model,
+            llm_provider=llm_provider,
+            response=response_for_parent,
+            litellm_debug_info=litellm_debug_info,
+        )
+        self.status_code = 402
+        self.message = f"litellm.PaymentRequiredError: {message}"
+
+    def __str__(self) -> str:
+        return (
+            self.message
+            + (f" LiteLLM Retried: {self.num_retries} times" if self.num_retries else "")
+            + (f", LiteLLM Max Retries: {self.max_retries}" if self.max_retries else "")
+        )
+
+    def __repr__(self) -> str:
+        return (
+            self.message
+            + (f" LiteLLM Retried: {self.num_retries} times" if self.num_retries else "")
+            + (f", LiteLLM Max Retries: {self.max_retries}" if self.max_retries else "")
+        )
 
 
 # sub class of bad request error - meant to help us catch guardrails-related errors on proxy.
@@ -595,7 +691,7 @@ class ContentPolicyViolationError(BadRequestError):
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         provider_specific_fields: dict | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 400
         self.message = f"litellm.ContentPolicyViolationError: {message}"
@@ -679,6 +775,9 @@ class ServiceUnavailableError(openai.APIStatusError):
 
 
 class BadGatewayError(openai.APIStatusError):
+    response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
+    request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+
     def __init__(
         self,
         message,
@@ -706,7 +805,9 @@ class BadGatewayError(openai.APIStatusError):
             ),
         )
         super().__init__(
-            self.message, response=self.response, body=None
+            self.message,
+            response=self.response,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
+            body=None,
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
@@ -727,6 +828,9 @@ class BadGatewayError(openai.APIStatusError):
 
 
 class InternalServerError(openai.InternalServerError):
+    response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
+    request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+
     def __init__(
         self,
         message,
@@ -736,6 +840,7 @@ class InternalServerError(openai.InternalServerError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: object | None = None,
     ):
         self.status_code = 500
         self.message = f"litellm.InternalServerError: {message}"
@@ -754,8 +859,11 @@ class InternalServerError(openai.InternalServerError):
             ),
         )
         super().__init__(
-            self.message, response=self.response, body=None
+            self.message,
+            response=self.response,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
+            body=body,
         )  # Call the base class constructor with the parameters it needs
+        self.type = "internal_server_error"
 
     def __str__(self):
         _message = self.message
@@ -786,6 +894,7 @@ class APIError(openai.APIError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: object | None = None,
     ):
         self.status_code = status_code
         self.message = f"litellm.APIError: {message}"
@@ -796,7 +905,7 @@ class APIError(openai.APIError):
         self.num_retries = num_retries
         if request is None:
             request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        super().__init__(self.message, request=request, body=None)
+        super().__init__(self.message, request=request, body=body)
 
     def __str__(self):
         _message = self.message
@@ -817,6 +926,8 @@ class APIError(openai.APIError):
 
 # raised if an invalid request (not get, delete, put, post) is made
 class APIConnectionError(openai.APIConnectionError):
+    request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+
     def __init__(
         self,
         message,
@@ -835,7 +946,10 @@ class APIConnectionError(openai.APIConnectionError):
         self.request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         self.max_retries = max_retries
         self.num_retries = num_retries
-        super().__init__(message=self.message, request=self.request)
+        super().__init__(
+            message=self.message,
+            request=self.request,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
+        )
 
     def __str__(self):
         _message = self.message
@@ -856,6 +970,9 @@ class APIConnectionError(openai.APIConnectionError):
 
 # raised if an invalid request (not get, delete, put, post) is made
 class APIResponseValidationError(openai.APIResponseValidationError):
+    response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
+    request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+
     def __init__(
         self,
         message,
@@ -873,7 +990,11 @@ class APIResponseValidationError(openai.APIResponseValidationError):
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        super().__init__(response=response, body=None, message=message)
+        super().__init__(
+            response=response,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
+            body=None,
+            message=message,
+        )
 
     def __str__(self):
         _message = self.message
@@ -939,10 +1060,12 @@ LITELLM_EXCEPTION_TYPES: Final = [
     BadRequestError,
     UnprocessableEntityError,
     UnsupportedParamsError,
+    UnsupportedEndpointError,
     Timeout,
     PermissionDeniedError,
     RateLimitError,
     ContextWindowExceededError,
+    PaymentRequiredError,
     RejectedRequestError,
     ContentPolicyViolationError,
     InternalServerError,
@@ -957,6 +1080,10 @@ LITELLM_EXCEPTION_TYPES: Final = [
 ]
 
 
+class ModelNotMappedError(Exception):
+    pass
+
+
 class BudgetExceededError(Exception):
     def __init__(
         self,
@@ -969,7 +1096,7 @@ class BudgetExceededError(Exception):
     ):
         self.current_cost = current_cost
         self.max_budget = max_budget
-        self.status_code = 429
+        self.status_code = litellm.budget_exceeded_status_code
         self.llm_provider = llm_provider or ""
         self.entity_type = entity_type
         self.entity_id = entity_id
@@ -988,6 +1115,9 @@ class BudgetExceededError(Exception):
 
 ## DEPRECATED ##
 class InvalidRequestError(openai.BadRequestError):
+    response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
+    request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+
     def __init__(self, message, model, llm_provider):
         self.status_code = 400
         self.message = message
@@ -998,7 +1128,9 @@ class InvalidRequestError(openai.BadRequestError):
             request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
         )
         super().__init__(
-            message=self.message, response=self.response, body=None
+            message=self.message,
+            response=self.response,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
+            body=None,
         )  # Call the base class constructor with the parameters it needs
 
 
@@ -1039,16 +1171,29 @@ class LiteLLMUnknownProvider(BadRequestError):
 
 
 class GuardrailRaisedException(Exception):
+    """
+    Raised both when a guardrail judged content and when it could not judge it at all, since a
+    guardrail that fails closed refuses the request the same way a policy violation does.
+
+    ``blocked_content`` separates the two. Set it only where the guardrail actually reached a
+    verdict on the payload; leave it alone for an unreachable backend, a timeout, or a response
+    the integration could not parse. Callers that treat a block as something other than a plain
+    failure, such as the batch path dropping one record and submitting the rest, must gate on it,
+    because dropping a record no guardrail ever inspected is a silent loss of enforcement.
+    """
+
     def __init__(
         self,
         guardrail_name: str | None = None,
         message: str = "",
         should_wrap_with_default_message: bool = True,
         status_code: int = 400,
+        blocked_content: bool = False,
     ):
         default_message: Final = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
         self.guardrail_name = guardrail_name
         self.status_code = status_code
+        self.blocked_content = blocked_content
         self.message = default_message if should_wrap_with_default_message else message
         super().__init__(self.message)
 
@@ -1083,6 +1228,7 @@ class MidStreamFallbackError(ServiceUnavailableError):
         num_retries: int | None = None,
         generated_content: str = "",
         is_pre_first_chunk: bool = False,
+        emitted_disqualifying_content: bool = False,
     ):
         original_status: Final = getattr(original_exception, "status_code", None)
         self.status_code = int(original_status) if original_status is not None else 503
@@ -1095,6 +1241,7 @@ class MidStreamFallbackError(ServiceUnavailableError):
         self.num_retries = num_retries
         self.generated_content = generated_content
         self.is_pre_first_chunk = is_pre_first_chunk
+        self.emitted_disqualifying_content = emitted_disqualifying_content
 
         # Create a response if one wasn't provided
         if response is None:
@@ -1133,6 +1280,10 @@ class MidStreamFallbackError(ServiceUnavailableError):
         self.message = _saved_message
         self.args = (_saved_message,)
 
+        original_headers: Final[object] = getattr(original_exception, "litellm_response_headers", None)
+        if original_headers is not None:
+            self.litellm_response_headers = original_headers
+
     def __str__(self):
         _message = self.message
         if self.num_retries:
@@ -1166,8 +1317,8 @@ class ModifyResponseException(Exception):
         model: str,
         request_data: dict[str, Any],
         guardrail_name: str | None = None,
-        detection_info: dict[str, Any] | None = None,
-        original_response: Any | None = None,
+        detection_info: Mapping[str, object] | None = None,
+        original_response: object = None,
     ):
         self.message = message
         self.model = model
@@ -1200,7 +1351,7 @@ class SensitiveDataRouteException(Exception):
         route_to_model: str,
         session_id: str,
         guardrail_name: str | None = None,
-        detection_info: dict[str, Any] | None = None,
+        detection_info: Mapping[str, object] | None = None,
         message: str | None = None,
         sticky_session_routing: bool = True,
     ):

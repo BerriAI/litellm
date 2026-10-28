@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearAllMcpTokens, getToken, isTokenValid, removeToken, setToken } from "./mcpTokenStore";
 

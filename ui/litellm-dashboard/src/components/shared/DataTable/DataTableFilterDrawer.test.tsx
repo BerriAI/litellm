@@ -1,5 +1,5 @@
 import type { ColumnDef, ColumnFiltersState } from "@tanstack/react-table";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
@@ -65,10 +65,10 @@ describe("DataTableFilterDrawer", () => {
     expect(names()).toEqual(["Alice", "Bob", "Carol"]);
 
     await user.click(screen.getByTestId("datatable-filters-trigger"));
-    await user.type(await screen.findByTestId("draft-name"), "Bob");
+    fireEvent.change(await screen.findByTestId("draft-name"), { target: { value: "Bob" } });
 
     expect(names()).toEqual(["Alice", "Bob", "Carol"]);
-    expect(screen.queryByTestId("filter-chip-name")).toBeNull();
+    expect(screen.queryByTestId("filter-chip-name")).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId("filter-drawer-apply"));
     expect(names()).toEqual(["Bob"]);
@@ -92,7 +92,7 @@ describe("DataTableFilterDrawer", () => {
     await user.click(await screen.findByTestId("filter-drawer-reset"));
 
     expect(names()).toEqual(["Alice", "Bob", "Carol"]);
-    expect(screen.queryByTestId("filter-chip-name")).toBeNull();
+    expect(screen.queryByTestId("filter-chip-name")).not.toBeInTheDocument();
     expect(screen.getByTestId("draft-name")).toHaveValue("");
   });
 });

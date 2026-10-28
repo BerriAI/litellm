@@ -2,20 +2,27 @@
 Utility functions for A2A protocol.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+import hashlib
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final, Protocol
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import has_attributes
 
 if TYPE_CHECKING:
     from a2a.types import SendMessageRequest, SendStreamingMessageRequest
+
+
+class _SupportsModelDump(Protocol):
+    def model_dump(self, *, mode: str) -> object: ...
 
 
 class A2ARequestUtils:
     """Utility class for A2A request/response processing."""
 
     @staticmethod
-    def extract_text_from_message(message: Any) -> str:
+    def extract_text_from_message(message: object) -> str:
         """
         Extract text content from A2A message parts.
 
@@ -46,7 +53,7 @@ class A2ARequestUtils:
         return " ".join(text_parts)
 
     @staticmethod
-    def extract_text_from_response(response_dict: dict[str, Any]) -> str:
+    def extract_text_from_response(response_dict: Mapping[str, object]) -> str:
         """
         Extract text content from A2A response result.
 
@@ -72,7 +79,7 @@ class A2ARequestUtils:
     @staticmethod
     def get_input_message_from_request(
         request: "SendMessageRequest | SendStreamingMessageRequest",
-    ) -> Any:
+    ) -> object:
         """
         Extract the input message from an A2A request.
 
@@ -82,7 +89,7 @@ class A2ARequestUtils:
         Returns:
             The message object/dict or None
         """
-        params: Final = getattr(request, "params", None)
+        params: Final[object] = getattr(request, "params", None)
         if params is None:
             return None
         return getattr(params, "message", None)
@@ -109,7 +116,7 @@ class A2ARequestUtils:
     @staticmethod
     def calculate_usage_from_request_response(
         request: "SendMessageRequest | SendStreamingMessageRequest",
-        response_dict: dict[str, Any],
+        response_dict: Mapping[str, object],
     ) -> tuple[int, int, int]:
         """
         Calculate token usage from A2A request and response.
@@ -125,10 +132,12 @@ class A2ARequestUtils:
         # the dict branch — request-side parts are a2a-sdk Part RootModels whose
         # kind/text live on part.root, which the object branch cannot read. This
         # mirrors how the response side already works (it operates on model_dump).
-        input_message = A2ARequestUtils.get_input_message_from_request(request)
-        if input_message is not None and hasattr(input_message, "model_dump"):
-            input_message = input_message.model_dump(mode="json")
-        input_text: Final = A2ARequestUtils.extract_text_from_message(input_message)
+        input_message: Final = A2ARequestUtils.get_input_message_from_request(request)
+        input_text: Final = A2ARequestUtils.extract_text_from_message(
+            input_message.model_dump(mode="json")
+            if has_attributes(input_message, _SupportsModelDump, "model_dump")
+            else input_message
+        )
         prompt_tokens: Final = A2ARequestUtils.count_tokens(input_text)
 
         # Count output tokens
@@ -140,10 +149,33 @@ class A2ARequestUtils:
         return prompt_tokens, completion_tokens, total_tokens
 
 
+def get_session_id_from_a2a_params(params: Mapping[str, object]) -> str | None:
+    message: Final = params.get("message", {})
+    if isinstance(message, dict):
+        return message.get("contextId")
+    return getattr(message, "contextId", None)
+
+
+def scope_session_to_principal(session_id: str, principal: str | None) -> str:
+    """
+    Bind a client-supplied A2A contextId to the authenticated principal.
+
+    Without this, two distinct keys authorized for the same agent could set the
+    same contextId and read/append to each other's backend memory. The
+    principal is hashed (it is already a hashed token) so the raw value is never
+    sent to the agent backend, while the original contextId is kept as a suffix
+    for operator-side correlation.
+    """
+    if not principal:
+        return session_id
+    principal_prefix: Final = hashlib.sha256(principal.encode("utf-8")).hexdigest()[:16]
+    return f"{principal_prefix}-{session_id}"
+
+
 # Backwards compatibility aliases
-def extract_text_from_a2a_message(message: Any) -> str:
+def extract_text_from_a2a_message(message: object) -> str:
     return A2ARequestUtils.extract_text_from_message(message)
 
 
-def extract_text_from_a2a_response(response_dict: dict[str, Any]) -> str:
+def extract_text_from_a2a_response(response_dict: Mapping[str, object]) -> str:
     return A2ARequestUtils.extract_text_from_response(response_dict)

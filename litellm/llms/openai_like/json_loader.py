@@ -6,7 +6,12 @@ import json
 from pathlib import Path
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_logger
+from litellm.types.utils import ProviderSpecificModelInfo
+
+_PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
 
 
 class SimpleProviderConfig:
@@ -22,6 +27,9 @@ class SimpleProviderConfig:
         self.constraints = data.get("constraints", {})
         self.special_handling = data.get("special_handling", {})
         self.supported_endpoints = data.get("supported_endpoints", [])
+        self.provider_info: ProviderSpecificModelInfo = (
+            _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
+        )
 
 
 class JSONProviderRegistry:
@@ -64,6 +72,11 @@ class JSONProviderRegistry:
     def exists(cls, slug: str) -> bool:
         """Check if a provider is defined via JSON"""
         return slug in cls._providers
+
+    @classmethod
+    def get_by_base_url(cls, base_url: str) -> SimpleProviderConfig | None:
+        """Get a provider configuration by its default base url"""
+        return next((provider for provider in cls._providers.values() if provider.base_url == base_url), None)
 
     @classmethod
     def supports_responses_api(cls, slug: str) -> bool:

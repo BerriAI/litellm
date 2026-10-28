@@ -1,10 +1,16 @@
 "use client";
 
-import { Form } from "antd";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import CredentialsPanel from "@/components/model_add/CredentialsPanel";
-import { vertexCredentialsUploadProps } from "@/app/(dashboard)/models-and-endpoints/vertexCredentialsUpload";
+import UserConnectionsPanel from "@/components/model_add/UserConnectionsPanel";
+import { all_admin_roles } from "@/utils/roles";
 
 export default function LlmCredentialsPanel() {
-  const [form] = Form.useForm();
-  return <CredentialsPanel uploadProps={vertexCredentialsUploadProps(form)} />;
+  const { userRole } = useAuthorized();
+  return (
+    <div className="flex flex-col gap-6">
+      {all_admin_roles.includes(userRole ?? "") && <CredentialsPanel />}
+      <UserConnectionsPanel />
+    </div>
+  );
 }

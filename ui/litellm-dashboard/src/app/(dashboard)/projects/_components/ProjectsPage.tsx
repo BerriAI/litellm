@@ -1,28 +1,33 @@
+import { useCanManageProjects } from "@/app/(dashboard)/hooks/projects/projectAccess";
+import { Page, PageContent } from "@/components/shared/Page";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { PlusOutlined } from "@ant-design/icons";
-import { Button, Flex, Input, Layout, Space, theme, Typography } from "antd";
-import { SearchIcon } from "lucide-react";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { isUserTeamAdminForAnyTeam } from "@/utils/roles";
+import { Folder, Plus, SearchIcon, X } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { useMemo, useState } from "react";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
+import { Button } from "@/components/ui/button";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { CreateProjectModal } from "./ProjectModals/CreateProjectModal";
 import { ProjectDetail } from "./ProjectDetailsPage";
 import { ProjectsTable } from "./ProjectsTable";
-
-const { Title, Text } = Typography;
-const { Content } = Layout;
+import { useClearProjectKeysTableState, useProjectsTableState } from "./useProjectsUrlState";
 
 export function ProjectsPage() {
-  const { token } = theme.useToken();
   const { data: projects, isLoading } = useProjects();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
+  const { userId } = useAuthorized();
+  const canCreateProject = useCanManageProjects(isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""));
 
   const [selectedProjectId, setSelectedProjectId] = useQueryState(
     "project",
     parseAsString.withOptions({ history: "push" }),
   );
+  const clearProjectKeysTableState = useClearProjectKeysTableState();
+  const { search: searchText, setSearch: setSearchText } = useProjectsTableState();
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
-  const [searchText, setSearchText] = useState("");
 
   const teamAliasMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -47,50 +52,65 @@ export function ProjectsPage() {
     });
   }, [projects, searchText, teamAliasMap]);
 
+  const closeProject = () => {
+    void setSelectedProjectId(null, { history: "replace" });
+    clearProjectKeysTableState();
+  };
+
   if (selectedProjectId) {
-    return (
-      <ProjectDetail
-        projectId={selectedProjectId}
-        onBack={() => void setSelectedProjectId(null, { history: "replace" })}
-      />
-    );
+    return <ProjectDetail projectId={selectedProjectId} onBack={closeProject} />;
   }
 
   return (
-    <Content style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}>
-      <Flex justify="space-between" align="center" style={{ marginBottom: 16 }}>
-        <Space direction="vertical" size={0}>
-          <Title level={2} style={{ margin: 0 }}>
-            Projects
-          </Title>
-          <Text type="secondary">Manage projects within your teams</Text>
-        </Space>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsCreateModalVisible(true)}>
-          Create Project
-        </Button>
-      </Flex>
+    <Page>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Folder />
+          Projects
+        </PageHeaderTitle>
+        <PageHeaderDescription>Manage projects within your teams</PageHeaderDescription>
+        {canCreateProject && (
+          <PageHeaderControls>
+            <Button onClick={() => setIsCreateModalVisible(true)}>
+              <Plus className="size-4" />
+              Create Project
+            </Button>
+          </PageHeaderControls>
+        )}
+      </PageHeader>
 
-      <Flex align="center" style={{ marginBottom: 12 }}>
-        <Input
-          prefix={<SearchIcon size={16} />}
-          placeholder="Search projects by name, ID, description, or team..."
-          style={{ maxWidth: 400 }}
-          value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-          allowClear
+      <PageContent className="gap-3">
+        <div className="flex items-center">
+          <InputGroup className="max-w-[400px]">
+            <InputGroupAddon>
+              <SearchIcon className="size-4 text-muted-foreground" />
+            </InputGroupAddon>
+            <InputGroupInput
+              placeholder="Search projects by name, ID, description, or team..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+            />
+            {searchText && (
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchText("")}>
+                  <X />
+                </InputGroupButton>
+              </InputGroupAddon>
+            )}
+          </InputGroup>
+        </div>
+
+        <ProjectsTable
+          projects={filteredProjects}
+          isLoading={isLoading}
+          isFiltered={searchText.trim().length > 0}
+          onProjectClick={(id) => void setSelectedProjectId(id)}
+          teamAliasMap={teamAliasMap}
+          isTeamsLoading={isTeamsLoading}
         />
-      </Flex>
-
-      <ProjectsTable
-        projects={filteredProjects}
-        isLoading={isLoading}
-        isFiltered={searchText.trim().length > 0}
-        onProjectClick={(id) => void setSelectedProjectId(id)}
-        teamAliasMap={teamAliasMap}
-        isTeamsLoading={isTeamsLoading}
-      />
+      </PageContent>
 
       <CreateProjectModal isOpen={isCreateModalVisible} onClose={() => setIsCreateModalVisible(false)} />
-    </Content>
+    </Page>
   );
 }

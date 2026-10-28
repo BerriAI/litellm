@@ -6,14 +6,15 @@ Exercises the gateway against a live OpenAI deployment using customer request sh
 from __future__ import annotations
 
 import pytest
-from e2e_config import unique_marker
+from e2e_config import provider_edge_base, unique_marker
 from e2e_http import StreamingResponse, assert_client_error, require_successful_call, unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody
 from proxy_client import ProxyClient
 from pydantic import BaseModel
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.replayable]
 
 OPENAI_BACKEND = "openai/gpt-4o-mini"
 CHAT_PATH = "/chat/completions"
@@ -38,10 +39,15 @@ class ChatErrorEnvelope(BaseModel):
 
 
 def _register_chat_model(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, str]:
+    base = provider_edge_base("openai")
     model = f"e2e-chat-sec-{unique_marker()}"
     model_id = proxy.create_model(
         model,
-        LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY"),
+        LiteLLMParamsBody(
+            model=OPENAI_BACKEND,
+            api_key="os.environ/OPENAI_API_KEY",
+            api_base=None if base is None else f"{base}/v1",
+        ),
     )
     resources.defer(lambda: proxy.delete_model(model_id))
     return model, resources.key()
@@ -57,6 +63,15 @@ def _chat_status(proxy: ProxyClient, key: str, body: BaseModel) -> StreamingResp
 
 class TestChatCompletionsContract:
     @pytest.mark.covers("llm.chat_completions.openai.multi_turn.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_multi_turn_history_is_honored(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register_chat_model(proxy, resources)
         turn1 = unwrap(
@@ -101,6 +116,15 @@ class TestChatCompletionsContract:
         assert "84" in second, f"turn2 must answer 84 from history, got: {second!r}"
 
     @pytest.mark.covers("llm.chat_completions.openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_success_response_matches_chat_completion_contract(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
@@ -126,6 +150,12 @@ class TestChatCompletionsContract:
         assert (message.content or "").strip(), f"content must be non-empty: {result.body[:300]}"
 
     @pytest.mark.covers("llm.chat_completions.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+        )
+    )
     def test_missing_model_returns_client_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         _, key = _register_chat_model(proxy, resources)
         result = _chat_status(
@@ -140,12 +170,30 @@ class TestChatCompletionsContract:
         )
 
     @pytest.mark.covers("llm.chat_completions.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_missing_messages_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register_chat_model(proxy, resources)
         result = _chat_status(proxy, key, ChatMissingMessagesBody(model=model))
         assert_client_error(result, "missing messages")
 
     @pytest.mark.covers("llm.chat_completions.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_empty_messages_returns_client_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register_chat_model(proxy, resources)
         result = _chat_status(
@@ -156,6 +204,15 @@ class TestChatCompletionsContract:
         assert_client_error(result, "empty messages")
 
     @pytest.mark.covers("llm.chat_completions.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_invalid_role_returns_client_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register_chat_model(proxy, resources)
         result = _chat_status(
@@ -170,6 +227,15 @@ class TestChatCompletionsContract:
         assert_client_error(result, "invalid role")
 
     @pytest.mark.covers("llm.chat_completions.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_invalid_temperatures_return_client_errors(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register_chat_model(proxy, resources)
         for temperature in (-0.1, 2.1, 3.0, 100.0):
@@ -186,6 +252,15 @@ class TestChatCompletionsContract:
             assert_client_error(result, f"temperature={temperature}")
 
     @pytest.mark.covers("llm.chat_completions.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_invalid_max_completion_tokens_return_client_errors(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
@@ -203,6 +278,15 @@ class TestChatCompletionsContract:
             assert_client_error(result, f"max_completion_tokens={max_completion_tokens}")
 
     @pytest.mark.covers("llm.chat_completions.openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_temperature_boundaries_succeed(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register_chat_model(proxy, resources)
         for temperature in (0.0, 2.0):

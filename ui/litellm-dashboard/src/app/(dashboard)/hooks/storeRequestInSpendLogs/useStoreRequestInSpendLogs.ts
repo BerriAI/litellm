@@ -6,6 +6,10 @@ import { proxyConfigKeys } from "../proxyConfig/useProxyConfig";
 export interface StoreRequestInSpendLogsParams {
   store_prompts_in_spend_logs: boolean;
   maximum_spend_logs_retention_period?: string;
+  maximum_spend_logs_cleanup_batch_size?: number;
+  maximum_spend_logs_cleanup_max_batches?: number;
+  maximum_spend_logs_cleanup_run_budget?: string;
+  maximum_spend_logs_cleanup_batch_timeout?: string;
 }
 
 export interface StoreRequestInSpendLogsResponse {
@@ -19,6 +23,8 @@ const performStoreRequestInSpendLogs = async (
   const proxyBaseUrl = getProxyBaseUrl();
   const url = proxyBaseUrl ? `${proxyBaseUrl}/config/update` : `/config/update`;
 
+  const { store_prompts_in_spend_logs, ...optionalSettings } = params;
+
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -27,10 +33,8 @@ const performStoreRequestInSpendLogs = async (
     },
     body: JSON.stringify({
       general_settings: {
-        store_prompts_in_spend_logs: params.store_prompts_in_spend_logs,
-        ...(params.maximum_spend_logs_retention_period && {
-          maximum_spend_logs_retention_period: params.maximum_spend_logs_retention_period,
-        }),
+        store_prompts_in_spend_logs,
+        ...optionalSettings,
       },
     }),
   });

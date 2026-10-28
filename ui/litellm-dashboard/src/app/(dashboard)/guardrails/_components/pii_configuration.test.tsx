@@ -1,10 +1,10 @@
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import PiiConfiguration from "./pii_configuration";
 
 describe("PiiConfiguration", () => {
   it("should render", () => {
-    const { getByText } = render(
+    render(
       <PiiConfiguration
         entities={[]}
         actions={[]}
@@ -15,6 +15,6 @@ describe("PiiConfiguration", () => {
         entityCategories={[]}
       />,
     );
-    expect(getByText("Configure PII Protection")).toBeInTheDocument();
+    expect(screen.getByText("Configure PII Protection")).toBeInTheDocument();
   });
 });

@@ -34,7 +34,7 @@ describe("LoggingSettingsView logos", () => {
   it("renders a letter avatar for the custom callback API, which has no bundled logo", () => {
     render(<LoggingSettingsView disabledCallbacks={["custom_callback_api"]} />);
 
-    expect(screen.queryByAltText("Custom Callback API logo")).toBeNull();
+    expect(screen.queryByAltText("Custom Callback API logo")).not.toBeInTheDocument();
     expect(screen.getByText("C")).toBeInTheDocument();
   });
 });

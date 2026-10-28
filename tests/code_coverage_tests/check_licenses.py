@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 import configparser
+from collections.abc import Collection, Iterable, Iterator
 from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
 import sys
-import tomllib
-from typing import Dict, List, Optional, Set, Tuple
+import time
+from typing import Callable, Dict, Final, List, Optional, Protocol, Set, Tuple
 
 from packaging.requirements import Requirement
 import requests
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 DEFAULT_TRANSITIVE_PIN_PACKAGES = (
     "aiofiles",
@@ -37,6 +43,13 @@ DEFAULT_TRANSITIVE_PIN_PACKAGES = (
 # of the identifier, not an operator.
 _SPDX_OPERATOR_SPLIT = re.compile(r"\s+(?:OR|AND)\s+")
 _SPDX_WITH_SUFFIX = re.compile(r"\s+WITH\s+.*", re.DOTALL)
+_PYPI_FETCH_ATTEMPTS: Final[int] = 3
+_PYPI_FETCH_BACKOFF_SECONDS: Final[float] = 0.5
+
+
+class _HttpGet(Protocol):
+    def __call__(self, url: str, *, timeout: float) -> requests.Response:
+        ...
 
 
 @dataclass
@@ -50,7 +63,10 @@ class PackageLicense:
 
 class LicenseChecker:
     def __init__(
-        self, config_file: Path = Path("./tests/code_coverage_tests/liccheck.ini")
+        self,
+        config_file: Path = Path("./tests/code_coverage_tests/liccheck.ini"),
+        http_get: Optional[_HttpGet] = None,
+        sleep: Optional[Callable[[float], None]] = None,
     ):
         if not config_file.exists():
             print(f"Error: Config file {config_file} not found")
@@ -79,6 +95,8 @@ class LicenseChecker:
 
         # Track package results
         self.package_results: List[PackageLicense] = []
+        self._http_get = http_get
+        self._sleep = sleep
 
     @staticmethod
     def _normalize_package_name(package_name: str) -> str:
@@ -123,21 +141,38 @@ class LicenseChecker:
         last resort derives the license from the ``License :: OSI Approved ::
         ...`` trove classifiers.
         """
-        try:
-            url = f"https://pypi.org/pypi/{package_name}/{version}/json"
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            info = response.json().get("info", {}) or {}
-            return (
-                info.get("license_expression")
-                or info.get("license")
-                or self._license_from_classifiers(info.get("classifiers") or [])
-            )
-        except Exception as e:
-            print(
-                f"Warning: Failed to fetch license for {package_name} {version}: {str(e)}"
-            )
-            return None
+        url = f"https://pypi.org/pypi/{package_name}/{version}/json"
+        http_get = self._http_get if self._http_get is not None else requests.get
+        sleep = self._sleep if self._sleep is not None else time.sleep
+
+        for attempt in range(_PYPI_FETCH_ATTEMPTS):
+            try:
+                response = http_get(url, timeout=10)
+                response.raise_for_status()
+                info = response.json().get("info", {}) or {}
+                return (
+                    info.get("license_expression")
+                    or info.get("license")
+                    or self._license_from_classifiers(info.get("classifiers") or [])
+                )
+            except Exception as error:
+                if self._is_retryable_pypi_error(error) and attempt < _PYPI_FETCH_ATTEMPTS - 1:
+                    sleep(_PYPI_FETCH_BACKOFF_SECONDS)
+                    continue
+                print(
+                    f"Warning: Failed to fetch license for {package_name} {version}: {str(error)}"
+                )
+                return None
+        return None
+
+    @staticmethod
+    def _is_retryable_pypi_error(error: Exception) -> bool:
+        if isinstance(error, (requests.ConnectionError, requests.Timeout)):
+            return True
+        if not isinstance(error, requests.HTTPError) or error.response is None:
+            return False
+        status_code = error.response.status_code
+        return status_code == 429 or status_code >= 500
 
     @staticmethod
     def _license_from_classifiers(classifiers: List[str]) -> Optional[str]:
@@ -305,6 +340,20 @@ class LicenseChecker:
 
         return is_acceptable
 
+    def _direct_group_requirements(
+        self, entries: Iterable[object], group_names: Collection[str]
+    ) -> Iterator[str]:
+        for entry in entries:
+            match entry:
+                case str():
+                    yield entry
+                case {"include-group": str(name)} if (
+                    len(entry) == 1 and self._normalize_package_name(name) in group_names
+                ):
+                    continue
+                case _:
+                    raise ValueError(f"Invalid dependency group entry: {entry!r}")
+
     def _load_requirements(
         self, requirements_file: Optional[Path] = None
     ) -> List[Requirement]:
@@ -324,8 +373,14 @@ class LicenseChecker:
                     pyproject["project"].get("optional-dependencies", {}).values()
                 ):
                     requirement_lines.extend(extra_reqs)
-                for group_reqs in pyproject.get("dependency-groups", {}).values():
-                    requirement_lines.extend(group_reqs)
+                groups: Final = pyproject.get("dependency-groups", {})
+                group_names: Final = frozenset(
+                    self._normalize_package_name(name) for name in groups
+                )
+                for group_reqs in groups.values():
+                    requirement_lines.extend(
+                        self._direct_group_requirements(group_reqs, group_names)
+                    )
 
                 lock_versions: Dict[str, List[str]] = {}
                 for package in lock_data.get("package", []):
@@ -352,9 +407,10 @@ class LicenseChecker:
                 requirement_lines = list(dict.fromkeys(requirement_lines))
 
             return [
-                Requirement(line.split("#")[0].strip())
+                Requirement(requirement)
                 for line in requirement_lines
-                if line.split("#")[0].strip() and not line.startswith("#")
+                if (requirement := re.split(r"\s+#", line, maxsplit=1)[0].strip())
+                and not requirement.startswith("#")
             ]
         except Exception as e:
             source = requirements_file or "pyproject.toml + uv.lock"
@@ -412,6 +468,9 @@ def main():
 
     # Check requirements
     if not checker.check_requirements(req_file):
+        if not checker.package_results:
+            sys.exit(1)
+
         # Get lists of problematic packages
         unverified = [p for p in checker.package_results if not p.license_type]
         invalid = [

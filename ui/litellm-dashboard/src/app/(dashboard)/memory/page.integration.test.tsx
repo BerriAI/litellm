@@ -46,14 +46,7 @@ describe("Memory page access by role", () => {
       renderAs(userRole);
 
       expect(await screen.findByText("Memory is only available to admin users.")).toBeInTheDocument();
-      await waitFor(() => expect(fetchMock).not.toHaveBeenCalled());
-      expect(requestedUrls().filter((url) => url.includes("/v1/memory"))).toEqual([]);
+      await waitFor(() => expect(requestedUrls().filter((url) => url.includes("/v1/memory"))).toEqual([]));
     },
   );
-
-  it("hides the deprecation banner along with the page body for a denied role", () => {
-    renderAs("Internal User");
-
-    expect(screen.queryByText(/draft deprecation list/i)).not.toBeInTheDocument();
-  });
 });

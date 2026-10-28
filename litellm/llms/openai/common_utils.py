@@ -2,26 +2,42 @@
 Common helpers / utils across al OpenAI endpoints
 """
 
+import asyncio
 import hashlib
 import inspect
 import json
 import os
 import ssl
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Optional
+import time
+import uuid
+from collections.abc import AsyncIterator, Iterator, Mapping
+from contextlib import suppress
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional, Protocol
+from urllib.parse import urlsplit
 
 import httpx
 import openai
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, DefaultAsyncHttpxClient, DefaultHttpxClient, OpenAI
+from openai.types.chat import ChatCompletion, ChatCompletionChunk, ChatCompletionMessage
+from openai.types.chat.chat_completion import Choice
+from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
+from openai.types.chat.chat_completion_chunk import ChoiceDelta
+from openai.types.completion_usage import CompletionUsage
+from pydantic import BaseModel, TypeAdapter
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 
 import litellm
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
     get_ssl_configuration,
+    http2_enabled,
 )
 
 
@@ -32,6 +48,60 @@ def _get_client_init_params(cls: type) -> tuple[str, ...]:
 
 _OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(OpenAI)
 _AZURE_OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(AzureOpenAI)
+
+
+_OPENAI_API_HOST: Final[str] = "api.openai.com"
+
+
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> dict[str, object]: ...  # mutable-ok: pydantic model_dump returns a dict
+
+
+def model_dump_provider_response(response: _ModelDumpable) -> dict[str, object]:  # mutable-ok: callers need a dict
+    if isinstance(response, BaseModel):
+        return response.model_dump(exclude_unset=True)
+    return response.model_dump()
+
+
+_OPENAI_HTTPX_DEFAULT_TIMEOUT: Final = CompletionTimeout.normalize(openai.DEFAULT_TIMEOUT)
+_OPENAI_HTTPX_CONNECTION_LIMITS: Final = httpx.Limits(
+    max_connections=openai.DEFAULT_CONNECTION_LIMITS.max_connections,
+    max_keepalive_connections=openai.DEFAULT_CONNECTION_LIMITS.max_keepalive_connections,
+    keepalive_expiry=openai.DEFAULT_CONNECTION_LIMITS.keepalive_expiry,
+)
+
+
+class OpenAIHTTPClient(httpx.Client):
+    def __init__(self) -> None:
+        super().__init__(
+            timeout=_OPENAI_HTTPX_DEFAULT_TIMEOUT,
+            limits=_OPENAI_HTTPX_CONNECTION_LIMITS,
+            follow_redirects=True,
+        )
+
+    def __del__(self) -> None:
+        with suppress(Exception):
+            if not self.is_closed:
+                self.close()
+
+
+class OpenAIAsyncHTTPClient(httpx.AsyncClient):
+    def __init__(self) -> None:
+        super().__init__(
+            timeout=_OPENAI_HTTPX_DEFAULT_TIMEOUT,
+            limits=_OPENAI_HTTPX_CONNECTION_LIMITS,
+            follow_redirects=True,
+        )
+
+    def __del__(self) -> None:
+        with suppress(Exception):
+            if not self.is_closed:
+                asyncio.get_running_loop().create_task(self.aclose())
+
+
+def is_openai_backed_api_base(api_base: str) -> bool:
+    hostname: Final = urlsplit(api_base).hostname
+    return hostname is not None and (hostname == _OPENAI_API_HOST or hostname.endswith(f".{_OPENAI_API_HOST}"))
 
 
 class OpenAIError(BaseLLMException):
@@ -65,12 +135,15 @@ class OpenAIError(BaseLLMException):
         )
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 ####### Error Handling Utils for OpenAI API #######################
 ###################################################################
 def drop_params_from_unprocessable_entity_error(
     e: openai.UnprocessableEntityError | httpx.HTTPStatusError,
-    data: dict[str, Any],
-) -> dict[str, Any]:
+    data: Mapping[str, object],
+) -> dict[str, object]:
     """
     Helper function to read OpenAI UnprocessableEntityError and drop the params that raised an error from the error message.
 
@@ -83,19 +156,20 @@ def drop_params_from_unprocessable_entity_error(
     """
     invalid_params: Final[list[str]] = []
     if isinstance(e, httpx.HTTPStatusError):
-        error_json: Final = e.response.json()
+        error_json: Final = decoded_json_object(_DECODED_JSON.validate_python(e.response.json()))
         error_message: Final = error_json.get("error", {})
         error_body = error_message
     else:
         error_body = e.body
-    if error_body is not None and isinstance(error_body, dict) and error_body.get("message"):
-        message = error_body.get("message", {})
+    error_mapping: Final = as_str_mapping(error_body)
+    if isinstance(error_mapping, dict) and error_mapping.get("message"):
+        message = error_mapping.get("message", {})
         if isinstance(message, str):
             try:
-                message = json.loads(message)
+                message = _DECODED_JSON.validate_python(json.loads(message))
             except json.JSONDecodeError:
                 message = {"detail": message}
-        detail: Final = message.get("detail")
+        detail: Final = decoded_json_object(message).get("detail")
 
         if isinstance(detail, list) and len(detail) > 0 and isinstance(detail[0], dict):
             for error_dict in detail:
@@ -109,6 +183,79 @@ def drop_params_from_unprocessable_entity_error(
     new_data: Final = {k: v for k, v in data.items() if k not in invalid_params}
 
     return new_data
+
+
+_OUTPUT_TOKEN_LIMIT_ERROR_MARKER: Final[str] = (
+    "could not finish the message because max_tokens or model output limit was reached"
+)
+
+
+def is_output_token_limit_error(e: openai.BadRequestError) -> bool:
+    """
+    True when OpenAI/Azure rejected a chat request because the output budget could not fit a single visible token.
+
+    GPT-5.x turns that case into a 400 while returning a length-truncated 200 for marginally larger budgets, so the
+    match has to stay pinned to the full provider sentence to avoid swallowing genuine bad requests.
+    """
+    return _OUTPUT_TOKEN_LIMIT_ERROR_MARKER in e.message.lower()
+
+
+def _output_token_limit_completion(model: str, prompt_tokens: int) -> ChatCompletion:
+    return ChatCompletion(
+        id=f"chatcmpl-{uuid.uuid4()}",
+        choices=(
+            Choice(
+                index=0,
+                finish_reason="length",
+                message=ChatCompletionMessage(role="assistant", content=""),
+            ),
+        ),
+        created=int(time.time()),
+        model=model,
+        object="chat.completion",
+        usage=CompletionUsage(completion_tokens=0, prompt_tokens=prompt_tokens, total_tokens=prompt_tokens),
+    )
+
+
+def _output_token_limit_chunk(model: str) -> ChatCompletionChunk:
+    return ChatCompletionChunk(
+        id=f"chatcmpl-{uuid.uuid4()}",
+        choices=(
+            ChunkChoice(
+                index=0,
+                finish_reason="length",
+                delta=ChoiceDelta(role="assistant", content=""),
+            ),
+        ),
+        created=int(time.time()),
+        model=model,
+        object="chat.completion.chunk",
+    )
+
+
+def _iter_once(chunk: ChatCompletionChunk) -> Iterator[ChatCompletionChunk]:
+    yield chunk
+
+
+async def _aiter_once(chunk: ChatCompletionChunk) -> AsyncIterator[ChatCompletionChunk]:
+    yield chunk
+
+
+def build_output_token_limit_response(
+    e: openai.BadRequestError, data: Mapping[str, object], is_async: bool
+) -> tuple[httpx.Headers, ChatCompletion | Iterator[ChatCompletionChunk] | AsyncIterator[ChatCompletionChunk]]:
+    """Synthesize the length-truncated response the provider itself returns for slightly larger output budgets.
+
+    The provider billed the prompt it processed but sends no usage object with the 400, so the prompt is estimated
+    the way every other usage-less path estimates it: reporting zero would spend input tokens against no budget.
+    """
+    model: Final[str] = str(data.get("model", ""))
+    messages: Final = data.get("messages")
+    prompt_tokens: Final = token_counter(model=model, messages=messages) if isinstance(messages, list) else 0
+    if not data.get("stream"):
+        return e.response.headers, _output_token_limit_completion(model, prompt_tokens)
+    chunk: Final = _output_token_limit_chunk(model)
+    return e.response.headers, (_aiter_once(chunk) if is_async else _iter_once(chunk))
 
 
 class BaseOpenAILLM:
@@ -129,7 +276,9 @@ class BaseOpenAILLM:
         return _cached_client
 
     @staticmethod
-    def owns_wrapped_http_client(http_client: httpx.Client | httpx.AsyncClient | None) -> bool:
+    def owns_wrapped_http_client(
+        http_client: httpx.Client | httpx.AsyncClient | DefaultHttpxClient | DefaultAsyncHttpxClient | None,
+    ) -> bool:
         """Whether litellm may close an SDK client built around ``http_client``.
 
         ``_get_async_http_client`` / ``_get_sync_http_client`` hand back
@@ -186,6 +335,7 @@ class BaseOpenAILLM:
             "max_retries",
             "organization",
             "api_base",
+            "workload_identity_config",
         )
         openai_client_fields: Final = (
             BaseOpenAILLM.get_openai_client_initialization_param_fields(client_type=client_type)
@@ -211,7 +361,7 @@ class BaseOpenAILLM:
     @staticmethod
     def _get_async_http_client(
         shared_session: Optional["ClientSession"] = None,
-    ) -> httpx.AsyncClient | None:
+    ) -> httpx.AsyncClient | DefaultAsyncHttpxClient | None:
         if litellm.aclient_session is not None:
             return litellm.aclient_session
 
@@ -222,19 +372,29 @@ class BaseOpenAILLM:
 
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration()
+        transport: Final = AsyncHTTPHandler.create_async_transport(
+            ssl_context=(ssl_config if isinstance(ssl_config, ssl.SSLContext) else None),
+            ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
+            shared_session=shared_session,
+        )
 
         return httpx.AsyncClient(
             verify=ssl_config,
-            transport=AsyncHTTPHandler._create_async_transport(
-                ssl_context=(ssl_config if isinstance(ssl_config, ssl.SSLContext) else None),
-                ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
-                shared_session=shared_session,
-            ),
+            transport=transport,
+            mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(transport, verify=ssl_config, cert=None),
             follow_redirects=True,
+            http2=http2_enabled(),
         )
 
+    @classmethod
+    def get_async_http_client(
+        cls,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> httpx.AsyncClient | None:
+        return cls._get_async_http_client(shared_session)
+
     @staticmethod
-    def _get_sync_http_client() -> httpx.Client | None:
+    def _get_sync_http_client() -> httpx.Client | DefaultHttpxClient | None:
         if litellm.client_session is not None:
             return litellm.client_session
 
@@ -249,7 +409,12 @@ class BaseOpenAILLM:
         return httpx.Client(
             verify=ssl_config,
             follow_redirects=True,
+            http2=http2_enabled(),
         )
+
+    @classmethod
+    def get_sync_http_client(cls) -> httpx.Client | None:
+        return cls._get_sync_http_client()
 
 
 class OpenAICredentials(NamedTuple):

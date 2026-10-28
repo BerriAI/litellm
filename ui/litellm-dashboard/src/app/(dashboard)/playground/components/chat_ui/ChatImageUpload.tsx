@@ -1,43 +1,70 @@
-import React from "react";
-import { Upload, Tooltip } from "antd";
-import { PaperClipOutlined } from "@ant-design/icons";
-
-const { Dragger } = Upload;
+import React, { useId, useRef } from "react";
+import { Paperclip } from "lucide-react";
+import { toast } from "@/lib/toast";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { CHAT_ATTACHMENT_ACCEPT, validateChatAttachment } from "./uploadValidation";
 
 interface ChatImageUploadProps {
   chatUploadedImage: File | null;
   chatImagePreviewUrl: string | null;
-  onImageUpload: (file: File) => false;
+  onImageUpload: (file: File) => void;
   onRemoveImage: () => void;
+  disabled?: boolean;
 }
 
-const ChatImageUpload: React.FC<ChatImageUploadProps> = ({
-  chatUploadedImage,
-  chatImagePreviewUrl,
-  onImageUpload,
-  onRemoveImage,
-}) => {
+const ChatImageUpload: React.FC<ChatImageUploadProps> = ({ chatUploadedImage, onImageUpload, disabled = false }) => {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const inputId = useId();
+
+  if (chatUploadedImage) {
+    return null;
+  }
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    const result = validateChatAttachment(file);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    onImageUpload(file);
+  };
+
   return (
     <>
-      {/* Subtle upload button - only show when no image */}
-      {!chatUploadedImage && (
-        <Dragger
-          beforeUpload={onImageUpload}
-          accept="image/*,.pdf"
-          showUploadList={false}
-          className="inline-block"
-          style={{ padding: 0, border: "none", background: "none" }}
-        >
-          <Tooltip title="Attach image or PDF">
-            <button
+      <input
+        id={inputId}
+        ref={inputRef}
+        type="file"
+        accept={CHAT_ATTACHMENT_ACCEPT}
+        className="sr-only"
+        tabIndex={-1}
+        disabled={disabled}
+        onChange={handleFileChange}
+      />
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
               type="button"
-              className="flex items-center justify-center w-8 h-8 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
-            >
-              <PaperClipOutlined style={{ fontSize: "16px" }} />
-            </button>
-          </Tooltip>
-        </Dragger>
-      )}
+              variant="ghost"
+              size="icon-sm"
+              disabled={disabled}
+              aria-label="Attach image or PDF"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => inputRef.current?.click()}
+            />
+          }
+        >
+          <Paperclip className="size-4" />
+        </TooltipTrigger>
+        <TooltipContent>Attach image or PDF</TooltipContent>
+      </Tooltip>
     </>
   );
 };
