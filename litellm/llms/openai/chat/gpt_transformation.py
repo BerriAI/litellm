@@ -959,13 +959,13 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                     status_code=error_status_code,
                     message=error_message,
                 )
-            choices = chunk.get("choices") or []
-            if any(choice.get("finish_reason") == "abort" for choice in _CHOICE_MAPPINGS.validate_python(choices)):
+            raw_choices: Final = chunk.get("choices") or []
+            if any(choice.get("finish_reason") == "abort" for choice in _CHOICE_MAPPINGS.validate_python(raw_choices)):
                 raise OpenAIError(
                     status_code=500,
                     message="Upstream generation aborted (finish_reason=abort)",
                 )
-            choices = self._map_reasoning_to_reasoning_content(choices)
+            choices: Final = self._map_reasoning_to_reasoning_content(raw_choices)
             fingerprint: Final = _OBJECT_MAPPING.validate_python(chunk).get("system_fingerprint")
 
             kwargs: Final[dict[str, Any]] = {
