@@ -1388,14 +1388,13 @@ def test_a_transport_collected_while_its_loop_runs_elsewhere_closes_its_session_
 
 @pytest.mark.asyncio
 async def test_a_stream_keeps_reading_after_the_client_that_opened_it_is_collected():
-    """A client dropped mid-stream (an SDK client evicted from the cache) must not close the session under the body."""
     from aiohttp import web
 
     release: Final = asyncio.Event()
     body: Final = tuple(f"chunk{i}\n".encode() for i in range(4))
 
     async def handler(request: web.Request) -> web.StreamResponse:
-        response = web.StreamResponse()
+        response: Final = web.StreamResponse()
         await response.prepare(request)
         await response.write(body[0])
         await release.wait()
@@ -1413,14 +1412,14 @@ async def test_a_stream_keeps_reading_after_the_client_that_opened_it_is_collect
     port: Final[int] = sock.getsockname()[1]
     await web.SockSite(runner, sock).start()
 
-    transport = LiteLLMAiohttpTransport(client=aiohttp.ClientSession)
-    client = httpx.AsyncClient(transport=transport)
+    transport: Final = LiteLLMAiohttpTransport(client=aiohttp.ClientSession)
+    client: Final = httpx.AsyncClient(transport=transport)
     transport_ref: Final = weakref.ref(transport)
     try:
-        response = await client.send(client.build_request("GET", f"http://127.0.0.1:{port}/stream"), stream=True)
+        response: Final = await client.send(client.build_request("GET", f"http://127.0.0.1:{port}/stream"), stream=True)
         session: Final = transport.client
         assert isinstance(session, aiohttp.ClientSession)
-        chunks = response.aiter_bytes()
+        chunks: Final = response.aiter_bytes()
         first: Final = await chunks.__anext__()
 
         del client, transport
