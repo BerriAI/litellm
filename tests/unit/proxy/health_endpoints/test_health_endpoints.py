@@ -4345,7 +4345,6 @@ async def test_health_endpoint_refuses_a_deployment_the_team_allowlist_forbids(u
     probe.assert_not_awaited()
 
 
-
 _KEY_ALIASED_AWAY_FROM_HAIKU = UserAPIKeyAuth(
     api_key="hashed-test-key", models=["gpt-5.4-mini"], aliases={"claude-haiku-5-5": "gpt-5.4-mini"}
 )
@@ -4424,6 +4423,20 @@ async def test_health_endpoint_refuses_the_deployment_a_key_alias_shadows(use_ba
 
     assert refused.value.status_code == 403
     probe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_never_probes_a_deployment_without_a_model_name_for_a_restricted_key():
+    nameless_deployment = {"litellm_params": {"model": "openai/gpt-5.4-mini"}, "model_info": {"id": "id-nameless"}}
+
+    probed = await _live_probed_model_ids(
+        [*_PROVIDER_PREFIXED_MODEL_LIST, nameless_deployment],
+        _MINI_ONLY_KEY,
+        llm_router=_router_for(_PROVIDER_PREFIXED_MODEL_LIST),
+    )
+
+    assert probed == {"id-mini"}
+
 
 def test_resolve_targeted_model_ids_lets_model_id_win_over_model():
     resolve = _health_endpoints_module._resolve_targeted_model_ids
