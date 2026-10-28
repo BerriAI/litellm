@@ -36,7 +36,8 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     FALLBACK_GENERALIZATIONS_KEY,
     GetModelCostMap,
     get_model_cost_map,
-    install_initial_model_cost_map,
+    get_model_cost_map_source_info,
+    load_model_cost_map_at_import,
     reload_model_cost_map,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -460,7 +461,7 @@ def test_reload_reads_a_file_url(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# install_initial_model_cost_map: the import-time load
+# load_model_cost_map_at_import: the import-time load
 # ---------------------------------------------------------------------------
 
 
@@ -484,7 +485,7 @@ def test_boot_load_success_does_not_start_background_retry():
     module, catalog = _bound_catalog()
     sleeper = _SyncSleepRecorder()
     with _serving([(200, {}, _real_map_bytes())]) as server:
-        install_initial_model_cost_map(server.url, catalog, sleeper)
+        load_model_cost_map_at_import(server.url, catalog, sleeper)
     assert len(server.requests) == 1
     assert sleeper.waits == []
     assert _retry_threads() == []
@@ -517,7 +518,7 @@ def test_boot_load_transient_failure_installs_local_then_background_retry_instal
     litellm.register_model({"my-runtime-model": {"litellm_provider": "custom", "max_input_tokens": 4321}})
 
     with _serving([(503, {"Retry-After": "0"}, b""), (200, {}, remote)]) as server:
-        install_initial_model_cost_map(server.url, catalog, sleeper)
+        load_model_cost_map_at_import(server.url, catalog, sleeper)
         assert sleeper.started.wait(timeout=10)
         threads = _retry_threads()
         try:
@@ -550,7 +551,7 @@ def test_boot_load_does_not_retry_non_retryable_failure():
     _, catalog = _bound_catalog()
     sleeper = _SyncSleepRecorder()
     with _serving([(404, {}, b"")]) as server:
-        install_initial_model_cost_map(server.url, catalog, sleeper)
+        load_model_cost_map_at_import(server.url, catalog, sleeper)
     assert len(server.requests) == 1
     assert sleeper.waits == []
     assert _retry_threads() == []
@@ -562,7 +563,7 @@ def test_boot_load_does_not_retry_non_retryable_failure():
 
 def test_boot_load_falls_back_when_the_url_does_not_parse():
     module, catalog = _bound_catalog()
-    install_initial_model_cost_map("http://[bad/model_prices.json", catalog, _SyncSleepRecorder())
+    load_model_cost_map_at_import("http://[bad/model_prices.json", catalog, _SyncSleepRecorder())
     assert _retry_threads() == []
     assert module.model_cost.keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
     assert "invalid URL" in (catalog.provenance().fallback_reason or "")
@@ -573,7 +574,7 @@ def test_boot_load_respects_local_env_override(monkeypatch, flag):
     monkeypatch.setenv(flag, "True")
     module, catalog = _bound_catalog()
     with _serving([(200, {}, _real_map_bytes())]) as server:
-        install_initial_model_cost_map(server.url, catalog, _SyncSleepRecorder())
+        load_model_cost_map_at_import(server.url, catalog, _SyncSleepRecorder())
     assert server.requests == []
     assert len(module.model_cost) > 100
     assert catalog.provenance().is_env_forced is True
@@ -583,7 +584,7 @@ def test_boot_load_records_the_blob_id_of_the_bytes_served_and_the_fetch_etag():
     _, catalog = _bound_catalog()
     body = _real_map_bytes()
     with _serving([(200, {"ETag": 'W/"boot"'}, body)]) as server:
-        install_initial_model_cost_map(server.url, catalog, _SyncSleepRecorder())
+        load_model_cost_map_at_import(server.url, catalog, _SyncSleepRecorder())
     provenance = catalog.provenance()
     assert (provenance.source, provenance.etag, provenance.source_revision) == ("remote", 'W/"boot"', git_blob_id(body))
 
@@ -591,9 +592,9 @@ def test_boot_load_records_the_blob_id_of_the_bytes_served_and_the_fetch_etag():
 def test_boot_load_fallback_to_the_bundled_map_reports_its_blob_id_and_drops_the_remote_etag():
     _, catalog = _bound_catalog()
     with _serving([(200, {"ETag": 'W/"boot"'}, _real_map_bytes())]) as server:
-        install_initial_model_cost_map(server.url, catalog, _SyncSleepRecorder())
+        load_model_cost_map_at_import(server.url, catalog, _SyncSleepRecorder())
     with _serving([(404, {}, b"")]) as server:
-        install_initial_model_cost_map(server.url, catalog, _SyncSleepRecorder())
+        load_model_cost_map_at_import(server.url, catalog, _SyncSleepRecorder())
     provenance = catalog.provenance()
     assert (provenance.source, provenance.etag, provenance.source_revision) == (
         "local",
@@ -606,7 +607,7 @@ def test_boot_load_that_fails_the_integrity_check_reports_the_bundled_map_not_th
     _, catalog = _bound_catalog()
     shrunk_body = b'{"gpt-5.4-mini": {"mode": "chat", "input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}}'
     with _serving([(200, {"ETag": 'W/"shrunk"'}, shrunk_body)]) as server:
-        install_initial_model_cost_map(server.url, catalog, _SyncSleepRecorder())
+        load_model_cost_map_at_import(server.url, catalog, _SyncSleepRecorder())
     provenance = catalog.provenance()
     assert provenance.source == "local"
     assert "below minimum" in (provenance.fallback_reason or "")
@@ -628,7 +629,7 @@ def test_boot_load_skips_remote_fetch_for_cli_processes(
     monkeypatch.setattr(sys, "argv", [argv0, "--version"])
     _, catalog = _bound_catalog()
     with _serving([(200, {}, _real_map_bytes())]) as server:
-        install_initial_model_cost_map(server.url, catalog, _SyncSleepRecorder())
+        load_model_cost_map_at_import(server.url, catalog, _SyncSleepRecorder())
     assert len(server.requests) == request_count
     assert catalog.provenance().source == ("local" if request_count == 0 else "remote")
 
@@ -734,12 +735,95 @@ def test_get_model_cost_map_falls_back_to_the_bundled_map(reply):
     assert result.keys() == _backup_keys()
 
 
-def test_get_model_cost_map_uses_the_local_map_when_the_env_var_is_set(monkeypatch):
+def test_an_explicit_url_wins_over_the_local_map_flag(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    with _serving([(200, {}, b"{}")]) as server:
+    remote = _with(lambda document: document.update({"only-remote": {"litellm_provider": "openai"}}))
+    with _serving([(200, {}, remote)]) as server:
+        result = get_model_cost_map(server.url)
+    assert len(server.requests) == 1
+    assert "only-remote" in result
+
+
+def test_an_empty_url_is_the_bundled_map_with_no_request():
+    assert get_model_cost_map(url="").keys() == _backup_keys()
+
+
+def test_offline_mode_wins_over_an_explicit_url(monkeypatch):
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", "True")
+    with _serving([(200, {}, _real_map_bytes())]) as server:
         result = get_model_cost_map(server.url)
     assert server.requests == []
     assert result.keys() == _backup_keys()
+
+
+@pytest.mark.parametrize("status", [200, 503])
+def test_a_side_read_changes_no_global_state(status):
+    live_model_cost = litellm.model_cost
+    live_entries = json.dumps(litellm.model_cost, sort_keys=True, default=str)
+    source_info = get_model_cost_map_source_info()
+    loaded_catalog = GetModelCostMap.loaded_model_cost_map()
+    fallback_rules = json.dumps(get_fallback_generalization_rules(), sort_keys=True, default=str)
+    threads_before = frozenset(thread.ident for thread in _retry_threads())
+    remote = _with(
+        lambda document: (
+            document.update({"side-read-only": {"litellm_provider": "openai"}}),
+            document.pop(FALLBACK_GENERALIZATIONS_KEY),
+        )
+    )
+    reply = (200, {}, remote) if status == 200 else (503, {}, b"")
+
+    with _serving([reply]) as server:
+        result = get_model_cost_map(url=server.url, max_attempts=9)
+
+    assert len(server.requests) == 1
+    assert ("side-read-only" in result) is (status == 200)
+    assert litellm.model_cost is live_model_cost
+    assert json.dumps(litellm.model_cost, sort_keys=True, default=str) == live_entries
+    assert get_model_cost_map_source_info() == source_info
+    assert GetModelCostMap.loaded_model_cost_map() is loaded_catalog
+    assert json.dumps(get_fallback_generalization_rules(), sort_keys=True, default=str) == fallback_rules
+    assert frozenset(thread.ident for thread in _retry_threads()) <= threads_before
+
+
+def test_url_registration_fetches_the_requested_map_when_local_flag_is_set(monkeypatch):
+    from litellm import utils as litellm_utils
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    monkeypatch.setattr(
+        litellm_utils, "_runtime_registered_model_cost", dict(litellm_utils._runtime_registered_model_cost)
+    )
+    remote = _with(
+        lambda document: document.update(
+            {"side-url-registration-model": {"litellm_provider": "openai", "input_cost_per_token": 1e-6}}
+        )
+    )
+
+    with _serving([(200, {}, remote)]) as server:
+        litellm.register_model(server.url)
+
+    assert len(server.requests) == 1
+    assert litellm.model_cost["side-url-registration-model"]["litellm_provider"] == "openai"
+
+
+def test_url_registration_404_does_not_change_model_cost_state(monkeypatch, caplog):
+    from litellm import utils as litellm_utils
+
+    monkeypatch.setattr(
+        litellm_utils, "_runtime_registered_model_cost", dict(litellm_utils._runtime_registered_model_cost)
+    )
+    live_entries = json.dumps(litellm.model_cost, sort_keys=True, default=str)
+    registrations = dict(litellm_utils._runtime_registered_model_cost)
+
+    with _serving([(404, {}, b"missing")]) as server, caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        returned = litellm.register_model(server.url)
+
+    warnings = [record for record in caplog.records if "model cost URL registration failed" in record.getMessage()]
+    assert len(warnings) == 1
+    assert "404" in warnings[0].getMessage()
+    assert returned == server.url
+    assert json.dumps(litellm.model_cost, sort_keys=True, default=str) == live_entries
+    assert litellm_utils._runtime_registered_model_cost == registrations
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -1062,7 +1146,7 @@ def test_the_local_map_is_the_embedded_one_not_the_backup_file(monkeypatch, tmp_
     monkeypatch.setattr(get_model_cost_map_module, "files", lambda _package: tmp_path, raising=False)
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
-    cost_map = get_model_cost_map(url="http://127.0.0.1:9/never-fetched.json")
+    cost_map = get_model_cost_map(url="")
 
     assert "only-in-the-backup" not in cost_map
     assert cost_map.keys() == CATALOG.bundled().served().keys()

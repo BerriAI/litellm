@@ -18,6 +18,6 @@ def _use_pr_local_model_cost_map(monkeypatch):
     monkeypatch.setattr(
         litellm,
         "model_cost",
-        get_model_cost_map(url=litellm.model_cost_map_url),
+        get_model_cost_map(url=""),
     )
     yield

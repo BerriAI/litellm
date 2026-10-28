@@ -303,7 +303,7 @@ def test_azure_ai_validate_environment_with_azure_ad_token():
 @pytest.fixture
 def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=""))
 
 
 def test_foundry_gpt_6_sol_keeps_sampling_params_when_reasoning_effort_is_none(_local_model_cost_map):
@@ -954,7 +954,7 @@ def test_azure_ai_services_handler(api_base, expected_url):
 
 
 def test_azure_ai_services_with_api_version():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
 

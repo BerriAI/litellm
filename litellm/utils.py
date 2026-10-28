@@ -3992,7 +3992,14 @@ def register_model(
         # Convert stringified numbers to appropriate numeric types
         loaded_model_cost = model_cost
     elif isinstance(model_cost, str):
-        loaded_model_cost = litellm.get_model_cost_map(url=model_cost, max_attempts=1)
+        from litellm._catalog import Unavailable
+        from litellm.litellm_core_utils.get_model_cost_map import fetch_remote_model_cost_map
+
+        fetched: Final = fetch_remote_model_cost_map(model_cost)
+        if isinstance(fetched, Unavailable):
+            verbose_logger.warning("LiteLLM: model cost URL registration failed: %s", fetched.reason)
+            return model_cost
+        loaded_model_cost = fetched.served()
 
     if persist_across_reloads:
         _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost

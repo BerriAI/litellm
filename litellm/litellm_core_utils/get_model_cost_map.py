@@ -264,7 +264,7 @@ def _pick_model_cost_map(
     return _note_loaded(catalog.bundled()), False, f"Remote fetch failed: {fetched.reason}"
 
 
-def install_initial_model_cost_map(
+def load_model_cost_map_at_import(
     url: str,
     catalog: Catalog = CATALOG,
     sleep: Callable[[float], None] = time.sleep,
@@ -283,6 +283,13 @@ def install_initial_model_cost_map(
     )
 
 
+def fetch_remote_model_cost_map(url: str) -> Fetched | Unavailable:
+    """One attempt at ``url`` that installs nothing. Offline mode wins over the URL, so no request leaves the process"""
+    if is_offline_mode():
+        return Unavailable(reason=f"offline mode, {url} is not fetched")
+    return CATALOG.fetch(Remote(url), timeout=_IMPORT_FETCH_TIMEOUT_SECONDS, attempts=1)
+
+
 def get_model_cost_map(
     url: str,
     timeout: int = _IMPORT_FETCH_TIMEOUT_SECONDS,
@@ -292,15 +299,23 @@ def get_model_cost_map(
     client: object = None,
 ) -> dict[str, dict[str, JsonValue]]:
     """
-    Public entry point, returns a fresh model cost map dict picked by main's rules. The fetch, its retries and the
-    validation of the body run in Rust, and the bundled map is returned on any failure. ``rng`` and ``client`` are
-    accepted for compatibility and ignored, since Rust owns the HTTP client and the backoff jitter
+    Public entry point, a side read that returns a fresh model cost map dict and changes no global state. An explicit
+    URL wins over ``LITELLM_LOCAL_MODEL_COST_MAP``. The fetch makes one attempt whatever ``max_attempts`` says, and
+    returns the bundled rows on any failure. ``timeout``, ``max_attempts``, ``sleep``, ``rng`` and ``client`` are
+    accepted for compatibility, the fetch runs in Rust
     """
     if rng is not None or client is not None:
         warnings.warn(
             "get_model_cost_map ignores rng and client, the fetch runs in Rust", DeprecationWarning, stacklevel=2
         )
-    fetched, _, _ = _pick_model_cost_map(
-        url=url, timeout=timeout, max_attempts=max_attempts, sleep=sleep, catalog=CATALOG
-    )
+    if not url:
+        return CATALOG.bundled().served()
+    fetched: Final = fetch_remote_model_cost_map(url)
+    if isinstance(fetched, Unavailable):
+        verbose_logger.warning(
+            "LiteLLM: Failed to fetch remote model cost map from %s: %s. Falling back to local backup.",
+            url,
+            fetched.reason,
+        )
+        return CATALOG.bundled().served()
     return fetched.served()

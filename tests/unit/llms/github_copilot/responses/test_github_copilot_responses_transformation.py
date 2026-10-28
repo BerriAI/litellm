@@ -26,7 +26,7 @@ def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
     """Pin litellm.model_cost to the bundled local backup so tests don't depend
     on remote catalog fetches (and don't change behavior across remote refreshes)."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=""))
     litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 

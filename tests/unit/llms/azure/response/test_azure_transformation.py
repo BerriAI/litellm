@@ -787,7 +787,7 @@ class TestAzureResponsesAPIConfig:
 def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pin the bundled cost map: the published map lags a key added in this repo."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=""))
     litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 
@@ -1265,7 +1265,6 @@ async def test_azure_responses_api_status_error():
     Test that 'status' field is not sent in the final request body to Azure API.
     The status field should be filtered out from input messages before making the API call.
     """
-    from unittest.mock import MagicMock
     import json
 
     request_data = {
