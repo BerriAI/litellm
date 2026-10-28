@@ -1,4 +1,5 @@
-from collections.abc import Mapping
+import json
+from collections.abc import Iterator, Mapping
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final
@@ -6,7 +7,7 @@ from typing import TYPE_CHECKING, ClassVar, Final
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-from litellm.proxy.guardrails._content_utils import iter_tool_json_text, map_tool_json_text
+from litellm.llms.base_llm.guardrail_translation.utils import unappliable_request_rewrite
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _JSON_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_DESCRIBED_ITEM_KEYS: Final = ("choices", "levels")
 _QUESTION_LIST_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, JsonValue], ...]]] = TypeAdapter(
     tuple[Mapping[str, JsonValue], ...]
 )
@@ -73,20 +75,123 @@ def _guardrailed_input(decision_input: JsonValue, guardrailed: Mapping[str, str]
     return [_guardrailed_message(message, guardrailed) for message in decision_input]
 
 
-def _guardrailed_json(value: JsonValue, guardrailed: Mapping[str, str]) -> JsonValue:
-    return map_tool_json_text(value, lambda text: guardrailed.get(text, text))
+def _json_text_forms(value: JsonValue) -> Iterator[str]:
+    match value:
+        case bool() | None:
+            return
+        case str():
+            yield value
+        case int() | float():
+            yield json.dumps(value)
+        case list():
+            yield from chain.from_iterable(map(_json_text_forms, value))
+        case dict():
+            for key, item in value.items():
+                yield key
+                yield from _json_text_forms(item)
+
+
+def _json_texts(value: JsonValue) -> tuple[str, ...]:
+    return tuple(text for text in _json_text_forms(value) if text)
+
+
+def _guardrailed_number(value: float, guardrailed: Mapping[str, str]) -> JsonValue:
+    text: Final = json.dumps(value)
+    rewritten: Final = guardrailed.get(text, text)
+    return value if rewritten == text else rewritten
+
+
+def _guardrailed_json(value: JsonValue, guardrailed: Mapping[str, str], guardrail_name: str | None) -> JsonValue:
+    match value:
+        case bool() | None:
+            return value
+        case str():
+            return guardrailed.get(value, value)
+        case int() | float():
+            return _guardrailed_number(value, guardrailed)
+        case list():
+            return [_guardrailed_json(item, guardrailed, guardrail_name) for item in value]
+        case dict():
+            keys: Final = tuple(guardrailed.get(key, key) for key in value)
+            if len(frozenset(keys)) != len(keys):
+                raise unappliable_request_rewrite(guardrail_name)
+            return {
+                key: _guardrailed_json(item, guardrailed, guardrail_name)
+                for key, item in zip(keys, value.values(), strict=True)
+            }
 
 
 def _instruction_texts(question: Mapping[str, JsonValue]) -> tuple[str, ...]:
-    return tuple(iter_tool_json_text(question.get("instructions")))
+    return _json_texts(question.get("instructions"))
+
+
+def _described_items(question: Mapping[str, JsonValue]) -> tuple[JsonValue, ...]:
+    return tuple(chain.from_iterable(_list_items(question.get(key)) for key in _DESCRIBED_ITEM_KEYS))
+
+
+def _list_items(value: JsonValue) -> tuple[JsonValue, ...]:
+    return tuple(value) if isinstance(value, list) else ()
+
+
+def _item_description(item: JsonValue) -> tuple[str, ...]:
+    description: Final = item.get("description") if isinstance(item, dict) else None
+    return (description,) if isinstance(description, str) and description else ()
+
+
+def _decision_question_texts(question: Mapping[str, JsonValue]) -> tuple[str, ...]:
+    descriptions: Final = chain.from_iterable(map(_item_description, _described_items(question)))
+    return (*_instruction_texts(question), *descriptions)
+
+
+def _guardrailed_item(item: JsonValue, guardrailed: Mapping[str, str]) -> JsonValue:
+    if not isinstance(item, dict) or not isinstance(description := item.get("description"), str):
+        return item
+    return {**item, "description": guardrailed.get(description, description)}
+
+
+def _with_guardrailed_decision_question(
+    question: Mapping[str, JsonValue], guardrailed: Mapping[str, str], guardrail_name: str | None
+) -> Mapping[str, JsonValue]:
+    described: Final = {
+        key: [_guardrailed_item(item, guardrailed) for item in _list_items(question[key])]
+        for key in _DESCRIBED_ITEM_KEYS
+        if key in question
+    }
+    return {**_with_guardrailed_instructions(question, guardrailed, guardrail_name), **described}
+
+
+def _criteria_texts(criteria: JsonValue) -> tuple[str, ...]:
+    descriptions: Final = tuple(criteria.values()) if isinstance(criteria, dict) else (criteria,)
+    return tuple(chain.from_iterable(map(_json_texts, descriptions)))
+
+
+def _systemone_question_texts(question: Mapping[str, JsonValue]) -> tuple[str, ...]:
+    return (*_instruction_texts(question), *_criteria_texts(question.get("criteria")))
+
+
+def _guardrailed_criteria(criteria: JsonValue, guardrailed: Mapping[str, str], guardrail_name: str | None) -> JsonValue:
+    if not isinstance(criteria, dict):
+        return _guardrailed_json(criteria, guardrailed, guardrail_name)
+    return {
+        label: _guardrailed_json(description, guardrailed, guardrail_name) for label, description in criteria.items()
+    }
+
+
+def _with_guardrailed_systemone_question(
+    question: Mapping[str, JsonValue], guardrailed: Mapping[str, str], guardrail_name: str | None
+) -> Mapping[str, JsonValue]:
+    with_instructions: Final = _with_guardrailed_instructions(question, guardrailed, guardrail_name)
+    if "criteria" not in question:
+        return with_instructions
+    return {**with_instructions, "criteria": _guardrailed_criteria(question["criteria"], guardrailed, guardrail_name)}
 
 
 def _with_guardrailed_instructions(
-    question: Mapping[str, JsonValue], guardrailed: Mapping[str, str]
+    question: Mapping[str, JsonValue], guardrailed: Mapping[str, str], guardrail_name: str | None
 ) -> Mapping[str, JsonValue]:
     if "instructions" not in question:
         return question
-    return {**question, "instructions": _guardrailed_json(question["instructions"], guardrailed)}
+    return {**question, "instructions": _guardrailed_json(question["instructions"], guardrailed, guardrail_name)}
 
 
 async def _guardrailed_texts(
@@ -103,6 +208,14 @@ async def _guardrailed_texts(
         input_type="request",
         logging_obj=litellm_logging_obj,
     )
+    if not guardrail_to_apply.records_own_guardrail_information:
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,  # pyright: ignore[reportUnknownVariableType]  # callback_utils types request_data as a bare dict
+        )
+
+        add_guardrail_to_applied_guardrails_header(
+            request_data=request_data, guardrail_name=guardrail_to_apply.guardrail_name
+        )
     returned: Final = result.get("texts", [])
     return MappingProxyType(
         {text: returned[index] if index < len(returned) else text for index, text in enumerate(unique_texts)}
@@ -111,6 +224,7 @@ async def _guardrailed_texts(
 
 class _DecisionAnswersTranslation(BaseTranslation):
     scans_responses: ClassVar[bool] = False
+    lists_guardrail_when_called: ClassVar[bool] = True
 
     async def process_output_response(
         self,
@@ -132,14 +246,17 @@ class DecisionsHandler(_DecisionAnswersTranslation):
     ) -> Mapping[str, object]:
         decision_input: Final = _JSON_ADAPTER.validate_python(data.get("input"))
         questions: Final = _QUESTION_LIST_ADAPTER.validate_python(data.get("questions") or ())
-        texts: Final = (*_input_texts(decision_input), *chain.from_iterable(map(_instruction_texts, questions)))
+        texts: Final = (*_input_texts(decision_input), *chain.from_iterable(map(_decision_question_texts, questions)))
         if not texts:
             return data
         guardrailed: Final = await _guardrailed_texts(texts, guardrail_to_apply, data, litellm_logging_obj)
         return {
             **data,
             "input": _guardrailed_input(decision_input, guardrailed),
-            "questions": [_with_guardrailed_instructions(question, guardrailed) for question in questions],
+            "questions": [
+                _with_guardrailed_decision_question(question, guardrailed, guardrail_to_apply.guardrail_name)
+                for question in questions
+            ],
         }
 
 
@@ -152,17 +269,15 @@ class SystemOneHandler(_DecisionAnswersTranslation):
     ) -> Mapping[str, object]:
         state: Final = _JSON_ADAPTER.validate_python(data.get("state"))
         questions: Final = _QUESTION_MAP_ADAPTER.validate_python(data.get("questions") or {})
-        texts: Final = (
-            *iter_tool_json_text(state),
-            *chain.from_iterable(map(_instruction_texts, questions.values())),
-        )
+        texts: Final = (*_json_texts(state), *chain.from_iterable(map(_systemone_question_texts, questions.values())))
         if not texts:
             return data
         guardrailed: Final = await _guardrailed_texts(texts, guardrail_to_apply, data, litellm_logging_obj)
         return {
             **data,
-            "state": _guardrailed_json(state, guardrailed),
+            "state": _guardrailed_json(state, guardrailed, guardrail_to_apply.guardrail_name),
             "questions": {
-                name: _with_guardrailed_instructions(question, guardrailed) for name, question in questions.items()
+                name: _with_guardrailed_systemone_question(question, guardrailed, guardrail_to_apply.guardrail_name)
+                for name, question in questions.items()
             },
         }

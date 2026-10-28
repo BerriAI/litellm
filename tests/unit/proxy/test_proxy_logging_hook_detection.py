@@ -1135,6 +1135,21 @@ async def test_pre_call_hook_scans_decision_and_extraction_text_with_a_native_ho
 
 
 @pytest.mark.asyncio
+async def test_pre_call_hook_does_not_list_a_guardrail_for_a_systemone_request_without_text(monkeypatch):
+    guardrail = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.pre_call, default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    result = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
+        data={"model": "m", "state": {}, "questions": {"routed": {"type": "choice", "criteria": {"refund": None}}}},
+        call_type="asystemone",
+    )
+
+    assert guardrail.scanned == []
+    assert _applied_guardrails(result) == []
+
+
+@pytest.mark.asyncio
 async def test_during_call_hook_scans_extraction_state_with_a_native_hook_guardrail(monkeypatch):
     guardrail = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.during_call, default_on=True)
     monkeypatch.setattr(litellm, "callbacks", [guardrail])

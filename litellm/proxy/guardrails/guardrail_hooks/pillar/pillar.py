@@ -351,8 +351,8 @@ class PillarGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug("Pillar Guardrail: Pre-call hook")
         result: Final = await self.run_pillar_guardrail(data, user_api_key_dict)
 
-        # Add guardrail name to response headers
-        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+        if data.get("messages"):
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         return result
 
@@ -394,8 +394,8 @@ class PillarGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug("Pillar Guardrail: During-call moderation hook")
         result: Final = await self.run_pillar_guardrail(data, user_api_key_dict)
 
-        # Add guardrail name to response headers
-        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+        if data.get("messages"):
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         return result
 

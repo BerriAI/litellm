@@ -1307,3 +1307,26 @@ async def test_tool_call_in_both_tool_calls_and_structured_messages_is_screened_
     await guardrail.apply_guardrail(inputs, _request_data(), "request")
 
     assert [call.kwargs["input"] for call in router.adecisions.await_args_list] == ['send_email({"body": "hello"})']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("texts", "unreachable", "applied"),
+    [
+        pytest.param(["hello"], False, ["test_decision_model"], id="scanned"),
+        pytest.param([], False, None, id="no-text"),
+        pytest.param(["hello"], True, None, id="unreachable-fail-open"),
+    ],
+)
+async def test_decision_model_lists_itself_only_when_it_returned_verdicts(
+    texts: list[str], unreachable: bool, applied: list[str] | None
+):
+    router: Final = _decision_router(probability=0.1)
+    if unreachable:
+        router.adecisions.side_effect = httpx.ConnectError("unreachable")
+    guardrail: Final = _make_guardrail(router_provider=lambda: router, unreachable_fallback="fail_open")
+    request_data: Final = _request_data()
+
+    await guardrail.apply_guardrail({"texts": texts}, request_data, "request")
+
+    assert cast(dict[str, object], request_data["metadata"]).get("applied_guardrails") == applied

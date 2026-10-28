@@ -5,6 +5,7 @@ import pytest
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms import get_guardrail_translation_mapping
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.llms.openai.decisions.guardrail_translation.handler import DecisionsHandler, SystemOneHandler
 from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
@@ -25,6 +26,22 @@ class _TaggingGuardrail(CustomGuardrail):
         texts: Final = tuple(inputs.get("texts", []))
         self.seen.append((input_type, texts))
         return GenericGuardrailAPIInputs(texts=[f"{text} [GUARDRAILED]" for text in texts])
+
+
+class _MasksSecrets(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        secrets: Final = {"AKIAIOSFODNN7EXAMPLE": "<AWS_KEY>", "AKIAI44QH8DHBEXAMPLE": "<AWS_KEY>"}
+        return GenericGuardrailAPIInputs(
+            texts=[
+                "<CARD>" if text == "4111111111111111" else secrets.get(text, text) for text in inputs.get("texts", [])
+            ]
+        )
 
 
 class _ReturnsNoTexts(CustomGuardrail):
@@ -52,7 +69,7 @@ def test_decision_call_types_resolve_to_their_handler(call_type: CallTypes, hand
 
 
 @pytest.mark.asyncio
-async def test_decision_message_text_parts_and_question_instructions_are_guardrailed() -> None:
+async def test_decision_message_text_parts_and_question_text_are_guardrailed() -> None:
     guardrail: Final = _TaggingGuardrail()
     image: Final = {"type": "input_image", "image_url": "data:image/png;base64,AA=="}
     data: Final = {
@@ -64,12 +81,29 @@ async def test_decision_message_text_parts_and_question_instructions_are_guardra
         "questions": [
             {"type": "predicate", "name": "urgent", "instructions": "Is it urgent?"},
             {"type": "box", "name": "logo", "instructions": "ticket one"},
+            {
+                "type": "choice",
+                "name": "team",
+                "instructions": "Which team?",
+                "choices": [{"value": "billing", "description": "Payment issues"}, {"value": True}],
+            },
+            {
+                "type": "score",
+                "name": "mood",
+                "instructions": "How upset?",
+                "levels": [{"label": "calm"}, {"label": "angry", "description": "Uses caps"}],
+            },
         ],
     }
 
     result: Final = await DecisionsHandler().process_input_messages(data, guardrail)
 
-    assert guardrail.seen == [("request", ("ticket one", "ticket two", "Is it urgent?"))]
+    assert guardrail.seen == [
+        (
+            "request",
+            ("ticket one", "ticket two", "Is it urgent?", "Which team?", "Payment issues", "How upset?", "Uses caps"),
+        )
+    ]
     assert {key: value for key, value in result.items() if key != "metadata"} == {
         "model": "judge",
         "input": [
@@ -79,39 +113,102 @@ async def test_decision_message_text_parts_and_question_instructions_are_guardra
         "questions": [
             {"type": "predicate", "name": "urgent", "instructions": "Is it urgent? [GUARDRAILED]"},
             {"type": "box", "name": "logo", "instructions": "ticket one [GUARDRAILED]"},
+            {
+                "type": "choice",
+                "name": "team",
+                "instructions": "Which team? [GUARDRAILED]",
+                "choices": [{"value": "billing", "description": "Payment issues [GUARDRAILED]"}, {"value": True}],
+            },
+            {
+                "type": "score",
+                "name": "mood",
+                "instructions": "How upset? [GUARDRAILED]",
+                "levels": [{"label": "calm"}, {"label": "angry", "description": "Uses caps [GUARDRAILED]"}],
+            },
         ],
     }
     assert data["input"][0]["content"][0]["text"] == "ticket one"
 
 
 @pytest.mark.asyncio
-async def test_systemone_state_leaves_and_question_instructions_are_guardrailed() -> None:
+async def test_systemone_state_keys_scalars_and_question_text_are_guardrailed() -> None:
     guardrail: Final = _TaggingGuardrail()
-    criteria_question: Final = {"type": "noul", "criteria": {"yes": "refund"}}
     data: Final = {
         "model": "judge",
         "state": {"subject": "refund", "lines": ["order 7", "", 3, True], "meta": {"id": None}},
         "questions": {
             "refund": {"type": "noul", "instructions": {"ask": "Does the customer want a refund?"}},
-            "routed": criteria_question,
+            "routed": {"type": "noul", "criteria": {"true": "The customer asks for money back", "false": None}},
+            "tier": {"type": "score", "criteria": ["calm", {"level": "angry"}]},
         },
     }
 
     result: Final = await SystemOneHandler().process_input_messages(data, guardrail)
 
-    assert guardrail.seen == [("request", ("refund", "order 7", "Does the customer want a refund?"))]
+    assert guardrail.seen == [
+        (
+            "request",
+            (
+                "subject",
+                "refund",
+                "lines",
+                "order 7",
+                "3",
+                "meta",
+                "id",
+                "ask",
+                "Does the customer want a refund?",
+                "The customer asks for money back",
+                "calm",
+                "level",
+                "angry",
+            ),
+        )
+    ]
     assert {key: value for key, value in result.items() if key != "metadata"} == {
         "model": "judge",
         "state": {
-            "subject": "refund [GUARDRAILED]",
-            "lines": ["order 7 [GUARDRAILED]", "", 3, True],
-            "meta": {"id": None},
+            "subject [GUARDRAILED]": "refund [GUARDRAILED]",
+            "lines [GUARDRAILED]": ["order 7 [GUARDRAILED]", "", "3 [GUARDRAILED]", True],
+            "meta [GUARDRAILED]": {"id [GUARDRAILED]": None},
         },
         "questions": {
-            "refund": {"type": "noul", "instructions": {"ask": "Does the customer want a refund? [GUARDRAILED]"}},
-            "routed": criteria_question,
+            "refund": {
+                "type": "noul",
+                "instructions": {"ask [GUARDRAILED]": "Does the customer want a refund? [GUARDRAILED]"},
+            },
+            "routed": {
+                "type": "noul",
+                "criteria": {"true": "The customer asks for money back [GUARDRAILED]", "false": None},
+            },
+            "tier": {"type": "score", "criteria": ["calm [GUARDRAILED]", {"level [GUARDRAILED]": "angry [GUARDRAILED]"}]},
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_systemone_secret_key_and_card_number_are_masked_before_the_provider() -> None:
+    data: Final = {
+        "model": "judge",
+        "state": {"AKIAIOSFODNN7EXAMPLE": "<X>", "card": 4111111111111111, "items": 2},
+        "questions": {"q": {"type": "noul", "criteria": {}}},
+    }
+
+    result: Final = await SystemOneHandler().process_input_messages(data, _MasksSecrets(guardrail_name="mask"))
+
+    assert result["state"] == {"<AWS_KEY>": "<X>", "card": "<CARD>", "items": 2}
+
+
+@pytest.mark.asyncio
+async def test_systemone_rejects_masked_keys_that_collide() -> None:
+    data: Final = {
+        "model": "judge",
+        "state": {"AKIAIOSFODNN7EXAMPLE": "first", "AKIAI44QH8DHBEXAMPLE": "second"},
+        "questions": {"q": {"type": "noul", "criteria": {}}},
+    }
+
+    with pytest.raises(UnappliableRequestRewrite):
+        await SystemOneHandler().process_input_messages(data, _MasksSecrets(guardrail_name="mask"))
 
 
 @pytest.mark.asyncio
@@ -120,7 +217,7 @@ async def test_systemone_state_leaves_and_question_instructions_are_guardrailed(
     (
         (
             SystemOneHandler,
-            {"model": "judge", "state": {"count": 3}, "questions": {"q": {"type": "noul", "criteria": {}}}},
+            {"model": "judge", "state": {}, "questions": {"q": {"type": "noul", "criteria": {}}}},
         ),
         (
             DecisionsHandler,
@@ -144,14 +241,23 @@ async def test_request_without_text_is_returned_unscanned(
 
 
 @pytest.mark.asyncio
-async def test_guardrail_that_returns_no_texts_leaves_the_request_text_as_sent() -> None:
-    data: Final = {
-        "model": "judge",
-        "input": "ticket",
-        "questions": [{"type": "predicate", "instructions": "Is it urgent?"}],
-    }
-
-    result: Final = await DecisionsHandler().process_input_messages(data, _ReturnsNoTexts(guardrail_name="noop"))
+@pytest.mark.parametrize(
+    ("handler", "data"),
+    (
+        (
+            DecisionsHandler,
+            {"model": "judge", "input": "ticket", "questions": [{"type": "predicate", "instructions": "Is it urgent?"}]},
+        ),
+        (
+            SystemOneHandler,
+            {"model": "judge", "state": {"total": 3, "paid": 2.5}, "questions": {"q": {"type": "noul", "criteria": {}}}},
+        ),
+    ),
+)
+async def test_guardrail_that_returns_no_texts_leaves_the_request_text_as_sent(
+    handler: type[DecisionsHandler] | type[SystemOneHandler], data: dict[str, object]
+) -> None:
+    result: Final = await handler().process_input_messages(data, _ReturnsNoTexts(guardrail_name="noop"))
 
     assert result == data
 

@@ -328,8 +328,7 @@ class DynamoAIGuardrails(CustomGuardrail):
                 error_message: Final = self._create_error_message(processed_result)
                 raise ValueError(error_message)
 
-        # Add guardrail to applied guardrails header
-        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         return data
 
@@ -373,8 +372,7 @@ class DynamoAIGuardrails(CustomGuardrail):
                 error_message: Final = self._create_error_message(processed_result)
                 raise ValueError(error_message)
 
-        # Add guardrail to applied guardrails header
-        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         return data
 
@@ -441,8 +439,7 @@ class DynamoAIGuardrails(CustomGuardrail):
                     error_message: Final = self._create_error_message(processed_result)
                     raise ValueError(error_message)
 
-        # Add guardrail to applied guardrails header
-        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
     async def async_post_call_streaming_iterator_hook(
         self,

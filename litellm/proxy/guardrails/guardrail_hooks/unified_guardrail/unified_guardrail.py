@@ -284,7 +284,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         except ValueError:
             return data  # handle unmapped call types
 
-        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
+        translation: Final = mappings[CallTypes(call_type)]()
+        endpoint_translation: Final = _as_endpoint_translation(translation)
 
         _ensure_litellm_metadata(data, user_api_key_dict)
 
@@ -296,7 +297,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             litellm_logging_obj=data.get("litellm_logging_obj"),
         )
 
-        if not guardrail_to_apply.records_own_guardrail_information:
+        if not guardrail_to_apply.records_own_guardrail_information and not translation.lists_guardrail_when_called:
             add_guardrail_to_applied_guardrails_header(
                 request_data=data, guardrail_name=guardrail_to_apply.guardrail_name
             )

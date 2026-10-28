@@ -23,6 +23,9 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_utils.callback_utils import (
+    add_guardrail_to_applied_guardrails_header,  # pyright: ignore[reportUnknownVariableType]  # callback_utils types request_data as a bare dict
+)
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
@@ -169,6 +172,10 @@ class AimGuardrail(CustomGuardrail):
         return data
 
     async def call_aim_guardrail(self, data: dict, hook: str, key_alias: str | None) -> dict:
+        messages: Final = self._build_aim_inspection_messages(data)  # pyright: ignore[reportUnknownMemberType]  # hook request data is an untyped dict
+        if not messages:
+            return data  # pyright: ignore[reportUnknownVariableType]  # hook request data is an untyped dict
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         user_email: Final = data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
         call_id: Final = data.get("litellm_call_id")
         headers: Final = self._build_aim_headers(
@@ -180,7 +187,7 @@ class AimGuardrail(CustomGuardrail):
         response: Final = await self.async_handler.post(
             f"{self.api_base}/fw/v1/analyze",
             headers=headers,
-            json={"messages": self._build_aim_inspection_messages(data)},
+            json={"messages": messages},
             timeout=self.timeout,
         )
         response.raise_for_status()

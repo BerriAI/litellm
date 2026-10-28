@@ -17,6 +17,7 @@ import json
 from urllib.parse import unquote
 
 import pytest
+import respx
 from fastapi.exceptions import HTTPException
 from httpx import Request, Response
 
@@ -1513,3 +1514,52 @@ async def test_mcp_call_masking(
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])
+
+
+_INPUT_HOOKS = [
+    pytest.param(
+        "pre_call",
+        lambda guardrail, data: guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="completion"
+        ),
+        id="pre_call",
+    ),
+    pytest.param(
+        "during_call",
+        lambda guardrail, data: guardrail.async_moderation_hook(
+            data=data, user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
+        ),
+        id="during_call",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("event_hook", "run_hook"), _INPUT_HOOKS)
+@pytest.mark.parametrize(
+    ("request_fields", "applied"),
+    [
+        pytest.param({"messages": [{"role": "user", "content": "hi"}]}, ["pillar-test"], id="messages"),
+        pytest.param({"state": "hi"}, None, id="no-messages"),
+    ],
+)
+async def test_input_hooks_list_the_guardrail_only_when_they_scanned_text(
+    respx_mock: respx.MockRouter, event_hook, run_hook, request_fields, applied
+):
+    respx_mock.post(url__startswith="https://api.pillar.security/api/v1/protect").respond(
+        json={"session_id": "s", "flagged": False, "scanners": {}, "evidence": []}
+    )
+    guardrail = PillarGuardrail(
+        guardrail_name="pillar-test",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        on_flagged_action="block",
+        event_hook=event_hook,
+        default_on=True,
+    )
+    metadata: dict[str, object] = {}
+
+    await run_hook(guardrail, {**request_fields, "metadata": metadata})
+
+    assert metadata.get("applied_guardrails") == applied

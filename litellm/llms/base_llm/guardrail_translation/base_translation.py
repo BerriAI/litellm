@@ -74,6 +74,8 @@ class BaseTranslation(ABC):
 
     scans_responses: ClassVar[bool] = True
 
+    lists_guardrail_when_called: ClassVar[bool] = False
+
     def post_call_hook_response(self, response: object) -> object:
         """The ``response`` this endpoint's non-streaming post-call hooks receive, derived from
         the object the translation stores under ``request_data["response"]`` while scanning an

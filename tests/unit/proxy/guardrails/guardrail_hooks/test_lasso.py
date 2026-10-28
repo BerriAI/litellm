@@ -1549,3 +1549,35 @@ async def test_api_error_handling_legacy_messages(
     assert "Failed to verify request safety with Lasso API" in str(excinfo.value)
     assert error_message in str(excinfo.value)
     assert route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    ("call_type", "request_fields", "applied"),
+    [
+        pytest.param(
+            "adecisions", {"input": [{"role": "user", "content": "Is this a refund?"}]}, ["lasso"], id="decisions"
+        ),
+        pytest.param("aextraction", {"state": {"invoice": "INV-1"}}, None, id="extraction"),
+    ],
+)
+async def test_lasso_lists_itself_only_when_it_classified_request_text(
+    respx_mock: respx.MockRouter, call_type: str, request_fields: dict[str, object], applied: list[str] | None
+) -> None:
+    respx_mock.post("https://server.lasso.security/gateway/v3/classify").respond(
+        json={"deputies": {}, "findings": {}, "violations_detected": False}
+    )
+    guardrail: Final = LassoGuardrail(
+        lasso_api_key="test-api-key", guardrail_name="lasso", event_hook="pre_call", default_on=True
+    )
+    metadata: Final[dict[str, object]] = {}
+
+    await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        cache=DualCache(),
+        data={**request_fields, "metadata": metadata},
+        call_type=call_type,
+    )
+
+    assert metadata.get("applied_guardrails") == applied

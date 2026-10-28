@@ -45,6 +45,9 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.callback_utils import (
+    add_guardrail_to_applied_guardrails_header,  # pyright: ignore[reportUnknownVariableType]  # callback_utils types request_data as a bare dict
+)
 from litellm.proxy.guardrails._content_utils import (
     build_inspection_messages,
     has_non_string_content,
@@ -409,6 +412,7 @@ class LassoGuardrail(CustomGuardrail):
         messages: Final[Sequence[Mapping[str, object]]] = [*expanded_messages, *input_messages]
         if not messages:
             return data
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         # Lasso's classifix endpoint returns masked text that we copy back
         # into ``data["messages"]``. For multimodal/Responses-API input we

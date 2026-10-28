@@ -316,7 +316,7 @@ async def test_aim_anonymize_action_blocks_malformed_redacted_messages(
             )
 
     assert exc_info.value.code == "400"
-    assert data == request_body
+    assert {key: value for key, value in data.items() if key != "metadata"} == request_body
 
 
 _OUTPUT_REQUEST = {
@@ -815,3 +815,34 @@ async def test_aim_streaming_block_stops_after_verified_chunks(monkeypatch: pyte
         {"choices": [{"delta": {"content": "A"}}]},
         {"done": True},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    ("call_type", "request_fields", "aim_calls", "applied"),
+    [
+        pytest.param(
+            "adecisions", {"input": [{"role": "user", "content": "Is this a refund?"}]}, 1, ["aim"], id="decisions"
+        ),
+        pytest.param("aextraction", {"state": {"invoice": "INV-1"}}, 0, None, id="extraction"),
+    ],
+)
+async def test_aim_calls_aim_and_lists_itself_only_when_the_request_has_text(
+    respx_mock: respx.MockRouter, call_type: str, request_fields: dict, aim_calls: int, applied: list[str] | None
+):
+    analyze = respx_mock.post("http://aim.test/fw/v1/analyze").respond(
+        json={"analysis_result": {"analysis_time_ms": 1, "policy_drill_down": {}}, "required_action": None}
+    )
+    guardrail = AimGuardrail(api_key="hs-aim-key", api_base="http://aim.test", guardrail_name="aim")
+    metadata: dict[str, object] = {}
+
+    await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        cache=DualCache(),
+        data={**request_fields, "metadata": metadata},
+        call_type=call_type,
+    )
+
+    assert analyze.call_count == aim_calls
+    assert metadata.get("applied_guardrails") == applied

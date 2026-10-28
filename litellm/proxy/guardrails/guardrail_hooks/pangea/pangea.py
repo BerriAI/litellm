@@ -167,6 +167,8 @@ class PangeaHandler(CustomGuardrail):
             messages = transformer.get_messages()
         else:
             messages = data.get("messages")
+        if not messages:
+            return
 
         ai_guard_payload: Final = {
             "debug": False,

@@ -5291,6 +5291,134 @@ async def test_logging_only_flagged_prompt_still_scans_response():
     assert len(flagged) == 2
 
 
+class _RedactsPhoneNumbers(AsyncHTTPHandler):
+    def __init__(self):
+        self.scanned: list[str] = []
+
+    async def post(
+        self,
+        url: str,
+        json: dict[str, object] | None = None,
+        headers: dict[str, str] | None = None,
+        **kwargs: object,
+    ) -> httpx.Response:
+        payload = cast(dict[str, dict[str, str]], json)
+        text = (payload.get("userPromptData") or payload["modelResponseData"])["text"]
+        self.scanned.append(text)
+        redacted = text.replace("555-123-4567", "[REDACTED]")
+        result = (
+            _clean_armor_response()
+            if redacted == text
+            else {
+                "sanitizationResult": {
+                    "filterMatchState": "MATCH_FOUND",
+                    "filterResults": {
+                        "sdp": {
+                            "sdpFilterResult": {
+                                "deidentifyResult": {"matchState": "MATCH_FOUND", "data": {"text": redacted}}
+                            }
+                        }
+                    },
+                }
+            }
+        )
+        return httpx.Response(200, json=result, request=httpx.Request("POST", url))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_type", ("request", "response"))
+async def test_apply_guardrail_masks_each_text_when_masking_is_on(input_type):
+    handler = _RedactsPhoneNumbers()
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-mask",
+        event_hook=GuardrailEventHooks.pre_call,
+        mask_request_content=input_type == "request",
+        mask_response_content=input_type == "response",
+        async_handler=handler,
+        access_token_provider=_async_token_provider,
+    )
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["call me at 555-123-4567", "refund order 4411"]},
+        request_data={"metadata": {}},
+        input_type=input_type,
+    )
+
+    assert result["texts"] == ["call me at [REDACTED]", "refund order 4411"]
+    assert sorted(handler.scanned) == ["call me at 555-123-4567", "refund order 4411"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_a_masking_finding_when_masking_is_off():
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-block",
+        event_hook=GuardrailEventHooks.pre_call,
+        async_handler=_RedactsPhoneNumbers(),
+        access_token_provider=_async_token_provider,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["call me at 555-123-4567", "refund order 4411"]},
+            request_data={"metadata": {}},
+            input_type="request",
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_returns_clean_text_unchanged_when_masking_is_off():
+    inputs = {"texts": ["refund order 4411"]}
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-clean",
+        event_hook=GuardrailEventHooks.pre_call,
+        async_handler=_RedactsPhoneNumbers(),
+        access_token_provider=_async_token_provider,
+    )
+
+    assert await guardrail.apply_guardrail(inputs=inputs, request_data={"metadata": {}}, input_type="request") is inputs
+
+class _UnavailableArmor(AsyncHTTPHandler):
+    def __init__(self):
+        pass
+
+    async def post(self, url: str, **kwargs: object) -> httpx.Response:
+        return httpx.Response(503, text="unavailable", request=httpx.Request("POST", url))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_on_error", (True, False))
+async def test_apply_guardrail_honors_fail_on_error_when_model_armor_is_down(fail_on_error):
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-down",
+        event_hook=GuardrailEventHooks.pre_call,
+        fail_on_error=fail_on_error,
+        async_handler=_UnavailableArmor(),
+        access_token_provider=_async_token_provider,
+    )
+    inputs = {"texts": ["refund order 4411"]}
+
+    if fail_on_error:
+        with pytest.raises(ModelArmorAPIError):
+            await guardrail.apply_guardrail(inputs=inputs, request_data={"metadata": {}}, input_type="request")
+    else:
+        assert await guardrail.apply_guardrail(inputs=inputs, request_data={"metadata": {}}, input_type="request") == inputs
+
+
 @pytest.mark.asyncio
 async def test_apply_guardrail_raises_on_flagged_when_not_logging_only():
     """The /guardrails/apply_guardrail endpoint calls apply_guardrail directly; a

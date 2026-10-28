@@ -203,6 +203,76 @@ async def test_post_call_hook_skips_dynamoai_when_the_reply_has_no_text(respx_mo
     assert route.called is False
 
 
+
+_INPUT_HOOKS = [
+    pytest.param(
+        "pre_call",
+        lambda guardrail, data: guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="completion"
+        ),
+        id="pre_call",
+    ),
+    pytest.param(
+        "during_call",
+        lambda guardrail, data: guardrail.async_moderation_hook(
+            data=data, user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
+        ),
+        id="during_call",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("event_hook", "run_hook"), _INPUT_HOOKS)
+@pytest.mark.parametrize(
+    ("request_fields", "applied"),
+    [
+        pytest.param({"messages": [{"role": "user", "content": "hi"}]}, ["test-dynamoai"], id="messages"),
+        pytest.param({"state": "hi"}, None, id="no-messages"),
+    ],
+)
+async def test_input_hooks_list_the_guardrail_only_when_they_scanned_text(
+    respx_mock: respx.MockRouter, event_hook, run_hook, request_fields, applied
+) -> None:
+    respx_mock.post(_ANALYZE_URL).respond(json={"finalAction": "NONE", "appliedPolicies": []})
+    guardrail = DynamoAIGuardrails(
+        guardrail_name="test-dynamoai",
+        api_key="test-api-key",
+        api_base="https://api.dynamo.ai",
+        event_hook=event_hook,
+        default_on=True,
+    )
+    metadata: dict[str, object] = {}
+
+    await run_hook(guardrail, {**request_fields, "metadata": metadata})
+
+    assert metadata.get("applied_guardrails") == applied
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    ("response", "applied"),
+    [
+        pytest.param(_assistant_reply("Hello, how are you?"), ["test-dynamoai"], id="chat-reply"),
+        pytest.param({"answers": {"aws_key": {"type": "text", "value": None}}}, None, id="no-choices"),
+    ],
+)
+async def test_post_call_hook_lists_the_guardrail_only_when_it_scanned_text(
+    respx_mock: respx.MockRouter, response, applied
+) -> None:
+    respx_mock.post(_ANALYZE_URL).respond(json={"finalAction": "NONE", "appliedPolicies": []})
+    metadata: dict[str, object] = {}
+
+    await _post_call_guardrail().async_post_call_success_hook(
+        data={"messages": [{"role": "user", "content": "hi"}], "metadata": metadata},
+        user_api_key_dict=UserAPIKeyAuth(),
+        response=response,
+    )
+
+    assert metadata.get("applied_guardrails") == applied
+
 @pytest.fixture(autouse=True)
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
