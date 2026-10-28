@@ -1618,7 +1618,7 @@ async def test_delete_organization_is_refused_while_one_of_its_teams_holds_a_ptu
 
 
 @pytest.mark.asyncio
-async def test_organization_member_add_reports_an_unknown_org_as_a_request_error_not_an_auth_error(monkeypatch):
+async def test_organization_member_add_reports_an_unknown_org_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
     from fastapi import Request
 
     from litellm.proxy._types import (
@@ -1630,7 +1630,7 @@ async def test_organization_member_add_reports_an_unknown_org_as_a_request_error
     )
     from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
 
-    mock_prisma_client = MagicMock()
+    mock_prisma_client: Final = MagicMock()
     mock_prisma_client.db.litellm_organizationtable.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 

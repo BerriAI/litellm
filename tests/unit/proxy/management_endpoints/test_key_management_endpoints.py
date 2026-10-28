@@ -23375,7 +23375,7 @@ def test_key_info_database_not_connected_sanitized_500(
 
 
 @pytest.mark.asyncio
-async def test_update_key_reports_a_bad_budget_duration_as_a_request_error_not_an_auth_error(monkeypatch):
+async def test_update_key_reports_a_bad_budget_duration_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
     from fastapi import Request
 
     from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
@@ -23396,12 +23396,12 @@ async def test_update_key_reports_a_bad_budget_duration_as_a_request_error_not_a
 
 
 @pytest.mark.asyncio
-async def test_key_aliases_answers_503_when_the_database_is_unreachable(monkeypatch):
+async def test_key_aliases_answers_503_when_the_database_is_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
     import prisma.errors
 
     from litellm.proxy.management_endpoints.key_management_endpoints import key_aliases
 
-    unreachable_db = MagicMock()
+    unreachable_db: Final = MagicMock()
     unreachable_db.db.query_raw = AsyncMock(
         side_effect=prisma.errors.PrismaError("Can't reach database server at `db:5432`")
     )

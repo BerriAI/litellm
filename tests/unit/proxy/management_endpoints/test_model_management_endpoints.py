@@ -10220,12 +10220,12 @@ class TestNonAdminCannotSetPerUserOauthOnModel:
 
 
 @pytest.mark.asyncio
-async def test_delete_model_reports_an_unknown_model_id_as_a_request_error_not_an_auth_error(monkeypatch):
+async def test_delete_model_reports_an_unknown_model_id_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy._types import ModelInfoDelete
     from litellm.proxy.management_endpoints.model_management_endpoints import delete_model
 
-    prisma = MagicMock()
+    prisma: Final = MagicMock()
     prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
@@ -10240,11 +10240,11 @@ async def test_delete_model_reports_an_unknown_model_id_as_a_request_error_not_a
 
 
 @pytest.mark.asyncio
-async def test_update_model_reports_an_unknown_model_id_as_a_request_error_not_an_auth_error(monkeypatch):
+async def test_update_model_reports_an_unknown_model_id_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.management_endpoints.model_management_endpoints import update_model
 
-    prisma = MagicMock()
+    prisma: Final = MagicMock()
     prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "llm_router", None)

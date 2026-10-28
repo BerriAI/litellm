@@ -19107,13 +19107,13 @@ async def test_default_budget_cache_eviction_does_not_fail_after_redis_error() -
 
 
 @pytest.mark.asyncio
-async def test_team_info_reports_a_missing_team_as_a_request_error_not_an_auth_error(monkeypatch):
+async def test_team_info_reports_a_missing_team_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
     from fastapi import Request
 
     from litellm.proxy._types import ProxyException
     from litellm.proxy.management_endpoints import team_endpoints
 
-    mock_prisma_client = MagicMock()
+    mock_prisma_client: Final = MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -19129,15 +19129,15 @@ async def test_team_info_reports_a_missing_team_as_a_request_error_not_an_auth_e
 
 
 @pytest.mark.asyncio
-async def test_team_info_keeps_the_auth_label_for_a_caller_outside_the_team(monkeypatch):
+async def test_team_info_keeps_the_auth_label_for_a_caller_outside_the_team(monkeypatch: pytest.MonkeyPatch) -> None:
     from fastapi import Request
 
     from litellm.proxy._types import ProxyException
     from litellm.proxy.management_endpoints import team_endpoints
 
-    other_team = MagicMock()
+    other_team: Final = MagicMock()
     other_team.model_dump.return_value = {"team_id": "team-a", "members_with_roles": []}
-    mock_prisma_client = MagicMock()
+    mock_prisma_client: Final = MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=other_team)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 

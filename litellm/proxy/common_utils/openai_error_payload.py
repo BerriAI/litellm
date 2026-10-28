@@ -80,7 +80,9 @@ def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyExcept
         case HTTPException(status_code=status_code, detail=detail):
             return _openai_shaped_proxy_exception(exc, str(detail), status_code)
         case _:
-            return _openai_shaped_proxy_exception(exc, str(exc), error_status_code(exc, default_status_code))
+            return _openai_shaped_proxy_exception(
+                exc, str(exc) or type(exc).__name__, error_status_code(exc, default_status_code)
+            )
 
 
 def _is_database_outage(exc: Exception) -> bool:
@@ -119,9 +121,15 @@ def _openai_shaped_proxy_exception(exc: Exception, message: str, status_code: in
 
 
 def _catch_all_error_type(exc: Exception, status_code: int) -> str:
-    if status_code in _AUTH_FAILURE_STATUS_CODES:
+    if _rejects_the_caller(exc, status_code):
         return ProxyErrorTypes.auth_error.value
     return openai_error_type(exc, status_code)
+
+
+def _rejects_the_caller(exc: Exception, status_code: int) -> bool:
+    raised_as_http_answer: Final = isinstance(exc, HTTPException)
+    status_from_upstream: Final = error_status_code(exc, 0) == status_code
+    return status_code in _AUTH_FAILURE_STATUS_CODES and (raised_as_http_answer or not status_from_upstream)
 
 
 def litellm_call_id_headers(litellm_call_id: str | None) -> dict[str, str] | None:  # mutable-ok: ProxyException.headers

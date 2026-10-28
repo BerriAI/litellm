@@ -5214,7 +5214,7 @@ async def test_user_update_without_password_revokes_nothing(_admin_prisma, mocke
 
 
 @pytest.mark.asyncio
-async def test_user_update_reports_a_bad_budget_duration_as_a_request_error_not_an_auth_error(_admin_prisma):
+async def test_user_update_reports_a_bad_budget_duration_as_a_request_error_not_an_auth_error(_admin_prisma: MagicMock) -> None:
     from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 
     with pytest.raises(ProxyException) as exc_info:
