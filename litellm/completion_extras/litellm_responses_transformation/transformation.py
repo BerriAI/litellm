@@ -1905,6 +1905,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
         self._structured_output: Final = structured_output
         self._first_message_item_done: bool = False
+        # output_index -> [arguments sent with output_item.added, argument deltas seen since]
+        self._tool_call_arguments_replay: dict[int, list[str]] = {}  # mutable-ok: per-stream accumulator state
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -2220,16 +2222,54 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         """
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
         self._remember_served_service_tier(chunk)
+        deduplicated_chunk: Final = self._without_replayed_tool_call_arguments(chunk)
         translated: Final = (
             self._empty_content_chunk()
-            if self._is_text_delta_after_structured_answer(chunk)
+            if deduplicated_chunk is None or self._is_text_delta_after_structured_answer(chunk)
             else OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-                chunk, tool_call_index_map=self._tool_call_index_map
+                deduplicated_chunk, tool_call_index_map=self._tool_call_index_map
             )
         )
         if self._structured_output and _is_message_item_done(chunk):
             self._first_message_item_done = True
         return self._with_served_service_tier(self._with_stream_scoped_id(translated))
+
+    def _without_replayed_tool_call_arguments(self, chunk: dict[str, object]) -> dict[str, object] | None:
+        """Some Responses backends (e.g. Azure) already put the complete arguments on
+        ``output_item.added`` and then stream the same arguments again as
+        ``function_call_arguments.delta`` events. ``output_item.added`` is translated with
+        those arguments, so the replayed deltas must be dropped or chat-completions clients
+        accumulate the arguments twice. Deltas that extend past the arguments already sent
+        are forwarded, minus the replayed prefix. Returns None for a fully replayed delta."""
+        event_type: Final = _responses_event_type(chunk)
+        output_index: Final = chunk.get("output_index", 0)
+        if not isinstance(output_index, int):
+            return chunk
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED.value:
+            item: Final = chunk.get("item")
+            if isinstance(item, dict) and item.get("type") in ("function_call", "custom_tool_call"):
+                sent = item.get("arguments") if item.get("type") == "function_call" else item.get("input")
+                if isinstance(sent, str) and sent:
+                    self._tool_call_arguments_replay[output_index] = [sent, ""]
+            return chunk
+        if event_type not in (
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA.value,
+            ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA.value,
+        ):
+            return chunk
+        replay: Final = self._tool_call_arguments_replay.get(output_index)
+        delta: Final = chunk.get("delta")
+        if replay is None or not isinstance(delta, str):
+            return chunk
+        sent_arguments, seen = replay
+        seen_with_delta: Final = seen + delta
+        if sent_arguments.startswith(seen_with_delta):
+            replay[1] = seen_with_delta
+            return None
+        del self._tool_call_arguments_replay[output_index]
+        if seen_with_delta.startswith(sent_arguments):
+            return {**chunk, "delta": seen_with_delta[len(sent_arguments) :]}
+        return chunk
 
     def _is_text_delta_after_structured_answer(self, chunk: Mapping[str, object]) -> bool:
         """Under a structured response_format the first message item is the whole answer, so
