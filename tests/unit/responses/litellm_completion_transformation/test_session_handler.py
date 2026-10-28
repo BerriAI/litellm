@@ -570,6 +570,33 @@ async def test_message_history_reconstructs_every_turn_of_the_session_in_order()
 
 
 @pytest.mark.asyncio
+async def test_message_history_skips_the_turns_the_provider_rejected():
+    session_id: Final = "5c5f9a3e-1c86-4c0e-9d7c-0a54b8a0f2f1"
+    answered_request_id: Final = "chatcmpl-1111"
+    rejected_request_id: Final = "chatcmpl-2222"
+    answered_turn: Final = {
+        **_spend_log(answered_request_id, session_id, "What is the weather in Paris?", "Checking."),
+        "status": "success",
+    }
+    rejected_turn: Final = {
+        **_spend_log(rejected_request_id, session_id, "Never mind. Just say hello", ""),
+        "status": "failure",
+        "response": {},
+    }
+    fake_prisma_client: Final = _FakePrismaClient(results=[[answered_turn, rejected_turn]])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            answered_request_id
+        )
+
+    assert [(message.get("role"), message.get("content")) for message in result["messages"]] == [
+        ("user", "What is the weather in Paris?"),
+        ("assistant", "Checking."),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_session_lookup_stops_retrying_once_the_budget_is_spent(
     instant_session_lookup_retries: None,
 ):
