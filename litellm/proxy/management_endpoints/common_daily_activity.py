@@ -720,6 +720,7 @@ def sum_spend_metrics(metrics: Sequence[SpendMetrics]) -> SpendMetrics:
     return SpendMetrics(
         spend=sum(metric.spend for metric in metrics),
         flat_cost=sum(metric.flat_cost for metric in metrics),
+        ptu_hours=sum(metric.ptu_hours for metric in metrics),
         prompt_tokens=sum(metric.prompt_tokens for metric in metrics),
         completion_tokens=sum(metric.completion_tokens for metric in metrics),
         cache_read_input_tokens=sum(metric.cache_read_input_tokens for metric in metrics),

@@ -2688,3 +2688,9 @@ def test_ptu_rows_do_not_create_endpoint_or_mcp_key_buckets(ptu_cost_attribution
     assert breakdown.mcp_servers["server/tool"].api_key_breakdown == {}
     assert breakdown.endpoints["/mcp"].metrics.flat_cost == 2.0
     assert breakdown.mcp_servers["server/tool"].metrics.flat_cost == 2.0
+
+
+def test_metric_merges_preserve_every_additive_field() -> None:
+    metrics: Final = SpendMetrics.model_validate(dict.fromkeys(SpendMetrics.model_fields, 2))
+    merged: Final = common_daily_activity_module.sum_spend_metrics((SpendMetrics(), metrics, metrics))
+    assert merged.model_dump() == dict.fromkeys(SpendMetrics.model_fields, 4)
