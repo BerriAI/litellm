@@ -102,6 +102,29 @@ def test_async_client_cache_keys_differ_for_every_collected_loop() -> None:
     assert len(set(keys)) == len(keys)
 
 
+class _LoopWithoutWeakReferences:
+    __slots__ = ()
+
+
+def _cache_key_while_running(cache: LLMClientCache, loop: _LoopWithoutWeakReferences) -> str:
+    asyncio._set_running_loop(loop)
+    try:
+        return cache.update_cache_key_with_event_loop("client")
+    finally:
+        asyncio._set_running_loop(None)
+
+
+def test_cache_keys_stay_per_loop_on_loops_without_weak_references() -> None:
+    cache: Final = LLMClientCache()
+    loop_a: Final = _LoopWithoutWeakReferences()
+    loop_b: Final = _LoopWithoutWeakReferences()
+
+    first_key_on_a: Final = _cache_key_while_running(cache, loop_a)
+
+    assert _cache_key_while_running(cache, loop_a) == first_key_on_a
+    assert _cache_key_while_running(cache, loop_b) != first_key_on_a
+
+
 @pytest.mark.asyncio
 async def test_remove_key_does_not_close_async_client():
     """

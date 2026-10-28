@@ -29,7 +29,8 @@ it does not belong to. Queued clients are therefore bucketed by what it takes to
 close them, and each bucket is ordered by deadline, so a reap walks the entries
 that are due rather than the whole queue.
 
-A bucket whose loop has been collected is dropped, since nothing can await its closes any more.
+A bucket whose loop has been collected is dropped, and its clients are left to the
+collector, as they are when the queue is full.
 
 The queue holds its clients weakly, so waiting out a grace window never keeps
 alive anything the collector would have reclaimed first.
