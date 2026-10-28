@@ -453,6 +453,131 @@ class _MessageCountParams:
         self.tool_section = chat_template_tool_section(model)
 
 
+def _tool_name_from_mapping(tool: Mapping[str, object]) -> str | None:
+    name: Final = tool.get("name")
+    if isinstance(name, str) and name:
+        return name
+    fn: Final = tool.get("function")
+    if isinstance(fn, Mapping):
+        fn_name: Final = fn.get("name")
+        if isinstance(fn_name, str) and fn_name:
+            return fn_name
+    defn: Final = tool.get("definition")
+    if isinstance(defn, Mapping):
+        defn_name: Final = defn.get("name")
+        if isinstance(defn_name, str) and defn_name:
+            return defn_name
+    return None
+
+
+def _extract_added_tool(block: Mapping[str, object]) -> Mapping[str, object] | None:
+    tool_val: Final = block.get("tool")
+    if isinstance(tool_val, Mapping):
+        defn: Final = tool_val.get("definition")
+        if isinstance(defn, Mapping):
+            return defn
+        if tool_val.get("name") or tool_val.get("function"):
+            return tool_val
+    block_defn: Final = block.get("definition")
+    if isinstance(block_defn, Mapping):
+        return block_defn
+    if block.get("name"):
+        return block
+    return None
+
+
+def _extract_removed_tool_name(block: Mapping[str, object]) -> str | None:
+    tool_name: Final = block.get("tool_name")
+    if isinstance(tool_name, str) and tool_name:
+        return tool_name
+    name: Final = block.get("name")
+    if isinstance(name, str) and name:
+        return name
+    tool_val: Final = block.get("tool")
+    if isinstance(tool_val, str) and tool_val:
+        return tool_val
+    if isinstance(tool_val, Mapping):
+        inner_name: Final = tool_val.get("name")
+        if isinstance(inner_name, str) and inner_name:
+            return inner_name
+        inner_tool_name: Final = tool_val.get("tool_name")
+        if isinstance(inner_tool_name, str) and inner_tool_name:
+            return inner_tool_name
+        inner_defn: Final = tool_val.get("definition")
+        if isinstance(inner_defn, Mapping):
+            inner_defn_name: Final = inner_defn.get("name")
+            if isinstance(inner_defn_name, str) and inner_defn_name:
+                return inner_defn_name
+    return None
+
+
+def apply_mid_conversation_tool_changes(
+    messages: Sequence[AllMessageValues] | None,
+    tools: Sequence[object] | None,
+) -> tuple[list[AllMessageValues] | None, list[object] | None]:
+    """Apply Anthropic mid-conversation tool changes (tool_addition and tool_removal blocks)
+    in message order to derive the effective tool set and strip the event blocks from messages.
+    """
+    if messages is None:
+        return None, list(tools) if tools else None
+
+    # Fast-path check: do any messages contain tool_addition or tool_removal blocks?
+    has_tool_changes = False
+    for m in messages:
+        c = m.get("content") if isinstance(m, Mapping) else getattr(m, "content", None)
+        if isinstance(c, list):
+            for b in c:
+                if isinstance(b, Mapping) and b.get("type") in ("tool_addition", "tool_removal"):
+                    has_tool_changes = True
+                    break
+            if has_tool_changes:
+                break
+
+    if not has_tool_changes:
+        return list(messages), list(tools) if tools else None
+
+    effective_tools: dict[str, object] = {}
+    if tools:
+        for t in tools:
+            if isinstance(t, Mapping):
+                t_name = _tool_name_from_mapping(t)
+                if t_name:
+                    effective_tools[t_name] = t
+                else:
+                    effective_tools[f"__unnamed_{id(t)}"] = t
+            else:
+                effective_tools[f"__unnamed_{id(t)}"] = t
+
+    cleaned_messages: list[AllMessageValues] = []
+    for m in messages:
+        c = m.get("content") if isinstance(m, Mapping) else getattr(m, "content", None)
+        if isinstance(c, list):
+            new_content = []
+            for b in c:
+                if isinstance(b, Mapping):
+                    btype = b.get("type")
+                    if btype == "tool_addition":
+                        added_tool = _extract_added_tool(b)
+                        if added_tool is not None:
+                            added_name = _tool_name_from_mapping(added_tool)
+                            if added_name:
+                                effective_tools[added_name] = added_tool
+                        continue
+                    elif btype == "tool_removal":
+                        removed_name = _extract_removed_tool_name(b)
+                        if removed_name and removed_name in effective_tools:
+                            del effective_tools[removed_name]
+                        continue
+                new_content.append(b)
+            new_m = dict(m) if isinstance(m, Mapping) else dict(m.__dict__)
+            new_m["content"] = new_content
+            cleaned_messages.append(cast(AllMessageValues, new_m))
+        else:
+            cleaned_messages.append(m)
+
+    res_tools = list(effective_tools.values()) if effective_tools else None
+    return cleaned_messages, res_tools
+
 def token_counter(
     model="",
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
@@ -510,12 +635,13 @@ def token_counter(
 
     elif messages is not None:
         new_messages: Final = cast(list[AllMessageValues], convert_list_message_to_dict(messages))
+        cleaned_messages, updated_tools = apply_mid_conversation_tool_changes(new_messages, tools)
         params: Final = _MessageCountParams(model, custom_tokenizer)
-        num_tokens = _count_messages(params, new_messages, use_default_image_token_count, default_token_count)
+        num_tokens = _count_messages(params, cleaned_messages, use_default_image_token_count, default_token_count)
         if count_response_tokens is False:
-            includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
+            includes_system_message: Final = any(message.get("role", None) == "system" for message in cleaned_messages)
             num_tokens += _count_extra(
-                params.count_function, tools, tool_choice, includes_system_message, params.tool_section
+                params.count_function, updated_tools, tool_choice, includes_system_message, params.tool_section
             )
 
     else:
@@ -544,14 +670,15 @@ def messages_reach_token_count(
     new_messages: Final = cast(  # cast-ok: convert_list_message_to_dict is untyped, same as token_counter
         list[AllMessageValues], convert_list_message_to_dict(messages)
     )
+    cleaned_messages, updated_tools = apply_mid_conversation_tool_changes(new_messages, tools)
     params: Final = _MessageCountParams(model, None)
-    includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
+    includes_system_message: Final = any(message.get("role", None) == "system" for message in cleaned_messages)
     per_message_counts: Final = (
-        _count_messages(params, [message], use_default_image_token_count, None) for message in new_messages
+        _count_messages(params, [message], use_default_image_token_count, None) for message in cleaned_messages
     )
     running_totals: Final = accumulate(
         per_message_counts,
-        initial=_count_extra(params.count_function, tools, None, includes_system_message, params.tool_section),
+        initial=_count_extra(params.count_function, updated_tools, None, includes_system_message, params.tool_section),
     )
     return any(total >= threshold for total in running_totals)
 
@@ -1101,6 +1228,10 @@ def _count_content_list(
                 tool_name = str(c.get("tool_name") or "")
                 if tool_name:
                     num_tokens += count_function(tool_name)
+            elif c["type"] in ("tool_addition", "tool_removal"):
+                # Mid-conversation tool changes: tool schemas are counted via `tools`,
+                # so these event blocks contribute 0 additional content tokens.
+                pass
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise UnsupportedContentTypeError(
