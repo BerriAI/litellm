@@ -20,7 +20,7 @@ PROVIDER_USAGE_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = T
 PROVIDER_COST_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 EMPTY_OPTIONAL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 SEARCH_MODE_PARAM_BY_PROVIDER: Final[Mapping[str, str]] = MappingProxyType(
-    {"tavily": "search_depth", "linkup": "depth"}
+    {"tavily": "search_depth", "linkup": "depth", "exa_ai": "type"}
 )
 
 
@@ -73,11 +73,9 @@ def search_provider_cost_per_query(
     Calculate cost for search-only providers.
 
     Returns (input_cost, output_cost) where input_cost = queries * cost_per_query
-    Uses Exa's reported cost when available, otherwise its list price; other providers use tiered pricing based on max_results.
-
-
     Supports tiered pricing based on max_results parameter, and per-mode price entries selected by the
-    provider's mode parameter (Tavily `search_depth`, Linkup `depth`).
+    provider's mode parameter (Tavily `search_depth`, Linkup `depth`, Exa `type`). Exa bills one request at the
+    `costDollars.total` it reports, else at its list price, unless the price entry was registered at runtime.
 
     Args:
         model: Model name (e.g., "exa_ai/search", "tavily/search")
@@ -89,21 +87,6 @@ def search_provider_cost_per_query(
     Returns:
         Tuple of (input_cost, output_cost) where output_cost is always 0.0
     """
-    if custom_llm_provider == "exa_ai":
-        payload: Final = response.model_extra if isinstance(response, SearchResponse) else response
-        reported: Final = (
-            PROVIDER_COST_ADAPTER.validate_python(payload).get("costDollars") if isinstance(payload, Mapping) else None
-        )
-        total: Final = (
-            PROVIDER_COST_ADAPTER.validate_python(reported).get("total") if isinstance(reported, Mapping) else None
-        )
-        if isinstance(total, (int, float)) and not isinstance(total, bool) and math.isfinite(total) and total >= 0:
-            return (float(total), 0.0)
-
-        from litellm.llms.exa_ai.search.cost_calculator import exa_ai_list_price
-
-        return (exa_ai_list_price(optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS), 0.0)
-
     if custom_llm_provider == "parallel_ai":
         from litellm.llms.parallel_ai.search.cost_calculator import (
             PARALLEL_AI_USAGE_PARAM,
@@ -120,6 +103,26 @@ def search_provider_cost_per_query(
         model=_pricing_model(model, custom_llm_provider, optional_params),
         custom_llm_provider=custom_llm_provider,
     )
+    if custom_llm_provider == "exa_ai" and not _registered_at_runtime(model_info["key"]):
+        payload: Final = response.model_extra if isinstance(response, SearchResponse) else response
+        reported: Final = (
+            PROVIDER_COST_ADAPTER.validate_python(payload).get("costDollars") if isinstance(payload, Mapping) else None
+        )
+        total: Final = (
+            PROVIDER_COST_ADAPTER.validate_python(reported).get("total") if isinstance(reported, Mapping) else None
+        )
+        if isinstance(total, (int, float)) and not isinstance(total, bool) and math.isfinite(total) and total >= 0:
+            return (float(total), 0.0)
+
+        from litellm.llms.exa_ai.search.cost_calculator import exa_ai_list_price
+
+        return (
+            exa_ai_list_price(
+                base_price=float(model_info.get("input_cost_per_query") or 0.0),
+                optional_params=optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS,
+            ),
+            0.0,
+        )
 
     # Check for tiered pricing based on max_results
     tiered_pricing: Final = model_info.get("tiered_pricing")

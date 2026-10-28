@@ -23627,7 +23627,7 @@
         "input_cost_per_query": 0.007,
         "litellm_provider": "exa_ai",
         "metadata": {
-            "notes": "Base price per /search request, covering up to 10 results. Each result above 10 adds $0.001. Exa's reported costDollars.total takes precedence when present. Source: https://exa.ai/pricing (2026-10-15)"
+            "notes": "Base price per /search request, covering up to 10 results. Each result above 10 adds $0.001. Exa's reported costDollars.total takes precedence when present, unless this price is registered at runtime. Source: https://exa.ai/pricing (2026-10-15)"
         },
         "mode": "search"
     },
@@ -23651,7 +23651,15 @@
         "input_cost_per_query": 0.012,
         "litellm_provider": "exa_ai",
         "metadata": {
-            "notes": "Base price per /search request with type deep or deep-lite, covering up to 10 results. Source: https://exa.ai/pricing (2026-10-15)"
+            "notes": "Base price per /search request with type deep, covering up to 10 results. Source: https://exa.ai/pricing (2026-10-15)"
+        },
+        "mode": "search"
+    },
+    "exa_ai/search-deep-lite": {
+        "input_cost_per_query": 0.012,
+        "litellm_provider": "exa_ai",
+        "metadata": {
+            "notes": "Base price per /search request with type deep-lite, covering up to 10 results. Source: https://exa.ai/docs/reference/pricing (2026-10-27)"
         },
         "mode": "search"
     },

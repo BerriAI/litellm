@@ -279,3 +279,41 @@ async def test_async_linkup_deep_search_reports_the_deep_price(
     )
     assert json.loads(respx_mock.calls.last.request.content)["depth"] == "deep"
     assert response.hidden_params["response_cost"] == pytest.approx(0.011)
+
+
+EXA_REGISTERED_PRICE: Final = 0.123
+EXA_REPORTED_TOTAL: Final = 0.0137
+
+
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+@pytest.mark.parametrize(
+    ("registered_entry", "search_type", "expected"),
+    [
+        pytest.param("exa_ai/search", None, EXA_REGISTERED_PRICE, id="generic-entry"),
+        pytest.param("exa_ai/search", "deep", EXA_REGISTERED_PRICE, id="generic-entry-covers-unregistered-mode"),
+        pytest.param("exa_ai/search-deep", "deep", EXA_REGISTERED_PRICE, id="mode-entry"),
+        pytest.param("exa_ai/search-deep", "auto", EXA_REPORTED_TOTAL, id="other-mode-keeps-reported-total"),
+        pytest.param(None, "deep", EXA_REPORTED_TOTAL, id="nothing-registered"),
+    ],
+)
+def test_a_price_registered_for_exa_wins_over_the_cost_exa_reports(
+    respx_mock: respx.MockRouter, registered_entry: str | None, search_type: str | None, expected: float
+) -> None:
+    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [], "costDollars": {"total": EXA_REPORTED_TOTAL}})
+    if registered_entry is not None:
+        litellm.register_model(
+            {
+                registered_entry: {
+                    "input_cost_per_query": EXA_REGISTERED_PRICE,
+                    "litellm_provider": "exa_ai",
+                    "mode": "search",
+                }
+            }
+        )
+    response: Final = litellm.search(
+        query="litellm release notes",
+        search_provider="exa_ai",
+        api_key="test-exa-key",
+        **({"type": search_type} if search_type is not None else {}),
+    )
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)

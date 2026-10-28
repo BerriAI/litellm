@@ -523,7 +523,7 @@ def test_exa_estimate_prices_one_request_however_many_queries_it_joins() -> None
         ("instant", "exa_ai/search-instant"),
         ("auto", "exa_ai/search"),
         ("fast", "exa_ai/search"),
-        ("deep-lite", "exa_ai/search-deep"),
+        ("deep-lite", "exa_ai/search-deep-lite"),
         ("deep", "exa_ai/search-deep"),
         ("deep-reasoning", "exa_ai/search-deep-reasoning"),
     ],
