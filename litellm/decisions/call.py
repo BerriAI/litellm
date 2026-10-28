@@ -1,3 +1,4 @@
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -6,9 +7,11 @@ from typing import Final, Literal, TypeAlias
 
 import httpx
 from pydantic import BaseModel, ConfigDict, StrictBool, TypeAdapter, ValidationError
+from pydantic_core import to_jsonable_python
 from typing_extensions import assert_never
 
 import litellm
+from litellm.cost_calculator import cost_map_key_prices_anything
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER, normalize_drop_params
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -19,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
+    DecisionsResponseValidationError,
     image_media_type,
     image_param,
     input_images,
@@ -56,8 +60,9 @@ from litellm.types.decisions import (
     OpenAIDecisionResponse,
     UnsupportedDecisionsRequest,
 )
+from litellm.types.llms.openai import ChatCompletionUserMessage
 from litellm.types.utils import LlmProviders, ProviderSpecificHeader
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ProviderConfigManager, get_model_cost_key
 
 SystemOneQuestions: TypeAlias = Mapping[str, DecisionQuestion | Mapping[str, object]]
 OpenAIDecisionQuestions: TypeAlias = Sequence[OpenAIDecisionQuestion | Mapping[str, object]]
@@ -415,6 +420,30 @@ def _outbound_headers(
     return MappingProxyType({**(extra_headers or {}), **forwarded})
 
 
+_LOGGED_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _jsonable_fallback(value: object) -> object:
+    return dict(_LOGGED_FIELDS_ADAPTER.validate_python(value)) if isinstance(value, Mapping) else str(value)
+
+
+def _logged_request_message(caller_request: object) -> ChatCompletionUserMessage:
+    caller_fields: Final = _LOGGED_FIELDS_ADAPTER.validate_python(
+        to_jsonable_python(caller_request, fallback=_jsonable_fallback, bytes_mode="base64")
+    )
+    sent_fields: Final = json.dumps(
+        dict((name, value) for name, value in caller_fields.items() if value not in (None, [], {}))
+    )
+    return ChatCompletionUserMessage(role="user", content=sent_fields)
+
+
+def log_caller_request(kwargs: Mapping[str, object], caller_request: object) -> None:
+    """Record every request field the caller sent as the logged `messages`, before any validation."""
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.update_messages([_logged_request_message(caller_request)])
+
+
 def prepare_call(
     *,
     model: str,
@@ -427,10 +456,14 @@ def prepare_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
+    base_url_alias: Final = kwargs.get("base_url")
+    call_api_base: Final = (
+        base_url_alias if api_base is None and isinstance(base_url_alias, str) and base_url_alias else api_base
+    )
     upstream_model, provider, dynamic_api_key, dynamic_api_base = litellm.get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
-        api_base=api_base,
+        api_base=call_api_base,
         api_key=api_key,
     )
     provider_config: Final = _provider_config(upstream_model, provider)
@@ -458,8 +491,8 @@ def prepare_call(
         ) from error
 
     try:
-        resolved_api_base, resolved_api_key = provider_config.resolve_connection(
-            dynamic_api_base or api_base, dynamic_api_key or api_key
+        resolved_api_base, static_api_key = provider_config.resolve_connection(
+            dynamic_api_base or call_api_base, dynamic_api_key or api_key
         )
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
@@ -469,6 +502,7 @@ def prepare_call(
             model=model,
             llm_provider=provider,
         )
+    resolved_api_key: Final = provider_config.resolve_credential(static_api_key, resolved_api_base, kwargs)
     if resolved_api_key is None and provider_config.api_key_required:
         raise litellm.AuthenticationError(
             message=f"Missing API key for Decisions provider '{provider}'",
@@ -659,6 +693,13 @@ def _request_body(call: DecisionsCall) -> Mapping[str, object]:
     return body
 
 
+def _pricing_model(response: DecisionsIRResponse, call: DecisionsCall) -> str:
+    returned: Final = get_model_cost_key(f"{call.custom_llm_provider}/{response.model}")
+    if returned is not None and cost_map_key_prices_anything(returned):
+        return returned
+    return f"{call.custom_llm_provider}/{call.model}"
+
+
 def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
     formatted: Final = _formatted_response(response, call)
     provider_cost: Final = call.provider_config.provider_reported_cost(response)
@@ -666,7 +707,7 @@ def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> Deci
         {
             "model": f"{call.custom_llm_provider}/{call.model}",
             "custom_llm_provider": call.custom_llm_provider,
-            "provider_response_model": f"{call.custom_llm_provider}/{call.model}",
+            "provider_response_model": _pricing_model(response, call),
             **({"additional_headers": {RESPONSE_COST_HEADER: provider_cost}} if provider_cost is not None else {}),
         }
     )
@@ -696,18 +737,21 @@ def _formatted_response(
 
 
 def _map_upstream_exception(error: Exception, call: DecisionsCall) -> Exception:
-    if isinstance(error, BaseLLMException) and error.status_code_is_synthesized:
-        provider_label: Final = f"{call.custom_llm_provider[0].upper()}{call.custom_llm_provider[1:]}Exception"
-        return litellm.APIConnectionError(
-            message=f"{provider_label} - {error.message}",
-            llm_provider=call.custom_llm_provider,
-            model=f"{call.custom_llm_provider}/{call.model}",
-        )
-    return litellm.exception_type(
-        model=f"{call.custom_llm_provider}/{call.model}",
-        custom_llm_provider=call.custom_llm_provider,
-        original_exception=error,
-    )
+    provider_label: Final = f"{call.custom_llm_provider[0].upper()}{call.custom_llm_provider[1:]}Exception"
+    model: Final = f"{call.custom_llm_provider}/{call.model}"
+    match error:
+        case DecisionsResponseValidationError():
+            return litellm.InternalServerError(
+                message=f"{provider_label} - {error.message}", llm_provider=call.custom_llm_provider, model=model
+            )
+        case BaseLLMException(status_code_is_synthesized=True):
+            return litellm.APIConnectionError(
+                message=f"{provider_label} - {error.message}", llm_provider=call.custom_llm_provider, model=model
+            )
+        case _:
+            return litellm.exception_type(
+                model=model, custom_llm_provider=call.custom_llm_provider, original_exception=error
+            )
 
 
 async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:

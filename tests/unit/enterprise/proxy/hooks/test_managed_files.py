@@ -3,6 +3,7 @@ import json
 import logging
 import time
 import asyncio
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
@@ -13,6 +14,7 @@ import pytest
 import respx
 from fastapi import HTTPException
 from openai import APIConnectionError
+from pydantic import TypeAdapter
 
 if TYPE_CHECKING:
     from litellm.types.utils import LiteLLMBatch
@@ -22,13 +24,14 @@ from litellm_enterprise.proxy.hooks.managed_files import (
     _provider_file_retrieve_credentials,
 )
 from litellm.caching import DualCache
-from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable
+from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     is_base64_encoded_unified_file_id,
     encode_file_id_with_model,
 )
 from litellm.types.llms.openai import OpenAIFileObject
+from tests.unit.litellm_core_utils.attribute_forwarder import AttributeForwarder
 
 
 class _InMemoryManagedFileTable:
@@ -447,6 +450,20 @@ async def test_async_pre_call_deployment_hook_prefers_top_level_model_info():
     assert (
         result["input_file_id"] == top_level_provider_file
     ), "Should prefer top-level model_info over litellm_metadata"
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_reads_model_info_that_forwards_its_fields():
+    proxy_managed_files: Final = PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=MagicMock())
+    kwargs: Final = {
+        "input_file_id": "managed-file-abc",
+        "model_file_id_mapping": {"managed-file-abc": {"deployment-xyz": "file-provider-123"}},
+        "model_info": AttributeForwarder({"id": "deployment-xyz"}),
+    }
+
+    result: Final = await proxy_managed_files.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.acreate_batch)
+
+    assert result["input_file_id"] == "file-provider-123"
 
 
 @pytest.mark.asyncio
@@ -6048,6 +6065,164 @@ async def test_create_from_raw_provider_file_id_skips_managed_ownership_lookup(c
 
     assert isinstance(result, dict) and result[file_field] == "file-raw-provider-id", result
     assert not any("unified_file_id" in where for where in table.find_first_calls), table.find_first_calls
+
+
+def _owned_managed_file(unified_uuid: str, model_mappings: Mapping[str, str]) -> tuple[str, LiteLLM_ManagedFileTable]:
+    raw: Final = f"litellm_proxy:application/jsonl;unified_id,{unified_uuid};target_model_names,gpt-4o-mini"
+    unified_file_id: Final = base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+    return unified_file_id, LiteLLM_ManagedFileTable(
+        unified_file_id=unified_file_id,
+        file_object=None,
+        model_mappings=dict(model_mappings),
+        flat_model_file_ids=list(model_mappings.values()),
+        created_by="user_a",
+        team_id="team_a",
+    )
+
+
+async def _provider_kwargs(
+    managed_files: PROXY_LiteLLMManagedFiles, call_type: str, request: Mapping[str, str], deployment_id: str
+) -> Mapping[str, object]:
+    prepared: Final = await managed_files.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(user_id="user_a", team_id="team_a", parent_otel_span=MagicMock()),
+        cache=MagicMock(),
+        data=dict(request),
+        call_type=call_type,
+    )
+    assert isinstance(prepared, dict), prepared
+    sent: Final = await managed_files.async_pre_call_deployment_hook(
+        kwargs={**prepared, "litellm_metadata": {"model_info": {"id": deployment_id}}}, call_type=CallTypes(call_type)
+    )
+    assert sent is not None
+    return sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("call_type", "file_field"), _INPUT_FILE_CREATE_CALLS)
+@pytest.mark.parametrize(("deployment_id", "provider_file_id"), [("model-a", "file-a"), ("model-b", "file-b")])
+async def test_create_from_managed_file_sends_the_routed_deployments_provider_file_id(
+    call_type: str, file_field: str, deployment_id: str, provider_file_id: str
+) -> None:
+    unified_file_id, row = _owned_managed_file(
+        "0b6f2c1e-9a4d-4c3e-8f71-2d5a6b7c8d90", {"model-a": "file-a", "model-b": "file-b"}
+    )
+    managed_files, _ = _managed_files_with_fake_prisma(row)
+
+    sent: Final = await _provider_kwargs(
+        managed_files, call_type, {"model": "gpt-4o-mini", file_field: unified_file_id}, deployment_id
+    )
+
+    assert sent[file_field] == provider_file_id, sent
+
+
+@pytest.mark.asyncio
+async def test_fine_tuning_create_swaps_managed_training_and_validation_files_independently() -> None:
+    training_file, training_row = _owned_managed_file("5c1d9e0a-3b7f-4e2a-9c6d-1f8e7a6b5c40", {"model-a": "file-train"})
+    validation_file, validation_row = _owned_managed_file(
+        "8e2f4a6c-1d3b-4f5e-a7c9-0b2d4f6a8c10", {"model-a": "file-validate"}
+    )
+    managed_files, _ = _managed_files_with_fake_prisma(training_row, validation_row)
+
+    sent: Final = await _provider_kwargs(
+        managed_files,
+        "acreate_fine_tuning_job",
+        {"model": "gpt-4o-mini", "training_file": training_file, "validation_file": validation_file},
+        "model-a",
+    )
+
+    assert (sent["training_file"], sent["validation_file"]) == ("file-train", "file-validate"), sent
+
+
+@pytest.mark.asyncio
+async def test_fine_tuning_create_keeps_a_raw_validation_file_next_to_a_managed_training_file() -> None:
+    training_file, training_row = _owned_managed_file("5c1d9e0a-3b7f-4e2a-9c6d-1f8e7a6b5c40", {"model-a": "file-train"})
+    managed_files, _ = _managed_files_with_fake_prisma(training_row)
+
+    sent: Final = await _provider_kwargs(
+        managed_files,
+        "acreate_fine_tuning_job",
+        {"model": "gpt-4o-mini", "training_file": training_file, "validation_file": "file-raw-validate"},
+        "model-a",
+    )
+
+    assert (sent["training_file"], sent["validation_file"]) == ("file-train", "file-raw-validate"), sent
+
+
+_REQUEST_KWARGS: Final = TypeAdapter(dict[str, object])
+_DEPLOYMENTS: Final = TypeAdapter(list[dict[str, dict[str, str]]])
+
+
+async def _routable_deployment_ids(
+    managed_files: PROXY_LiteLLMManagedFiles, call_type: str, request: Mapping[str, str]
+) -> tuple[str, ...]:
+    prepared: Final = _REQUEST_KWARGS.validate_python(
+        await managed_files.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(user_id="user_a", team_id="team_a", parent_otel_span=MagicMock()),
+            cache=MagicMock(),
+            data=dict(request),
+            call_type=call_type,
+        )
+    )
+    routable: Final = _DEPLOYMENTS.validate_python(
+        await managed_files.async_filter_deployments(
+            model="gpt-4o-mini",
+            healthy_deployments=[{"model_info": {"id": model_id}} for model_id in ("model-a", "model-b", "model-c")],
+            messages=None,
+            request_kwargs=prepared,
+        )
+    )
+    return tuple(deployment["model_info"]["id"] for deployment in routable)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "files", "expected"),
+    [
+        pytest.param(
+            "acreate_fine_tuning_job",
+            {"training_file": {"model-a": "f-1", "model-b": "f-2"}, "validation_file": {"model-b": "f-3"}},
+            ("model-b",),
+            id="fine-tune-routes-to-the-deployment-holding-both-files",
+        ),
+        pytest.param(
+            "acreate_fine_tuning_job",
+            {"training_file": {"model-a": "f-1", "model-b": "f-2"}, "validation_file": "file-raw-validate"},
+            ("model-a", "model-b"),
+            id="fine-tune-raw-validation-file-does-not-narrow",
+        ),
+        pytest.param(
+            "acreate_fine_tuning_job",
+            {"training_file": {"model-a": "f-1"}, "validation_file": {"model-b": "f-3"}},
+            ("model-a", "model-b", "model-c"),
+            id="fine-tune-files-on-disjoint-deployments-keep-every-deployment",
+        ),
+        pytest.param(
+            "acreate_fine_tuning_job",
+            {"training_file": {"model-z": "f-5"}},
+            ("model-a", "model-b", "model-c"),
+            id="fine-tune-file-of-another-model-group-keeps-every-deployment",
+        ),
+        pytest.param("acreate_batch", {"input_file_id": {"model-c": "f-4"}}, ("model-c",), id="batch-input-file"),
+        pytest.param(
+            "acreate_batch", {"input_file_id": {"model-z": "f-6"}}, (), id="batch-input-file-of-another-model-group"
+        ),
+    ],
+)
+async def test_create_from_managed_files_routes_only_to_deployments_holding_every_file(
+    call_type: str, files: Mapping[str, Mapping[str, str] | str], expected: tuple[str, ...]
+) -> None:
+    owned: Final = {
+        field: _owned_managed_file(str(uuid.uuid5(uuid.NAMESPACE_URL, field)), mappings)
+        for field, mappings in files.items()
+        if not isinstance(mappings, str)
+    }
+    managed_files, _ = _managed_files_with_fake_prisma(*(row for _, row in owned.values()))
+    request: Final = {
+        "model": "gpt-4o-mini",
+        **{field: owned[field][0] if field in owned else str(mappings) for field, mappings in files.items()},
+    }
+
+    assert await _routable_deployment_ids(managed_files, call_type, request) == expected
 
 
 _MANAGED_READ_SALT_KEY: Final = "managed-read-unit-test-salt-key"

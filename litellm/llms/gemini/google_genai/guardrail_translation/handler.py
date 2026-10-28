@@ -15,7 +15,10 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamTransformSink,
@@ -28,6 +31,7 @@ if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _EMPTY_REQUEST_DATA: Final[Mapping[str, object]] = MappingProxyType({})
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _field(container: object, name: str) -> object | None:
@@ -108,12 +112,10 @@ def _write_back_texts(text_parts: Sequence[object], guardrailed_texts: Sequence[
 
 def _parse_json_dict_or_none(payload: str) -> Mapping[str, object] | None:
     try:
-        parsed: Final = json.loads(payload)
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(payload))
     except json.JSONDecodeError:
         return None
-    if isinstance(parsed, dict):
-        return parsed
-    return None
+    return as_str_mapping(parsed)
 
 
 def _sse_payload_texts(sse_text: str) -> tuple[str, ...]:

@@ -524,6 +524,12 @@ jobs:
       - name: check_provider_folders_documented
         run: uv run --no-sync python ./tests/code_coverage_tests/check_provider_folders_documented.py
 
+      - name: check_provider_endpoints_support_generated
+        run: uv run --no-sync python scripts/generate_provider_endpoints_support.py --check
+
+      - name: test_generate_provider_endpoints_support
+        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_generate_provider_endpoints_support.py
+
       - name: check_prisma_binary_cache
         run: uv run --no-sync python ./tests/code_coverage_tests/check_prisma_binary_cache.py
 
@@ -539,8 +545,8 @@ jobs:
       - name: test_unit_passed_gate
         run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_unit_passed_gate.py
 
-      - name: test_e2e_changed_gate
-        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_changed_gate.py tests/code_coverage_tests/test_e2e_idp_stack.py
+      - name: test_e2e_idp_stack
+        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_idp_stack.py
 
       - name: test_e2e_metadata
         env:

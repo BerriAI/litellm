@@ -7,9 +7,13 @@ Similar to litellm/litellm_core_utils/exception_mapping_utils.py but for Anthrop
 import json
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
 from .exceptions import AnthropicErrorDetail, AnthropicErrorResponse, AnthropicErrorType
+
+_PARSED_ERROR_BODY: Final = TypeAdapter(object)
 
 # HTTP status code -> Anthropic error type
 # Source: https://docs.anthropic.com/en/api/errors
@@ -79,7 +83,7 @@ class AnthropicExceptionMapping:
         - Generic: {"message": "..."}
         - Plain strings
         """
-        parsed: Final = safe_json_loads(raw_message)
+        parsed: Final = _PARSED_ERROR_BODY.validate_python(safe_json_loads(raw_message))
         if isinstance(parsed, dict):
             # Bedrock format
             if "detail" in parsed and isinstance(parsed["detail"], dict):
@@ -145,9 +149,8 @@ class AnthropicExceptionMapping:
             AnthropicErrorResponse dict
         """
         # Try to parse as JSON once
-        parsed: dict | None = safe_json_loads(raw_message)
-        if not isinstance(parsed, dict):
-            parsed = None
+        decoded: Final = _PARSED_ERROR_BODY.validate_python(safe_json_loads(raw_message))
+        parsed: Final[dict[str, object] | None] = decoded if isinstance(decoded, dict) else None
 
         # If parsed and already in Anthropic format - passthrough
         if parsed is not None and AnthropicExceptionMapping._is_anthropic_error_dict(parsed):

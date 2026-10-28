@@ -80,7 +80,7 @@ class A2ACompletionBridgeHandler:
     @staticmethod
     def _build_completion_params(
         params: dict[str, Any],
-        litellm_params: Mapping[str, Any],
+        litellm_params: Mapping[str, object],
         api_base: str | None,
         agent_extra_headers: Mapping[str, str] | None,
         *,

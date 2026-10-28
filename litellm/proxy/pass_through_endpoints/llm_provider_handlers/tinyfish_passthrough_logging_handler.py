@@ -36,6 +36,7 @@ from litellm.types.passthrough_endpoints.tinyfish import (
 from litellm.types.utils import StandardPassThroughResponseObject
 
 _RUN_ADAPTER: Final = TypeAdapter(TinyfishRun)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 _EMPTY_KWARGS: Final[Mapping[str, object]] = MappingProxyType({})
 
@@ -323,7 +324,7 @@ class TinyFishPassthroughLoggingHandler:
                     "TinyFish passthrough: GET /v1/runs/%s returned %s", safe_run_id, response.status_code
                 )
                 return None
-            payload: Final[object] = response.json()  # any-ok: httpx Response.json() -> Any
+            payload: Final = _DECODED_JSON.validate_python(response.json())
             return _parse_run(payload)
         except Exception as e:  # noqa: BLE001  # billing/logging must never break the relayed request
             verbose_proxy_logger.warning("[Non blocking logging error] TinyFish run fetch failed: %s", e)
@@ -413,7 +414,7 @@ def _run_id_from_sse_chunks(all_chunks: Sequence[str]) -> str | None:
         if not line.startswith("data:"):
             continue
         try:
-            event_payload: object = json.loads(line[5:].strip())  # any-ok: json.loads -> Any
+            event_payload: object = _DECODED_JSON.validate_python(json.loads(line[5:].strip()))
         except json.JSONDecodeError:
             continue
         event = _parse_run(event_payload)
