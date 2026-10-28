@@ -1201,9 +1201,15 @@ def test_streaming_responses_rejected_follow_up_bills_round_one_once(
         assert _billed(rows) == pytest.approx(expected), rows
 
 
-@pytest.mark.parametrize("upstream", STREAMED_UPSTREAMS, ids=STREAMED_IDS)
+BROKEN_FOLLOW_UPS: Final = (
+    pytest.param("messages_bridge", FOLLOW_UP_ROUND, id="native"),
+    pytest.param("responses_bridge", None, id="bridged"),
+)
+
+
+@pytest.mark.parametrize(("upstream", "reported_usage"), BROKEN_FOLLOW_UPS)
 def test_streaming_responses_follow_up_broken_mid_stream_bills_round_one_once_and_itself_on_a_failure_row(
-    gateway: Gateway, upstream: StreamedUpstream
+    gateway: Gateway, upstream: StreamedUpstream, reported_usage: tuple[int, int] | None
 ) -> None:
     billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND, follow_up_breaks=True)
     with _rig(gateway, "responses", upstream=upstream, billing=billing, prices=PRICES) as rig:
@@ -1218,6 +1224,8 @@ def test_streaming_responses_follow_up_broken_mid_stream_bills_round_one_once_an
         assert (success["prompt_tokens"], success["completion_tokens"]) == FIRST_ROUND, rows
         assert float(str(success["spend"])) == pytest.approx(round_one), rows
         failed_round: Final = (int(str(failure["prompt_tokens"])), int(str(failure["completion_tokens"])))
+        assert min(failed_round) > 0, rows
+        assert reported_usage in (None, failed_round), rows
         assert float(str(failure["spend"])) == pytest.approx(_price(failed_round)), rows
 
 
