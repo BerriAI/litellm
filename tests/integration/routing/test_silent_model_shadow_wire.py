@@ -5,6 +5,7 @@ import re
 import uuid
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal
 from urllib.parse import unquote
@@ -128,7 +129,7 @@ def _spend_row(gateway: Gateway, request_id: str) -> tuple[_SpendRow, ...]:
 
 
 def _spend_rows(gateway: Gateway, request_ids: tuple[str, ...]) -> tuple[_SpendRow, ...]:
-    return tuple(row for request_id in request_ids for row in _spend_row(gateway, request_id))
+    return tuple(chain.from_iterable(_spend_row(gateway, request_id) for request_id in request_ids))
 
 
 @dataclass(frozen=True, slots=True)
