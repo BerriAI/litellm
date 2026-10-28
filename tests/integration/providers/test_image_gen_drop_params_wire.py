@@ -82,6 +82,7 @@ async def test_proxy_image_retry_attempts_are_owned_only_by_router(
                 )
         finally:
             release.set()
+            router.discard()
             litellm.in_memory_llm_clients_cache.flush_cache()
         requests: Final = wire.drain()
     status: Final = {"503": 503, "timeout": 408, "success": 200}[outcome]
