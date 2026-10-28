@@ -1607,3 +1607,53 @@ async def test_all_citation_batches_stream_before_message_done(
     done_index: Final = next(index for index, event in enumerate(events) if event.type == "response.output_text.done")
     assert all(events.index(event) < done_index for event in added)
     assert message.content[0].text == "Claim" + ("!" * len(batches) if with_text else "")
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_citation_after_reasoning_opens_its_message_before_text(sync_mode: bool) -> None:
+    annotation: Final = {
+        "type": "url_citation",
+        "url_citation": {
+            "start_index": 0,
+            "end_index": 5,
+            "url": "https://example.com/claim",
+            "title": "Claim source",
+        },
+    }
+    text_chunk: Final = _chunk("Claim", finish_reason="stop")
+    citation_chunk: Final = ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model=text_chunk.model,
+        choices=[StreamingChoices(index=0, delta=Delta(role="assistant", annotations=[annotation]))],
+    )
+
+    chunks: Final = (*_reasoning_then_text_chunks()[:1], citation_chunk, text_chunk)
+    events: Final = await _collect_events(_build_iterator(chunks), sync_mode)
+
+    message_added: Final = next(
+        event for event in events if event.type == "response.output_item.added" and event.item.type == "message"
+    )
+    part_added: Final = next(event for event in events if event.type == "response.content_part.added")
+    citations: Final = [event for event in events if event.type == "response.output_text.annotation.added"]
+    text_delta: Final = next(event for event in events if event.type == "response.output_text.delta")
+    message_index: Final = next(
+        index for index, item in enumerate(events[-1].response.output) if item.type == "message"
+    )
+    message: Final = events[-1].response.output[message_index]
+    assert len(citations) == 1
+    assert (
+        events.index(message_added) < events.index(part_added) < events.index(citations[0]) < events.index(text_delta)
+    )
+    assert message_added.item.id == part_added.item_id == citations[0].item_id == text_delta.item_id == message.id
+    assert (
+        message_added.output_index
+        == part_added.output_index
+        == citations[0].output_index
+        == text_delta.output_index
+        == message_index
+    )
+    assert citations[0].content_index == citations[0].annotation_index == 0
+    assert [event.annotation for event in citations] == [entry.model_dump() for entry in message.content[0].annotations]
+    assert message.content[0].text == "Claim"
