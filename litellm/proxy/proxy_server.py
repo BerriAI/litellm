@@ -14711,13 +14711,18 @@ async def _raise_if_count_route_model_unserved(
     model: str,
     requested: str,
     team_id: str | None,
+    require_deployment: bool,
 ) -> None:
     """Raise 404 not_found_error when routing cannot pick a deployment for ``model``.
 
     A model a sibling replica loaded but this replica has not is read through before the
     rejection, the way route_request recovers from the same miss.
     """
-    if _count_route_model_is_served(llm_router, model, team_id):
+    if (
+        not require_deployment
+        or llm_router.router_general_settings.pass_through_all_models
+        or _count_route_model_is_served(llm_router, model, team_id)
+    ):
         return
     from litellm.proxy.common_utils.registry_read_through import model_registry_read_through
 
@@ -15369,12 +15374,10 @@ async def count_request_tokens(
     if llm_router is not None:
         # An unserved model on the Anthropic count route is a 404, not a local estimate from an
         # unrelated tokenizer. pass_through_all_models opts out, as on the completion routes.
-        pass_through_all_models: Final = llm_router.router_general_settings.pass_through_all_models
         request_kwargs: Final = dict(_count_route_request_kwargs(user_api_key_dict))
-        if require_deployment and not pass_through_all_models:
-            await _raise_if_count_route_model_unserved(
-                llm_router, resolution_model, request.model, _count_route_team_id(user_api_key_dict)
-            )
+        await _raise_if_count_route_model_unserved(
+            llm_router, resolution_model, request.model, _count_route_team_id(user_api_key_dict), require_deployment
+        )
         # get 1 deployment corresponding to the model
         try:
             deployment = await llm_router.async_get_available_deployment(

@@ -52,7 +52,7 @@ def _input_tokens(payload: Mapping[str, JsonValue]) -> int:
 
 
 def _auth_header(api_key: object) -> Mapping[str, str]:
-    """vLLM commonly runs keyless, so an unset key sends no auth header at all."""
+    """Send no auth header when the key is unset, since vLLM commonly runs keyless."""
     return {"Authorization": f"Bearer {api_key}"} if isinstance(api_key, str) and api_key else {}
 
 
