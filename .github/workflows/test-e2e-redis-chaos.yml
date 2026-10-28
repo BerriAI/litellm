@@ -60,12 +60,12 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Cache the Rust build
-        uses: ./.github/actions/cache-cargo-build
+      - name: Set up the Rust bridge
+        uses: ./.github/actions/rust-bridge
 
       - name: Install dependencies
         run: |
-          uv sync --frozen --group ci --group proxy-dev --group e2e-dev --extra proxy
+          .github/scripts/uv_sync_with_rust_bridge.sh --frozen --group ci --group proxy-dev --group e2e-dev --extra proxy
 
       - name: Cache Prisma binaries
         uses: ./.github/actions/cache-prisma-binaries
