@@ -2649,6 +2649,13 @@ async def delete_team_model_alias(
     return removed_model_aliases
 
 
+def _model_not_added_to_db() -> HTTPException:
+    return HTTPException(
+        status_code=500,
+        detail={"error": "Failed to add model to db. Check your server logs for more details."},
+    )
+
+
 @router.post(
     "/model/new",
     description="Allows adding new models to the model list in the config.yaml",
@@ -2817,6 +2824,8 @@ async def add_new_model(
                 if isinstance(e, HTTPException):
                     raise
                 verbose_proxy_logger.exception("Exception in add_new_model: %s", e)
+                if model_response is None:
+                    raise _model_not_added_to_db() from e
 
         else:
             raise HTTPException(
@@ -2825,10 +2834,7 @@ async def add_new_model(
             )
 
         if model_response is None:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": "Failed to add model to db. Check your server logs for more details."},
-            )
+            raise _model_not_added_to_db()
 
         ## CREATE AUDIT LOG ##
         asyncio.create_task(

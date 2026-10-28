@@ -10,7 +10,7 @@ from typing import Final
 from fastapi import HTTPException, status
 
 from litellm.constants import STRINGIFIED_NONE
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, proxy_exception_status_code
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, exception_chain
 
@@ -80,7 +80,7 @@ def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyExcept
         case HTTPException(status_code=status_code, detail=detail):
             return _openai_shaped_proxy_exception(exc, str(detail), status_code)
         case _:
-            return _openai_shaped_proxy_exception(exc, str(exc), default_status_code)
+            return _openai_shaped_proxy_exception(exc, str(exc), error_status_code(exc, default_status_code))
 
 
 def _is_database_outage(exc: Exception) -> bool:
@@ -109,19 +109,19 @@ def _is_prisma_outage(exc: Exception) -> bool:
 
 
 def _openai_shaped_proxy_exception(exc: Exception, message: str, status_code: int) -> ProxyException:
+    answered_status: Final = int(proxy_exception_status_code(message, str(status_code)))
     return ProxyException(
         message=message,
-        type=_catch_all_error_type(exc, status_code),
+        type=_catch_all_error_type(exc, answered_status),
         param=openai_error_param(exc),
-        code=status_code,
+        code=answered_status,
     )
 
 
 def _catch_all_error_type(exc: Exception, status_code: int) -> str:
-    failure_status: Final = error_status_code(exc, status_code)
-    if failure_status in _AUTH_FAILURE_STATUS_CODES:
+    if status_code in _AUTH_FAILURE_STATUS_CODES:
         return ProxyErrorTypes.auth_error.value
-    return openai_error_type(exc, failure_status)
+    return openai_error_type(exc, status_code)
 
 
 def litellm_call_id_headers(litellm_call_id: str | None) -> dict[str, str] | None:  # mutable-ok: ProxyException.headers

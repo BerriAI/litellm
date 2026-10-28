@@ -10257,3 +10257,36 @@ async def test_update_model_reports_an_unknown_model_id_as_a_request_error_not_a
 
     assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
     assert exc_info.value.message == "model not found"
+
+
+@pytest.mark.asyncio
+async def test_add_new_model_reports_a_database_outage_during_the_insert_as_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import prisma.errors
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+    unreachable_db: Final = MagicMock()
+    unreachable_db.db.query_raw = AsyncMock(return_value=[])
+    unreachable_db.db.litellm_proxymodeltable.create = AsyncMock(
+        side_effect=prisma.errors.PrismaError("Can't reach database server at `db:5432`")
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", unreachable_db)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-outage-salt")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await add_new_model(
+            model_params=Deployment(
+                model_name="outage-model",
+                litellm_params=LiteLLM_Params(model="openai/gpt-5.4-mini", api_key="fake-key"),
+                model_info={"id": "outage-model-1"},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")

@@ -1,5 +1,6 @@
 import json
 import sys
+from typing import Final
 
 import httpx
 import prisma.errors
@@ -19,6 +20,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     proxy_exception_for,
     with_litellm_call_id,
 )
+from litellm.types.router import RouterErrors
 
 
 @pytest.mark.parametrize(
@@ -282,14 +284,14 @@ def test_the_wrapped_error_serializes_as_an_openai_error_object(exc: Exception):
     assert body["error"]["type"] == "invalid_request_error"
 
 
-def test_a_provider_credential_failure_keeps_the_auth_label_at_the_status_its_route_answers_with():
-    provider_failure = litellm.AuthenticationError(
+def test_a_provider_credential_failure_keeps_the_auth_label_at_the_providers_status():
+    provider_failure: Final = litellm.AuthenticationError(
         message="invalid x-api-key", llm_provider="anthropic", model="claude-haiku-5-5"
     )
 
-    wrapped = proxy_exception_for(provider_failure, default_status_code=400)
+    wrapped: Final = proxy_exception_for(provider_failure, default_status_code=400)
 
-    assert (wrapped.code, wrapped.type) == ("400", "auth_error")
+    assert (wrapped.code, wrapped.type) == ("401", "auth_error")
 
 
 def test_a_database_outage_answers_503_so_callers_retry_instead_of_fixing_their_request():
@@ -392,11 +394,26 @@ def test_a_database_outage_answer_does_not_reveal_where_the_database_lives():
     assert "prod-db.internal" not in wrapped.message
 
 
-def test_an_upstream_failure_is_labelled_by_its_own_status_not_the_routes_default():
-    upstream_overloaded = litellm.ServiceUnavailableError(
+def test_an_upstream_failure_answers_with_its_own_status_not_the_routes_default():
+    upstream_overloaded: Final = litellm.ServiceUnavailableError(
         message="upstream overloaded", llm_provider="openai", model="gpt-5.4-mini"
     )
 
-    wrapped = proxy_exception_for(upstream_overloaded, default_status_code=400)
+    wrapped: Final = proxy_exception_for(upstream_overloaded, default_status_code=400)
 
-    assert (wrapped.code, wrapped.type) == ("400", "internal_server_error")
+    assert (wrapped.code, wrapped.type) == ("503", "internal_server_error")
+
+
+@pytest.mark.parametrize(
+    "router_rejection, expected",
+    [
+        (f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model=gpt-5.4-mini", ("401", "auth_error")),
+        (f"{RouterErrors.no_deployments_available.value}. Passed model=gpt-5.4-mini", ("429", "rate_limit_error")),
+    ],
+)
+def test_a_router_rejection_is_labelled_by_the_status_it_answers_with(
+    router_rejection: str, expected: tuple[str, str]
+) -> None:
+    wrapped: Final = proxy_exception_for(ValueError(router_rejection), default_status_code=400)
+
+    assert (wrapped.code, wrapped.type) == expected
