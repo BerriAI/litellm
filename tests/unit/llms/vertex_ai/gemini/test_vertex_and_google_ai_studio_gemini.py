@@ -8289,11 +8289,12 @@ def test_gemini_image_generation_ignores_non_dict_image_config():
 def test_gemini_image_generation_openai_size_maps_to_google_table(
     size: str, expected_aspect_ratio: str, expected_image_size: str
 ):
+    """Flash table as of 2026-10-26, https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size."""
     from litellm.llms.gemini.common_utils import (
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") == {
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3.1-flash-image") == {
         "aspectRatio": expected_aspect_ratio,
         "imageSize": expected_image_size,
     }
@@ -8317,7 +8318,7 @@ def test_gemini_image_generation_openai_size_snaps_to_nearest_option(
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") == {
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3.1-flash-image") == {
         "aspectRatio": expected_aspect_ratio,
         "imageSize": expected_image_size,
     }
