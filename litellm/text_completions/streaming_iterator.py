@@ -1,5 +1,6 @@
 from typing import Final
 
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_params
 from litellm.types.utils import Choices, ModelResponse, TextChoices, TextCompletionResponse
 
 
@@ -49,7 +50,7 @@ class TextCompletionStreamWrapper:
             else:
                 response.usage = None
 
-            response._hidden_params = {**chunk._hidden_params}  # pyright: ignore[reportPrivateUsage]  # the bill the builder priced rides the usage chunk to the proxy egress
+            set_hidden_params(response, dict(get_hidden_params(chunk) or {}))
             return response
         except Exception as e:
             raise Exception(f"Error occurred converting to text completion object - chunk: {chunk}; Error: {e}")

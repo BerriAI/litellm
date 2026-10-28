@@ -1882,18 +1882,25 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return status_mapping.get(status, "stop")
 
 
-def _with_inner_bill_as_usage_cost(event: BaseModel) -> dict[str, object]:
+_EVENT_PAYLOAD_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _with_inner_bill_as_usage_cost(event: BaseModel) -> dict[str, object]:  # mutable-ok: chunk_parser takes the plain dict model_dump returns
     """The inner Responses call already billed its spend row and left the bill in hidden ``response_cost``. The
     chat stream built on top of it reads that bill from ``usage.cost``, where a priced upstream would put it."""
-    dumped: Final = event.model_dump()
-    response: Final = getattr(event, "response", None)
-    bill: Final = (get_hidden_params(response) or {}).get("response_cost") if response is not None else None
-    usage: Final = dumped.get("response", {}).get("usage") if isinstance(dumped.get("response"), dict) else None
-    if not isinstance(usage, dict) or usage.get("cost") is not None:
+    dumped: Final = _EVENT_PAYLOAD_ADAPTER.validate_python(event.model_dump())
+    response_payload: Final = dumped.get("response")
+    if not isinstance(response_payload, dict):
         return dumped
-    if isinstance(bill, bool) or not isinstance(bill, (int, float)):
+    response_dict: Final = _EVENT_PAYLOAD_ADAPTER.validate_python(response_payload)
+    usage_payload: Final = response_dict.get("usage")
+    if not isinstance(usage_payload, dict):
         return dumped
-    return {**dumped, "response": {**dumped["response"], "usage": {**usage, "cost": float(bill)}}}
+    usage_dict: Final = _EVENT_PAYLOAD_ADAPTER.validate_python(usage_payload)
+    bill: Final = (get_hidden_params(getattr(event, "response", None)) or {}).get("response_cost")
+    if usage_dict.get("cost") is not None or isinstance(bill, bool) or not isinstance(bill, (int, float)):
+        return dumped
+    return {**dumped, "response": {**response_dict, "usage": {**usage_dict, "cost": float(bill)}}}
 
 
 class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
