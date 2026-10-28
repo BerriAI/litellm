@@ -1642,7 +1642,7 @@ async def new_team(
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
-    - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
+    - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model, keyed by model name, `*` pattern, or model access group. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
@@ -2420,7 +2420,7 @@ async def update_team(
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
-    - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
+    - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model, keyed by model name, `*` pattern, or model access group. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
