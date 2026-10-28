@@ -520,8 +520,8 @@ mod tests {
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_string)
                 };
-                let expected = cell(&format!("{provider}_header_only"))
-                    .or_else(|| cell(provider.as_ref()));
+                let expected =
+                    cell(&format!("{provider}_header_only")).or_else(|| cell(provider.as_ref()));
                 let actual = beta.on(*provider).map(|name| name.to_string());
                 assert_eq!(actual, expected, "provider {provider}, beta {beta}");
                 if matches!(beta, AnthropicBeta::AdvancedToolUse20251120)
