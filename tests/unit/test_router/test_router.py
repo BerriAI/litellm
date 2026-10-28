@@ -6191,8 +6191,8 @@ def _make_router_with_fallback(primary="gpt-4", secondary="gpt-3.5-turbo"):
 
 
 class _InjectedFallbackRouter(Router):
-    def __init__(self, fallback_response: object) -> None:
-        super().__init__(model_list=[], fallbacks=[{"primary": ["fallback"]}])
+    def __init__(self, fallback_response: object, model_list: list[dict[str, object]] | None = None) -> None:
+        super().__init__(model_list=model_list or [], fallbacks=[{"primary": ["fallback"]}])
         self._fallback_response: Final = fallback_response
 
     async def async_function_with_fallbacks_common_utils(
@@ -7160,6 +7160,50 @@ async def test_aresponses_streaming_iterator_does_not_continue_constrained_outpu
     outcome: Final = [item async for item in _events_until_error(wrapped)]
 
     assert outcome == [*primary_output, fallback_completed if falls_back else primary_error]
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_does_not_continue_output_the_cut_deployment_constrains():
+    """A deployment that pins its own JSON text format constrains the output it was cut in, though the request sets
+    no format."""
+    primary_delta: Final = MagicMock(type="response.output_text.delta", delta='{"numbers": [1, 2, ')
+    primary_error: Final = litellm.InternalServerError(
+        message="The server had an error while processing your request.", model="gpt-4", llm_provider="openai"
+    )
+    router: Final = _InjectedFallbackRouter(
+        _AsyncList([MagicMock(type="response.completed")]),
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4", "text": {"format": _NUMBERS_TEXT_FORMAT}},
+                "model_info": {"id": "json-deployment"},
+            }
+        ],
+    )
+    src: Final = _make_responses_iterator(
+        chunks=[primary_delta],
+        error=MidStreamFallbackError(
+            message="server_error",
+            model="gpt-4",
+            llm_provider="openai",
+            original_exception=primary_error,
+            generated_content=primary_delta.delta,
+            is_pre_first_chunk=False,
+        ),
+        hidden_params={"model_id": "json-deployment"},
+    )
+
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=src,
+        initial_kwargs={
+            "model": "primary",
+            "stream": True,
+            "input": "Return the integers 1 through 12 in order.",
+            "original_generic_function": litellm.aresponses,
+        },
+    )
+
+    assert [item async for item in _events_until_error(wrapped)] == [primary_delta, primary_error]
 
 
 @pytest.mark.asyncio
