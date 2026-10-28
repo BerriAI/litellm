@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import time
 from typing import Final
 
 import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
+from integration._support.ports import allocate_port
 from integration.compatibility._a2a_peers import (
     HINT,
     KIND_ERROR,
@@ -284,14 +284,8 @@ def test_registered_agent_persists_protocol_version(gateway: Gateway) -> None:
         _assert_legacy_wire(posts(agent.wire), agent.marker)  # type: ignore[arg-type]
 
 
-def _closed_local_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
 def test_pinned_agent_survives_localhost_retry(gateway: Gateway) -> None:
-    dead: Final = f"http://localhost:{_closed_local_port()}/a2a/unreachable"
+    dead: Final = f"http://localhost:{allocate_port()}/a2a/unreachable"
     with peer("lgretry", "langgraph", card_url=dead) as agent, gateway.scenario() as scenario:
         identity: Final = register(gateway, scenario.cleanups.callback, agent.marker, agent.url, PINNED)
         _send_ok(gateway, identity, agent.marker)

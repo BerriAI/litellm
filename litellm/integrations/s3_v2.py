@@ -35,6 +35,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import Timeout as LiteLLMTimeout
 from litellm.integrations.adaptive_concurrency import AdaptiveConcurrencyLimiter, PutSample
+from litellm.integrations.batch_line_item_objects import batch_line_items_ndjson, batch_line_items_object_name
 from litellm.integrations.s3 import (
     get_s3_object_download_filename,
     get_s3_object_key,
@@ -60,7 +61,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity, s3BatchLoggingElement
-from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
+from litellm.types.utils import StandardAuditLogPayload, StandardBatchLineItemsPayload, StandardLoggingPayload
 
 from .custom_batch_logger import CustomBatchLogger
 
@@ -548,6 +549,32 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         except Exception as e:
             verbose_logger.exception("S3 audit log error: %s", e)
 
+    async def async_log_batch_line_items(self, payload: StandardBatchLineItemsPayload) -> None:
+        """Upload one part of a batch's lines as an NDJSON object under <s3_path>/batch_line_items/."""
+        object_name: Final = batch_line_items_object_name(payload)
+        s3_path: Final = cast(str | None, self.s3_path)  # cast-ok: s3_path is set from untyped callback params
+        s3_object_key: Final = (f"{s3_path.rstrip('/')}/" if s3_path else "") + object_name
+        element: Final = s3BatchLoggingElement(
+            payload={},
+            body=await asyncio.to_thread(batch_line_items_ndjson, payload),
+            content_type="application/x-ndjson",
+            s3_object_key=s3_object_key,
+            s3_object_download_filename="-".join(object_name.rsplit("/", 2)[-2:]),
+        )
+        # hashing a large object is CPU-bound too, so it is also prepared off the event loop
+        prepared_put: Final = await asyncio.to_thread(self._prepare_put, element)
+        delivered: Final = await self.async_upload_data_to_s3(element, prepared_put)
+        if not delivered:
+            # only a log-queue flush reads and clears the drop marks, and this upload is not part of one
+            self._flush_dropped.pop(id(element), None)
+            verbose_logger.error(
+                "s3 logging: the %d line items of part %d of batch %s were not stored at %s",
+                len(payload["lines"]),
+                payload["part"],
+                payload["batch_id"],
+                s3_object_key,
+            )
+
     async def _async_log_event_base(self, kwargs, response_obj, start_time, end_time):
         try:
             verbose_logger.debug("s3 Logging - Enters logging function for model %s", kwargs)
@@ -592,6 +619,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
     async def async_upload_data_to_s3(
         self,
         batch_logging_element: s3BatchLoggingElement,
+        prepared_put: _PreparedPut | None = None,
     ) -> bool:
         try:
             from litellm.litellm_core_utils.asyncify import asyncify
@@ -627,7 +655,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 except _TRANSIENT_ERRORS as error:
                     return error
 
-            prepared: Final = self._prepare_put(batch_logging_element)
+            prepared: Final = prepared_put if prepared_put is not None else self._prepare_put(batch_logging_element)
             await self._put_with_retries(partial(signed_put, prepared), batch_logging_element.s3_object_key)
         except Exception as e:
             verbose_logger.exception("Error uploading to s3: %s", e)

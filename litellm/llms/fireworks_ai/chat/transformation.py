@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_litellm_response_only_fields,
     unpack_legacy_defs,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -58,6 +59,7 @@ if TYPE_CHECKING:
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _STR: Final = TypeAdapter(str)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _map_reasoning_effort(value: object) -> object:
@@ -543,7 +545,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             return cached[2]
 
         index: Final[list[tuple[str, dict]]] = []
-        for key, model_info in model_cost.items():
+        for key, model_info in (*model_cost.items(),):
             if not key.startswith("fireworks_ai/"):
                 continue
             if not isinstance(model_info, dict):
@@ -745,7 +747,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = raw_response.json()
+            completion_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise FireworksAIException(
@@ -825,7 +827,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         base = api_base.rstrip("/")
         base = base.removesuffix("/v1")
         response: Final = litellm.module_level_client.get(
-            url=f"{base}/v1/accounts/{account_id}/models",
+            url=join_api_base(base, f"v1/accounts/{account_id}/models"),
             headers={"Authorization": f"Bearer {api_key}"},
         )
 

@@ -209,6 +209,13 @@ class AnthropicMessagesTextParam(TypedDict, total=False):
     prompt_cache_breakpoint: ReadOnly[PromptCacheBreakpoint]
 
 
+class AnthropicSearchResultParam(TypedDict, total=False):
+    type: Required[ReadOnly[Literal["search_result"]]]
+    source: Required[ReadOnly[str]]
+    title: Required[ReadOnly[str]]
+    content: Required[ReadOnly[Iterable[AnthropicMessagesTextParam]]]
+
+
 class AnthropicMessagesToolUseParam(TypedDict, total=False):
     type: Required[Literal["tool_use"]]
     id: str
@@ -357,6 +364,7 @@ class AnthropicMessagesToolResultParam(TypedDict, total=False):
             AnthropicMessagesToolResultContent
             | AnthropicMessagesImageParam
             | AnthropicMessagesDocumentParam
+            | AnthropicSearchResultParam
             | ToolReference
         ]
     )
@@ -368,6 +376,7 @@ AnthropicMessagesUserMessageValues = (
     | AnthropicMessagesImageParam
     | AnthropicMessagesToolResultParam
     | AnthropicMessagesDocumentParam
+    | AnthropicSearchResultParam
     | AnthropicMessagesContainerUploadParam
 )
 
@@ -481,6 +490,11 @@ class ContentThinkingSignatureBlockDelta(TypedDict):
     signature: str
 
 
+class ContentCompactionBlockDelta(TypedDict):
+    type: ReadOnly[Literal["compaction_delta"]]
+    content: ReadOnly[str | None]
+
+
 StreamingContentBlockDeltaType = Literal["text_delta", "input_json_delta", "thinking_delta", "signature_delta"]
 
 
@@ -493,6 +507,7 @@ class ContentBlockDelta(TypedDict):
         | ContentCitationsBlockDelta
         | ContentThinkingBlockDelta
         | ContentThinkingSignatureBlockDelta
+        | ContentCompactionBlockDelta
     )
 
 
@@ -536,7 +551,9 @@ class ContentBlockStartText(TypedDict):
     content_block: TextBlock
 
 
-ContentBlockContentBlockDict = ToolUseBlock | TextBlock | ChatCompletionThinkingBlock
+ContentBlockContentBlockDict = (
+    ToolUseBlock | TextBlock | ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock
+)
 
 ContentBlockStart = ContentBlockStartToolUse | ContentBlockStartText
 
@@ -761,10 +778,15 @@ ANTHROPIC_API_ONLY_HEADERS: Final = {  # fails if calling anthropic on vertex ai
 }
 
 
+class AnthropicThinkingBlockBinding(TypedDict, total=False):
+    prefix_mismatch_behavior: ReadOnly[Literal["error", "drop_block"]]
+
+
 class AnthropicThinkingParam(TypedDict, total=False):
     type: ReadOnly[Literal["enabled", "adaptive", "disabled"]]
     budget_tokens: int
     display: ReadOnly[Literal["summarized", "omitted", "updates"]]
+    block_binding: ReadOnly[AnthropicThinkingBlockBinding]
 
 
 class ANTHROPIC_HOSTED_TOOLS(str, Enum):

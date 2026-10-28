@@ -34,6 +34,8 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     message_field,
     parts_of,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import non_numeric_thinking_budget_error
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.wif import (
     aget_anthropic_wif_token,
     anthropic_base_without_chat_suffix,
@@ -48,7 +50,9 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
+    ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
+    ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
     AnthropicMessagesToolChoice,
@@ -109,8 +113,9 @@ _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
-_CLAUDE_CODE_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
-_CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
+OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
@@ -158,22 +163,56 @@ def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None
     )
 
 
+def _tool_config_point_control(points: object) -> Mapping[object, object] | None:
+    point_fields: Final = tuple(validated_object_mapping(point) for point in validated_object_list(points) or ())
+    tool_config_point: Final = next(
+        (fields for fields in point_fields if fields is not None and fields.get("location") == "tool_config"), None
+    )
+    if tool_config_point is None:
+        return None
+    control: Final = tool_config_point.get("control")
+    return {"type": "ephemeral"} if control is None else validated_object_mapping(control)
+
+
+def tools_marked_for_a_tool_config_point(tools: object, points: object) -> tuple[object, ...] | None:
+    """Put the ``tool_config`` point's breakpoint on the last tool Anthropic caches.
+
+    Anthropic caches tools as one prefix ending at the marked tool, so the last one carries
+    the mark, skipping tool-search tools whose transform drops cache markers. A client that
+    already marked a tool keeps its own breakpoint. Returns ``None`` when nothing is marked.
+    """
+    control: Final = _tool_config_point_control(points)
+    tool_list: Final = validated_object_list(tools) or ()
+    tool_fields: Final = tuple(validated_object_mapping(tool) for tool in tool_list)
+    if control is None or any(fields is not None and "cache_control" in fields for fields in tool_fields):
+        return None
+    cacheable: Final = tuple(
+        (position, fields)
+        for position, fields in enumerate(tool_fields)
+        if fields is not None and fields.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+    )
+    if not cacheable:
+        return None
+    position, fields = cacheable[-1]
+    return (*tool_list[:position], {**fields, "cache_control": control}, *tool_list[position + 1 :])
+
+
 def is_claude_code_user_agent(user_agent: str) -> bool:
     """Claude Code sends its API calls through the Anthropic SDK as `claude-cli/<version>` and its own
     fetches, such as gateway model discovery, as `claude-code/<version>`"""
     return user_agent.startswith(_CLAUDE_CODE_USER_AGENT_PREFIXES)
 
 
-def _validated_claude_code_mapping(value: object) -> dict[object, object] | None:
+def validated_object_mapping(value: object) -> dict[object, object] | None:
     try:
-        return _CLAUDE_CODE_OBJECT_MAPPING_ADAPTER.validate_python(value)
+        return OBJECT_MAPPING_ADAPTER.validate_python(value)
     except ValidationError:
         return None
 
 
-def _validated_claude_code_list(value: object) -> list[object] | None:
+def validated_object_list(value: object) -> Sequence[object] | None:
     try:
-        return _CLAUDE_CODE_OBJECT_LIST_ADAPTER.validate_python(value)
+        return OBJECT_LIST_ADAPTER.validate_python(value)
     except ValidationError:
         return None
 
@@ -200,10 +239,10 @@ def _claude_code_billing_fields(text: str) -> tuple[tuple[str, str], ...] | None
 def _claude_code_billing_texts(system: object) -> tuple[str, ...] | None:
     if isinstance(system, str):
         return (system,)
-    blocks: Final = _validated_claude_code_list(system)
+    blocks: Final = validated_object_list(system)
     if blocks is None:
         return None
-    block_mappings: Final = tuple(_validated_claude_code_mapping(block) for block in blocks)
+    block_mappings: Final = tuple(validated_object_mapping(block) for block in blocks)
     if any(block is None for block in block_mappings):
         return None
     text_values: Final = tuple(
@@ -236,7 +275,7 @@ def is_claude_code_one_shot_subagent_request(
     tools: object,
     user_agent: str | None,
 ) -> bool:
-    only_message: Final = _validated_claude_code_mapping(messages[0]) if len(messages) == 1 else None
+    only_message: Final = validated_object_mapping(messages[0]) if len(messages) == 1 else None
     return (
         user_agent is not None
         and is_claude_code_user_agent(user_agent)
@@ -415,7 +454,7 @@ def _sanitized_anthropic_error(response: httpx.Response, detail: str | None = No
     if detail is not None:
         return f"HTTP {response.status_code}: {detail}"
     try:
-        body: Final = response.json()
+        body: Final = _DECODED_JSON.validate_python(response.json())
     except ValueError:
         return f"HTTP {response.status_code}"
     error: Final = body.get("error") if isinstance(body, dict) else None
@@ -430,7 +469,7 @@ def _fetch_anthropic_models_page(
     # which a read-only one cannot support
     query: Final = f"?after_id={quote(after_id)}" if after_id else ""
     response: Final = litellm.module_level_client.get(
-        url=f"{api_base}/v1/models{query}",
+        url=f"{join_api_base(api_base, 'v1/models')}{query}",
         headers=headers,
         follow_redirects=False,
     )
@@ -458,6 +497,27 @@ def _fetch_anthropic_model_ids(
             return collected
         cursor = page.last_id
     raise Exception(f"Anthropic /v1/models did not terminate within {_MODEL_LIST_PAGE_CAP} pages.")
+
+
+def _numeric_budget_tokens(budget_tokens: object) -> int | None:
+    if isinstance(budget_tokens, bool):
+        return None
+    if isinstance(budget_tokens, (int, float)):
+        return int(budget_tokens)
+    if not isinstance(budget_tokens, str):
+        return None
+    try:
+        return int(budget_tokens)
+    except ValueError:
+        return None
+
+
+def _legacy_budget_tokens(budget_tokens: object, *, drop_params: bool) -> int | None:
+    if (numeric := _numeric_budget_tokens(budget_tokens)) is not None:
+        return numeric
+    if drop_params or litellm.drop_params is True:
+        return None
+    raise non_numeric_thinking_budget_error(budget_tokens)
 
 
 class AnthropicModelInfo(BaseLLMModelInfo):
@@ -653,7 +713,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         optional_params: dict,
         model: str,
         param: str,
-        value: Any,
+        value: object,
         drop_params: bool,
         output_key: str,
     ) -> None:
@@ -923,6 +983,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         model: str,
         optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param like the sibling helpers
         custom_llm_provider: str,
+        drop_params: bool,
     ) -> None:
         """Translate legacy ``thinking.type=enabled`` to adaptive for the
         adaptive-thinking models that reject it (4.7+ and the 5 families).
@@ -935,21 +996,23 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             return
         if AnthropicModelInfo._supports_legacy_thinking(model, custom_llm_provider):
             return
-        thinking: Final = optional_params.get("thinking")
-        if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
+        thinking: Final = validated_object_mapping(optional_params.get("thinking"))
+        if thinking is None or thinking.get("type") != "enabled":
             return
 
+        budget_tokens: Final = _legacy_budget_tokens(thinking.get("budget_tokens", 0), drop_params=drop_params)
+        display: Final = thinking.get("display")
+        supported_display: Final = {"display": display} if display in ("summarized", "omitted") else {}
+        carried_keys: Final = carried_thinking_keys(
+            thinking, rebuilt_keys=frozenset(("type", "budget_tokens", "display")), drop_params=drop_params
+        )
+        optional_params["thinking"] = {**carried_keys, "type": "adaptive", **supported_display}
+        if budget_tokens is None:
+            return
         effort: Final = AnthropicModelInfo._legacy_budget_to_effort(
-            model=model,
-            budget_tokens=int(thinking.get("budget_tokens") or 0),
-            custom_llm_provider=custom_llm_provider,
+            model=model, budget_tokens=budget_tokens, custom_llm_provider=custom_llm_provider
         )
         existing_output_config: Final = optional_params.get("output_config")
-        display: Final = thinking.get("display")
-        if display in ("summarized", "omitted"):
-            optional_params["thinking"] = {"type": "adaptive", "display": display}
-        else:
-            optional_params["thinking"] = {"type": "adaptive"}
         optional_params["output_config"] = {
             "effort": effort,
             **(existing_output_config if isinstance(existing_output_config, dict) else MappingProxyType({})),
@@ -1344,7 +1407,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return {**caller_headers, **anthropic_headers}
 
     @staticmethod
-    def get_api_base(api_base: str | None = None) -> str | None:
+    def resolve_anthropic_api_base(api_base: str | None = None) -> str:
         from litellm.secret_managers.main import get_secret_str
 
         return (
@@ -1353,6 +1416,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             or get_secret_str("ANTHROPIC_BASE_URL")
             or "https://api.anthropic.com"
         )
+
+    @staticmethod
+    def get_api_base(api_base: str | None = None) -> str | None:
+        return AnthropicModelInfo.resolve_anthropic_api_base(api_base)
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
@@ -1471,14 +1538,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_base: str | None,
         litellm_params: Mapping[str, object] | None,
     ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
-        resolved_api_base: Final = AnthropicModelInfo.get_api_base(api_base)
+        resolved_api_base: Final = AnthropicModelInfo.resolve_anthropic_api_base(api_base)
         auth_header: Final = AnthropicModelInfo.get_auth_header(
             api_key,
             resolved_api_base,
             litellm_params=litellm_params,
             allow_workload_identity=config_allows_workload_identity(self),
         )
-        if resolved_api_base is None or auth_header is None:
+        if auth_header is None:
             raise ValueError(
                 "ANTHROPIC_API_BASE/ANTHROPIC_BASE_URL or ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN (or workload "
                 "identity federation via ANTHROPIC_FEDERATION_RULE_ID/ANTHROPIC_ORGANIZATION_ID/"
@@ -1617,6 +1684,36 @@ def is_anthropic_invalid_thinking_block_error(error_text: str) -> bool:
     return "must contain thinking" in lower
 
 
+_ADAPTIVE_THINKING_KEYS: Final = (
+    AnthropicThinkingParam.__required_keys__ | AnthropicThinkingParam.__optional_keys__
+) - {"budget_tokens"}
+
+
+def carried_thinking_keys(
+    thinking: Mapping[object, object], rebuilt_keys: frozenset[str], drop_params: bool
+) -> Mapping[object, object]:
+    drops_unknown_keys: Final = drop_params or litellm.drop_params is True
+    return {
+        key: value
+        for key, value in thinking.items()
+        if key not in rebuilt_keys and (key in _ADAPTIVE_THINKING_KEYS or not drops_unknown_keys)
+    }
+
+
+def is_anthropic_thinking_binding_mismatch_error(error_text: str) -> bool:
+    """messages.N.content.M: Invalid `signature` in `thinking` block. The block is bound to a different conversation."""
+    return "bound to a different conversation" in error_text.lower()
+
+
+def anthropic_request_errors_on_thinking_binding_mismatch(request_body: object) -> bool:
+    """``thinking.block_binding.prefix_mismatch_behavior: error`` is the caller asking
+    for the 400, so a retry that strips thinking must not override it."""
+    body: Final = validated_object_mapping(request_body)
+    thinking: Final = validated_object_mapping(body.get("thinking")) if body is not None else None
+    binding: Final = validated_object_mapping(thinking.get("block_binding")) if thinking is not None else None
+    return binding is not None and binding.get("prefix_mismatch_behavior") == "error"
+
+
 def strip_thinking_blocks_from_anthropic_messages(messages: Sequence[object]) -> list[object]:
     """
     Return a new message list with thinking / redacted_thinking content blocks removed
@@ -1684,7 +1781,7 @@ def strip_encrypted_reasoning_blocks_from_anthropic_messages(
 
 
 def strip_thinking_blocks_from_anthropic_messages_request_dict(
-    data: dict[str, Any],
+    data: dict[str, object],
 ) -> None:
     """
     Mutate an Anthropic Messages-style request dict: strip thinking blocks from
@@ -1694,6 +1791,21 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
     if isinstance(msgs, list):
         data["messages"] = strip_thinking_blocks_from_anthropic_messages(msgs)
     data.pop("thinking", None)
+
+
+_DROP_ANTHROPIC_MESSAGE: Final = object()
+
+
+def _strip_empty_content_blocks_from_message(message: object) -> object:
+    if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+        return message
+    content: Final = message["content"]
+    filtered: Final = [
+        block for block in content if not _is_empty_text_block(block) and not is_empty_unsigned_thinking_block(block)
+    ]
+    if len(filtered) == len(content):
+        return message
+    return {**message, "content": filtered} if filtered else _DROP_ANTHROPIC_MESSAGE
 
 
 def strip_empty_content_blocks_from_anthropic_messages(
@@ -1730,18 +1842,11 @@ def strip_empty_content_blocks_from_anthropic_messages(
     The caller's list and its content blocks are never mutated; modified
     messages are returned as shallow copies with a fresh content list.
     """
-    out: Final[list[Any]] = []
-    for m in messages:
-        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
-            out.append(m)
-            continue
-        content = m["content"]
-        filtered = [b for b in content if not _is_empty_text_block(b) and not is_empty_unsigned_thinking_block(b)]
-        if len(filtered) == len(content):
-            out.append(m)
-        elif filtered:
-            out.append({**m, "content": filtered})
-    return out
+    return [
+        stripped_message
+        for message in messages
+        if (stripped_message := _strip_empty_content_blocks_from_message(message)) is not _DROP_ANTHROPIC_MESSAGE
+    ]
 
 
 def _is_empty_text_block(block: object) -> bool:
@@ -1829,18 +1934,15 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> l
     and ``:`` — valid on the upstream provider but rejected by Anthropic when
     the session is switched to a native Anthropic deployment.
     """
-    out: Final[list[Any]] = []
-    for m in messages:
-        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
-            out.append(m)
-            continue
-        content = m["content"]
-        new_content = [_sanitize_tool_use_id_content_block(b) for b in content]
-        if new_content == content:
-            out.append(m)
-        else:
-            out.append({**m, "content": new_content})
-    return out
+    return [_sanitize_tool_use_ids_in_message(message) for message in messages]
+
+
+def _sanitize_tool_use_ids_in_message(message: object) -> object:
+    if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+        return message
+    content: Final = message["content"]
+    new_content: Final = [_sanitize_tool_use_id_content_block(block) for block in content]
+    return message if new_content == content else {**message, "content": new_content}
 
 
 class _ReplayedSearchQuery(LiteLLMBaseModel):
@@ -1915,14 +2017,21 @@ def _replayed_server_tool_use(block: object) -> _ReplayedServerToolUse | None:
 def tool_call_is_rebuilt_as_server_tool_use(
     tool_call_id: object, provider_specific_fields: object, answered_tool_ids: Container[str] = frozenset()
 ) -> bool:
-    fields: Final = _validated_claude_code_mapping(provider_specific_fields)
-    if not isinstance(tool_call_id, str) or tool_call_id in answered_tool_ids or fields is None:
+    if (
+        not isinstance(tool_call_id, str)
+        or not tool_call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
+        or tool_call_id in answered_tool_ids
+        or provider_specific_fields is None
+    ):
+        return False
+    fields: Final = validated_object_mapping(provider_specific_fields)
+    if fields is None:
         return False
     return (
         find_anthropic_server_tool_result(
             tool_call_id,
-            _validated_claude_code_list(fields.get("web_search_results")),
-            _validated_claude_code_list(fields.get("tool_results")),
+            validated_object_list(fields.get("web_search_results")),
+            validated_object_list(fields.get("tool_results")),
         )
         is not None
     )

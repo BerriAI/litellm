@@ -11,7 +11,7 @@ import socket
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
 from multiprocessing.process import BaseProcess
 from multiprocessing.sharedctypes import Synchronized
@@ -30,6 +30,7 @@ from integration._support.client import Gateway, eventually, gateway_from_enviro
 from integration._support.database import read_rows
 from integration._support.process import kill_stray_process, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
 BEDROCK_MODEL: Final = "us.openai.gpt-5.6-sol"
@@ -227,14 +228,6 @@ def _calls(count: int, endpoints: tuple[Endpoint, ...], stream: Callable[[int], 
     )
 
 
-def _free_ports(count: int) -> tuple[int, ...]:
-    with ExitStack() as reserved:
-        sockets: Final = tuple(reserved.enter_context(socket.socket()) for _ in range(count))
-        for reserve in sockets:
-            reserve.bind(("127.0.0.1", 0))
-        return tuple(reserve.getsockname()[1] for reserve in sockets)
-
-
 def _accepts_connections(port: int) -> bool:
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=0.2):
@@ -283,7 +276,7 @@ def _chaos_config(endpoints: Mapping[str, str], directory: Path) -> Path:
 def chaos_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_ChaosProxy]:
     directory: Final = tmp_path_factory.mktemp("bedrock-gpt-chat-completions-chaos")
     burst, peer_killed, slow_peer = (
-        _Deployment(f"bedrock-gpt-chat-completions-chaos-{uuid.uuid4().hex}", port) for port in _free_ports(3)
+        _Deployment(f"bedrock-gpt-chat-completions-chaos-{uuid.uuid4().hex}", allocate_port()) for _ in range(3)
     )
     endpoints: Final = {
         deployment.model: f"http://127.0.0.1:{deployment.peer_port}" for deployment in (burst, peer_killed, slow_peer)

@@ -9,7 +9,7 @@ import asyncio
 import contextvars
 import os
 import weakref
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar
 
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
     pipeline = Pipeline
     async_redis_client = Redis
-    Span = _Span | Any
+    Span = _Span
 else:
     pipeline = Any
     async_redis_client = Any
@@ -126,13 +126,13 @@ class RedisClusterCache(RedisCache):
             return call()
         return self._connection_gate.run(call, self._get_async_client_cache_key())
 
-    def _run_redis_mget_operation(self, keys: list[str]) -> list[Any]:
+    def _run_redis_mget_operation(self, keys: list[str]) -> Sequence[bytes | str | None]:
         """
         Overrides `_run_redis_mget_operation` in redis_cache.py
         """
         return self.redis_client.mget_nonatomic(keys=keys)
 
-    async def _async_run_redis_mget_operation(self, keys: list[str]) -> list[Any]:
+    async def _async_run_redis_mget_operation(self, keys: list[str]) -> Sequence[bytes | str | None]:
         """
         Overrides `_async_run_redis_mget_operation` in redis_cache.py
         """

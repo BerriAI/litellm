@@ -42,7 +42,7 @@ IGNORE_FUNCTIONS = [
     "contains_encrypted_marker",  # max depth set.
     "_rotate_guardrail_row",  # bounded by attempts_left.
     "_delete_nested_value_custom",  # max depth set (bounded by number of path segments).
-    "filter_exceptions_from_params",  # max depth set (default 20) to prevent infinite recursion.
+    "_filter_exceptions_from_params",  # max depth set (default 20) to prevent infinite recursion.
     "__getattr__",  # lazy loading pattern in litellm/__init__.py with proper caching to prevent infinite recursion.
     "_validate_inheritance_chain",  # max depth set (default 100) to prevent infinite recursion in policy inheritance validation.
     "_basic_json_schema_validate",  # max depth set.
@@ -77,6 +77,7 @@ IGNORE_FUNCTIONS = [
     "_restore_redacted_nested_value",  # max depth set (default 10), mirrors _redact_agent_params_tree on the write side.
     "_unqualified",  # bounded by the qualifier depth of a static TypedDict annotation (Annotated, Required/NotRequired, ReadOnly around one type, no cycles possible).
     "_render_json",  # bounded by the nesting depth of a pydantic-validated JsonValue from the operator's config (a finite JSON tree, no cycles possible).
+    "with_id_fields_replaced",  # harness/opencode: bounded by the nesting depth of the JsonValue that validate_json parsed from `opencode export`, which refuses nesting past ~200 levels.
     "completion_cost",  # max depth 1: recursion only fires for mixed-tier Responses WS logging objects, and each split part carries a single service_tier so _split_responses_ws_logging_object_by_service_tier returns None.
     "_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).
     "_replace_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).

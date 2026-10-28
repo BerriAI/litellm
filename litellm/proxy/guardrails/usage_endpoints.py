@@ -11,10 +11,11 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, overload
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.usage_tracking import guardrail_status_to_action
@@ -838,28 +839,41 @@ def _snippet(text: object, max_len: int = 200) -> str | None:
     return result
 
 
-def _input_snippet_for_log(sl: "prisma_models.LiteLLM_SpendLogs") -> str | None:
-    """Snippet for request input: prefer messages, fall back to proxy_server_request (same as drawer)."""
-    out = _snippet(sl.messages)
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _request_dict(value: object) -> Mapping[str, object] | None:
+    mapping: Final = as_str_mapping(value)
+    return mapping if isinstance(mapping, dict) else None
+
+
+def _proxy_request_snippet(psr: object) -> str | None:
+    request: Final = _request_dict(psr)
+    if request is None:
+        return _snippet(psr)
+    msgs: Final = request.get("messages")
+    body: Final = _request_dict(request.get("body")) if msgs is None else None
+    out: Final = _snippet(body.get("messages") if body is not None else msgs)
     if out:
         return out
-    psr = getattr(sl, "proxy_server_request", None)
+    return _snippet(psr)
+
+
+def _input_snippet_for_log(sl: "prisma_models.LiteLLM_SpendLogs") -> str | None:
+    """Snippet for request input: prefer messages, fall back to proxy_server_request (same as drawer)."""
+    out: Final = _snippet(sl.messages)
+    if out:
+        return out
+    psr: Final[object] = getattr(sl, "proxy_server_request", None)
     if not psr:
         return None
-    if isinstance(psr, str):
-        try:
-            psr = json.loads(psr)
-        except Exception:
-            return _snippet(psr)
-    if isinstance(psr, dict):
-        msgs = psr.get("messages")
-        if msgs is None and isinstance(psr.get("body"), dict):
-            msgs = psr["body"].get("messages")
-        out = _snippet(msgs)
-        if out:
-            return out
+    if not isinstance(psr, str):
+        return _proxy_request_snippet(psr)
+    try:
+        decoded: Final = _DECODED_JSON.validate_python(json.loads(psr))
+    except Exception:
         return _snippet(psr)
-    return _snippet(psr)
+    return _proxy_request_snippet(decoded)
 
 
 @router.get(
