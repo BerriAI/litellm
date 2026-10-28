@@ -1,6 +1,10 @@
 """Tests for the shared guardrail content extraction helpers."""
 
 import json
+from functools import reduce
+
+import pytest
+from pydantic import JsonValue
 
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
@@ -9,6 +13,8 @@ from litellm.proxy.guardrails._content_utils import (
     is_non_conversational_call_type,
     is_string_batch_input,
     iter_message_text,
+    iter_tool_json_text,
+    map_tool_json_text,
     walk_user_text,
 )
 
@@ -554,9 +560,7 @@ def test_build_inspection_messages_includes_reasoning_summary():
             }
         ]
     }
-    assert build_inspection_messages(data) == [
-        {"role": "assistant", "content": "secret summary"}
-    ]
+    assert build_inspection_messages(data) == [{"role": "assistant", "content": "secret summary"}]
 
 
 # ── has_non_string_content ────────────────────────────────────────────────────
@@ -716,6 +720,7 @@ def test_is_string_batch_input_rejects_other_shapes():
 # LIT-4302: custom_tool_call_output walking
 # -------------------------------------------------------------------
 
+
 def test_iter_message_text_walks_custom_tool_call_output():
     """custom_tool_call_output items should yield their output text."""
     data = {
@@ -724,6 +729,7 @@ def test_iter_message_text_walks_custom_tool_call_output():
         ]
     }
     from litellm.proxy.guardrails._content_utils import iter_message_text
+
     texts = list(iter_message_text(data))
     assert "tool-secret" in texts
 
@@ -738,6 +744,34 @@ def test_walk_user_text_redacts_custom_tool_call_output():
     count = walk_user_text(data, lambda t: t.replace("PII-data", "[MASKED]"))
     assert count >= 1
     assert data["input"][0]["output"] == "[MASKED]"
+
+
+@pytest.mark.parametrize(
+    ("item", "field", "masked"),
+    (
+        (
+            {"type": "function_call", "name": "secret_tool_name", "arguments": '{"token": "secret", "count": 7}'},
+            "arguments",
+            '{"token": "[MASKED]", "count": 7}',
+        ),
+        ({"type": "function_call", "arguments": '{"token":"secret",broken'}, "arguments", '{"token":"[MASKED]",broken'),
+        ({"type": "custom_tool_call", "name": "secret_tool_name", "input": "echo secret"}, "input", "echo [MASKED]"),
+    ),
+    ids=("function-call", "function-call-malformed", "custom-tool-call"),
+)
+def test_responses_tool_call_items_are_masked(item, field, masked):
+    data = {"input": [{"role": "user", "content": "go"}, item]}
+    assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]")) == 2
+    assert data["input"][1][field] == masked
+    assert data["input"][1].get("name", "secret_tool_name") == "secret_tool_name"
+
+
+@pytest.mark.parametrize("instructions", ("secret rules", [{"type": "input_text", "text": "secret rules"}]))
+def test_responses_instructions_are_masked(instructions):
+    data = {"instructions": instructions, "input": "hi"}
+    assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]")) == 2
+    masked = data["instructions"] if isinstance(instructions, str) else data["instructions"][0]["text"]
+    assert masked == "[MASKED] rules"
 
 
 def test_build_inspection_messages_custom_tool_call_output():
@@ -782,3 +816,273 @@ def test_is_non_conversational_call_type_defaults_to_inspecting_unknown_call_typ
     """A call type this module has never heard of must still be inspected —
     failing closed is the point of the deny-list."""
     assert is_non_conversational_call_type("some_future_call_type") is False
+
+
+@pytest.mark.parametrize(
+    "tool_input",
+    (
+        {"token": "secret", "path": 'C:\\tmp\\"file"', "nested": [False, 7, None, "secret"]},
+        {"command": "export API_TOKEN=secret\nnext line", "safe": "unchanged"},
+    ),
+)
+def test_native_tool_payload_rewrites_values_preserving_structure(tool_input):
+    data = {
+        "system": [{"type": "text", "text": "secret", "cache_control": {"type": "ephemeral"}}],
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "name": "secret_tool_name", "id": "secret_id", "input": tool_input}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "secret_id",
+                        "content": [
+                            {"type": "text", "text": "secret"},
+                            {"type": "image", "source": {"data": "secret"}},
+                        ],
+                    }
+                ],
+            },
+        ],
+    }
+    visited = walk_user_text(data, lambda value: value.replace("secret", "[MASKED]"))
+    assert visited == 3
+    block = data["messages"][0]["content"][0]
+    assert block["name"] == "secret_tool_name"
+    assert block["id"] == "secret_id"
+    assert block["input"] == json.loads(json.dumps(tool_input).replace("secret", "[MASKED]"))
+    result = data["messages"][1]["content"][0]
+    assert result["tool_use_id"] == "secret_id"
+    assert result["content"] == [{"type": "text", "text": "[MASKED]"}, {"type": "image", "source": {"data": "secret"}}]
+    assert data["system"] == [{"type": "text", "text": "[MASKED]", "cache_control": {"type": "ephemeral"}}]
+
+
+def _tool_call(arguments: JsonValue) -> dict[str, JsonValue]:
+    return {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_1", "function": {"name": "secret_tool_name", "arguments": arguments}}],
+            }
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        '{ "token": "secret", "count": 7, "ok": false, "none": null }',
+        {"token": "secret", "count": 7, "ok": False, "none": None},
+    ),
+    ids=("string", "dict"),
+)
+def test_native_tool_call_arguments_are_masked_as_json(arguments: JsonValue) -> None:
+    data = _tool_call(arguments)
+    assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]")) == 1
+    function = data["messages"][0]["tool_calls"][0]["function"]
+    masked = json.loads(function["arguments"]) if isinstance(arguments, str) else function["arguments"]
+    assert masked == {"token": "[MASKED]", "count": 7, "ok": False, "none": None}
+    assert function["name"] == "secret_tool_name"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    ('{"token":"secret", "token":"safe"}', '{"token":"secret",broken', '{"pattern":"[\\ud800-\\udbff] secret"}'),
+    ids=("duplicate-key", "malformed", "lone-surrogate"),
+)
+def test_native_tool_call_arguments_that_are_not_clean_json_are_masked_as_raw_text(arguments: str) -> None:
+    data = _tool_call(arguments)
+    assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]")) == 1
+    assert data["messages"][0]["tool_calls"][0]["function"]["arguments"] == arguments.replace("secret", "[MASKED]")
+
+
+def test_native_tool_arguments_keep_their_bytes_when_nothing_is_masked():
+    arguments = '{ "content" : "caf\\u00e9", "count": 3 }'
+    data = {"messages": [{"tool_calls": [{"function": {"arguments": arguments}}]}]}
+    assert walk_user_text(data, lambda text: text) == 1
+    assert data["messages"][0]["tool_calls"][0]["function"]["arguments"] == arguments
+
+
+@pytest.mark.parametrize(
+    "data",
+    (
+        {"system": "payload"},
+        {"system": [{"type": "text", "text": "payload"}]},
+        {"messages": [{"content": [{"type": "tool_result", "content": "payload"}]}]},
+        {"messages": [{"content": [{"type": "tool_result", "content": [{"type": "text", "text": "payload"}]}]}]},
+        {"messages": [{"content": [{"type": "tool_use", "input": {"nested": [False, {"field": "payload"}]}}]}]},
+        {"messages": [{"tool_calls": [{"function": {"arguments": '{"field":"payload"}'}}]}]},
+        {"messages": [{"tool_calls": [{"function": {"arguments": {"field": "payload"}}}]}]},
+    ),
+)
+def test_native_writer_visits_each_tool_and_system_slot(data):
+    assert walk_user_text(data, lambda text: text.replace("payload", "[MASKED]")) == 1
+    assert "payload" not in json.dumps(data)
+
+
+@pytest.mark.parametrize(
+    "part",
+    (
+        {"type": "tool_result", "content": "secret", "text": "safe"},
+        {"type": "tool_use", "input": {"env": "secret"}, "text": "safe"},
+    ),
+)
+def test_native_tool_envelope_text_cannot_shadow_its_payload(part):
+    data = {"messages": [{"role": "assistant", "content": [part]}]}
+    walk_user_text(data, lambda text: text.replace("secret", "[REDACTED]"))
+    assert "secret" not in json.dumps(data)
+    assert data["messages"][0]["content"][0]["text"] == "safe"
+
+
+def _deep_tool_value(depth: int, leaf: JsonValue) -> JsonValue:
+    return reduce(lambda value, level: {"nested": value} if level % 2 else [value], range(depth), leaf)
+
+
+def _deep_tool_leaf(value: JsonValue, depth: int) -> JsonValue:
+    def child(current: JsonValue, _level: int) -> JsonValue:
+        assert isinstance(current, (list, dict))
+        return current[0] if isinstance(current, list) else current["nested"]
+
+    return reduce(child, range(depth), value)
+
+
+@pytest.mark.parametrize("depth", (255, 1000))
+def test_deep_tool_input_writer_preserves_values(depth: int) -> None:
+    leaf = {"secret-key": "secret", "empty": "", "enabled": False, "count": 7, "ratio": 1.5, "none": None}
+    payload = _deep_tool_value(depth, leaf)
+    data = {"messages": [{"content": [{"type": "tool_use", "id": "tool", "name": "read", "input": payload}]}]}
+    assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]")) == 1
+    result = _deep_tool_leaf(data["messages"][0]["content"][0]["input"], depth)
+    assert isinstance(result, dict)
+    assert tuple(result) == tuple(leaf)
+    assert result == {**leaf, "secret-key": "[MASKED]"}
+    assert result["enabled"] is False and result["none"] is None
+    assert type(result["count"]) is int and type(result["ratio"]) is float
+    assert leaf["secret-key"] == "secret"
+
+
+@pytest.mark.parametrize("depth", (255, 1000))
+def test_deep_tool_json_direct_map_and_iteration(depth: int) -> None:
+    value = _deep_tool_value(depth, {"secret": "secret", "tail": [False, None, "last", ""]})
+    rewritten = map_tool_json_text(value, lambda text: text.replace("secret", "[MASKED]"))
+    assert tuple(iter_tool_json_text(value)) == ("secret", "last")
+    assert tuple(iter_tool_json_text(rewritten)) == ("[MASKED]", "last")
+    assert _deep_tool_leaf(rewritten, depth) == {"secret": "[MASKED]", "tail": [False, None, "last", ""]}
+
+
+def test_deep_tool_arguments_decode_values_and_preserve_no_hit_bytes() -> None:
+    arguments = '{ "nested" : ' * 255 + '{"caf\\u00e9":"caf\\u00e9 secret","empty":"","count":7}' + " }" * 255
+    data = {"messages": [{"tool_calls": [{"function": {"name": "secret_tool", "arguments": arguments}}]}]}
+    assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]")) == 1
+    function = data["messages"][0]["tool_calls"][0]["function"]
+    decoded = json.loads(function["arguments"])
+    for _ in range(255):
+        decoded = decoded["nested"]
+    assert tuple(decoded) == ("café", "empty", "count")
+    assert decoded == {"café": "café [MASKED]", "empty": "", "count": 7}
+    assert function["name"] == "secret_tool"
+    clean = arguments.replace("secret", "safe")
+    untouched = {"messages": [{"tool_calls": [{"function": {"arguments": clean}}]}]}
+    assert walk_user_text(untouched, lambda text: text) == 1
+    assert untouched["messages"][0]["tool_calls"][0]["function"]["arguments"] == clean
+
+
+def test_deep_tool_arguments_parser_limit_keeps_raw_masking_fallback() -> None:
+    arguments = ""
+    for depth in (1000, 2000, 4000, 8000, 16000):
+        candidate = '{"nested":' * depth + '{"value":"secret"}' + "}" * depth
+        try:
+            json.loads(candidate, object_pairs_hook=dict)
+        except RecursionError:
+            arguments = candidate
+            break
+    assert arguments, "JSON decoder did not reach its recursion guard"
+    data = {"messages": [{"tool_calls": [{"function": {"arguments": arguments}}]}]}
+    try:
+        visited = walk_user_text(data, lambda text: text.replace("secret", "[MASKED]"))
+    except RecursionError:
+        visited = 0
+    assert visited == 1
+    rewritten = data["messages"][0]["tool_calls"][0]["function"]["arguments"]
+    assert rewritten == arguments.replace("secret", "[MASKED]")
+
+
+def test_tool_json_graph_repeated_shared_containers_keep_order_and_empty_leaves() -> None:
+    shared = {"secret-key": "secret", "empty": "", "scalars": [False, 7, 1.5, None], "tail": "last"}
+    value = {"first": shared, "second": shared, "empty": []}
+    visited = []
+
+    def visit(text: str) -> str:
+        visited.append(text)
+        return text.replace("secret", "[MASKED]")
+
+    rewritten = map_tool_json_text(value, visit)
+    assert visited == ["secret", "last", "secret", "last"]
+    assert tuple(iter_tool_json_text(value)) == ("secret", "last", "secret", "last")
+    assert isinstance(rewritten, dict) and tuple(rewritten) == ("first", "second", "empty")
+    assert rewritten["first"] == rewritten["second"] == {**shared, "secret-key": "[MASKED]"}
+    assert rewritten["empty"] == [] and shared["secret-key"] == "secret"
+
+
+def test_nested_tool_result_chain_leaves_later_messages_masked() -> None:
+    chain = reduce(
+        lambda content, _: [{"type": "tool_result", "tool_use_id": "tool", "content": content}],
+        range(1500),
+        [{"type": "text", "text": "inner"}],
+    )
+    data = {"messages": [{"role": "assistant", "content": chain}, {"role": "user", "content": "secret"}]}
+    walk_user_text(data, lambda text: text.replace("secret", "[MASKED]"))
+    assert data["messages"][1]["content"] == "[MASKED]"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    ('{"token":"secret","limit":1e400}', '{"token":"secret","limit":-Infinity}', '{"token":"secret","ratio":NaN}'),
+)
+def test_tool_arguments_with_non_finite_numbers_keep_their_original_bytes(arguments: str) -> None:
+    data = {"messages": [{"tool_calls": [{"function": {"arguments": arguments}}]}]}
+    assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]")) == 1
+    assert data["messages"][0]["tool_calls"][0]["function"]["arguments"] == arguments.replace("secret", "[MASKED]")
+
+
+@pytest.mark.parametrize(
+    ("arguments", "masked"),
+    (
+        (
+            '{ "token" : "secret", "amount": 0.123456789012345678901, "price": 1.50, "limit": 1e5 }',
+            '{ "token" : "[MASKED]", "amount": 0.123456789012345678901, "price": 1.50, "limit": 1e5 }',
+        ),
+        (
+            '{"caf\\u00e9":"caf\\u00e9","list":["secret", "", "a\\"secret\\"b"],\n "secret": "keep"}',
+            '{"caf\\u00e9":"caf\\u00e9","list":["[MASKED]", "", "a\\"[MASKED]\\"b"],\n "secret": "keep"}',
+        ),
+    ),
+    ids=("number-literals", "escapes-and-keys"),
+)
+def test_masked_tool_arguments_change_only_the_masked_strings(arguments: str, masked: str) -> None:
+    data = {"messages": [{"tool_calls": [{"function": {"arguments": arguments}}]}]}
+    assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]")) == 1
+    assert data["messages"][0]["tool_calls"][0]["function"]["arguments"] == masked
+
+
+@pytest.mark.parametrize(
+    "rewritten",
+    (
+        {"token": "[MASKED]"},
+        {"token": "[MASKED]", "renamed": "keep", "count": 7},
+        {"token": "[MASKED]", "note": "keep", "count": 8},
+        {"token": "[MASKED]", "note": "keep", "count": True},
+    ),
+    ids=("key-dropped", "key-renamed", "number-changed", "number-retyped"),
+)
+def test_tool_visitor_that_changes_more_than_strings_writes_its_payload_as_arguments(rewritten: JsonValue) -> None:
+    data = {
+        "messages": [{"tool_calls": [{"function": {"arguments": '{ "token": "secret", "note": "keep", "count": 1 }'}}]}]
+    }
+    assert walk_user_text(data, lambda text: text, lambda payload: rewritten) == 1
+    assert data["messages"][0]["tool_calls"][0]["function"]["arguments"] == json.dumps(rewritten)
+

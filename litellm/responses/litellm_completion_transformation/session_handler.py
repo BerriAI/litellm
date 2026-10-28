@@ -54,8 +54,15 @@ def _normalize_redacted_tool_call_arguments(message: Message) -> None:
 _MCP_TOOL_CALL_TYPES: Final = frozenset((CallTypes.list_mcp_tools.value, CallTypes.call_mcp_tool.value))
 
 
+_FAILED_TURN_STATUS: Final = "failure"
+
+
+def _is_a_failed_turn(spend_log: "SpendLogsPayload") -> bool:
+    return "status" in spend_log and spend_log["status"] == _FAILED_TURN_STATUS
+
+
 def _is_a_conversation_turn(spend_log: "SpendLogsPayload") -> bool:
-    return spend_log.get("call_type") not in _MCP_TOOL_CALL_TYPES
+    return spend_log.get("call_type") not in _MCP_TOOL_CALL_TYPES and not _is_a_failed_turn(spend_log)
 
 
 _MCP_AUTO_EXECUTE_OUTPUT_TYPES: Final = frozenset(("mcp_tools_fetched", "tool_execution_results"))

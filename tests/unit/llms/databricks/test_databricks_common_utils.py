@@ -1,19 +1,21 @@
 import json
 import sys
+from functools import partial
 from types import ModuleType, SimpleNamespace
 from typing import Final
+from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
+import responses
 import respx
 from fastapi.testclient import TestClient
 
-from unittest.mock import MagicMock, patch
-
 import litellm
 from litellm._version import version
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import BadRequestError
-from litellm.llms.databricks.common_utils import DatabricksBase
+from litellm.llms.databricks.common_utils import DatabricksBase, DatabricksException
 
 
 def test_databricks_validate_environment():
@@ -195,3 +197,79 @@ def test_embeddings_uses_databricks_sdk_if_api_key_and_base_not_specified(
         {"model": "bge-large-en-v1.5", "input": inputs, "extraparam": "testpassingextraparam"},
     )
     assert response.to_dict() == upstream_response
+
+
+@responses.activate
+def test_should_reuse_the_token_until_its_refresh_margin() -> None:
+    clock: Final = Mock(return_value=1000.0)
+    get_token: Final = partial(
+        DatabricksBase().get_cached_oauth_m2m_token,
+        client_id="synthetic-client",
+        client_secret="synthetic-secret",
+        token_cache=InMemoryCache(clock=clock),
+    )
+    responses.post(f"{SDK_HOST}/oidc/v1/token", json={"access_token": "first-token", "expires_in": 3600})
+    responses.post(f"{SDK_HOST}/oidc/v1/token", json={"access_token": "refreshed-token", "expires_in": 3600})
+
+    assert get_token(SDK_HOST) == "first-token"
+    clock.return_value = 4539.0
+    assert get_token(f"{SDK_HOST}/serving-endpoints/") == "first-token"
+    assert len(responses.calls) == 1
+    clock.return_value = 4541.0
+    assert get_token(SDK_HOST) == "refreshed-token"
+    assert len(responses.calls) == 2
+
+
+@responses.activate
+@pytest.mark.parametrize("expires_in", (0, 30, 60))
+def test_should_not_cache_a_token_within_the_refresh_margin(expires_in: int) -> None:
+    get_token: Final = partial(
+        DatabricksBase().get_cached_oauth_m2m_token,
+        SDK_HOST,
+        "synthetic-client",
+        "synthetic-secret",
+        token_cache=InMemoryCache(),
+    )
+    token: Final = responses.post(
+        f"{SDK_HOST}/oidc/v1/token", json={"access_token": "short-lived-token", "expires_in": expires_in}
+    )
+
+    assert get_token() == "short-lived-token"
+    assert get_token() == "short-lived-token"
+    assert token.call_count == 2
+
+
+@responses.activate
+@pytest.mark.parametrize("changed", ("workspace", "client_id", "client_secret"))
+def test_should_not_reuse_a_token_for_a_different_workspace_or_credentials(changed: str) -> None:
+    base: Final = DatabricksBase()
+    cache: Final = InMemoryCache()
+    responses.post(f"{SDK_HOST}/oidc/v1/token", json={"access_token": "original-token", "expires_in": 3600})
+    assert (
+        base.get_cached_oauth_m2m_token(SDK_HOST, "synthetic-client", "synthetic-secret", token_cache=cache)
+        == "original-token"
+    )
+
+    next_host: Final = "https://other-workspace.example" if changed == "workspace" else SDK_HOST
+    client_id: Final = "rotated-client" if changed == "client_id" else "synthetic-client"
+    client_secret: Final = "rotated-secret" if changed == "client_secret" else "synthetic-secret"
+    responses.post(f"{next_host}/oidc/v1/token", json={"access_token": "new-token", "expires_in": 3600})
+    assert base.get_cached_oauth_m2m_token(next_host, client_id, client_secret, token_cache=cache) == "new-token"
+    assert len(responses.calls) == 2
+
+
+@responses.activate
+def test_should_propagate_oauth_failure_and_retry_the_next_request() -> None:
+    get_token: Final = partial(
+        DatabricksBase().get_cached_oauth_m2m_token,
+        SDK_HOST,
+        "synthetic-client",
+        "synthetic-secret",
+        token_cache=InMemoryCache(),
+    )
+    responses.post(f"{SDK_HOST}/oidc/v1/token", status=401, json={"error": "invalid_client"})
+    responses.post(f"{SDK_HOST}/oidc/v1/token", json={"access_token": "valid-token", "expires_in": 3600})
+
+    with pytest.raises(DatabricksException, match="OAuth M2M token request failed"):
+        get_token()
+    assert get_token() == "valid-token"

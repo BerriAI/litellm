@@ -21,6 +21,7 @@ from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+from tests.unit.proxy.conftest import httpx_transport
 
 
 @pytest.mark.serial
@@ -98,6 +99,69 @@ def test_get_complete_url():
     expected = "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
 
     assert result == expected
+
+
+@pytest.mark.parametrize(
+    ("base_path", "expected_path"),
+    [
+        ("/foundry/openai/openai/v1", "/foundry/openai/openai/v1/responses?api-version=v1"),
+        ("/foundry/openai/openai/v1/", "/foundry/openai/openai/v1/responses?api-version=v1"),
+        ("/foundry/openai/openai/v1/responses", "/foundry/openai/openai/v1/responses?api-version=v1"),
+        ("/foundry/openai/openai/v1/responses/", "/foundry/openai/openai/v1/responses?api-version=v1"),
+        (
+            "/openai/v1?redirect=/openai/v1/responses",
+            "/openai/v1/responses?redirect=%2Fopenai%2Fv1%2Fresponses&api-version=v1",
+        ),
+        (
+            "/openai/v1?tenant=example&api-version=preview",
+            "/openai/v1/responses?tenant=example&api-version=preview",
+        ),
+        (
+            "/openai/v1/responses?api-version=2025-04-01-preview",
+            "/openai/v1/responses?api-version=2025-04-01-preview",
+        ),
+        (
+            "/openai/v1/responses?redirect=/openai/responses",
+            "/openai/v1/responses?redirect=%2Fopenai%2Fresponses&api-version=v1",
+        ),
+        ("/foo%2Fbar/openai/v1?tenant=example", "/foo%2Fbar/openai/v1/responses?tenant=example&api-version=v1"),
+        (
+            "/foo%3Fbar/openai/v1/responses?tenant=example",
+            "/foo%3Fbar/openai/v1/responses?tenant=example&api-version=v1",
+        ),
+        ("/openai", "/openai/v1/responses?api-version=v1"),
+        ("/foundry/openai", "/foundry/openai/v1/responses?api-version=v1"),
+    ],
+)
+def test_explicit_v1_api_base_preserves_the_gateway_prefix_and_query(base_path: str, expected_path: str) -> None:
+    result: Final = AzureOpenAIResponsesAPIConfig().get_complete_url(
+        api_base=f"https://gateway.example.com{base_path}", litellm_params={"api_version": "v1"}
+    )
+
+    assert result == f"https://gateway.example.com{expected_path}"
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "expected_version"),
+    [
+        ({}, AZURE_DEFAULT_RESPONSES_API_VERSION),
+        ({"api_version": "v1"}, "v1"),
+        ({"api_version": "latest"}, "latest"),
+        ({"api_version": "preview"}, "preview"),
+        ({"api_version": "2025-04-01-preview"}, "2025-04-01-preview"),
+        ({"api_version": "2024-10-21"}, AZURE_DEFAULT_RESPONSES_API_VERSION),
+        ({"api_version": "2024-10-21", "responses_api_version": "preview"}, "preview"),
+    ],
+)
+def test_explicit_v1_api_base_keeps_responses_api_version_selection(
+    litellm_params: dict[str, str], expected_version: str
+) -> None:
+    result: Final = AzureOpenAIResponsesAPIConfig().get_complete_url(
+        api_base="https://gateway.example.com/foundry/openai/openai/v1",
+        litellm_params=litellm_params,
+    )
+
+    assert result == f"https://gateway.example.com/foundry/openai/openai/v1/responses?api-version={expected_version}"
 
 
 @pytest.mark.serial
@@ -945,6 +1009,119 @@ def test_dated_ga_api_version_sends_responses_to_the_unset_api_version_url(
     assert text == "Done."
     assert route.call_count == 1
     assert route.calls[0].request.url == _unset_api_version_responses_url()
+
+
+_COMPLETED_RESPONSE_SSE: Final = "".join(
+    f"data: {json.dumps(event)}\n\n"
+    for event in (
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 0,
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Done.",
+        },
+        {"type": "response.completed", "sequence_number": 1, "response": _COMPLETED_RESPONSE},
+    )
+)
+
+
+@pytest.fixture
+def gateway_responses(respx_mock: respx.MockRouter, stream: bool) -> respx.Route:
+    body: Final = _COMPLETED_RESPONSE_SSE if stream else json.dumps(_COMPLETED_RESPONSE)
+    content_type: Final = "text/event-stream" if stream else "application/json"
+    return respx_mock.post(
+        "https://gateway.example.com/foundry/openai/openai/v1/responses?api-version=v1"
+    ).mock(return_value=httpx.Response(200, text=body, headers={"content-type": content_type}))
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_explicit_v1_base_sends_responses_to_the_gateway(gateway_responses: respx.Route, stream: bool) -> None:
+    response: Final = litellm.responses(
+        model="azure/gpt-6.1-sol",
+        input="hi",
+        api_base="https://gateway.example.com/foundry/openai/openai/v1",
+        api_key="azure-test-key",
+        api_version="v1",
+        stream=stream,
+    )
+    text: Final = (
+        "".join(event.delta for event in response if event.type == "response.output_text.delta")
+        if stream
+        else response.output[0].content[0].text
+    )
+
+    assert text == "Done."
+    assert gateway_responses.call_count == 1
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_explicit_v1_base_sends_bridged_chat_to_the_gateway(gateway_responses: respx.Route, stream: bool) -> None:
+    response: Final = litellm.completion(
+        model="azure/responses/gpt-6.1-sol",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://gateway.example.com/foundry/openai/openai/v1",
+        api_key="azure-test-key",
+        api_version="v1",
+        stream=stream,
+    )
+    text: Final = (
+        "".join(chunk.choices[0].delta.content or "" for chunk in response)
+        if stream
+        else response.choices[0].message.content
+    )
+
+    assert text == "Done."
+    assert gateway_responses.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.parametrize("stream", [False, True])
+async def test_explicit_v1_base_sends_async_responses_to_the_gateway(
+    gateway_responses: respx.Route, stream: bool
+) -> None:
+    response: Final = await litellm.aresponses(
+        model="azure/gpt-6.1-sol",
+        input="hi",
+        api_base="https://gateway.example.com/foundry/openai/openai/v1",
+        api_key="azure-test-key",
+        api_version="v1",
+        stream=stream,
+    )
+    text: Final = (
+        "".join([event.delta async for event in response if event.type == "response.output_text.delta"])
+        if stream
+        else response.output[0].content[0].text
+    )
+
+    assert text == "Done."
+    assert gateway_responses.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.parametrize("stream", [False, True])
+async def test_explicit_v1_base_sends_async_bridged_chat_to_the_gateway(
+    gateway_responses: respx.Route, stream: bool
+) -> None:
+    response: Final = await litellm.acompletion(
+        model="azure/responses/gpt-6.1-sol",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://gateway.example.com/foundry/openai/openai/v1",
+        api_key="azure-test-key",
+        api_version="v1",
+        stream=stream,
+    )
+    text: Final = (
+        "".join([chunk.choices[0].delta.content or "" async for chunk in response])
+        if stream
+        else response.choices[0].message.content
+    )
+
+    assert text == "Done."
+    assert gateway_responses.call_count == 1
 
 
 _LIFECYCLE_BODIES: Final = {
