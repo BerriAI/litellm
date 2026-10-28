@@ -35,6 +35,7 @@ from litellm.integrations.otel.logger import (
     publish_global_otel_v2_provider,
 )
 from litellm.integrations.otel.mappers import resolve_mappers
+from litellm.integrations.otel.mappers.langfuse import LANGFUSE_REQUEST_METADATA_ATTRIBUTES
 from litellm.integrations.otel.model.config import (
     CaptureMessageContent,
     ExporterOwner,
@@ -3450,7 +3451,7 @@ class TestLangfuseDestinationFields:
         credential_less_proxy(monkeypatch)
         capture: Final = _ExporterCapture()
         for kind in ("otlp_grpc", "otlp_http", "console"):
-            monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)
+            monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
         config: Final = OpenTelemetryV2Config()
         provider: Final = build_tracer_provider(config, tenant_overrides=True)
         attach_tenant_fan_out(provider, config)
@@ -3480,24 +3481,43 @@ class TestLangfuseDestinationFields:
         assert "langfuse.observation.metadata" in to_langfuse
         assert "langfuse.observation.metadata" not in received[None]
 
+    @staticmethod
+    def _attributes(
+        destinations: tuple[OtelDestination, ...], limit: int | None, call: LLMCallSpanData
+    ) -> dict[str, object]:
+        exporter: Final = InMemorySpanExporter()
+        provider: Final = TracerProvider(span_limits=SpanLimits(max_span_attributes=limit))
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), OpenTelemetryV2Config())
+
+        def run() -> None:
+            set_request_destinations(destinations)
+            emitter.emit(SpanRole.LLM_CALL, call)
+
+        in_fresh_context(run)
+        return dict(exporter.get_finished_spans()[0].attributes or {})
+
     def test_a_span_at_its_attribute_limit_sheds_the_destinations_langfuse_fields_first(self) -> None:
-        def attributes(destinations: tuple[OtelDestination, ...], limit: int | None) -> dict[str, object]:
-            exporter: Final = InMemorySpanExporter()
-            provider: Final = TracerProvider(span_limits=SpanLimits(max_span_attributes=limit))
-            provider.add_span_processor(SimpleSpanProcessor(exporter))
-            emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), OpenTelemetryV2Config())
-
-            def run() -> None:
-                set_request_destinations(destinations)
-                emitter.emit(SpanRole.LLM_CALL, _MODEL_CALL_WITH_CONTENT)
-
-            in_fresh_context(run)
-            return dict(exporter.get_finished_spans()[0].attributes or {})
-
-        generic: Final = attributes((), None)
+        generic: Final = self._attributes((), None, _MODEL_CALL_WITH_CONTENT)
 
         assert "user.id" not in generic
-        assert attributes((LANGFUSE_DEST,), len(generic)) == generic, "the generic attributes all survive"
+        assert self._attributes((LANGFUSE_DEST,), len(generic), _MODEL_CALL_WITH_CONTENT) == generic, (
+            "the generic attributes all survive"
+        )
+
+    def test_a_span_at_its_attribute_limit_sheds_the_destinations_request_metadata_before_its_other_fields(
+        self,
+    ) -> None:
+        call: Final = replace(
+            _MODEL_CALL_WITH_CONTENT, request_metadata=MappingProxyType({"user_api_key_alias": "prod-key"})
+        )
+        whole: Final = self._attributes((LANGFUSE_DEST,), None, call)
+
+        squeezed: Final = self._attributes((LANGFUSE_DEST,), len(whole) - 1, call)
+
+        assert len(squeezed) == len(whole) - 1
+        assert whole.keys() - squeezed.keys() <= LANGFUSE_REQUEST_METADATA_ATTRIBUTES
+        assert squeezed["langfuse.observation.type"] == "generation"
 
 
 class TestContextIsolation:

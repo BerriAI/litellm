@@ -169,7 +169,6 @@ class SpanEmitter:
         self._mappers: list[AttributeMapper] = (
             list(mappers) if mappers is not None else resolve_mappers(config.mapper_names)
         )
-        # A key's or team's Langfuse destination reads the Langfuse vocabulary, which this logger may not write.
         self._langfuse: Final = (
             None if any(isinstance(mapper, LangfuseMapper) for mapper in self._mappers) else LangfuseMapper()
         )
@@ -302,7 +301,12 @@ class SpanEmitter:
         )
         configured: Final = {key: value for mapper in self._mappers for key, value in mapper.map(data).items()}
         for_langfuse: Final = (
-            self._langfuse.map(data)
+            dict(
+                sorted(
+                    self._langfuse.map(data).items(),
+                    key=lambda item: item[0] not in LANGFUSE_REQUEST_METADATA_ATTRIBUTES,
+                )
+            )
             if self._langfuse is not None and ExporterOwner.LANGFUSE_OTEL in destination_backends()
             else _NO_ATTRIBUTES
         )
