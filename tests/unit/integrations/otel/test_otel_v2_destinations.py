@@ -3915,10 +3915,12 @@ class TestConfigTeamDestinations:
                 "langfuse_host": "http://cfg-team.internal",
             },
         }
-        monkeypatch.setattr(litellm, "default_team_settings", [team])
         monkeypatch.setattr(
-            proxy_server.proxy_config, "load_team_config", lambda team_id: dict(team) if team_id == "cfg-team" else {}
+            proxy_server.proxy_config,
+            "config",
+            MappingProxyType({"litellm_settings": {"default_team_settings": [team]}}),
         )
+        monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", [], raising=False)
         return team
 
     def test_a_config_team_resolves_with_its_env_secret_and_unlisted_host(self):
@@ -3945,7 +3947,9 @@ class TestConfigTeamDestinations:
         ],
         ids=["key-logging", "team-logging", "team-callback-settings", "unconfigured-team"],
     )
-    def test_a_level_that_wins_over_the_config_keeps_it_out(self, auth):
+    def test_a_level_that_wins_over_the_config_keeps_it_out(self, monkeypatch, auth):
+        monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["cfg-team.internal"], raising=False)
+
         assert resolve_tenant_otel_destinations(auth) == ()
 
 

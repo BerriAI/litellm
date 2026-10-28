@@ -1382,9 +1382,11 @@ def _config_team_callbacks(user_api_key_dict: UserAPIKeyAuth) -> tuple[AddTeamCa
     from litellm.proxy.proxy_server import proxy_config
 
     team_id: Final = user_api_key_dict.team_id
+    litellm_settings: Final = proxy_config.config.get("litellm_settings")
     if (
         team_id is None
-        or not litellm.default_team_settings
+        or not isinstance(litellm_settings, Mapping)
+        or "default_team_settings" not in litellm_settings
         or "callback_settings" in (user_api_key_dict.team_metadata or {})
     ):
         return ()
