@@ -533,22 +533,42 @@ async def _check_team_model_budget(
         )
 
 
-async def _check_end_user_model_budget(
+async def _end_user_model_max_budget(
+    end_user_id: str | None,
     end_user_object: LiteLLM_EndUserTable | None,
+    key_end_user_budget_id: str | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+) -> Mapping[str, object] | None:
+    budget_table: Final = (
+        end_user_object.litellm_budget_table
+        if end_user_object is not None
+        else (
+            await resolve_default_end_user_budget(
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                key_end_user_budget_id=key_end_user_budget_id,
+                parent_otel_span=parent_otel_span,
+            )
+            if end_user_id and prisma_client is not None
+            else None
+        )
+    )
+    return model_max_budget_of(budget_table) if budget_table is not None else None
+
+
+async def _check_end_user_model_budget(
+    end_user_id: str | None,
+    end_user_model_max_budget: Mapping[str, object] | None,
     model_max_budget_limiter: _EndUserModelBudgetLimiter,
     models: Sequence[str],
 ) -> None:
-    """Enforce the `model_max_budget` of the end user's budget (its linked one or the default applied to it).
-
-    Reads the request's end-user row, not the token: the master key's cached auth object keeps
-    the limits of whichever end user it was cached with."""
-    budget_table: Final = end_user_object.litellm_budget_table if end_user_object is not None else None
-    end_user_model_max_budget: Final = model_max_budget_of(budget_table) if budget_table is not None else None
-    if end_user_object is None or not end_user_model_max_budget:
+    if not end_user_id or not end_user_model_max_budget:
         return
     for model_name in models:
         await model_max_budget_limiter.is_end_user_within_model_budget(
-            end_user_id=end_user_object.user_id,
+            end_user_id=end_user_id,
             end_user_model_max_budget=end_user_model_max_budget,
             model=model_name,
         )
@@ -2451,7 +2471,6 @@ async def user_api_key_auth_builder(
                         auto_registered.user_model_max_budget = (
                             user_object.model_max_budget if user_object is not None else None
                         )
-                        auto_registered.end_user_model_max_budget = valid_token.end_user_model_max_budget
                         valid_token = auto_registered
                         api_key = valid_token.token or ""
 
@@ -2501,26 +2520,19 @@ async def user_api_key_auth_builder(
                         # zero-cost model would be refused here and allowed there,
                         # while the log above claims all budget checks were skipped.
                         if not skip_budget_checks:
-                            jwt_budget_models: Final = _get_model_names_for_budget_checks(
-                                model=_get_model_from_request_context(
-                                    request_data=request_data,
-                                    route=route,
-                                    request=request,
-                                    llm_router=llm_router,
-                                    team_id=valid_token.team_id,
-                                )
-                            )
                             await _check_user_model_budget(
                                 valid_token=cast(UserAPIKeyAuth, valid_token),
                                 model_max_budget_limiter=model_max_budget_limiter,
-                                models=jwt_budget_models,
+                                models=_get_model_names_for_budget_checks(
+                                    model=_get_model_from_request_context(
+                                        request_data=request_data,
+                                        route=route,
+                                        request=request,
+                                        llm_router=llm_router,
+                                        team_id=valid_token.team_id,
+                                    )
+                                ),
                             )
-                            if not route_skips_budget_checks(route=route):
-                                await _check_end_user_model_budget(
-                                    end_user_object=result["end_user_object"],
-                                    model_max_budget_limiter=model_max_budget_limiter,
-                                    models=jwt_budget_models,
-                                )
 
                         return cast(UserAPIKeyAuth, valid_token)
 
@@ -3805,6 +3817,18 @@ async def run_centralized_common_checks(
             parent_otel_span=parent_otel_span,
             keep_token_limits=user_custom_auth is not None,
         )
+    end_user_model_max_budget: Final = await _end_user_model_max_budget(
+        end_user_id=end_user_id,
+        end_user_object=end_user_object,
+        key_end_user_budget_id=key_end_user_budget_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+    )
+    if end_user_id and (user_custom_auth is None or user_api_key_auth_obj.end_user_model_max_budget is None):
+        user_api_key_auth_obj.end_user_model_max_budget = (  # rebind-ok: the spend hook charges from this token
+            dict(end_user_model_max_budget) if end_user_model_max_budget else None
+        )
 
     skip_budget_checks: Final = _should_skip_budget_checks(
         request_data=request_data,
@@ -3879,11 +3903,6 @@ async def run_centralized_common_checks(
                 project_object if isinstance(project_object, LiteLLM_ProjectTableCachedObj) else None
             )
             if not route_skips_budget_checks(route=route):
-                await _check_end_user_model_budget(
-                    end_user_object=end_user_object,
-                    model_max_budget_limiter=model_max_budget_limiter,
-                    models=models,
-                )
                 await _check_team_member_model_budget_with_fallback(
                     valid_token=user_api_key_auth_obj,
                     model_max_budget_limiter=model_max_budget_limiter,
@@ -3901,6 +3920,20 @@ async def run_centralized_common_checks(
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
+                )
+                await _check_end_user_model_budget(
+                    end_user_id=end_user_id,
+                    end_user_model_max_budget=user_api_key_auth_obj.end_user_model_max_budget,
+                    model_max_budget_limiter=model_max_budget_limiter,
+                    models=_get_model_names_for_budget_checks(
+                        model=_get_model_from_request_context(
+                            request_data=request_data,
+                            route=route,
+                            request=request,
+                            llm_router=llm_router,
+                            team_id=user_api_key_auth_obj.team_id,
+                        )
+                    ),
                 )
             if sub_call and RouteChecks.is_llm_api_route(route=route):
                 await virtual_key_max_budget_check(
