@@ -147,7 +147,8 @@ async fn provider_call(
             &MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params),
         )?,
         &validated.headers,
-    );
+        shaping.settings.drop_params,
+    )?;
     let environment = ValidatedEnvironment {
         headers: config.request_headers(
             with_default_headers(validated.headers, config.default_headers()),
@@ -525,33 +526,53 @@ mod tests {
         );
     }
 
+    fn vertex_call_requesting(
+        shaping: MessagesShaping,
+        requested: &str,
+        drop_params: bool,
+    ) -> MessagesCall {
+        MessagesCall {
+            body: body(
+                json!({"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+            ),
+            api_key: None,
+            api_base: Some("https://vertex.test".into()),
+            custom_llm_provider: Some("vertex_ai".into()),
+            litellm_params: Default::default(),
+            extra_headers: Some(Map::from_iter([
+                ("authorization".to_string(), json!("Bearer vertex-token")),
+                ("anthropic-version".to_string(), json!(requested)),
+            ])),
+            provider_specific_header: None,
+            timeout: None,
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    drop_params,
+                    ..shaping.settings
+                },
+                ..shaping
+            },
+        }
+    }
+
+    fn vertex_project(name: &str) -> Option<String> {
+        (name == "VERTEXAI_PROJECT").then(|| "version-project".to_string())
+    }
+
     #[rstest]
-    #[case::sdk_2("2026-10-21", "2026-10-21")]
-    #[case::sdk_1("2023-06-01", "vertex-2023-10-16")]
+    #[case::sdk_2("2026-10-21", false, "2026-10-21")]
+    #[case::sdk_1("2023-06-01", false, "vertex-2023-10-16")]
+    #[case::unknown_under_drop_params("latest", true, "vertex-2023-10-16")]
     #[tokio::test]
     async fn vertex_gets_the_requested_version_in_the_body_alone(
         shaping: MessagesShaping,
         #[case] requested: &str,
+        #[case] drop_params: bool,
         #[case] body_version: &str,
     ) {
         let call = provider_call_with_secrets(
-            MessagesCall {
-                body: body(
-                    json!({"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
-                ),
-                api_key: None,
-                api_base: Some("https://vertex.test".into()),
-                custom_llm_provider: Some("vertex_ai".into()),
-                litellm_params: Default::default(),
-                extra_headers: Some(Map::from_iter([
-                    ("authorization".to_string(), json!("Bearer vertex-token")),
-                    ("anthropic-version".to_string(), json!(requested)),
-                ])),
-                provider_specific_header: None,
-                timeout: None,
-                shaping,
-            },
-            &|name: &str| (name == "VERTEXAI_PROJECT").then(|| "version-project".to_string()),
+            vertex_call_requesting(shaping, requested, drop_params),
+            &vertex_project,
         )
         .await
         .unwrap();
@@ -566,6 +587,21 @@ mod tests {
             (version_headers, &call.wire.body["anthropic_version"]),
             (Vec::<&str>::new(), &json!(body_version))
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn vertex_refuses_an_unsupported_version_without_drop_params(shaping: MessagesShaping) {
+        assert!(matches!(
+            provider_call_with_secrets(
+                vertex_call_requesting(shaping, "latest", false),
+                &vertex_project
+            )
+            .await,
+            Err(Error::InvalidRequest(
+                litellm_llms::ErrorDetail::UnsupportedParameter { .. }
+            ))
+        ));
     }
 
     #[rstest]

@@ -77,8 +77,13 @@ pub trait BaseMessagesConfig: Sync {
         headers
     }
 
-    fn request_body(&self, request: MessagesRequest, _headers: &Headers) -> MessagesRequest {
-        request
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        _headers: &Headers,
+        _drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        Ok(request)
     }
 
     /// The JSON that goes on the wire, for a host whose body differs from the typed request:

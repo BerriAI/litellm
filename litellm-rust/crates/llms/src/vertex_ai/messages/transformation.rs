@@ -36,12 +36,27 @@ use litellm_llms_types::providers::vertex_ai::{
 };
 
 const WEB_SEARCH_TOOL_PREFIX: &str = "web_search";
-const FIRST_PARTY_VERSIONS_SERVED_AS_VERTEX_DEFAULT: [&str; 2] = ["2023-01-01", "2023-06-01"];
+const VERSIONS_SERVED_AS_VERTEX_DEFAULT: [&str; 3] = ["", "2023-01-01", "2023-06-01"];
+const VERSIONS_VERTEX_ACCEPTS_IN_BODY: [&str; 2] = [ANTHROPIC_VERSION, "2026-10-21"];
 
-fn vertex_version(requested: Option<&str>) -> &str {
-    requested
-        .filter(|version| !FIRST_PARTY_VERSIONS_SERVED_AS_VERTEX_DEFAULT.contains(version))
-        .unwrap_or(ANTHROPIC_VERSION)
+fn vertex_version<'a>(
+    model: &str,
+    requested: Option<&'a str>,
+    drop_params: bool,
+) -> Result<&'a str, Error> {
+    match requested.map(str::trim).unwrap_or_default() {
+        version if VERSIONS_SERVED_AS_VERTEX_DEFAULT.contains(&version) => Ok(ANTHROPIC_VERSION),
+        version if VERSIONS_VERTEX_ACCEPTS_IN_BODY.contains(&version) => Ok(version),
+        _ if drop_params => Ok(ANTHROPIC_VERSION),
+        version => Err(Error::InvalidRequest(
+            crate::ErrorDetail::UnsupportedParameter {
+                model: model.into(),
+                param: VERSION_HEADER.into(),
+                value: version.into(),
+                hint: String::new(),
+            },
+        )),
+    }
 }
 
 /// Claude on Vertex AI, Python's `VertexAIPartnerModelsAnthropicMessagesConfig`: the Anthropic
@@ -140,9 +155,18 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         )
     }
 
-    fn request_body(&self, request: MessagesRequest, headers: &Headers) -> MessagesRequest {
-        let version = vertex_version(header_value(headers, VERSION_HEADER));
-        MessagesRequest {
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        headers: &Headers,
+        drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        let version = vertex_version(
+            &request.model,
+            header_value(headers, VERSION_HEADER),
+            drop_params,
+        )?;
+        Ok(MessagesRequest {
             params: MessagesOptionalParams {
                 extra: request
                     .params
@@ -153,7 +177,7 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
                 ..request.params
             },
             ..request
-        }
+        })
     }
 
     /// Vertex addresses the model in the URL and rejects it in the body.
@@ -524,12 +548,17 @@ mod tests {
     }
 
     #[rstest]
-    #[case::sdk_2(&[("anthropic-version", "2026-10-21")], "2026-10-21")]
-    #[case::any_case(&[("Anthropic-Version", "2026-10-21")], "2026-10-21")]
-    #[case::sdk_1(&[("anthropic-version", "2023-06-01")], "vertex-2023-10-16")]
-    #[case::no_header(&[], "vertex-2023-10-16")]
+    #[case::sdk_2(&[("anthropic-version", "2026-10-21")], false, "2026-10-21")]
+    #[case::any_case(&[("Anthropic-Version", "2026-10-21")], false, "2026-10-21")]
+    #[case::vertex_name(&[("anthropic-version", "vertex-2023-10-16")], false, "vertex-2023-10-16")]
+    #[case::sdk_1(&[("anthropic-version", "2023-06-01")], false, "vertex-2023-10-16")]
+    #[case::first_version(&[("anthropic-version", "2023-01-01")], false, "vertex-2023-10-16")]
+    #[case::blank(&[("anthropic-version", " ")], false, "vertex-2023-10-16")]
+    #[case::no_header(&[], false, "vertex-2023-10-16")]
+    #[case::unknown_under_drop_params(&[("anthropic-version", "latest")], true, "vertex-2023-10-16")]
     fn the_requested_version_goes_in_the_body(
         #[case] forwarded: &[(&str, &str)],
+        #[case] drop_params: bool,
         #[case] body_version: &str,
     ) {
         let request: MessagesRequest = serde_json::from_value(json!({
@@ -542,10 +571,36 @@ mod tests {
             .iter()
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
-        let body =
-            serde_json::to_value(VERTEX_ANTHROPIC_MESSAGES_CONFIG.request_body(request, &headers))
-                .unwrap();
+        let body = serde_json::to_value(
+            VERTEX_ANTHROPIC_MESSAGES_CONFIG
+                .request_body(request, &headers, drop_params)
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(body["anthropic_version"], json!(body_version));
+    }
+
+    #[rstest]
+    #[case::unreleased("2025-01-01")]
+    #[case::alias("latest")]
+    fn an_unsupported_version_is_refused_without_drop_params(#[case] requested: &str) {
+        let request: MessagesRequest = serde_json::from_value(json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        .unwrap();
+        let headers: Headers = vec![("anthropic-version".to_string(), requested.to_string())];
+        assert_eq!(
+            VERTEX_ANTHROPIC_MESSAGES_CONFIG
+                .request_body(request, &headers, false)
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "invalid request: claude-sonnet-4-5 does not support anthropic-version={requested}. \
+                 To drop unsupported params, set `litellm.drop_params = True`."
+            )
+        );
     }
 
     #[rstest]
@@ -557,15 +612,18 @@ mod tests {
         }))
         .unwrap();
         let body = serde_json::to_value(
-            VERTEX_ANTHROPIC_MESSAGES_CONFIG.request_body(
-                VERTEX_ANTHROPIC_MESSAGES_CONFIG
-                    .transform_anthropic_messages_request(
-                        request,
-                        &MessagesTransformContext::default(),
-                    )
-                    .unwrap(),
-                &Vec::new(),
-            ),
+            VERTEX_ANTHROPIC_MESSAGES_CONFIG
+                .request_body(
+                    VERTEX_ANTHROPIC_MESSAGES_CONFIG
+                        .transform_anthropic_messages_request(
+                            request,
+                            &MessagesTransformContext::default(),
+                        )
+                        .unwrap(),
+                    &Vec::new(),
+                    false,
+                )
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(body["model"], json!("claude-sonnet-4-5@20250929"));
