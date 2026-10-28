@@ -8475,7 +8475,7 @@ export interface paths {
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
          *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
          *     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
-         *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+         *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
          *     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
@@ -8721,7 +8721,7 @@ export interface paths {
          *         - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
          *         - spend: Optional[float] - Amount spent by key
          *         - max_budget: Optional[float] - Max budget for key
-         *         - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+         *         - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
          *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
          *         - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
@@ -8798,7 +8798,7 @@ export interface paths {
          *     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
          *     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
-         *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+         *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
          *     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
@@ -8931,7 +8931,7 @@ export interface paths {
          *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
          *     - spend: Optional[float] - Amount spent by key
          *     - max_budget: Optional[float] - Max budget for key
-         *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+         *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
          *     - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached. Set to null to remove the soft budget.
@@ -9020,7 +9020,7 @@ export interface paths {
          *         - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
          *         - spend: Optional[float] - Amount spent by key
          *         - max_budget: Optional[float] - Max budget for key
-         *         - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+         *         - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
          *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
          *         - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
@@ -17098,7 +17098,7 @@ export interface paths {
          *     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
          *     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
          *     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
-         *     - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
+         *     - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model, keyed by model name, `*` pattern, or model access group. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
@@ -17328,7 +17328,7 @@ export interface paths {
          *     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
          *     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
          *     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
-         *     - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
+         *     - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model, keyed by model name, `*` pattern, or model access group. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
@@ -18778,7 +18778,7 @@ export interface paths {
          *     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *     - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *     - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
+         *     - model_max_budget: Optional[dict] - Model-specific max budget for user, keyed by model name, `*` pattern, or model access group. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
          *     - mcp_rpm_limit: Optional[dict] - Per-MCP-server rpm limit, keyed by MCP server name {"github": 100, "slack": 200}. Enforced for keys and teams only; values set on a user are stored but not enforced per user.
@@ -18917,7 +18917,7 @@ export interface paths {
          *         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *         - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *         - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
+         *         - model_max_budget: Optional[dict] - Model-specific max budget for user, keyed by model name, `*` pattern, or model access group. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
          *         - mcp_rpm_limit: Optional[dict] - Per-MCP-server rpm limit, keyed by MCP server name {"github": 100, "slack": 200}. Enforced for keys and teams only; values set on a user are stored but not enforced per user.

@@ -5,7 +5,7 @@
 import litellm.proxy
 import litellm.proxy.proxy_server
 
-from typing import Dict, Final, List, Optional
+from typing import Dict, Final, List, Mapping, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1367,7 +1367,9 @@ async def test_check_user_model_budget(user_id, user_model_max_budget, expected_
     calls = []
 
     class _Limiter:
-        async def is_user_within_model_budget(self, user_id, user_model_max_budget, model):
+        async def is_user_within_model_budget(
+            self, user_id: str, user_model_max_budget: Mapping[str, object], model: str, team_id: str | None = None
+        ) -> bool:
             calls.append((user_id, user_model_max_budget, model))
             return True
 

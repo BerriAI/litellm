@@ -268,6 +268,7 @@ async def caller_within_model_budget(
                 user_id=user_id,
                 user_model_max_budget=user_model_max_budget,
                 model=model,
+                team_id=user_api_key_auth.team_id,
             )
         except litellm.BudgetExceededError:
             return "denied"
@@ -309,6 +310,7 @@ async def caller_within_model_budget(
                 end_user_id=end_user_id,
                 end_user_model_max_budget=end_user_model_max_budget,
                 model=model,
+                team_id=user_api_key_auth.team_id,
             )
         except litellm.BudgetExceededError:
             return "denied"

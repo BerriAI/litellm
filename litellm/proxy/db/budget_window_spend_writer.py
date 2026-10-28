@@ -64,6 +64,16 @@ _ROLL_WINDOW_SPEND_SQL: Final = (
     "AND window_start < ($4::timestamptz AT TIME ZONE 'UTC')"
 )
 
+_OPEN_WINDOW_SPEND_SQL: Final = (
+    'INSERT INTO "LiteLLM_BudgetWindowSpend" '
+    "(entity_type, entity_id, window_duration, window_start, spend, created_at, updated_at) "
+    "VALUES ($1, $2, $3, ($4::timestamptz AT TIME ZONE 'UTC'), 0, "
+    "($4::timestamptz AT TIME ZONE 'UTC'), ($4::timestamptz AT TIME ZONE 'UTC')) "
+    "ON CONFLICT (entity_type, entity_id, window_duration) DO UPDATE SET "
+    "window_start = EXCLUDED.window_start, spend = 0, updated_at = EXCLUDED.updated_at "
+    "WHERE \"LiteLLM_BudgetWindowSpend\".window_start <= ($5::timestamptz AT TIME ZONE 'UTC')"
+)
+
 _SEED_FROM_SPEND_LOGS_KEY_SQL: Final = (
     "SELECT COALESCE(SUM(spend), 0.0) AS total, "
     "COALESCE(SUM(spend) FILTER (WHERE \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) AS before_batch "
@@ -388,4 +398,30 @@ async def roll_window_spend_row(
             window_duration,
             to_naive_utc(new_window_start),
             to_naive_utc(datetime.now(timezone.utc)),
+        )
+
+
+async def open_window_spend_row(
+    prisma_client: "PrismaClient",
+    entity_type: str,
+    entity_id: str,
+    window_duration: str,
+    window_start: datetime,
+    replaces_window_start: datetime | None,
+) -> None:
+    """Start a window at `window_start` unless another writer already started one.
+
+    The row is created when it does not exist, and moved onto the new window only
+    while it still holds `replaces_window_start`, the ended window the caller saw.
+    A writer that lost the race leaves the winner's window in place, so reading
+    the row back gives every writer the same window start.
+    """
+    async with db_span("open_window_spend_row", "LiteLLM_BudgetWindowSpend"):
+        await prisma_client.db.execute_raw(
+            _OPEN_WINDOW_SPEND_SQL,
+            entity_type,
+            entity_id,
+            window_duration,
+            to_naive_utc(window_start),
+            None if replaces_window_start is None else to_naive_utc(replaces_window_start),
         )
