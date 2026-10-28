@@ -3348,8 +3348,7 @@ class TestArizeTenantOnly:
 
         assert capture.received() == {
             "space_id=space-operator,api_key=key-operator": ("chat gpt-4",),
-            None: ("chat gpt-4",),
-        }, "the operator's space, plus the stdout placeholder every credentialed preset keeps today"
+        }, "the operator's space, with no stdout copy the operator never asked for"
 
     def test_the_standard_otlp_headers_still_reach_the_operators_space(self, monkeypatch):
         credential_less_arize(monkeypatch)
@@ -3362,8 +3361,7 @@ class TestArizeTenantOnly:
 
         assert capture.received() == {
             "space_id=space-operator,api_key=key-operator": ("chat gpt-4",),
-            None: ("chat gpt-4",),
-        }, "the operator's space, plus the stdout placeholder every credentialed preset keeps today"
+        }, "the operator's space, with no stdout copy the operator never asked for"
 
     def test_a_credential_less_arize_still_delivers_a_team_destination(self, monkeypatch):
         from litellm.integrations.otel.plumbing.providers import attach_tenant_fan_out
@@ -4554,6 +4552,47 @@ class TestCredentialGatedExporters:
         kept = credential_gated_exporters((operator_console,), ExporterOwner.LANGFUSE_OTEL)
 
         assert kept[0] is operator_console
+
+
+class TestConsolePlaceholder:
+    """The console spec ``_normalize`` folds in for an empty exporter list prints spans
+    only while it is the provider's sole exporter."""
+
+    @staticmethod
+    def _received(monkeypatch, config: OpenTelemetryV2Config) -> Mapping[str | None, tuple[str, ...]]:
+        capture: Final = TestArizeTenantOnly._capture_exporters(monkeypatch)
+        provider: Final = build_tracer_provider(config)
+        emit(provider)
+        provider.force_flush()
+        return capture.received()
+
+    @staticmethod
+    def _operator_langfuse(monkeypatch) -> None:
+        for name in _OTEL_SHORTHAND_ENV:
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-operator")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-operator")
+
+    def test_a_credentialed_langfuse_exports_to_langfuse_alone(self, monkeypatch):
+        self._operator_langfuse(monkeypatch)
+        config: Final = langfuse_preset()
+        langfuse_headers: Final = next(
+            spec.headers for spec in config.exporters if spec.owner is ExporterOwner.LANGFUSE_OTEL
+        )
+
+        assert self._received(monkeypatch, config) == {langfuse_headers: ("chat gpt-4",)}
+
+    def test_a_console_exporter_the_operator_named_still_prints(self, monkeypatch):
+        self._operator_langfuse(monkeypatch)
+        monkeypatch.setenv("OTEL_EXPORTER", "console")
+
+        assert self._received(monkeypatch, langfuse_preset())[None] == ("chat gpt-4",)
+
+    def test_the_placeholder_still_prints_when_nothing_else_is_configured(self, monkeypatch):
+        for name in _OTEL_SHORTHAND_ENV:
+            monkeypatch.delenv(name, raising=False)
+
+        assert self._received(monkeypatch, OpenTelemetryV2Config()) == {None: ("chat gpt-4",)}
 
 
 class TestTenantHostSsrfGuard:

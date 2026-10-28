@@ -54,6 +54,7 @@ from litellm.integrations.otel.model.config import (
     OpenTelemetryV2Config,
     capture_message_content_from_env,
     captures_span_content,
+    is_unconfigured_placeholder,
 )
 from litellm.integrations.otel.model.semconv import (
     DB,
@@ -1546,6 +1547,8 @@ def build_tracer_provider(
     )
     for spec in config.exporters:
         if spec.requires_headers and not spec.headers:
+            continue
+        if is_unconfigured_placeholder(spec) and len(config.exporters) > 1:
             continue
         processor = _spec_processor(
             spec,
