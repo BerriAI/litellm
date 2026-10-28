@@ -1885,7 +1885,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 _EVENT_PAYLOAD_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
-def _with_inner_bill_as_usage_cost(event: BaseModel) -> dict[str, object]:  # mutable-ok: chunk_parser takes the plain dict model_dump returns
+def _with_inner_bill_as_usage_cost(
+    event: BaseModel,
+) -> dict[str, object]:  # mutable-ok: chunk_parser takes the plain dict model_dump returns
     """The inner Responses call already billed its spend row and left the bill in hidden ``response_cost``. The
     chat stream built on top of it reads that bill from ``usage.cost``, where a priced upstream would put it."""
     dumped: Final = _EVENT_PAYLOAD_ADAPTER.validate_python(event.model_dump())
