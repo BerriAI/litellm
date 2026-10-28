@@ -24,6 +24,7 @@ from litellm.proxy.proxy_server import app
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.router import RouterErrors
 from tests._master_key import MASTER_KEY
+from tests._support.clock_loops import AutojumpClockLoop
 
 
 @pytest.mark.asyncio
@@ -177,65 +178,72 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
         assert "error" in events[-1]
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["/v1/responses", "/v1/chat/completions"])
-async def test_a_failure_after_keepalive_pings_keeps_the_client_protocol(monkeypatch: pytest.MonkeyPatch, path: str):
-    import litellm.proxy.proxy_server as ps
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+def test_a_failure_after_keepalive_pings_keeps_the_client_protocol(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+    async def request_and_check() -> None:
+        import litellm.proxy.proxy_server as ps
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-    model: Final = "gpt-6-astra"
-    message: Final = "Upstream is rate limiting this key"
-    upstream_url: Final = "https://streaming.example/v1"
-    is_chat: Final = path == "/v1/chat/completions"
+        model: Final = "gpt-6-astra"
+        message: Final = "Upstream is rate limiting this key"
+        upstream_url: Final = "https://streaming.example/v1"
+        is_chat: Final = path == "/v1/chat/completions"
 
-    async def slow_rate_limit(_: httpx.Request) -> httpx.Response:
-        await asyncio.sleep(0.3)
-        return httpx.Response(429, json={"error": {"message": message, "type": "rate_limit_error", "code": None}})
+        async def slow_rate_limit(_: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(0.3)
+            return httpx.Response(429, json={"error": {"message": message, "type": "rate_limit_error", "code": None}})
 
-    router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": model,
-                "litellm_params": {
-                    "model": "openai/" + model,
-                    "api_base": upstream_url,
-                    "api_key": "fixture-key",
-                    "max_retries": 0,
-                },
-            }
-        ],
-        num_retries=0,
-    )
-    monkeypatch.setattr(ps, "llm_router", router)
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 0.05)
-    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
-    with respx.mock as transport:
-        transport.post(upstream_url + ("/chat/completions" if is_chat else "/responses")).mock(
-            side_effect=slow_rate_limit
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": model,
+                    "litellm_params": {
+                        "model": "openai/" + model,
+                        "api_base": upstream_url,
+                        "api_key": "fixture-key",
+                        "max_retries": 0,
+                    },
+                }
+            ],
+            num_retries=0,
         )
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
-            result: Final = await client.post(
-                path,
-                json={
-                    "model": model,
-                    "stream": True,
-                    **({"messages": [{"role": "user", "content": "hello"}]} if is_chat else {"input": "hello"}),
-                },
+        monkeypatch.setattr(ps, "llm_router", router)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 0.05)
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
+        with respx.mock as transport:
+            transport.post(upstream_url + ("/chat/completions" if is_chat else "/responses")).mock(
+                side_effect=slow_rate_limit
             )
-    frames: Final = tuple(frame for frame in result.text.split("\n\n") if frame)
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+                result: Final = await client.post(
+                    path,
+                    json={
+                        "model": model,
+                        "stream": True,
+                        **({"messages": [{"role": "user", "content": "hello"}]} if is_chat else {"input": "hello"}),
+                    },
+                )
+        frames: Final = tuple(frame for frame in result.text.split("\n\n") if frame)
 
-    assert result.status_code == 200, result.text
-    assert frames[0] == ": ping", result.text
-    if is_chat:
-        assert frames[-1] == "data: [DONE]", result.text
-        assert message in json.loads(frames[-2].removeprefix("data: "))["error"]["message"]
-    else:
-        assert "data: [DONE]" not in result.text
-        assert frames[-1].startswith("event: response.failed\ndata: "), result.text
-        failed_error: Final = json.loads(frames[-1].split("data: ", 1)[1])["response"]["error"]
-        assert failed_error["code"] == "rate_limit_exceeded"
-        assert message in failed_error["message"]
+        assert result.status_code == 200, result.text
+        assert frames[0] == ": ping", result.text
+        if is_chat:
+            assert frames[-1] == "data: [DONE]", result.text
+            assert message in json.loads(frames[-2].removeprefix("data: "))["error"]["message"]
+        else:
+            assert "data: [DONE]" not in result.text
+            assert frames[-1].startswith("event: response.failed\ndata: "), result.text
+            failed_error: Final = json.loads(frames[-1].split("data: ", 1)[1])["response"]["error"]
+            assert failed_error["code"] == "rate_limit_exceeded"
+            assert message in failed_error["message"]
+
+    loop: Final = AutojumpClockLoop()
+    try:
+        loop.run_until_complete(request_and_check())
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
 
 
 _COMPACTION_ITEM: Final = {

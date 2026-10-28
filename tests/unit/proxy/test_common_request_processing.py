@@ -3,7 +3,7 @@ import contextvars
 import copy
 import datetime
 import json
-from collections.abc import AsyncIterable, Mapping
+from collections.abc import AsyncIterable, Awaitable, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
 from urllib.parse import unquote_plus
@@ -81,6 +81,7 @@ from litellm.router import Router
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.utils import ModelResponseListIterator
 from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
+from tests._support.clock_loops import AutojumpClockLoop
 
 
 def test_attach_guardrail_information_copies_recorded_entries_onto_model_response():
@@ -10391,17 +10392,18 @@ async def test_ttft_keepalive_relays_a_late_non_streaming_body_as_an_sse_frame()
     assert collected[-1] == b"data: [DONE]\n\n"
 
 
-async def _slow_rate_limit_failure():
+async def _slow_rate_limit_failure() -> Response:
     await asyncio.sleep(0.2)
     raise HTTPException(status_code=429, detail="rate limited")
 
 
-async def _slow_guardrail_block_body():
+async def _slow_guardrail_block_body() -> Response:
     await asyncio.sleep(0.2)
-    return JSONResponse(status_code=400, content={"error": {"message": "blocked", "type": "guardrail_error", "code": "400"}})
+    return JSONResponse(
+        status_code=400, content={"error": {"message": "blocked", "type": "guardrail_error", "code": "400"}}
+    )
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "produce,expected_code,expected_message",
     [
@@ -10409,23 +10411,31 @@ async def _slow_guardrail_block_body():
         (_slow_guardrail_block_body, "invalid_request_error", "blocked"),
     ],
 )
-async def test_ttft_keepalive_ends_a_late_responses_failure_with_response_failed_and_no_done(
-    produce, expected_code, expected_message
-):
-    response: Final = await open_sse_before_first_byte(
-        produce(), ping_interval_seconds=0.05, late_framing=RESPONSES_LATE_SSE_FRAMING
-    )
-    collected: Final = await _drain(response)
+def test_ttft_keepalive_ends_a_late_responses_failure_with_response_failed_and_no_done(
+    produce: Callable[[], Awaitable[Response]], expected_code: str, expected_message: str
+) -> None:
+    async def collect_and_check() -> None:
+        response: Final = await open_sse_before_first_byte(
+            produce(), ping_interval_seconds=0.05, late_framing=RESPONSES_LATE_SSE_FRAMING
+        )
+        collected: Final = await _drain(response)
 
-    assert collected[0] == TTFT_PING
-    assert b"data: [DONE]\n\n" not in collected
-    event_line, data_line = collected[-1].decode().strip().split("\n")
-    failed: Final = json.loads(data_line.removeprefix("data: "))
-    assert event_line == "event: response.failed"
-    assert failed["type"] == "response.failed"
-    assert failed["response"]["status"] == "failed"
-    assert failed["response"]["error"]["code"] == expected_code
-    assert expected_message in failed["response"]["error"]["message"]
+        assert collected[0] == TTFT_PING
+        assert b"data: [DONE]\n\n" not in collected
+        event_line, data_line = collected[-1].decode().strip().split("\n")
+        failed: Final = json.loads(data_line.removeprefix("data: "))
+        assert event_line == "event: response.failed"
+        assert failed["type"] == "response.failed"
+        assert failed["response"]["status"] == "failed"
+        assert failed["response"]["error"]["code"] == expected_code
+        assert expected_message in failed["response"]["error"]["message"]
+
+    loop: Final = AutojumpClockLoop()
+    try:
+        loop.run_until_complete(collect_and_check())
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
 
 
 @pytest.mark.asyncio
