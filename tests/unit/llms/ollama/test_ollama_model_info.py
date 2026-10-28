@@ -396,8 +396,6 @@ class TestOllamaGetModelInfo:
         key must still reach the backend rather than be served from a result cached
         with a different key.
         """
-        from litellm.utils import _cached_get_model_info
-
         captured_headers = []
 
         def mock_post(url, json, headers=None):
@@ -420,7 +418,6 @@ class TestOllamaGetModelInfo:
                     api_key=api_key,
                 )
 
-            assert _cached_get_model_info.cache_info().currsize <= 1
             assert captured_headers == [
                 {"Authorization": "Bearer key-one"},
                 {"Authorization": "Bearer key-two"},

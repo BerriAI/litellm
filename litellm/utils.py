@@ -231,7 +231,6 @@ from litellm.types.llms.openai import (
     OpenAIWebSearchOptions,
 )
 from litellm.types.utils import (
-    ABOVE_THRESHOLD_COST_KEY_PATTERN,
     API_KEY_UPSTREAM_PARAMS,
     OPENAI_RESPONSE_HEADERS,
     AdminApiKeySecretReference,
@@ -277,7 +276,7 @@ from litellm.types.utils import (
 )
 
 _CALL_TYPE_ENUM_MAP: Final[dict] = {ct.value: ct for ct in CallTypes}
-_BACKFILL_MODES: Final = frozenset({"chat", "responses"})
+_BACKFILL_MODES: Final[frozenset[str]] = frozenset({"chat", "responses"})
 
 # +-----------------------------------------------+
 # |                                               |
@@ -3095,7 +3094,10 @@ def supports_factory(model: str, custom_llm_provider: str | None, key: str) -> b
     Raises:
     Exception: If the given model is not found or there's an error in retrieval.
     """
-    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+    from litellm.litellm_core_utils.get_llm_provider_logic import (
+        declared_authenticating_provider,
+        provider_banner_suppressed,
+    )
 
     try:
         declared: Final = declared_authenticating_provider(model, custom_llm_provider)
@@ -3103,9 +3105,10 @@ def supports_factory(model: str, custom_llm_provider: str | None, key: str) -> b
             model = model.removeprefix(f"{declared}/")
             custom_llm_provider = declared  # rebind-ok: same
         else:
-            model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, custom_llm_provider=custom_llm_provider
-            )
+            with provider_banner_suppressed():
+                model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                    model=model, custom_llm_provider=custom_llm_provider
+                )
 
         model_info: Final = get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
 
@@ -6179,129 +6182,22 @@ def _strip_model_name(model: str, custom_llm_provider: str | None) -> str:
         return _strip_dated_snapshot_suffix(model_name=model)
 
 
-# Global case-insensitive lookup map for model_cost (built eagerly at module import)
-_model_cost_lowercase_map: dict[str, str] | None = None
-
-# Monotonic counter bumped on every model_cost mutation. Consumers that
-# memoize derived state (e.g. provider-specific indices) can include this
-# value in their cache key so they invalidate even when key add+remove or
-# in-place value replacement leaves len/id unchanged.
-_model_cost_mutation_generation: int = 0
-
-
-def get_model_cost_mutation_generation() -> int:
-    return _model_cost_mutation_generation
-
-
 def _invalidate_model_cost_lowercase_map() -> None:
-    """Invalidate the case-insensitive lookup map for model_cost.
+    """Kept for callers on main. Reads go to the live dict, so only a key swap that leaves the length unchanged needs
+    the name index rebuilt, and this marks it stale"""
+    from litellm._catalog import CATALOG
 
-    Call this whenever litellm.model_cost is modified to ensure the map is rebuilt.
-    Also clears related LRU caches that depend on model_cost data.
-    """
-    global _model_cost_lowercase_map, _model_cost_mutation_generation
-    _model_cost_lowercase_map = None
-    _model_cost_mutation_generation += 1
-
-    # Clear LRU caches that depend on model_cost data
-    _cached_get_model_info.cache_clear()
-    cached_get_model_info_helper.cache_clear()
-
-
-def _rebuild_model_cost_lowercase_map() -> dict[str, str]:
-    """Rebuild the case-insensitive lookup map from the current model_cost.
-
-    Returns:
-        The rebuilt map (guaranteed to be not None).
-    """
-    global _model_cost_lowercase_map
-    _model_cost_lowercase_map = {k.lower(): k for k in tuple(litellm.model_cost)}
-    return _model_cost_lowercase_map
-
-
-def _handle_stale_map_entry_rebuild(
-    potential_key_lower: str,
-) -> str | None:
-    """
-    Handle stale _model_cost_lowercase_map entry (key was popped).
-
-    Rebuilds the map and retries the lookup.
-
-    Returns:
-        The matched key if found after rebuild, None otherwise.
-    """
-    matched_key: Final = _rebuild_model_cost_lowercase_map().get(potential_key_lower)
-    if matched_key is not None and matched_key in litellm.model_cost:
-        return matched_key
-    return None
-
-
-def _handle_new_key_with_scan(
-    potential_key_lower: str,
-) -> str | None:
-    """
-    Handle new key added to model_cost without invalidating _model_cost_lowercase_map.
-
-    Scans model_cost for case-insensitive match and rebuilds the map if found.
-
-    Returns:
-        The matched key if found, None otherwise.
-    """
-    global _model_cost_lowercase_map
-    for key in tuple(_builtin_cost_map()):
-        if key.lower() == potential_key_lower:
-            _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
-            return key
-    return None
+    CATALOG.mark_index_stale()
 
 
 def get_model_cost_key(potential_key: str) -> str | None:
-    """
-    Get the actual key from model_cost, with case-insensitive fallback.
+    """The actual key in ``litellm.model_cost`` for ``potential_key``, exact first, then case-insensitive"""
+    from litellm._catalog import CATALOG
 
-    WARNING: Only O(1) lookup operations are acceptable. O(n) lookups will cause severe
-    CPU overhead. This function is called frequently during router operations.
-
-    ALLOWED HELPER FUNCTIONS (conditionally called, O(n) operations are acceptable):
-    - _rebuild_model_cost_lowercase_map: Rebuilds the lookup map (only when map is None)
-    - _handle_stale_map_entry_rebuild: Rebuilds map when stale entry detected (rare case)
-
-    If you need to add a new helper function with O(n) operations that is conditionally
-    called and confirmed not to cause performance issues, add it to the allowed_helpers
-    list in: tests/code_coverage_tests/check_get_model_cost_key_performance.py
-    """
-    # Exact match (O(1))
-    if potential_key in litellm.model_cost:
-        return potential_key
-
-    # Case-insensitive lookup via map (O(1)); bound locally because another thread's
-    # registration can invalidate the module-level map at any point
-    cached_lowercase_map: Final = _model_cost_lowercase_map
-    lowercase_map: Final = (
-        cached_lowercase_map if cached_lowercase_map is not None else _rebuild_model_cost_lowercase_map()
-    )
-
-    potential_key_lower: Final = potential_key.lower()
-    matched_key = lowercase_map.get(potential_key_lower)
-
-    # Verify key exists (O(1) - handles model_cost.pop() case)
-    if matched_key is not None and matched_key in litellm.model_cost:
-        return matched_key
-
-    # Rebuild map if stale entry detected (O(n) rebuild, but only when stale entry found)
-    if matched_key is not None:
-        matched_key = _handle_stale_map_entry_rebuild(potential_key_lower)
-        if matched_key is not None:
-            return matched_key
-
-    return None
+    return CATALOG.lookup_key(potential_key)
 
 
 _get_model_cost_key = get_model_cost_key
-
-
-def _get_model_info_from_model_cost(key: str) -> dict[str, object]:
-    return litellm.model_cost[key]
 
 
 def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> bool:
@@ -6368,19 +6264,6 @@ class PotentialModelNamesAndCustomLLMProvider(TypedDict):
     combined_stripped_model_name: str
     provider_prefixed_model_name: ReadOnly[str]
     custom_llm_provider: str
-
-
-def _first_registered_match(
-    candidates: Sequence[str], custom_llm_provider: str | None
-) -> tuple[str | None, dict[str, Any] | None]:
-    registered_keys: Final = (key for key in map(get_model_cost_key, candidates) if key is not None)
-    entries: Final = ((key, _get_model_info_from_model_cost(key=key)) for key in registered_keys)
-    matches: Final = (
-        (key, info)
-        for key, info in entries
-        if _check_provider_match(model_info=info, custom_llm_provider=custom_llm_provider)
-    )
-    return next(matches, (None, None))
 
 
 def _get_model_info_from_generalization(
@@ -6515,6 +6398,7 @@ def get_potential_model_names(model: str, custom_llm_provider: str | None) -> Po
 _get_potential_model_names = get_potential_model_names
 
 
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _get_max_position_embeddings(model_name: str) -> int | None:
     # Construct the URL for the config.json file
     config_url: Final = f"https://huggingface.co/{model_name}/raw/main/config.json"
@@ -6538,17 +6422,12 @@ def _get_max_position_embeddings(model_name: str) -> int | None:
         return None
 
 
-@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def cached_get_model_info_helper(
     model: str,
     custom_llm_provider: str | None,
     api_base: str | None = None,
 ) -> ModelInfoBase:
-    """
-    _get_model_info_helper wrapped with lru_cache
-
-    Speed Optimization to hit high RPS
-    """
+    """Kept for callers on main. Reads go to the live dict, so there is nothing to cache"""
     return get_model_info_helper(
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -6579,19 +6458,7 @@ def get_provider_info(model: str, custom_llm_provider: str | None) -> ProviderSp
     return json_provider.provider_info if json_provider is not None and json_provider.provider_info else None
 
 
-def _is_potential_model_name_in_model_cost(
-    potential_model_names: PotentialModelNamesAndCustomLLMProvider,
-) -> bool:
-    """
-    Check if the potential model name is in the model cost (case-insensitive).
-    """
-    return any(
-        get_model_cost_key(str(potential_model_name)) is not None
-        for potential_model_name in potential_model_names.values()
-    )
-
-
-_ABOVE_THRESHOLD_COST_KEY: Final = ABOVE_THRESHOLD_COST_KEY_PATTERN
+_REPORTED_INVALID_ROWS: Final[set[str]] = set()  # mutable-ok: logs each bad live row once per process
 
 
 def _model_not_mapped_message(model: str, custom_llm_provider: str | None) -> str:
@@ -6610,7 +6477,10 @@ def get_model_info_helper(
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
     """
-    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+    from litellm.litellm_core_utils.get_llm_provider_logic import (
+        declared_authenticating_provider,
+        provider_banner_suppressed,
+    )
 
     try:
         azure_llms: Final = {**litellm.azure_llms, **litellm.azure_embedding_models}
@@ -6626,19 +6496,15 @@ def get_model_info_helper(
             ):
                 model = model + "@latest"
         ##########################
-        potential_model_names: Final = get_potential_model_names(
-            model=model, custom_llm_provider=custom_llm_provider or declared_authenticating_provider(model)
-        )
+        requested_provider: Final = custom_llm_provider
+        with provider_banner_suppressed():
+            potential_model_names: Final = get_potential_model_names(
+                model=model, custom_llm_provider=custom_llm_provider or declared_authenticating_provider(model)
+            )
 
         verbose_logger.debug("checking potential_model_names in litellm.model_cost: %s", potential_model_names)
 
-        combined_model_name: Final = potential_model_names["combined_model_name"]
-        stripped_model_name: Final = potential_model_names["stripped_model_name"]
-        combined_stripped_model_name: Final = potential_model_names["combined_stripped_model_name"]
-        provider_prefixed_model_name: Final = potential_model_names["provider_prefixed_model_name"]
-        split_model: Final = potential_model_names["split_model"]
         custom_llm_provider = potential_model_names["custom_llm_provider"]
-        model_cost_custom_llm_provider: Final = custom_llm_provider
         #########################
         provider_config: BaseLLMModelInfo | None = None
         if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
@@ -6703,20 +6569,18 @@ def get_model_info_helper(
                and strip it. Tried last so no model that already resolves through 1-6 can change.
             """
 
-            lookup_order: Final = (
-                combined_model_name,
-                model,
-                potential_model_names["region_free_combined_model_name"],
-                split_model,
-                combined_stripped_model_name,
-                stripped_model_name,
-                provider_prefixed_model_name,
-            )
-            lookup: Final = _first_registered_match(lookup_order, model_cost_custom_llm_provider)
-            key: str | None = lookup[0]
-            _model_info: dict[str, Any] | None = lookup[1]
+            from litellm._catalog import CATALOG, Invalid, Missing
 
-            if _model_info is not None and key is not None and _model_info.get("mode", "chat") in _BACKFILL_MODES:
+            resolution: Final = CATALOG.resolve(model, requested_provider)
+            key: str | None = None if isinstance(resolution, Missing) else resolution.key
+            if isinstance(resolution, Invalid) and resolution.key not in _REPORTED_INVALID_ROWS:
+                _REPORTED_INVALID_ROWS.add(resolution.key)
+                verbose_logger.warning(
+                    "litellm.model_cost[%r] fails validation: %s", resolution.key, "; ".join(resolution.errors)
+                )
+            _model_info: dict[str, Any] | None = None if isinstance(resolution, Missing) else resolution.row()
+
+            if _model_info is not None and key is not None and (_model_info.get("mode") or "chat") in _BACKFILL_MODES:
                 fill_missing: Final = match_fill_missing_generalizations(key, _model_info.get("litellm_provider", ""))
                 if fill_missing is not None:
                     _model_info = {
@@ -6735,321 +6599,11 @@ def get_model_info_helper(
 
             if _model_info is None or key is None:
                 raise ModelNotMappedError(_model_not_mapped_message(model, custom_llm_provider))
-            _input_cost_per_token: float | None = _model_info.get("input_cost_per_token")
-            if _input_cost_per_token is None:
-                # default value to 0, be noisy about this
-                verbose_logger.debug(
-                    "model=%s, custom_llm_provider=%s has no input_cost_per_token in model_cost_map. Defaulting to 0.",
-                    model,
-                    custom_llm_provider,
-                )
-                _input_cost_per_token = 0
+            from litellm._catalog import Catalog
 
-            _output_cost_per_token: float | None = _model_info.get("output_cost_per_token")
-            if _output_cost_per_token is None:
-                # default value to 0, be noisy about this
-                verbose_logger.debug(
-                    "model=%s, custom_llm_provider=%s has no output_cost_per_token in model_cost_map. Defaulting to 0.",
-                    model,
-                    custom_llm_provider,
-                )
-                _output_cost_per_token = 0
-
-            returned_model_info: Final = ModelInfoBase(
-                key=key,
-                max_tokens=_model_info.get("max_output_tokens") or _model_info.get("max_input_tokens"),
-                max_input_tokens=_model_info.get("max_input_tokens", None),
-                max_output_tokens=_model_info.get("max_output_tokens", None),
-                input_cost_per_token=_input_cost_per_token,
-                input_cost_per_token_flex=_model_info.get("input_cost_per_token_flex", None),
-                input_cost_per_token_priority=_model_info.get("input_cost_per_token_priority", None),
-                input_cost_per_token_balanced=_model_info.get("input_cost_per_token_balanced", None),
-                input_cost_per_token_ultrafast=_model_info.get("input_cost_per_token_ultrafast", None),
-                cache_creation_input_token_cost=_model_info.get("cache_creation_input_token_cost", None),
-                cache_creation_input_token_cost_above_200k_tokens=_model_info.get(
-                    "cache_creation_input_token_cost_above_200k_tokens", None
-                ),
-                cache_creation_input_token_cost_above_272k_tokens=_model_info.get(
-                    "cache_creation_input_token_cost_above_272k_tokens", None
-                ),
-                cache_creation_input_token_cost_above_272k_tokens_priority=_model_info.get(
-                    "cache_creation_input_token_cost_above_272k_tokens_priority", None
-                ),
-                cache_creation_input_token_cost_above_272k_tokens_flex=_model_info.get(
-                    "cache_creation_input_token_cost_above_272k_tokens_flex", None
-                ),
-                cache_creation_input_token_cost_above_272k_tokens_ultrafast=_model_info.get(
-                    "cache_creation_input_token_cost_above_272k_tokens_ultrafast", None
-                ),
-                cache_creation_input_token_cost_flex=_model_info.get("cache_creation_input_token_cost_flex", None),
-                cache_creation_input_token_cost_priority=_model_info.get(
-                    "cache_creation_input_token_cost_priority", None
-                ),
-                cache_creation_input_token_cost_ultrafast=_model_info.get(
-                    "cache_creation_input_token_cost_ultrafast", None
-                ),
-                cache_read_input_token_cost=_model_info.get("cache_read_input_token_cost", None),
-                cache_read_input_audio_token_cost=_model_info.get("cache_read_input_audio_token_cost", None),
-                cache_read_input_audio_token_cost_flex=_model_info.get("cache_read_input_audio_token_cost_flex", None),
-                cache_read_input_audio_token_cost_priority=_model_info.get(
-                    "cache_read_input_audio_token_cost_priority", None
-                ),
-                cache_read_input_audio_token_cost_batches=_model_info.get(
-                    "cache_read_input_audio_token_cost_batches", None
-                ),
-                explicit_cache_read_input_token_cost=_model_info.get("explicit_cache_read_input_token_cost", None),
-                prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
-                cache_read_input_token_cost_above_200k_tokens=_model_info.get(
-                    "cache_read_input_token_cost_above_200k_tokens", None
-                ),
-                cache_read_input_token_cost_above_200k_tokens_priority=_model_info.get(
-                    "cache_read_input_token_cost_above_200k_tokens_priority", None
-                ),
-                cache_read_input_token_cost_above_272k_tokens=_model_info.get(
-                    "cache_read_input_token_cost_above_272k_tokens", None
-                ),
-                cache_read_input_token_cost_above_272k_tokens_priority=_model_info.get(
-                    "cache_read_input_token_cost_above_272k_tokens_priority", None
-                ),
-                cache_read_input_token_cost_above_272k_tokens_flex=_model_info.get(
-                    "cache_read_input_token_cost_above_272k_tokens_flex", None
-                ),
-                cache_read_input_token_cost_above_272k_tokens_ultrafast=_model_info.get(
-                    "cache_read_input_token_cost_above_272k_tokens_ultrafast", None
-                ),
-                cache_read_input_token_cost_above_512k_tokens=_model_info.get(
-                    "cache_read_input_token_cost_above_512k_tokens", None
-                ),
-                cache_read_input_token_cost_flex=_model_info.get("cache_read_input_token_cost_flex", None),
-                cache_read_input_token_cost_priority=_model_info.get("cache_read_input_token_cost_priority", None),
-                cache_read_input_token_cost_balanced=_model_info.get("cache_read_input_token_cost_balanced", None),
-                cache_read_input_token_cost_ultrafast=_model_info.get("cache_read_input_token_cost_ultrafast", None),
-                cache_read_input_token_cost_batches=_model_info.get("cache_read_input_token_cost_batches"),
-                cache_read_input_token_cost_above_200k_tokens_batches=_model_info.get(
-                    "cache_read_input_token_cost_above_200k_tokens_batches"
-                ),
-                cache_read_input_token_cost_above_272k_tokens_batches=_model_info.get(
-                    "cache_read_input_token_cost_above_272k_tokens_batches"
-                ),
-                cache_creation_input_token_cost_batches=_model_info.get("cache_creation_input_token_cost_batches"),
-                cache_creation_input_token_cost_above_200k_tokens_batches=_model_info.get(
-                    "cache_creation_input_token_cost_above_200k_tokens_batches"
-                ),
-                cache_creation_input_token_cost_above_272k_tokens_batches=_model_info.get(
-                    "cache_creation_input_token_cost_above_272k_tokens_batches"
-                ),
-                cache_creation_input_token_cost_above_1hr=_model_info.get(
-                    "cache_creation_input_token_cost_above_1hr", None
-                ),
-                cache_creation_input_token_cost_above_12hr=_model_info.get(
-                    "cache_creation_input_token_cost_above_12hr", None
-                ),
-                cache_creation_input_token_cost_above_12hr_flex=_model_info.get(
-                    "cache_creation_input_token_cost_above_12hr_flex", None
-                ),
-                cache_creation_input_token_cost_above_12hr_priority=_model_info.get(
-                    "cache_creation_input_token_cost_above_12hr_priority", None
-                ),
-                cache_creation_input_token_cost_above_12hr_above_272k_tokens=_model_info.get(
-                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens", None
-                ),
-                cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex=_model_info.get(
-                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex", None
-                ),
-                cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority=_model_info.get(
-                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority", None
-                ),
-                cache_creation_input_token_cost_above_12hr_batches=_model_info.get(
-                    "cache_creation_input_token_cost_above_12hr_batches", None
-                ),
-                cache_creation_input_token_cost_above_12hr_ultrafast=_model_info.get(
-                    "cache_creation_input_token_cost_above_12hr_ultrafast", None
-                ),
-                cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches=_model_info.get(
-                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches", None
-                ),
-                cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast=_model_info.get(
-                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast", None
-                ),
-                off_peak_pricing=_model_info.get("off_peak_pricing", None),
-                input_cost_per_character=_model_info.get("input_cost_per_character", None),
-                input_cost_per_token_above_128k_tokens=_model_info.get("input_cost_per_token_above_128k_tokens", None),
-                input_cost_per_token_above_200k_tokens=_model_info.get("input_cost_per_token_above_200k_tokens", None),
-                input_cost_per_token_above_200k_tokens_priority=_model_info.get(
-                    "input_cost_per_token_above_200k_tokens_priority", None
-                ),
-                input_cost_per_token_above_272k_tokens=_model_info.get("input_cost_per_token_above_272k_tokens", None),
-                input_cost_per_token_above_272k_tokens_priority=_model_info.get(
-                    "input_cost_per_token_above_272k_tokens_priority", None
-                ),
-                input_cost_per_token_above_272k_tokens_flex=_model_info.get(
-                    "input_cost_per_token_above_272k_tokens_flex", None
-                ),
-                input_cost_per_token_above_272k_tokens_ultrafast=_model_info.get(
-                    "input_cost_per_token_above_272k_tokens_ultrafast", None
-                ),
-                input_cost_per_token_above_512k_tokens=_model_info.get("input_cost_per_token_above_512k_tokens", None),
-                input_cost_per_query=_model_info.get("input_cost_per_query", None),
-                cost_per_second=_model_info.get("cost_per_second", None),
-                input_cost_per_second=_model_info.get("input_cost_per_second", None),
-                input_cost_per_text_message=_model_info.get("input_cost_per_text_message", None),
-                input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
-                input_cost_per_audio_token_flex=_model_info.get("input_cost_per_audio_token_flex", None),
-                input_cost_per_audio_token_priority=_model_info.get("input_cost_per_audio_token_priority", None),
-                input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
-                input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
-                input_cost_per_audio_token_batches=_model_info.get("input_cost_per_audio_token_batches", None),
-                input_cost_per_image_token_batches=_model_info.get("input_cost_per_image_token_batches", None),
-                input_cost_per_image=_model_info.get("input_cost_per_image", None),
-                input_cost_per_audio_per_second=_model_info.get("input_cost_per_audio_per_second", None),
-                input_cost_per_video_per_second=_model_info.get("input_cost_per_video_per_second", None),
-                input_cost_per_token_batches=_model_info.get("input_cost_per_token_batches"),
-                input_cost_per_video_token_batches=_model_info.get("input_cost_per_video_token_batches", None),
-                input_cost_per_token_above_200k_tokens_batches=_model_info.get(
-                    "input_cost_per_token_above_200k_tokens_batches"
-                ),
-                input_cost_per_token_above_272k_tokens_batches=_model_info.get(
-                    "input_cost_per_token_above_272k_tokens_batches"
-                ),
-                output_cost_per_token_batches=_model_info.get("output_cost_per_token_batches"),
-                output_cost_per_token_above_200k_tokens_batches=_model_info.get(
-                    "output_cost_per_token_above_200k_tokens_batches"
-                ),
-                output_cost_per_token_above_272k_tokens_batches=_model_info.get(
-                    "output_cost_per_token_above_272k_tokens_batches"
-                ),
-                output_cost_per_token=_output_cost_per_token,
-                output_cost_per_token_flex=_model_info.get("output_cost_per_token_flex", None),
-                output_cost_per_token_priority=_model_info.get("output_cost_per_token_priority", None),
-                output_cost_per_token_balanced=_model_info.get("output_cost_per_token_balanced", None),
-                output_cost_per_token_ultrafast=_model_info.get("output_cost_per_token_ultrafast", None),
-                regional_processing_uplift_multiplier_eu=_model_info.get(
-                    "regional_processing_uplift_multiplier_eu", None
-                ),
-                regional_processing_uplift_multiplier_us=_model_info.get(
-                    "regional_processing_uplift_multiplier_us", None
-                ),
-                regional_endpoint_uplift_multiplier=_model_info.get("regional_endpoint_uplift_multiplier", None),
-                output_cost_per_audio_token=_model_info.get("output_cost_per_audio_token", None),
-                output_cost_per_character=_model_info.get("output_cost_per_character", None),
-                output_cost_per_reasoning_token=_model_info.get("output_cost_per_reasoning_token", None),
-                output_cost_per_reasoning_token_flex=_model_info.get("output_cost_per_reasoning_token_flex", None),
-                output_cost_per_reasoning_token_priority=_model_info.get(
-                    "output_cost_per_reasoning_token_priority", None
-                ),
-                output_cost_per_token_above_128k_tokens=_model_info.get(
-                    "output_cost_per_token_above_128k_tokens", None
-                ),
-                output_cost_per_character_above_128k_tokens=_model_info.get(
-                    "output_cost_per_character_above_128k_tokens", None
-                ),
-                output_cost_per_token_above_200k_tokens=_model_info.get(
-                    "output_cost_per_token_above_200k_tokens", None
-                ),
-                output_cost_per_token_above_200k_tokens_priority=_model_info.get(
-                    "output_cost_per_token_above_200k_tokens_priority", None
-                ),
-                output_cost_per_token_above_272k_tokens=_model_info.get(
-                    "output_cost_per_token_above_272k_tokens", None
-                ),
-                output_cost_per_token_above_272k_tokens_priority=_model_info.get(
-                    "output_cost_per_token_above_272k_tokens_priority", None
-                ),
-                output_cost_per_token_above_272k_tokens_flex=_model_info.get(
-                    "output_cost_per_token_above_272k_tokens_flex", None
-                ),
-                output_cost_per_token_above_272k_tokens_ultrafast=_model_info.get(
-                    "output_cost_per_token_above_272k_tokens_ultrafast", None
-                ),
-                output_cost_per_token_above_512k_tokens=_model_info.get(
-                    "output_cost_per_token_above_512k_tokens", None
-                ),
-                output_cost_per_second=_model_info.get("output_cost_per_second", None),
-                output_cost_per_second_1080p=_model_info.get("output_cost_per_second_1080p", None),
-                output_cost_per_second_480p=_model_info.get("output_cost_per_second_480p", None),
-                output_cost_per_second_720p=_model_info.get("output_cost_per_second_720p", None),
-                output_cost_per_second_768p=_model_info.get("output_cost_per_second_768p", None),
-                output_cost_per_second_2k=_model_info.get("output_cost_per_second_2k", None),
-                output_cost_per_second_4k=_model_info.get("output_cost_per_second_4k", None),
-                output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
-                output_cost_per_image=_model_info.get("output_cost_per_image", None),
-                output_cost_per_pixel=_model_info.get("output_cost_per_pixel", None),
-                output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
-                output_cost_per_image_token_batches=_model_info.get("output_cost_per_image_token_batches", None),
-                output_cost_per_video_token=_model_info.get("output_cost_per_video_token", None),
-                output_vector_size=_model_info.get("output_vector_size", None),
-                citation_cost_per_token=_model_info.get("citation_cost_per_token", None),
-                tiered_pricing=_model_info.get("tiered_pricing", None),
-                litellm_provider=_model_info.get("litellm_provider", custom_llm_provider),
-                mode=_model_info.get("mode"),
-                supported_endpoints=_model_info.get("supported_endpoints", None),
-                supports_system_messages=_model_info.get("supports_system_messages", None),
-                supports_response_schema=_model_info.get("supports_response_schema", None),
-                supports_vision=_model_info.get("supports_vision", None),
-                supports_function_calling=_model_info.get("supports_function_calling", None),
-                supports_parallel_function_calling=_model_info.get("supports_parallel_function_calling", None),
-                supports_tool_choice=_model_info.get("supports_tool_choice", None),
-                supports_assistant_prefill=_model_info.get("supports_assistant_prefill", None),
-                supports_prompt_caching=_model_info.get("supports_prompt_caching", None),
-                supports_prompt_cache_breakpoint=_model_info.get("supports_prompt_cache_breakpoint", None),
-                supports_thinking_cache_preservation=_model_info.get("supports_thinking_cache_preservation", None),
-                supports_audio_input=_model_info.get("supports_audio_input", None),
-                supports_video_input=_model_info.get("supports_video_input", None),
-                supports_box_questions=_model_info.get("supports_box_questions", None),
-                supports_audio_output=_model_info.get("supports_audio_output", None),
-                supports_pdf_input=_model_info.get("supports_pdf_input", None),
-                supports_embedding_image_input=_model_info.get("supports_embedding_image_input", None),
-                supports_native_streaming=_model_info.get("supports_native_streaming", None),
-                supports_native_structured_output=_model_info.get("supports_native_structured_output", None),
-                supports_bedrock_native_structured_output=_model_info.get(
-                    "supports_bedrock_native_structured_output", None
-                ),
-                supports_web_search=_model_info.get("supports_web_search", None),
-                supports_url_context=_model_info.get("supports_url_context", None),
-                supports_reasoning=_model_info.get("supports_reasoning", None),
-                supports_adaptive_thinking=_model_info.get("supports_adaptive_thinking", None),
-                supports_legacy_thinking=_model_info.get("supports_legacy_thinking", None),
-                thinking_always_on=_model_info.get("thinking_always_on", None),
-                supports_tool_search=_model_info.get("supports_tool_search", None),
-                supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
-                supports_anthropic_thinking_payload=_model_info.get("supports_anthropic_thinking_payload", None),
-                supports_anthropic_compaction=_model_info.get("supports_anthropic_compaction", None),
-                supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),
-                supports_minimal_reasoning_effort=_model_info.get("supports_minimal_reasoning_effort", None),
-                supports_low_reasoning_effort=_model_info.get("supports_low_reasoning_effort", None),
-                supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
-                supports_max_reasoning_effort=_model_info.get("supports_max_reasoning_effort", None),
-                reasoning_effort_levels=_model_info.get("reasoning_effort_levels", None),
-                default_reasoning_effort=_model_info.get("default_reasoning_effort", None),
-                bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
-                bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
-                supports_regex_lookaround=_model_info.get("supports_regex_lookaround", None),
-                supports_computer_use=_model_info.get("supports_computer_use", None),
-                search_context_cost_per_query=_model_info.get("search_context_cost_per_query", None),
-                browser_open_cost_per_request=_model_info.get("browser_open_cost_per_request", None),
-                cost_per_additional_result=_model_info.get("cost_per_additional_result", None),
-                web_search_billing_unit=_model_info.get("web_search_billing_unit", None),
-                search_free_requests=_model_info.get("search_free_requests", None),
-                google_maps_grounding_cost_per_query=_model_info.get("google_maps_grounding_cost_per_query", None),
-                tpm=_model_info.get("tpm", None),
-                rpm=_model_info.get("rpm", None),
-                ocr_cost_per_page=_model_info.get("ocr_cost_per_page", None),
-                ocr_cost_per_page_batches=_model_info.get("ocr_cost_per_page_batches", None),
-                ocr_cost_per_credit=_model_info.get("ocr_cost_per_credit", None),
-                annotation_cost_per_page=_model_info.get("annotation_cost_per_page", None),
-                annotation_cost_per_page_batches=_model_info.get("annotation_cost_per_page_batches", None),
-                provider_specific_entry=_model_info.get("provider_specific_entry", None),
-                uses_embed_content=_model_info.get("uses_embed_content", None),
-                supports_image_size=_model_info.get("supports_image_size", None),
-                supported_audio_formats=_model_info.get("supported_audio_formats", None),
-                token_count_framing=_model_info.get("token_count_framing", None),
-                token_count_model=_model_info.get("token_count_model", None),
-                token_count_tokenizer=_model_info.get("token_count_tokenizer", None),
-                vertex_ai_audio_api=_model_info.get("vertex_ai_audio_api", None),
+            returned_model_info: Final = cast(  # cast-ok: Rust builds the dict from the ModelInfoBase field list
+                ModelInfoBase, Catalog.model_info_of(key, _model_info, custom_llm_provider)
             )
-            for cost_key, cost_value in _model_info.items():
-                if cost_key not in returned_model_info and _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None:
-                    returned_model_info[cost_key] = cost_value
             return returned_model_info
     except ModelNotMappedError:
         raise
@@ -7067,7 +6621,12 @@ def _build_model_info(
     api_base: str | None = None,
     api_key: str | None = None,
 ) -> ModelInfo:
-    supported_openai_params = litellm.get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider)
+    from litellm.litellm_core_utils.get_llm_provider_logic import provider_banner_suppressed
+
+    with provider_banner_suppressed():
+        supported_openai_params = litellm.get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
 
     _model_info: Final = get_model_info_helper(
         model=model,
@@ -7086,15 +6645,6 @@ def _build_model_info(
     # verbose_logger.debug(f"model_info: {_model_info}")
 
     return ModelInfo(**_model_info, supported_openai_params=supported_openai_params)
-
-
-@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
-def _cached_get_model_info(
-    model: str,
-    custom_llm_provider: str | None = None,
-    api_base: str | None = None,
-) -> ModelInfo:
-    return _build_model_info(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
 
 
 def get_model_info(
@@ -7176,15 +6726,12 @@ def get_model_info(
             "supported_openai_params": ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"]
         }
     """
-    # api_key is a per-caller credential, not part of the model identity, so it is
-    # kept out of the cache key; explicit keys are resolved without the cache.
-    if api_key is not None:
-        return _build_model_info(model, custom_llm_provider, api_base, api_key)
-    return _cached_get_model_info(model, custom_llm_provider, api_base)
+    return _build_model_info(model, custom_llm_provider, api_base, api_key)
 
 
-get_model_info.cache_clear = _cached_get_model_info.cache_clear
-get_model_info.cache_info = _cached_get_model_info.cache_info
+get_model_info.cache_clear = _get_max_position_embeddings.cache_clear  # pyright: ignore[reportFunctionMemberAccess]  # main callers still call cache_clear, reads are live
+get_model_info.cache_info = _get_max_position_embeddings.cache_info  # pyright: ignore[reportFunctionMemberAccess]  # main callers still call cache_clear, reads are live
+cached_get_model_info_helper.cache_clear = _get_max_position_embeddings.cache_clear  # pyright: ignore[reportFunctionMemberAccess]  # main callers still call cache_clear, reads are live
 
 
 def json_schema_type(python_type_name: str):

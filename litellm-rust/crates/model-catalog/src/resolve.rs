@@ -1,8 +1,11 @@
 mod image;
+mod provider_match;
 
 use std::borrow::Cow;
 
 pub use image::*;
+pub use provider_match::*;
+use serde_json::Value;
 
 use crate::wire::Fields;
 
@@ -58,4 +61,70 @@ pub enum Resolution {
     Missing {
         tried: Vec<String>,
     },
+}
+
+impl Candidates {
+    /// The names in main's lookup order, each with the slot it fills
+    pub fn in_order(&self) -> impl Iterator<Item = (CandidateSlot, &str)> {
+        [
+            (
+                CandidateSlot::CombinedModelName,
+                self.combined_model_name.as_deref(),
+            ),
+            (CandidateSlot::Model, Some(self.model.as_str())),
+            (
+                CandidateSlot::RegionFreeCombinedModelName,
+                self.region_free_combined_model_name.as_deref(),
+            ),
+            (CandidateSlot::SplitModel, self.split_model.as_deref()),
+            (
+                CandidateSlot::CombinedStrippedModelName,
+                self.combined_stripped_model_name.as_deref(),
+            ),
+            (
+                CandidateSlot::StrippedModelName,
+                self.stripped_model_name.as_deref(),
+            ),
+            (
+                CandidateSlot::ProviderPrefixedModelName,
+                self.provider_prefixed_model_name.as_deref(),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(slot, name)| Some((slot, name?)))
+    }
+}
+
+/// main's candidate walk. Each name is tried as an exact key, then through the case-insensitive index, and the first
+/// whose row passes `provider_matches` wins
+pub fn resolve(keys: &impl Keys, candidates: &Candidates, provider: Option<&str>) -> Resolution {
+    let found = candidates.in_order().find_map(|(slot, name)| {
+        let (key, case_insensitive) = if keys.contains(name) {
+            (name.to_owned(), false)
+        } else {
+            (keys.by_normalized(name)?, true)
+        };
+        let row = keys.row(&key)?;
+        row_provider_matches(&row, provider).then_some(Resolution::Found {
+            key,
+            via: Via {
+                slot,
+                case_insensitive,
+            },
+        })
+    });
+    found.unwrap_or_else(|| Resolution::Missing {
+        tried: candidates
+            .in_order()
+            .map(|(_, name)| name.to_owned())
+            .collect(),
+    })
+}
+
+fn row_provider_matches(row: &Fields, provider: Option<&str>) -> bool {
+    match row.get("litellm_provider") {
+        None | Some(Value::Null) => provider_matches(None, provider),
+        Some(Value::String(row_provider)) => provider_matches(Some(row_provider), provider),
+        Some(_) => provider_matches(Some(""), provider),
+    }
 }

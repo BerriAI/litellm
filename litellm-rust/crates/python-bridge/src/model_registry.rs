@@ -1,5 +1,7 @@
 mod fetch;
 mod install;
+mod name_index;
+mod resolve;
 mod row_error;
 
 use std::collections::HashMap;
@@ -8,7 +10,7 @@ use std::time::SystemTime;
 
 use litellm_host_python::{release_gil, to_py};
 use litellm_model_catalog::wire::Fields;
-use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog, Layers, Located};
+use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog, Keys, Layers, Located};
 use litellm_model_catalog_refresh::{Source, git_blob_id};
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
@@ -17,6 +19,7 @@ use serde::Serialize;
 
 pub(crate) use fetch::{Bundled, File, Provenance, Remote};
 use install::{Record, write_into};
+pub(crate) use resolve::{Invalid, Missing, Resolved};
 pub(crate) use row_error::{RowError, RowErrorKind, row_error};
 
 static BUNDLED: LazyLock<Arc<Parsed>> = LazyLock::new(|| {
@@ -90,6 +93,7 @@ pub(crate) struct CatalogHandle {
     module: Py<PyModule>,
     attr: String,
     state: Mutex<State>,
+    index: Mutex<Option<name_index::NameIndex>>,
 }
 
 #[pymethods]
@@ -151,6 +155,7 @@ impl CatalogHandle {
                 record: None,
                 provenance: None,
             }),
+            index: Mutex::new(None),
         }
     }
 
@@ -183,6 +188,70 @@ impl CatalogHandle {
             .into_pyobject(py)?
             .into_any()
             .unbind())
+    }
+
+    /// The bound dict's row for `model`, through main's candidate names (decisions 18 and 20)
+    #[pyo3(signature = (model, provider = None))]
+    fn resolve(&self, py: Python<'_>, model: &str, provider: Option<&str>) -> PyResult<Py<PyAny>> {
+        let dict = self.bound_dict(py)?;
+        let keys = resolve::LiveKeys {
+            dict: &dict,
+            index: &self.index,
+        };
+        resolve::resolve(py, &keys, model, provider)
+    }
+
+    /// The actual key for `name`, exact first, then through the case-insensitive index
+    fn lookup_key(&self, py: Python<'_>, name: &str) -> PyResult<Option<String>> {
+        let dict = self.bound_dict(py)?;
+        let keys = resolve::LiveKeys {
+            dict: &dict,
+            index: &self.index,
+        };
+        Ok(if keys.contains(name) {
+            Some(name.to_owned())
+        } else {
+            keys.by_normalized(name)
+        })
+    }
+
+    /// The keys whose row names this `litellm_provider`, from the index
+    fn provider_keys(&self, py: Python<'_>, provider: &str) -> PyResult<Vec<String>> {
+        let dict = self.bound_dict(py)?;
+        let keys = resolve::LiveKeys {
+            dict: &dict,
+            index: &self.index,
+        };
+        Ok(keys.provider_keys(provider))
+    }
+
+    /// main's 133-field copy of a row Python built, a generalization match or a fill-missing merge
+    #[staticmethod]
+    #[pyo3(signature = (key, row, provider = None))]
+    fn model_info_of(
+        py: Python<'_>,
+        key: &str,
+        row: &Bound<'_, PyDict>,
+        provider: Option<&str>,
+    ) -> PyResult<Py<PyAny>> {
+        let fields: Fields = row
+            .iter()
+            .filter_map(|(name, value)| {
+                Some((
+                    name.extract::<String>().ok()?,
+                    litellm_host_python::from_py::<serde_json::Value>(&value).ok()?,
+                ))
+            })
+            .collect();
+        to_py(
+            py,
+            &litellm_model_catalog::model_info(key, &fields, provider),
+        )
+    }
+
+    /// Rebuild the index on the next lookup, for a caller that knows keys changed with the length unchanged
+    fn mark_index_stale(&self) {
+        *self.index.lock().unwrap_or_else(PoisonError::into_inner) = None;
     }
 
     /// Where the installed map came from, `None` before the first install
@@ -235,6 +304,13 @@ impl CatalogHandle {
 }
 
 impl CatalogHandle {
+    fn bound_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let bound = self.module.bind(py).getattr(self.attr.as_str())?;
+        bound
+            .cast_into::<PyDict>()
+            .map_err(|_| PyTypeError::new_err(format!("{} must be a dict", self.attr)))
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }

@@ -1,3 +1,6 @@
+import contextlib
+import contextvars
+from collections.abc import Generator
 from typing import Final, cast
 from urllib.parse import urlparse
 
@@ -16,6 +19,18 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import GenericLiteLLMParams, LiteLLM_Params
+
+_PROVIDER_BANNER: Final = contextvars.ContextVar("litellm_provider_banner", default=True)
+
+
+@contextlib.contextmanager
+def provider_banner_suppressed() -> Generator[None]:
+    """A model-info lookup tries names that need not route anywhere, so a miss there prints nothing (#5982)"""
+    token: Final = _PROVIDER_BANNER.set(False)
+    try:
+        yield
+    finally:
+        _PROVIDER_BANNER.reset(token)
 
 
 def invalid_provider_routing_hints_message(error: ValidationError) -> str:
@@ -553,7 +568,7 @@ def get_llm_provider(
             custom_llm_provider = match_routing_generalization(model)
 
         if not custom_llm_provider:
-            if litellm.suppress_debug_info is False:
+            if litellm.suppress_debug_info is False and _PROVIDER_BANNER.get():
                 print()  # noqa: T201
                 print(  # noqa: T201
                     "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"

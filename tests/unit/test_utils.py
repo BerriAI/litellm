@@ -5100,7 +5100,7 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
 
 
 def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.utils import _invalidate_model_cost_lowercase_map, _rebuild_model_cost_lowercase_map
+    from litellm.utils import _invalidate_model_cost_lowercase_map, get_model_cost_key
 
     class _KeyRegisteredMidWalk(str):
         def lower(self) -> str:
@@ -5115,9 +5115,8 @@ def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch: p
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     litellm.model_cost[_KeyRegisteredMidWalk("LIT-5853-WALKED-LAST")] = _EntryRegisteredMidWalk(mode="chat")
     try:
-        assert _rebuild_model_cost_lowercase_map()["lit-5853-walked-last"] == "LIT-5853-WALKED-LAST"
+        assert get_model_cost_key("lit-5853-walked-last") == "LIT-5853-WALKED-LAST"
         litellm.add_known_models(model_cost_map=litellm.model_cost)
-        assert "lit-5853-registered-during-the-rebuild" in litellm.model_cost
         assert "lit-5853-registered-during-add-known-models" in litellm.model_cost
     finally:
         _invalidate_model_cost_lowercase_map()
@@ -5169,22 +5168,19 @@ class _EntryReadDuringARegistration(dict[str, object]):
         return super().__contains__(key)
 
 
-@pytest.mark.parametrize("walk", ["fal_ai", "fireworks_ai", "ollama", "gpt-5", "case-insensitive scan"])
+@pytest.mark.parametrize("walk", ["fal_ai", "ollama", "gpt-5"])
 def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
     monkeypatch: pytest.MonkeyPatch, walk: str
 ) -> None:
     from litellm.llms.fal_ai.cost_calculator import _keyed_rows
-    from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
     from litellm.llms.ollama.common_utils import OllamaModelInfo
     from litellm.llms.openai.chat.gpt_reasoning_transformation import _catalogue_declares_default_effort
-    from litellm.utils import _handle_new_key_with_scan, _invalidate_model_cost_lowercase_map
+    from litellm.utils import _invalidate_model_cost_lowercase_map
 
     walks: Final[Mapping[str, Callable[[], object]]] = {
         "fal_ai": lambda: _keyed_rows("lit-5853-model", "standard"),
-        "fireworks_ai": FireworksAIConfig._get_fireworks_index,
         "ollama": lambda: OllamaModelInfo._is_static_ollama_model("ollama/lit-5853-model"),
         "gpt-5": _catalogue_declares_default_effort,
-        "case-insensitive scan": lambda: _handle_new_key_with_scan("lit-5853-model"),
     }
     monkeypatch.setattr(
         litellm,
@@ -10900,3 +10896,67 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     )
 
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
+
+
+def test_get_model_info_sees_a_direct_write_without_an_invalidator(monkeypatch):
+    from litellm.utils import cached_get_model_info_helper
+
+    litellm.get_model_info("gpt-4o")
+    monkeypatch.setitem(litellm.model_cost, "gpt-4o", {**litellm.model_cost["gpt-4o"], "input_cost_per_token": 1.0})
+
+    assert litellm.get_model_info("gpt-4o")["input_cost_per_token"] == 1.0
+    assert cached_get_model_info_helper("gpt-4o", "openai")["input_cost_per_token"] == 1.0
+
+
+def test_get_model_info_sees_a_nested_write_without_an_invalidator(monkeypatch):
+    litellm.get_model_info("gpt-4o")
+    litellm.supports_vision("gpt-4o")
+    monkeypatch.setitem(litellm.model_cost, "gpt-4o", dict(litellm.model_cost["gpt-4o"]))
+
+    litellm.model_cost["gpt-4o"]["input_cost_per_token"] = 1.0
+    litellm.model_cost["gpt-4o"]["supports_vision"] = False
+
+    assert litellm.get_model_info("gpt-4o")["input_cost_per_token"] == 1.0
+    assert litellm.supports_vision("gpt-4o") is False
+
+
+@pytest.mark.parametrize(
+    "lookup",
+    [
+        pytest.param(lambda: litellm.get_model_info("acme-unknown-model-5982"), id="get_model_info"),
+        pytest.param(lambda: litellm.supports_function_calling("acme-unknown-model-5982"), id="supports"),
+    ],
+)
+def test_an_unknown_model_prints_no_provider_banner(monkeypatch, capsys, lookup):
+    monkeypatch.setattr(litellm, "suppress_debug_info", False)
+
+    with contextlib.suppress(Exception):
+        lookup()
+
+    assert capsys.readouterr().out == ""
+
+
+def test_a_key_added_by_a_direct_write_is_found_case_insensitively(monkeypatch):
+    from litellm.utils import get_model_cost_key
+
+    assert get_model_cost_key("mixed-case-direct") is None
+    monkeypatch.setitem(litellm.model_cost, "Mixed-Case-Direct", {"litellm_provider": "openai"})
+
+    assert get_model_cost_key("mixed-case-direct") == "Mixed-Case-Direct"
+
+
+def test_resolution_matches_mains_for_every_bundled_key_and_variant():
+    reference = json.loads((Path(__file__).parent / "resolution_reference.json").read_text())
+
+    def resolved(model, provider):
+        try:
+            return litellm.get_model_info(model, provider)["key"]
+        except Exception:
+            return None
+
+    mismatches = [
+        (model, provider, expected, actual)
+        for model, provider, expected in reference["cases"]
+        if (actual := resolved(model, provider)) != expected
+    ]
+    assert mismatches == []

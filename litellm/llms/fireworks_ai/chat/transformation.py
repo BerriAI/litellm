@@ -34,7 +34,6 @@ from litellm.types.utils import (
     ProviderSpecificModelInfo,
 )
 from litellm.utils import (
-    get_model_cost_mutation_generation,
     supports_function_calling,
     supports_reasoning,
     supports_tool_choice,
@@ -528,36 +527,22 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         return [strip_litellm_response_only_fields(message) for message in messages]
 
-    # Cached index of fireworks_ai/* entries from litellm.model_cost. Building
-    # this index requires a full scan of model_cost (tens of thousands of
-    # entries), so we memoize it. The cache key is (id(model_cost),
-    # mutation_generation): the generation counter is bumped on every
-    # register_model / reload path, so add+remove or in-place value
-    # replacement (which can leave id and len unchanged) still invalidates.
-    _fireworks_index_cache: tuple[int, int, list[tuple[str, dict]]] | None = None
-
     @classmethod
     def _get_fireworks_index(cls) -> list[tuple[str, dict]]:
+        """The ``fireworks_ai/*`` rows of the live map, short name first. The keys come from the catalog's name index,
+        which follows keys added or removed by direct writes, and the rows are read live"""
+        from litellm._catalog import CATALOG
+
         model_cost: Final = litellm.model_cost
-        signature: Final = (id(model_cost), get_model_cost_mutation_generation())
-        cached: Final = cls._fireworks_index_cache
-        if cached is not None and cached[0] == signature[0] and cached[1] == signature[1]:
-            return cached[2]
-
-        index: Final[list[tuple[str, dict]]] = []
-        for key, model_info in (*model_cost.items(),):
-            if not key.startswith("fireworks_ai/"):
-                continue
-            if not isinstance(model_info, dict):
-                continue
-            key_short = key[len("fireworks_ai/") :]
-            key_short = key_short.removeprefix("accounts/fireworks/models/")
-            if not key_short:
-                continue
-            index.append((key_short, model_info))
-
-        cls._fireworks_index_cache = (signature[0], signature[1], index)
-        return index
+        keys: Final = (*CATALOG.provider_keys("fireworks_ai"), *CATALOG.provider_keys("fireworks_ai-embedding-models"))
+        rows: Final = ((key, model_cost.get(key)) for key in keys)
+        return [
+            (key_short, model_info)
+            for key, model_info in rows
+            if key.startswith("fireworks_ai/")
+            and isinstance(model_info, dict)
+            and (key_short := key[len("fireworks_ai/") :].removeprefix("accounts/fireworks/models/"))
+        ]
 
     @staticmethod
     def _matches_on_hyphen_boundary(short_name: str, key_short: str) -> bool:

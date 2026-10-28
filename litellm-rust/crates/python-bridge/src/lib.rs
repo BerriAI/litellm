@@ -35,7 +35,8 @@ mod _native {
     use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
     use crate::model_registry::{
-        Bundled, CatalogHandle, Fetched, File, Installed, Provenance, Remote, RowError, Unavailable,
+        Bundled, CatalogHandle, Fetched, File, Installed, Invalid, Missing, Provenance, Remote,
+        Resolved, RowError, Unavailable,
     };
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
@@ -163,6 +164,9 @@ mod tests {
                 "File",
                 "Bundled",
                 "Provenance",
+                "Resolved",
+                "Missing",
+                "Invalid",
                 "RowError",
                 "RowErrorKind",
                 "NativeClickHouseSpendConfig",
