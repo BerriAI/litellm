@@ -10,6 +10,7 @@ before response.completed, and that every event of a bridged stream carries the 
 spend tracking stores, so a follow-up previous_response_id still finds the conversation.
 """
 
+import itertools
 import json
 from collections.abc import Callable
 from typing import Final
@@ -23,6 +24,7 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
+    OutputTextDeltaEvent,
     ResponsesAPIStreamEvents,
 )
 from litellm.types.responses.main import build_web_search_call
@@ -1558,3 +1560,29 @@ async def test_a_compaction_block_without_its_summary_streams_no_compaction_item
 
     assert [event["item"]["type"] for event in events if "item" in event] == ["message", "message"]
     assert [item["type"] for item in events[-1]["response"]["output"]] == ["message"]
+
+
+def test_the_partial_response_billed_on_disconnect_carries_the_logging_objects_bill_as_hidden_response_cost() -> None:
+    from litellm.litellm_core_utils.hidden_params import get_hidden_params
+
+    wrapper: Final = _FakeStreamWrapper([_chunk("Hello"), _chunk(" world", finish_reason="stop")])
+    wrapper.logging_obj.response_cost_calculator.return_value = 0.00032
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=wrapper,  # pyright: ignore[reportArgumentType]  # the fake stands in for CustomStreamWrapper, as in _build_iterator
+        request_input="What is the weather in San Francisco?",
+        responses_api_request={},
+        custom_llm_provider="anthropic",
+        litellm_metadata={},
+    )
+    relayed: Final = tuple(
+        itertools.takewhile(lambda event: not isinstance(event, OutputTextDeltaEvent), iterator)
+    )
+    assert relayed, "the stream must relay at least one chunk before the client goes away"
+
+    partial: Final = iterator.partial_response_on_disconnect()
+
+    assert partial is not None
+    hidden: Final = get_hidden_params(partial.response)
+    assert hidden is not None and hidden["response_cost"] == 0.00032
+    assert wrapper.logging_obj.response_cost_calculator.call_args.kwargs["result"] is partial.response

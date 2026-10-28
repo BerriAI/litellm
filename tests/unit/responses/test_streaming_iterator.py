@@ -25,6 +25,7 @@ from pydantic_core import PydanticSerializationError
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses import streaming_iterator as streaming_module
@@ -864,7 +865,7 @@ def test_normalize_responses_usage_types_a_dict_usage_and_keeps_the_provider_cos
         }
     )
 
-    normalize_responses_usage(response)
+    normalize_responses_usage(response, None)
 
     assert isinstance(response.usage, ResponseAPIUsage)
     assert response.usage.cost == pytest.approx(3e-05)
@@ -876,9 +877,24 @@ def test_normalize_responses_usage_never_writes_a_cost_the_provider_did_not_repo
 
     response = _responses_api_response_with_usage()
 
-    normalize_responses_usage(response)
+    normalize_responses_usage(response, None)
 
     assert getattr(response.usage, "cost", None) is None
+
+
+def test_normalize_responses_usage_stamps_the_logging_objects_bill_as_hidden_response_cost():
+    from litellm.responses.streaming_iterator import normalize_responses_usage
+
+    response = _responses_api_response_with_usage()
+    logging_obj = MagicMock()
+    logging_obj.response_cost_calculator.return_value = 0.00032
+
+    normalize_responses_usage(response, logging_obj)
+
+    hidden: Final = get_hidden_params(response)
+    assert hidden is not None and hidden["response_cost"] == 0.00032
+    assert getattr(response.usage, "cost", None) is None, "the client field is written at the proxy egress, not here"
+    assert logging_obj.response_cost_calculator.call_args.kwargs["result"] is response
 
 
 def _capture_dispatch(logged: list):
@@ -898,7 +914,7 @@ def _capture_dispatch(logged: list):
     return _dispatch
 
 
-def _headers_config(*, transform_hidden_params: dict | None = None) -> Mock:
+def _headers_config(*, transform_hidden_params: Mapping[str, object] | None = None) -> Mock:
     """Config whose completed event carries a real ResponsesAPIResponse, so the logging copy
     performs a genuine model_dump/model_validate round trip."""
     mock_config = Mock(spec=BaseResponsesAPIConfig)
@@ -1683,7 +1699,7 @@ def test_process_chunk_wraps_encrypted_content_with_model_id():
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-def test_process_chunk_completed_response_updates_id_and_leaves_usage_cost_alone(monkeypatch):
+def test_process_chunk_completed_response_updates_id_and_leaves_usage_cost_alone(monkeypatch: pytest.MonkeyPatch):
     original_include_cost = litellm.include_cost_in_streaming_usage
     litellm.include_cost_in_streaming_usage = True
     openai_types = streaming_module._get_openai_response_types()

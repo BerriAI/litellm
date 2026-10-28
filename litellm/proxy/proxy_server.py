@@ -922,7 +922,7 @@ from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
 from litellm.proxy.ui_crud_endpoints.user_banner_endpoints import (
     router as user_banner_endpoints_router,
 )
-from litellm.proxy.usage_cost_egress import Pricer, with_client_stream_usage_cost
+from litellm.proxy.usage_cost_egress import with_client_stream_usage_cost
 from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     PrismaClient,
     ProxyLogging,
@@ -10135,22 +10135,6 @@ def _fast_serialize_simple_model_response_stream(
     return orjson.dumps(payload)
 
 
-def _stream_usage_pricer(request_data: Mapping[str, object]) -> Pricer:
-    """Bills a usage-bearing stream event the way the request's logging object bills the spend row."""
-    logging_obj: Final = request_data.get("litellm_logging_obj")
-    model_name: Final = str(request_data.get("model", ""))
-
-    def price(reply: ModelResponse | ResponsesAPIResponse) -> float | None:
-        return ProxyBaseLLMRequestProcessing._streamed_usage_cost(  # pyright: ignore[reportPrivateUsage]  # the proxy's one stream pricer
-            reply,
-            model_name,
-            None,
-            logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None,
-        )
-
-    return price
-
-
 def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
     if isinstance(chunk, ModelResponseStream):
         serialized_chunk: Final = _fast_serialize_simple_model_response_stream(chunk)
@@ -10489,7 +10473,6 @@ async def async_data_generator(
         needs_per_chunk_hook: Final = proxy_logging_obj.needs_per_chunk_streaming_hook()
         is_raw_sse_stream: Final = bool(request_data.get("_litellm_raw_sse_stream"))
         strip_stream_usage: Final = bool(request_data.get("_litellm_strip_stream_usage"))
-        price_stream_usage: Final = _stream_usage_pricer(request_data)
         raw_sse_buffer = ""
 
         # A stream can start on a deployment with keepalive off and fall back
@@ -10576,7 +10559,7 @@ async def async_data_generator(
                 error_state.observe_chunk(chunk)
             raw_passthrough = False
             if isinstance(chunk, BaseModel):
-                chunk = _serialize_streaming_chunk(with_client_stream_usage_cost(chunk, price_stream_usage))
+                chunk = _serialize_streaming_chunk(with_client_stream_usage_cost(chunk))
             elif isinstance(chunk, bytes):
                 chunk = chunk.decode("utf-8", errors="replace")
                 if is_raw_sse_stream:

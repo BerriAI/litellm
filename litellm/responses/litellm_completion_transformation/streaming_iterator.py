@@ -1480,7 +1480,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 }
             )
         )
-        normalize_responses_usage(partial)
+        normalize_responses_usage(partial, self.litellm_logging_obj)
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
     def _emit_terminal_response_event(

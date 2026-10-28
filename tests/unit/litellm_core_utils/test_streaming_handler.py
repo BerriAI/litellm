@@ -8,15 +8,16 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import CodeType, FrameType, MappingProxyType
-from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional, cast
+from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional, Tuple, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, TypeAdapter
+
 import litellm
-from litellm import verbose_logger
+from litellm import completion, verbose_logger
 from litellm._logging import session_id_var, trace_id_var
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
@@ -27,7 +28,6 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkEarlyReturn,
     _ProviderChunkParsed,
 )
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
@@ -35,13 +35,11 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
-    StreamingChoices,
     StandardLoggingPayload,
+    StreamingChoices,
     Usage,
 )
 from litellm.utils import ModelResponseListIterator
-from litellm import completion
-from typing import Tuple
 
 
 @pytest.mark.parametrize("async_stream", [False, True])
@@ -2436,7 +2434,7 @@ def test_openai_compatible_streaming_cost_is_the_reported_cost():
         custom_llm_provider="openai",
         call_type="completion",
         optional_params={},
-    ) == pytest.approx(0.037)
+    ) == 0.037
 
 
 def test_xai_streaming_reported_cost_still_takes_the_margin(monkeypatch):
@@ -6059,6 +6057,25 @@ def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chu
     assert assembled._hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND_FLEX"}
 
 
+def test_the_usage_chunk_carries_the_bill_the_builder_priced_for_the_spend_row() -> None:
+    from litellm.litellm_core_utils.hidden_params import get_hidden_params
+    from litellm.litellm_core_utils.streaming_handler import (
+        _stamp_hidden_response_cost,  # pyright: ignore[reportPrivateUsage]  # the helper under test
+    )
+
+    usage: Final = Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120)
+    complete: Final = ModelResponse(model="omni-model", usage=usage)
+    complete.hidden_params = {"response_cost": 0.00032}
+    usage_chunk: Final = ModelResponseStream(id="chunk-1", model="omni-model", choices=[], usage=usage)
+    usage_chunk.hidden_params = {"response_cost": None}
+
+    _stamp_hidden_response_cost(usage_chunk, complete)
+
+    stamped: Final = get_hidden_params(usage_chunk)
+    assert stamped is not None and stamped["response_cost"] == 0.00032
+    assert getattr(usage, "cost", None) is None
+
+
 def test_chunk_creator_keeps_provider_model_private_across_stream():
     from litellm.router_utils.add_retry_fallback_headers import (
         get_hidden_params_dict,
@@ -6116,28 +6133,6 @@ def test_chunk_creator_keeps_provider_model_private_across_stream():
         get_hidden_params_dict(assembled)["provider_response_model"]
         == "selected-model"
     )
-
-
-def test_the_usage_chunk_carries_the_served_model_so_its_price_matches_the_assembled_response():
-    from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
-
-    wrapper = CustomStreamWrapper(
-        completion_stream=None,
-        model="requested-route",
-        logging_obj=MagicMock(),
-        custom_llm_provider="openai",
-    )
-    wrapper.chunk_creator(
-        chunk=ModelResponseStream(
-            id="chunk-1",
-            model="selected-model",
-            choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="hello"))],
-        )
-    )
-
-    usage_chunk = wrapper._new_usage_chunk()
-
-    assert get_hidden_params_dict(usage_chunk)["provider_response_model"] == "selected-model"
 
 
 def test_assembled_stream_uses_later_provider_model_for_cost(

@@ -92,6 +92,17 @@ def _next_sync_or_exhausted(it: Iterator[object]) -> object:
         return _SYNC_ITER_EXHAUSTED
 
 
+def _stamp_hidden_response_cost(
+    usage_chunk: ModelResponse | TextCompletionResponse | ModelResponseStream,
+    complete_response: ModelResponse | TextCompletionResponse | ModelResponseStream,
+) -> None:
+    """The bill the builder priced for the spend row rides the usage chunk, so the proxy shows the same number."""
+    bill: Final = (get_hidden_params(complete_response) or {}).get("response_cost")
+    target: Final = get_hidden_params(usage_chunk)
+    if target is not None and isinstance(bill, (int, float)) and not isinstance(bill, bool):
+        target["response_cost"] = float(bill)
+
+
 def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming_response: ModelResponse) -> None:
     served_tier: Final = complete_streaming_response.model_dump().get("service_tier")
     if isinstance(served_tier, str) and served_tier:
@@ -2122,6 +2133,7 @@ class CustomStreamWrapper:
                         getattr(complete_streaming_response, "usage"),
                     )
                     _stamp_served_service_tier(response, complete_streaming_response)
+                    _stamp_hidden_response_cost(response, complete_streaming_response)
                     try:
                         _cache_copy = complete_streaming_response.model_copy(deep=True)
                         _log_copy = complete_streaming_response.model_copy(deep=True)
@@ -2343,6 +2355,7 @@ class CustomStreamWrapper:
                     getattr(complete_streaming_response, "usage"),
                 )
                 _stamp_served_service_tier(response, complete_streaming_response)
+                _stamp_hidden_response_cost(response, complete_streaming_response)
                 try:
                     _copy = complete_streaming_response.model_copy(deep=True)
                 except RuntimeError:
@@ -2500,9 +2513,7 @@ class CustomStreamWrapper:
         return any(get(field) for field in cls._CONTINUATION_DISQUALIFYING_DELTA_FIELDS)
 
     def _new_usage_chunk(self) -> ModelResponseStream:
-        usage_chunk: Final = self.model_response_creator(
-            hidden_params=_provider_hidden_params(None, self._provider_response_model)
-        )
+        usage_chunk: Final = self.model_response_creator()
         if self.caller_requested_stream_usage:
             usage_chunk.choices = []
         return usage_chunk

@@ -41,6 +41,7 @@ from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -585,7 +586,7 @@ class BaseResponsesAPIStreamingIterator:
                         else openai_responses_api_chunk.model_copy(update={"response": _billed_response})
                     )
                     self.completed_response = _terminal_chunk
-                    normalize_responses_usage(_billed_response)
+                    normalize_responses_usage(_billed_response, self.logging_obj)
 
                     if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:
                         self._handle_logging_failed_response()
@@ -1069,7 +1070,7 @@ class BaseResponsesAPIStreamingIterator:
                 "output": _partial_output_items(self._generated_content),
             }
         )
-        normalize_responses_usage(partial)
+        normalize_responses_usage(partial, self.logging_obj)
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
@@ -1741,14 +1742,24 @@ def _estimate_usage_safely(
         return None
 
 
-def normalize_responses_usage(response_obj: ResponsesAPIResponse | None) -> None:
-    """A terminal response built off an untyped dict carries its usage as a dict, logging and the proxy read a model."""
+def normalize_responses_usage(response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None) -> None:
+    """A terminal response built off an untyped dict carries its usage as a dict, logging and the proxy read a model.
+    The bill the logging object prices for it rides its hidden ``response_cost``, so the proxy shows the same number."""
     if response_obj is None:
         return
     usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response_obj, "usage", None))
     if usage_obj is None:
         return
     response_obj.usage = usage_obj  # rebind-ok: the typed usage has to ride on the response the client receives
+    if logging_obj is None:
+        return
+    try:
+        bill: Final = logging_obj.response_cost_calculator(result=response_obj)
+    except Exception:  # noqa: BLE001  # a pricing failure leaves the client usage as the upstream sent it
+        return
+    hidden: Final = get_hidden_params(response_obj)
+    if hidden is not None and isinstance(bill, (int, float)) and not isinstance(bill, bool):
+        hidden["response_cost"] = float(bill)
 
 
 def opening_item_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
@@ -1782,7 +1793,7 @@ def build_synthetic_response_events(
     chunk_size: int,
 ) -> list[ResponsesAPIStreamingResponse]:
     openai_types: Final = get_openai_response_types()
-    normalize_responses_usage(transformed)
+    normalize_responses_usage(transformed, logging_obj)
 
     events: Final[list[ResponsesAPIStreamingResponse]] = [
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),
