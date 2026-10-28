@@ -1,4 +1,6 @@
+import copy
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,6 +11,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
 )
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from litellm.utils import get_optional_params
 
 
 def test_hosted_vllm_chat_transformation_file_url():
@@ -397,3 +400,82 @@ def test_hosted_vllm_custom_tools_use_top_level_input_schema():
     assert tools[0]["function"]["name"] == "search"
     assert tools[0]["function"]["description"] == "Search docs"
     assert tools[0]["function"]["parameters"] == input_schema
+
+
+def _strict_tools() -> list[dict[str, object]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "record_code",
+                "description": "Record a ten letter code",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "object",
+                            "properties": {"value": {"type": "string", "pattern": "^Z{10}$"}},
+                            "required": ["value"],
+                            "additionalProperties": False,
+                        }
+                    },
+                    "required": ["code"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+
+
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_hosted_vllm_forwards_strict_tool_schema_as_sent(drop_params: bool) -> None:
+    tools: Final = _strict_tools()
+    sent: Final = copy.deepcopy(tools)
+
+    optional_params: Final = get_optional_params(
+        model="my-vllm-model",
+        custom_llm_provider="hosted_vllm",
+        tools=tools,
+        tool_choice="auto",
+        drop_params=drop_params,
+    )
+
+    assert optional_params["tools"] == sent
+    assert tools == sent
+
+
+def test_hosted_vllm_additional_drop_params_removes_only_the_named_tool_fields() -> None:
+    tools: Final = _strict_tools()
+    sent: Final = copy.deepcopy(tools)
+
+    optional_params: Final = get_optional_params(
+        model="my-vllm-model",
+        custom_llm_provider="hosted_vllm",
+        tools=tools,
+        tool_choice="auto",
+        additional_drop_params=["tools[*].function.strict", "tools[*].function.parameters.additionalProperties"],
+    )
+
+    assert optional_params["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "record_code",
+                "description": "Record a ten letter code",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "object",
+                            "properties": {"value": {"type": "string", "pattern": "^Z{10}$"}},
+                            "required": ["value"],
+                            "additionalProperties": False,
+                        }
+                    },
+                    "required": ["code"],
+                },
+            },
+        }
+    ]
+    assert tools == sent

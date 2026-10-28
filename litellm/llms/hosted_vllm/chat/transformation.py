@@ -23,7 +23,6 @@ from litellm.types.llms.openai import (
     ChatCompletionVideoUrlObject,
 )
 
-from ....utils import remove_additional_properties, remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
@@ -86,14 +85,11 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        _tools = non_default_params.pop("tools", None)
-        if _tools is not None:
-            _tools = remove_additional_properties(_tools)
-            _tools = remove_strict_from_schema(_tools)
-            if isinstance(_tools, list):
-                _tools = self._convert_custom_tools_to_function_tools(_tools)
-        if _tools is not None:
-            non_default_params["tools"] = _tools
+        tools: Final = non_default_params.pop("tools", None)
+        if tools is not None:
+            non_default_params["tools"] = (
+                self._convert_custom_tools_to_function_tools(tools) if isinstance(tools, list) else tools
+            )
 
         thinking: Final = non_default_params.pop("thinking", None)
         thinking_effort: Final = (
