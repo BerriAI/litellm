@@ -14,7 +14,7 @@ import pytest
 
 import litellm
 from litellm.llms.bedrock.common_utils import bedrock_supports_openai_responses
-from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig
+from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig, _without_disabled_reasoning_effort
 from litellm.responses.file_search.emulated_handler import should_use_emulated_file_search
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.router import GenericLiteLLMParams
@@ -356,6 +356,19 @@ class TestDisabledReasoningEffort:
             r.getMessage() for r in caplog.records if "Dropping reasoning.effort='minimal'" in r.getMessage()
         ]
         assert len(dropped) == 1 and model in dropped[0]
+
+    def test_bedrock_disabled_effort_drop_warns_on_its_own(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            params: Final = _without_disabled_reasoning_effort(
+                {"reasoning": {"effort": "minimal"}, "max_output_tokens": 64}, MODEL, True, ()
+            )
+        assert params == {"max_output_tokens": 64}
+        dropped: Final = [
+            r.getMessage() for r in caplog.records if "Dropping reasoning.effort='minimal'" in r.getMessage()
+        ]
+        assert len(dropped) == 1 and MODEL in dropped[0]
 
     def test_effort_only_reasoning_is_removed_when_dropped(self, local_model_cost_map):
         params = _cfg().map_openai_params(

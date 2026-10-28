@@ -330,10 +330,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
     @staticmethod
     def _requests_reasoning_effort(reasoning: object) -> bool:
-        effort: Final = (
-            reasoning.get("effort") if isinstance(reasoning, Mapping) else getattr(reasoning, "effort", None)
-        )
-        return effort is not None
+        return OpenAIResponsesAPIConfig._requested_effort(reasoning) is not None
+
+    @staticmethod
+    def _requested_effort(reasoning: object) -> object:
+        return reasoning.get("effort") if isinstance(reasoning, Mapping) else getattr(reasoning, "effort", None)
 
     @staticmethod
     def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
@@ -406,7 +407,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         ):
             if drop_params or litellm.drop_params:
                 dropped_reasoning: Final = params.pop("reasoning", None)
-                verbose_logger.warning(DROP_UNSUPPORTED_REASONING_WARNING, dropped_reasoning, model)
+                if self._requested_effort(dropped_reasoning) != "none":
+                    verbose_logger.warning(DROP_UNSUPPORTED_REASONING_WARNING, dropped_reasoning, model)
             else:
                 raise litellm.UnsupportedParamsError(
                     message=(
