@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use crate::serde_compat::parse_str_bool;
+use crate::coercion::parse_str_bool;
 
 pub trait Lookup {
     fn get(&self, name: &str) -> Option<String>;

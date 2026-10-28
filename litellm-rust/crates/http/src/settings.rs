@@ -4,7 +4,7 @@ use std::{
 };
 
 use litellm_core_utils::{
-    serde_compat::parse_str_bool,
+    coercion::parse_str_bool,
     settings::{Layer, Lookup, merge},
 };
 
