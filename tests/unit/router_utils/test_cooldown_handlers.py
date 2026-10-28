@@ -2924,10 +2924,65 @@ async def test_bad_request_error_does_not_cool_down_a_deployment(
     assert tuple(cooldown_deployments) == ()
 
 
-@pytest.mark.parametrize("use_policy", [False, True], ids=["allowed_fails", "allowed_fails_policy"])
+TIMED_OUT_DEPLOYMENT: Final = {
+    "model_name": "test-model",
+    "litellm_params": {"model": "openai/test-model", "api_key": "test-key"},
+    "model_info": {"id": "test-deployment"},
+}
+BACKUP_DEPLOYMENT: Final = {
+    "model_name": "backup-model",
+    "litellm_params": {"model": "openai/backup-model", "api_key": "test-key", "api_base": "https://backup.test/v1"},
+    "model_info": {"id": "backup-deployment"},
+}
+BACKUP_REPLY: Final = {
+    "id": "chatcmpl-backup",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "backup-model",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+async def _lone_call_outcome(router: Router) -> type[Exception]:
+    try:
+        await router.acompletion(model="test-model", messages=[{"role": "user", "content": "timeout test"}])
+    except (litellm.Timeout, RouterRateLimitError) as error:
+        return type(error)
+    pytest.fail("the timed-out deployment answered")
+
+
+BENCHED: Final = (litellm.Timeout, litellm.Timeout, RouterRateLimitError, RouterRateLimitError, RouterRateLimitError)
+
+
+@pytest.mark.parametrize(
+    ("router_kwargs", "model_info", "outcomes"),
+    [
+        ({"allowed_fails": 1}, {}, (litellm.Timeout,) * 5),
+        ({"allowed_fails": 1}, {"allowed_fails_policy": {}}, (litellm.Timeout,) * 5),
+        ({"allowed_fails_policy": AllowedFailsPolicy(RateLimitErrorAllowedFails=1)}, {}, (litellm.Timeout,) * 5),
+        ({"allowed_fails_policy": AllowedFailsPolicy(TimeoutErrorAllowedFails=1)}, {}, BENCHED),
+        ({"allowed_fails": 1, "fallbacks": [{"test-model": ["backup-model"]}]}, {}, BENCHED),
+        (
+            {"allowed_fails": 1, "fallbacks": [{"test-model": [{"model": "backup-model", "temperature": 0}]}]},
+            {},
+            BENCHED,
+        ),
+    ],
+    ids=[
+        "allowed_fails",
+        "allowed_fails_with_an_empty_deployment_policy",
+        "policy_names_another_exception",
+        "policy_names_timeout",
+        "allowed_fails_with_a_fallback_group",
+        "allowed_fails_with_a_dict_fallback_target",
+    ],
+)
 @pytest.mark.asyncio
-async def test_allowed_fails_cools_a_single_deployment(
-    use_policy: bool,
+async def test_router_allowed_fails_benches_a_lone_deployment_only_when_the_policy_names_the_exception(
+    router_kwargs: Mapping[str, object],
+    model_info: Mapping[str, object],
+    outcomes: tuple[type[Exception], ...],
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2935,45 +2990,65 @@ async def test_allowed_fails_cools_a_single_deployment(
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         side_effect=httpx.ReadTimeout("upstream timeout")
     )
-    policy_kwargs: Final = (
-        {"allowed_fails_policy": AllowedFailsPolicy(TimeoutErrorAllowedFails=1)} if use_policy else {"allowed_fails": 1}
+    deployment: Final = {**TIMED_OUT_DEPLOYMENT, "model_info": {**TIMED_OUT_DEPLOYMENT["model_info"], **model_info}}
+    router: Final = Router(model_list=[deployment], cooldown_time=300, num_retries=0, **router_kwargs)
+
+    seen: Final = tuple([await _lone_call_outcome(router) for _ in range(5)])
+
+    assert seen == outcomes
+    assert len(route.calls) == outcomes.count(litellm.Timeout)
+
+
+async def _group_call_outcome(router: Router) -> str:
+    try:
+        response: Final = await router.acompletion(
+            model="test-model", messages=[{"role": "user", "content": "timeout test"}]
+        )
+    except litellm.Timeout:
+        return "timeout"
+    return response.id
+
+
+@pytest.mark.asyncio
+async def test_router_allowed_fails_still_benches_a_deployment_that_has_a_sibling_in_its_group(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    timed_out: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=httpx.ReadTimeout("upstream timeout")
     )
+    respx_mock.post("https://backup.test/v1/chat/completions").mock(return_value=httpx.Response(200, json=BACKUP_REPLY))
     router: Final = Router(
-        model_list=[
-            {
-                "model_name": "test-model",
-                "litellm_params": {"model": "openai/test-model", "api_key": "test-key"},
-                "model_info": {"id": "test-deployment"},
-            }
-        ],
+        model_list=[TIMED_OUT_DEPLOYMENT, {**BACKUP_DEPLOYMENT, "model_name": "test-model"}],
         cooldown_time=300,
         num_retries=0,
-        **policy_kwargs,
+        allowed_fails=1,
     )
 
-    for _ in range(2):
-        with pytest.raises(litellm.Timeout):
-            await router.acompletion(
-                model="test-model",
-                messages=[{"role": "user", "content": "timeout test"}],
-            )
-
+    while len(timed_out.calls) < 2:
+        await _group_call_outcome(router)
     cooldown_deployments: Final = await async_get_cooldown_deployments(
-        litellm_router_instance=router,
-        parent_otel_span=None,
+        litellm_router_instance=router, parent_otel_span=None
     )
+    served: Final = tuple([await _group_call_outcome(router) for _ in range(5)])
 
-    assert len(route.calls) == 2
     assert tuple(cooldown_deployments) == ("test-deployment",)
+    assert served == ("chatcmpl-backup",) * 5
+    assert len(timed_out.calls) == 2
 
 
 def test_per_user_session_upstream_errors_never_cool_down_the_shared_deployment(single_deployment_router):
     """A 429/401 from the caller's own Copilot seat is scoped to that user; it must
     not cool down the shared deployment for every other caller."""
-    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
     from litellm.llms.github_copilot.github_host import github_host_endpoints
+    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 
-    session_kwargs = {"github_copilot_user_session": GithubCopilotUserSession(token="gho_user", endpoints=github_host_endpoints("github.com"))}
+    session_kwargs = {
+        "github_copilot_user_session": GithubCopilotUserSession(
+            token="gho_user", endpoints=github_host_endpoints("github.com")
+        )
+    }
     for exc, status in (
         (litellm.RateLimitError("copilot 429", "github_copilot", "gpt-4o"), 429),
         (litellm.AuthenticationError("copilot 401", "github_copilot", "gpt-4o"), 401),

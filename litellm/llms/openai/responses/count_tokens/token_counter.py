@@ -15,8 +15,8 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.tool_fields import DropPolicy
-from litellm.llms.anthropic.pass_through.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
-from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
+from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
+from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter

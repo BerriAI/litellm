@@ -6063,7 +6063,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             model_id=optional_params.get("model_id"),
         )
-        if mock_response or mock_tool_calls or mock_timeout:
+        if mock_response is not None or mock_tool_calls or mock_timeout:
             kwargs.pop("mock_timeout", None)  # remove for any fallbacks triggered
             return mock_completion(
                 model,
@@ -6327,7 +6327,7 @@ def completion(
             response = _complete_vercel_ai_gateway(_dispatch_ctx)
         elif custom_llm_provider == "palm":
             raise ValueError(
-                "Palm was decommisioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
+                "Palm was decommissioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
             )
         elif custom_llm_provider == "vertex_ai_beta" or custom_llm_provider == "gemini":
             response = _complete_vertex_ai_beta(_dispatch_ctx)
@@ -7178,6 +7178,7 @@ def embedding(
                 custom_llm_provider="gemini",
                 api_key=gemini_api_key,
                 api_base=api_base,
+                timeout=timeout,
                 client=client,
                 extra_headers=headers,
                 drop_params=drop_unsupported_params,
@@ -7231,6 +7232,7 @@ def embedding(
                     custom_llm_provider="vertex_ai",
                     api_key=None,
                     api_base=api_base,
+                    timeout=timeout,
                     client=client,
                     extra_headers=headers,
                     drop_params=drop_unsupported_params,

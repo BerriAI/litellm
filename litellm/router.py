@@ -740,7 +740,7 @@ def _anthropic_stream_forwards_ping_live(chunk: object, has_generated_content: b
     """A `ping` keepalive reaches the client live whenever the stream has not committed: it carries no
     lifecycle, so it cannot create overlapping lifecycles on the wire, and it keeps the connection alive
     while lifecycle frames sit buffered for a possible fallback during a long thinking pass."""
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
+    from litellm.llms.anthropic.messages.native.streaming_iterator import is_anthropic_ping_chunk
 
     return not has_generated_content and is_anthropic_ping_chunk(chunk)
 
@@ -756,7 +756,7 @@ def _without_line_breaks(value: object) -> str:
 def _anthropic_stream_error_is_gateway_verdict(chunk: object) -> bool:
     """AgenticAnthropicStreamingIterator's own retrieval-failure frame is the gateway's verdict, not a provider
     failure: another deployment would rerun the same failed hook, so it reaches the client instead of falling back."""
-    from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
         is_server_fulfilled_tool_leak_error,
     )
 
@@ -920,7 +920,7 @@ def _stream_commits_now(chunk: object, has_generated_content: bool, buffered_chu
     pre-content buffer cap was hit) rather than keep buffering lifecycle
     frames toward a possible fallback.
     """
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.streaming_iterator import (
         is_anthropic_content_delta_chunk,
     )
 
@@ -1123,6 +1123,27 @@ def as_output_cap(value: object) -> int | None:
     except (ValueError, OverflowError):
         return None
     return cap if cap >= 0 else None
+
+
+def stamped_client_ceiling(request_kwargs: Mapping[str, object]) -> Mapping[str, int] | None:
+    """None means unstamped; an empty mapping means the original caller supplied no limit."""
+    stamped: Final = next(
+        (
+            bucket.get(CLIENT_OUTPUT_CEILING_METADATA_KEY)
+            for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata"))
+            if isinstance(bucket, dict) and CLIENT_OUTPUT_CEILING_METADATA_KEY in bucket
+        ),
+        None,
+    )
+    if not isinstance(stamped, dict):
+        return None
+    return MappingProxyType(
+        {
+            carrier: cap
+            for carrier, value in stamped.items()
+            if carrier in OUTPUT_TOKEN_CEILING_PARAMS and (cap := as_output_cap(value)) is not None
+        }
+    )
 
 
 def _exact_base_model_max_input_tokens(base_model: str) -> int | None:
@@ -6342,7 +6363,7 @@ class Router:
                 response=response,
                 kwargs=kwargs,
             ):
-                from litellm.llms.anthropic.pass_through.messages.utils import (
+                from litellm.llms.anthropic.messages.native.utils import (
                     safeguard_refusal_error,
                 )
 
@@ -6459,16 +6480,16 @@ class Router:
         including pings and provider error frames, is forwarded live and
         verbatim instead.
         """
-        from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
+        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
             FakeAnthropicMessagesStreamIterator,
         )
-        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.messages.native.streaming_iterator import (
             aclose_if_supported,
             aclose_superseded_attempt,
             parse_anthropic_error_event,
             parse_anthropic_refusal_stop_details,
         )
-        from litellm.llms.anthropic.pass_through.messages.utils import (
+        from litellm.llms.anthropic.messages.native.utils import (
             safeguard_refusal_error,
         )
 
@@ -6832,7 +6853,7 @@ class Router:
         A retry stamps the retry headers async_function_with_retries would have for a pre-stream retry;
         a later hop the recovered stream makes replaces them with its own, the way a fallback's do.
         """
-        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.messages.native.streaming_iterator import (
             aclose_if_supported,
             anthropic_messages_response_as_sse_events,
         )
@@ -9966,7 +9987,7 @@ class Router:
         when a content-policy fallback is configured; a plain refusal without stop_details, or
         any response with nothing configured, is returned to the client unchanged.
         """
-        from litellm.llms.anthropic.pass_through.messages.utils import (
+        from litellm.llms.anthropic.messages.native.utils import (
             get_safeguard_refusal_stop_details,
         )
 
@@ -14183,7 +14204,7 @@ class Router:
         `tools` (Chat Completions, Responses and Anthropic Messages shapes) and the
         Anthropic Messages top-level `system` block.
         """
-        from litellm.llms.anthropic.pass_through.messages.utils import (
+        from litellm.llms.anthropic.messages.native.utils import (
             anthropic_system_to_openai_message,
         )
 
@@ -15270,9 +15291,7 @@ class Router:
         request_kwargs: dict,
         responses_call: bool,
     ) -> bool:
-        """Apply a routing strategy's per-tier litellm_params on top of the request and report
-        whether they pinned an output ceiling, so the caller can hand the request its own ceiling
-        back on a routing pass that pins none."""
+        """Apply per-tier litellm_params and report whether they pinned an output ceiling."""
         if not tier_litellm_params:
             return False
         reject_api_key_secret_reference(tier_litellm_params)
@@ -15285,33 +15304,25 @@ class Router:
         return not OUTPUT_TOKEN_CEILING_PARAMS.isdisjoint(surface_tier_params)
 
     @staticmethod
-    def _restore_client_ceiling_no_tier_pins(request_kwargs: MutableMapping[str, object]) -> None:
-        """A model-group fallback re-enters routing with the kwargs an earlier auto-router pass
-        already rewrote, so a ceiling sized for that pass's tier would ride onto a group no tier
-        chose. When this pass pins none, hand the request back exactly the carriers the caller
-        sent, which the first pinning pass stamped. The stamp lives in a metadata bucket a
-        caller can also write, so the proxy strips the key at ingestion and this read takes
-        nothing but the three ceiling carriers as integers: no other key ever reaches kwargs."""
-        stamped: Final = next(
-            (
-                bucket.get(CLIENT_OUTPUT_CEILING_METADATA_KEY)
-                for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata"))
-                if isinstance(bucket, dict) and CLIENT_OUTPUT_CEILING_METADATA_KEY in bucket
-            ),
-            None,
-        )
-        if not isinstance(stamped, dict):
+    def _restore_client_output_ceiling(request_kwargs: MutableMapping[str, object]) -> None:
+        """Restore caller intent before routing, so neither a previous tier pin nor alias defaults
+        become the next attempt's budget. The proxy strips caller-written stamps at ingestion."""
+        callers_ceiling: Final = stamped_client_ceiling(request_kwargs)
+        if callers_ceiling is None:
             return
-        callers_ceiling: Final = MappingProxyType(
-            {
-                carrier: cap
-                for carrier, value in stamped.items()
-                if carrier in OUTPUT_TOKEN_CEILING_PARAMS and (cap := as_output_cap(value)) is not None
-            }
-        )
         for carrier in OUTPUT_TOKEN_CEILING_PARAMS:
             request_kwargs.pop(carrier, None)
         request_kwargs.update(callers_ceiling)
+
+    @staticmethod
+    def _stamp_client_output_ceiling(
+        request_kwargs: dict[str, object],  # mutable-ok: preserve request-owned metadata across routing attempts
+    ) -> None:
+        _, metadata_bucket = get_or_create_metadata_bucket(request_kwargs)
+        metadata_bucket.setdefault(
+            CLIENT_OUTPUT_CEILING_METADATA_KEY,
+            {carrier: request_kwargs[carrier] for carrier in OUTPUT_TOKEN_CEILING_PARAMS if carrier in request_kwargs},
+        )
 
     @staticmethod
     def _drop_client_carriers_a_tier_pin_supersedes(
@@ -15329,15 +15340,7 @@ class Router:
         one setting under three names, and a provider handed two of them either
         rejects the request or picks one by iteration order."""
         if not OUTPUT_TOKEN_CEILING_PARAMS.isdisjoint(tier_litellm_params):
-            _, metadata_bucket = get_or_create_metadata_bucket(request_kwargs)
-            metadata_bucket.setdefault(
-                CLIENT_OUTPUT_CEILING_METADATA_KEY,
-                {
-                    carrier: request_kwargs[carrier]
-                    for carrier in OUTPUT_TOKEN_CEILING_PARAMS
-                    if carrier in request_kwargs
-                },
-            )
+            Router._stamp_client_output_ceiling(request_kwargs)
             for carrier in OUTPUT_TOKEN_CEILING_PARAMS:
                 request_kwargs.pop(carrier, None)
         if "reasoning_effort" not in tier_litellm_params:
@@ -15409,14 +15412,12 @@ class Router:
                 model = pre_routing_hook_response.model
                 messages = pre_routing_hook_response.messages
                 record_pre_routing_selection(request_kwargs, model)
-            tier_pins_ceiling: Final = self._pin_tier_params_onto_request(
+            self._pin_tier_params_onto_request(
                 model=model,
                 tier_litellm_params=pre_routing_hook_response.litellm_params if pre_routing_hook_response else None,
                 request_kwargs=request_kwargs,
                 responses_call=responses_call,
             )
-            if not tier_pins_ceiling:
-                self._restore_client_ceiling_no_tier_pins(request_kwargs)
             #########################################################
 
             # Resolve the strategy and logger AFTER the pre-routing hook, since
@@ -15574,14 +15575,12 @@ class Router:
                 model = pre_routing_hook_response.model
                 messages = pre_routing_hook_response.messages
                 record_pre_routing_selection(request_kwargs, model)
-            tier_pins_ceiling: Final = self._pin_tier_params_onto_request(
+            self._pin_tier_params_onto_request(
                 model=model,
                 tier_litellm_params=pre_routing_hook_response.litellm_params if pre_routing_hook_response else None,
                 request_kwargs=request_kwargs,
                 responses_call=responses_call,
             )
-            if not tier_pins_ceiling:
-                self._restore_client_ceiling_no_tier_pins(request_kwargs)
 
             # 2. Get healthy deployments
             healthy_deployments: Final = await self.async_get_healthy_deployments(
@@ -15931,6 +15930,7 @@ class Router:
         spend metadata is stamped before routing and the response carries the tier group the
         strategy picked.
         """
+        self._restore_client_output_ceiling(request_kwargs)
         self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
         requested_registered_model_name: Final = self.get_model_from_alias(model=model) or model
         registered_model_name: Final = await self._resolve_claude_code_session_router(
@@ -16097,7 +16097,8 @@ class Router:
         # them) until `_update_kwargs_with_deployment` drops any the selected
         # deployment sets itself (its own `aws_region_name` beats the marker's).
         # Per-tier `litellm_params` on the hook response are deliberate overrides
-        # the caller applies on top, so those keys are never forwarded here.
+        # the caller applies on top, so those keys and equivalent output-limit
+        # names are never tracked as alias defaults here.
         marker_params: Final = (
             self._forwardable_alias_marker_params(
                 model=registered_model_name, strategy_tags=selected_strategy.tags, request_kwargs=request_kwargs
@@ -16108,9 +16109,16 @@ class Router:
         tier_param_keys: Final = (
             tuple(pre_routing_hook_response.litellm_params or ()) if pre_routing_hook_response is not None else ()
         )
-        newly_forwarded: Final = tuple(
-            (key, value) for key, value in marker_params if key not in request_kwargs and key not in tier_param_keys
+        overridden_marker_keys: Final = frozenset(tier_param_keys) | (
+            OUTPUT_TOKEN_CEILING_PARAMS if not OUTPUT_TOKEN_CEILING_PARAMS.isdisjoint(tier_param_keys) else frozenset()
         )
+        newly_forwarded: Final = tuple(
+            (key, value)
+            for key, value in marker_params
+            if key not in request_kwargs and key not in overridden_marker_keys
+        )
+        if pre_routing_hook_response is not None:
+            self._stamp_client_output_ceiling(request_kwargs)
         request_kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, None)
         request_kwargs.update(newly_forwarded)
         if newly_forwarded:
