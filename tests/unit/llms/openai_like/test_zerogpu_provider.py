@@ -19,10 +19,14 @@ ZEROGPU_MODELS: Final = (
     "gpt-4.1-mini",
     "gpt-5.4-nano",
     "gpt-5.6-luna",
+    "gpt-6-luna",
     "gpt-oss-120b",
     "LFM2.5-1.2B-Instruct",
+    "LFM2.5-1.2B-Thinking",
     "llama-3.1-8b-instruct-fast",
+    "llama-3.2-3b-instruct-fast",
     "qwen3-30b-a3b-fp8",
+    "qwen3.6-35b-a3b",
 )
 
 
