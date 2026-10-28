@@ -153,6 +153,14 @@ def _with_output_config(expected: Expected, output_config: JsonValue) -> Expecte
     return lambda marker: {**expected(marker), "output_config": output_config}
 
 
+def _with_fields(expected: Expected, fields: Mapping[str, JsonValue]) -> Expected:
+    return lambda marker: {**expected(marker), **fields}
+
+
+def _without(expected: Expected, field: str) -> Expected:
+    return lambda marker: {key: value for key, value in expected(marker).items() if key != field}
+
+
 def _converse_chat(effort: str, thinking: Mapping[str, JsonValue]) -> Expected:
     return lambda marker: {
         "messages": [{"role": "user", "content": [{"text": prompt(marker)}]}],
@@ -1958,20 +1966,65 @@ def _bedrock_native_schema(body: Mapping[str, JsonValue], *, invoke: bool) -> Js
     return JSON_OBJECT.validate_json(string_value(json_schema["schema"]))
 
 
+_CONVERSE_NATIVE_OUTPUT: Final[dict[str, JsonValue]] = {
+    "textFormat": {
+        "type": "json_schema",
+        "structure": {"jsonSchema": {"name": "answer", "schema": json.dumps(_NATIVE_OUTPUT_SCHEMA)}},
+    }
+}
+_INVOKE_NATIVE_OUTPUT: Final[dict[str, JsonValue]] = {
+    "effort": "high",
+    "format": {"type": "json_schema", "schema": _NATIVE_OUTPUT_SCHEMA},
+}
+_JSON_TOOL: Final = "json_tool_call"
+_CONVERSE_TOOL_SCHEMA: Final[dict[str, JsonValue]] = {
+    key: value for key, value in _NATIVE_OUTPUT_SCHEMA.items() if key != "additionalProperties"
+}
+_CONVERSE_WITH_NATIVE_OUTPUT: Final = _with_fields(
+    _converse_chat("high", _ADAPTIVE), {"outputConfig": _CONVERSE_NATIVE_OUTPUT}
+)
+_INVOKE_WITH_NATIVE_OUTPUT: Final = _with_output_config(
+    _invoke_chat("high", _ADAPTIVE, ("structured-outputs-2025-11-13",)), _INVOKE_NATIVE_OUTPUT
+)
+_CONVERSE_WITH_JSON_TOOL: Final = _with_fields(
+    _converse_chat("high", _ADAPTIVE),
+    {
+        "toolConfig": {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "name": _JSON_TOOL,
+                        "description": _JSON_TOOL,
+                        "inputSchema": {"json": _CONVERSE_TOOL_SCHEMA},
+                    }
+                }
+            ]
+        }
+    },
+)
+_INVOKE_WITH_JSON_TOOL: Final = _with_fields(
+    _without(_invoke_chat("high", _ADAPTIVE, ()), "anthropic_beta"),
+    {"tools": [{"name": _JSON_TOOL, "input_schema": _NATIVE_OUTPUT_SCHEMA}]},
+)
+
+
 @pytest.mark.parametrize(
-    ("kind", "target", "fields"),
+    ("kind", "target", "fields", "expected"),
     [
-        pytest.param("bedrock_converse", _CONVERSE, {"thinking": _BUDGET}, id="converse-budget"),
+        pytest.param(
+            "bedrock_converse", _CONVERSE, {"thinking": _BUDGET}, _CONVERSE_WITH_NATIVE_OUTPUT, id="converse-budget"
+        ),
         pytest.param(
             "bedrock_invoke",
             _INVOKE,
             {"thinking": _BUDGET, "output_config": {"effort": "medium"}},
+            _INVOKE_WITH_NATIVE_OUTPUT,
             id="invoke-output-config-beside-budget",
         ),
     ],
 )
 def test_a_deployment_opted_into_bedrock_native_output_keeps_it_beside_its_declared_level(
-    gateway: Gateway, kind: str, target: str, fields: Mapping[str, JsonValue]
+    gateway: Gateway, kind: str, target: str, fields: Mapping[str, JsonValue], expected: Expected
 ) -> None:
     marker: Final = new_marker()
     response_format: Final[dict[str, JsonValue]] = {
@@ -1987,10 +2040,7 @@ def test_a_deployment_opted_into_bedrock_native_output_keeps_it_beside_its_decla
     assert response.status_code == 200, response.text[:2000]
     assert answer(marker) in response.text, response.text[:2000]
     assert [(request.method, request.target) for request in received] == [("POST", target)]
-    body: Final = body_of(received[0])
-    assert _bedrock_native_schema(body, invoke=target == _INVOKE) == _NATIVE_OUTPUT_SCHEMA, body
-    assert {"toolConfig", "tools"}.isdisjoint(body), body
-    assert sent_effort(received[0]) == "high", body
+    assert body_of(received[0]) == expected(marker)
 
 
 _NATIVE_OUTPUT_REJECTION: Final = (
@@ -2006,10 +2056,16 @@ def _rejecting_native_output(request: Request) -> Reply:
 
 
 @pytest.mark.parametrize(
-    ("kind", "target"), [("bedrock_converse", _CONVERSE), ("bedrock_invoke", _INVOKE)], ids=["converse", "invoke"]
+    ("kind", "target", "rejected", "retried"),
+    [
+        pytest.param(
+            "bedrock_converse", _CONVERSE, _CONVERSE_WITH_NATIVE_OUTPUT, _CONVERSE_WITH_JSON_TOOL, id="converse"
+        ),
+        pytest.param("bedrock_invoke", _INVOKE, _INVOKE_WITH_NATIVE_OUTPUT, _INVOKE_WITH_JSON_TOOL, id="invoke"),
+    ],
 )
 def test_the_retry_after_bedrock_rejects_native_output_keeps_the_declared_level(
-    gateway: Gateway, kind: str, target: str
+    gateway: Gateway, kind: str, target: str, rejected: Expected, retried: Expected
 ) -> None:
     marker: Final = new_marker()
     response_format: Final[dict[str, JsonValue]] = {
@@ -2024,10 +2080,7 @@ def test_the_retry_after_bedrock_rejects_native_output_keeps_the_declared_level(
         received: Final = wire.drain()
     assert response.status_code == 200, response.text[:2000]
     assert [(request.method, request.target) for request in received] == [("POST", target), ("POST", target)]
-    rejected, retried = (body_of(request) for request in received)
-    assert _bedrock_native_schema(rejected, invoke=target == _INVOKE) == _NATIVE_OUTPUT_SCHEMA, rejected
-    assert _bedrock_native_schema(retried, invoke=target == _INVOKE) is None, retried
-    assert [sent_effort(request) for request in received] == ["high", "high"], [rejected, retried]
+    assert [body_of(request) for request in received] == [rejected(marker), retried(marker)]
 
 
 _VERTEX_PROJECT: Final = "scripted-project"
@@ -2039,6 +2092,10 @@ _VERTEX_RAW_PREDICT: Final = (
 _VERTEX_ACCESS_TOKEN: Final = json.dumps({"access_token": "scripted", "token_type": "Bearer", "expires_in": 3600})
 
 
+def _vertex(expected: Expected) -> Expected:
+    return _with_fields(_without(expected, "model"), {"anthropic_version": "vertex-2023-10-16"})
+
+
 def _vertex_reply(request: Request) -> Reply:
     if request.target == _VERTEX_TOKEN:
         return Reply(body=_VERTEX_ACCESS_TOKEN.encode())
@@ -2047,15 +2104,27 @@ def _vertex_reply(request: Request) -> Reply:
 
 
 @pytest.mark.parametrize(
-    ("route", "fields", "effort", "status"),
+    ("route", "fields", "expected", "status"),
     [
-        pytest.param(CHAT, {"reasoning_effort": "medium"}, "high", 200, id="chat-medium-to-high"),
-        pytest.param(MESSAGES, {"thinking": _BUDGET}, "high", 200, id="messages-budget-to-high"),
+        pytest.param(
+            CHAT,
+            {"reasoning_effort": "medium"},
+            _vertex(_anthropic_chat("high", {"type": "adaptive", "display": "summarized"})),
+            200,
+            id="chat-medium-to-high",
+        ),
+        pytest.param(
+            MESSAGES,
+            {"thinking": _BUDGET},
+            _vertex(_native_messages({"effort": "high"}, _ADAPTIVE)),
+            200,
+            id="messages-budget-to-high",
+        ),
         pytest.param(CHAT, {"thinking": _FALSE_BUDGET}, None, 400, id="chat-false-budget-400"),
     ],
 )
 def test_a_vertex_ai_claude_deployment_gets_one_of_its_declared_levels(
-    gateway: Gateway, route: str, fields: dict[str, JsonValue], effort: str | None, status: int
+    gateway: Gateway, route: str, fields: dict[str, JsonValue], expected: Expected | None, status: int
 ) -> None:
     marker: Final = new_marker()
     with wire_server(_vertex_reply) as wire, gateway.scenario() as scenario:
@@ -2074,14 +2143,13 @@ def test_a_vertex_ai_claude_deployment_gets_one_of_its_declared_levels(
         response: Final = gateway.request("POST", route, body)
         received: Final = tuple(request for request in wire.drain() if request.target != _VERTEX_TOKEN)
     assert response.status_code == status, response.text[:2000]
-    if effort is None:
+    if expected is None:
         assert _NON_NUMERIC_BUDGET in response.text, response.text[:2000]
         assert received == (), [request.body[:300] for request in received]
         return
     assert answer(marker) in response.text, response.text[:2000]
     assert [(request.method, request.target) for request in received] == [("POST", _VERTEX_RAW_PREDICT)]
-    sent: Final = body_of(received[0])
-    assert object_value(sent["output_config"])["effort"] == effort, sent
+    assert body_of(received[0]) == expected(marker)
 
 
 def _single(received: tuple[Request, ...], marker: str) -> Request:
