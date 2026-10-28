@@ -4974,12 +4974,24 @@ def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tupl
     return deployment_reasoning_effort_levels(model_info) or ()
 
 
-_DROPPED_REASONING_PARAM_FIXES: Final = MappingProxyType(
-    {
-        "reasoning_effort": "If the deployment is a reasoning model, set model_info.base_model to its underlying model.",
-        "thinking": "If the deployment is a reasoning model, send reasoning_effort instead.",
-    }
-)
+_DROPPED_REASONING_PARAMS: Final = ("reasoning_effort", "thinking")
+
+
+def _turns_reasoning_off(value: object) -> bool:
+    match value:
+        case "none" | {"effort": "none"} | {"type": "disabled"}:
+            return True
+        case _:
+            return False
+
+
+def _is_mapped_non_reasoning_model(model: str, custom_llm_provider: str | None) -> bool:
+    info: Final = lookup_model_info_for_registration(model, custom_llm_provider)
+    return not isinstance(info, ModelInfoLookupMiss) and info.get("supports_reasoning") is not True
+
+
+def _warns_on_dropped_reasoning(value: object, model: str, custom_llm_provider: str | None) -> bool:
+    return not (_turns_reasoning_off(value) and _is_mapped_non_reasoning_model(model, custom_llm_provider))
 
 
 def get_optional_params(
@@ -5069,26 +5081,31 @@ def get_optional_params(
         verbose_logger.info("\nLiteLLM completion() model= %s; provider = %s", model, custom_llm_provider)
         verbose_logger.debug("\nLiteLLM: Params passed to completion() %s", passed_params)
         verbose_logger.debug("\nLiteLLM: Non-Default params passed to completion() %s", non_default_params)
-        unsupported_params: Final[Mapping[str, object]] = {
-            k: non_default_params[k]
-            for k in non_default_params
-            if k not in supported_params and k not in PROVIDER_UNVALIDATED_PARAMS and not (k == "n" and n == 1)
-        }
+        unsupported_params: Final[MappingProxyType[str, object]] = MappingProxyType(
+            {
+                k: non_default_params[k]
+                for k in non_default_params
+                if k not in supported_params and k not in PROVIDER_UNVALIDATED_PARAMS and not (k == "n" and n == 1)
+            }
+        )
 
         if unsupported_params:
             if litellm.drop_params is True or (drop_params is not None and drop_params is True):
                 for k in unsupported_params:
                     non_default_params.pop(k, None)
-                for reasoning_param, fix in _DROPPED_REASONING_PARAM_FIXES.items():
-                    if reasoning_param in unsupported_params:
+                for reasoning_param in _DROPPED_REASONING_PARAMS:
+                    if reasoning_param in unsupported_params and _warns_on_dropped_reasoning(
+                        unsupported_params[reasoning_param], base_model or model, custom_llm_provider
+                    ):
                         verbose_logger.warning(
-                            "Dropping %s=%r for model=%r (drop_params=True) because %s does not support %s for it. %s",
+                            "Dropping %s=%r for model=%r (drop_params=True) because %s does not support %s for it. "
+                            "If the deployment is a reasoning model, set model_info.base_model to its underlying "
+                            "model.",
                             reasoning_param,
                             unsupported_params[reasoning_param],
                             model,
                             custom_llm_provider,
                             reasoning_param,
-                            fix,
                         )
             else:
                 raise UnsupportedParamsError(

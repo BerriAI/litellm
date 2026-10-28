@@ -9,6 +9,7 @@ gate, the URL construction for both paths, and the shared Bearer auth.
 
 import copy
 import logging
+from typing import Final
 
 import pytest
 from botocore.exceptions import (
@@ -21,6 +22,7 @@ import litellm
 from litellm.llms.bedrock_mantle.responses.transformation import (
     BedrockMantleResponsesAPIConfig,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -398,6 +400,16 @@ class TestBedrockMantleSamplingParams:
         )
         assert ("top_p" in mapped) is survives
         assert ("temperature" in mapped) is survives
+
+    def test_effort_level_the_deployment_declares_is_forwarded(self, local_cost_map) -> None:
+        params: Final = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+            model="openai.gpt-5.6-luna",
+            responses_api_provider_config=BedrockMantleResponsesAPIConfig(),
+            response_api_optional_params={"reasoning": {"effort": "minimal"}},
+            drop_params=False,
+            declared_reasoning_efforts=("minimal", "high"),
+        )
+        assert params["reasoning"] == {"effort": "minimal"}
 
     def test_top_p_without_drop_params_raises_only_while_reasoning_is_active(self, local_cost_map):
         with pytest.raises(litellm.UnsupportedParamsError):

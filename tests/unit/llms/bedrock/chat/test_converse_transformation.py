@@ -984,7 +984,7 @@ def test_openai_gpt5_converse_rejects_effort_level_disabled_in_model_map(
         )
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        optional_params = config.map_openai_params(
+        optional_params: Final = config.map_openai_params(
             non_default_params={"reasoning_effort": "minimal"},
             optional_params={},
             model=model,
@@ -993,7 +993,7 @@ def test_openai_gpt5_converse_rejects_effort_level_disabled_in_model_map(
     _, additional_request_params, _, _ = config._prepare_request_params(optional_params, model)
     assert "reasoning" not in additional_request_params
     assert "thinking" not in additional_request_params
-    dropped = [r.getMessage() for r in caplog.records if "Dropping reasoning_effort='minimal'" in r.getMessage()]
+    dropped: Final = [r.getMessage() for r in caplog.records if "Dropping reasoning_effort='minimal'" in r.getMessage()]
     assert len(dropped) == 1 and model in dropped[0]
 
 

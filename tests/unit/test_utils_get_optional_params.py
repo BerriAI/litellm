@@ -2129,4 +2129,41 @@ def test_dropping_an_unsupported_thinking_logs_one_warning(
         record.getMessage() for record in caplog.records if "Dropping thinking" in record.getMessage()
     ]
     assert len(drop_warnings) == 1
-    assert all(fragment in drop_warnings[0] for fragment in ("'disabled'", "terra-ptu", "send reasoning_effort"))
+    assert all(fragment in drop_warnings[0] for fragment in ("'disabled'", "terra-ptu", "model_info.base_model"))
+
+
+@pytest.mark.parametrize(
+    ("reasoning_kwargs", "warns"),
+    [
+        ({"reasoning_effort": "none"}, False),
+        ({"thinking": {"type": "disabled"}}, False),
+        ({"reasoning_effort": "high"}, True),
+        ({"thinking": {"type": "enabled", "budget_tokens": 1024}}, True),
+    ],
+)
+def test_reasoning_drop_warns_unless_a_mapped_non_reasoning_model_was_asked_for_none(
+    local_model_cost_map: None,
+    caplog: pytest.LogCaptureFixture,
+    reasoning_kwargs: dict[str, object],
+    warns: bool,
+) -> None:
+    litellm.register_model(
+        {
+            "azure/plain-chat-test-deployment": {
+                "litellm_provider": "azure",
+                "mode": "chat",
+                "max_tokens": 1024,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "supports_reasoning": False,
+            }
+        }
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="plain-chat-test-deployment", custom_llm_provider="azure", drop_params=True, **reasoning_kwargs
+        )
+
+    assert not set(reasoning_kwargs) & set(optional_params)
+    assert any("Dropping" in record.getMessage() for record in caplog.records) is warns

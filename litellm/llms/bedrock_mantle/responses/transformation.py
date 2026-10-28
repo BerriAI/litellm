@@ -15,7 +15,7 @@ role / access key / profile / web identity), signed via the shared
 BaseAWSLLM._sign_request after the request body is finalized.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Final, cast  # noqa: TID251  # map_openai_params returns the filtered params as a bare dict
 
 import httpx
@@ -229,18 +229,23 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     def _model_map_lookup_name(model: str) -> str:
         return model.split("/")[-1].removeprefix("openai.")
 
-    def map_openai_params(
+    def map_openai_params_for_deployment(
         self,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+        *,
+        declared_reasoning_efforts: Collection[str],
+    ) -> Mapping[str, object]:
         params: Final = self._handle_unsupported_reasoning_summary(
             self._handle_unsupported_service_tier(
-                super().map_openai_params(
-                    response_api_optional_params=response_api_optional_params,
-                    model=model,
-                    drop_params=drop_params,
+                dict(
+                    super().map_openai_params_for_deployment(
+                        response_api_optional_params,
+                        model,
+                        drop_params,
+                        declared_reasoning_efforts=declared_reasoning_efforts,
+                    )
                 ),
                 drop_params=drop_params,
             ),

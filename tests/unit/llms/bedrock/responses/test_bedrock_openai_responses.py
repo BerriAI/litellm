@@ -7,6 +7,7 @@ falls back to the Chat Completions bridge and rides Converse.
 import json
 import logging
 from importlib.resources import files
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -15,6 +16,7 @@ import litellm
 from litellm.llms.bedrock.common_utils import bedrock_supports_openai_responses
 from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig
 from litellm.responses.file_search.emulated_handler import should_use_emulated_file_search
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -341,7 +343,7 @@ class TestDisabledReasoningEffort:
         self, model: str, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
     ) -> None:
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-            params = _cfg().map_openai_params(
+            params: Final = _cfg().map_openai_params(
                 response_api_optional_params={
                     "reasoning": {"effort": "minimal", "summary": "auto"},
                     "max_output_tokens": 64,
@@ -350,7 +352,9 @@ class TestDisabledReasoningEffort:
                 drop_params=True,
             )
         assert params == {"reasoning": {"summary": "auto"}, "max_output_tokens": 64}
-        dropped = [r.getMessage() for r in caplog.records if "Dropping reasoning.effort='minimal'" in r.getMessage()]
+        dropped: Final = [
+            r.getMessage() for r in caplog.records if "Dropping reasoning.effort='minimal'" in r.getMessage()
+        ]
         assert len(dropped) == 1 and model in dropped[0]
 
     def test_effort_only_reasoning_is_removed_when_dropped(self, local_model_cost_map):
@@ -364,6 +368,17 @@ class TestDisabledReasoningEffort:
             response_api_optional_params={"reasoning": {"effort": "low"}}, model=MODEL, drop_params=False
         )
         assert params == {"reasoning": {"effort": "low"}}
+
+    @pytest.mark.parametrize("model", ["us.openai.gpt-5.6-luna", MODEL])
+    def test_effort_level_the_deployment_declares_is_forwarded(self, model: str, local_model_cost_map: None) -> None:
+        params: Final = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+            model=model,
+            responses_api_provider_config=_cfg(),
+            response_api_optional_params={"reasoning": {"effort": "minimal"}},
+            drop_params=False,
+            declared_reasoning_efforts=("minimal", "high"),
+        )
+        assert params["reasoning"] == {"effort": "minimal"}
 
 
 def _never_fetch(url: str) -> str:

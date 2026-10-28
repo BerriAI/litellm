@@ -34,7 +34,7 @@ inference profile, so the model is named ``us.openai.gpt-5.6-sol`` or
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from types import MappingProxyType
 from typing import Final
 
@@ -157,13 +157,13 @@ def inline_remote_image_urls(
 
 
 def _without_disabled_reasoning_effort(
-    params: Mapping[str, object], model: str, drop_params: bool
+    params: Mapping[str, object], model: str, drop_params: bool, declared_reasoning_efforts: Collection[str]
 ) -> dict[str, object]:  # mutable-ok: becomes the map_openai_params return value
     reasoning: Final = params.get("reasoning")
     effort: Final = reasoning.get("effort") if isinstance(reasoning, Mapping) else None
     if not isinstance(reasoning, Mapping) or not isinstance(effort, str):
         return dict(params)
-    if not bedrock_reasoning_effort_disabled(model=model, effort=effort):
+    if effort in declared_reasoning_efforts or not bedrock_reasoning_effort_disabled(model=model, effort=effort):
         return dict(params)
     if not (drop_params or litellm.drop_params):
         raise litellm.UnsupportedParamsError(
@@ -281,14 +281,16 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
             fake_stream=fake_stream,
         )
 
-    def map_openai_params(
+    def map_openai_params_for_deployment(
         self,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: signature fixed by the override contract
-        mapped: Final = super().map_openai_params(
-            response_api_optional_params=response_api_optional_params, model=model, drop_params=drop_params
+        *,
+        declared_reasoning_efforts: Collection[str],
+    ) -> Mapping[str, object]:
+        mapped: Final = super().map_openai_params_for_deployment(
+            response_api_optional_params, model, drop_params, declared_reasoning_efforts=declared_reasoning_efforts
         )
         unsupported: Final = tuple(sorted(BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS & mapped.keys()))
         if unsupported:
@@ -297,7 +299,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
                 unsupported,
             )
         supported: Final[dict[str, object]] = {key: value for key, value in mapped.items() if key not in unsupported}
-        params: Final = _without_disabled_reasoning_effort(supported, model, drop_params)
+        params: Final = _without_disabled_reasoning_effort(supported, model, drop_params, declared_reasoning_efforts)
         tools: Final = params.get("tools")
         if not isinstance(tools, list):
             return params
