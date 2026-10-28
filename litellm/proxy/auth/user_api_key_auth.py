@@ -40,6 +40,7 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_event, phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
+from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
@@ -384,6 +385,21 @@ class _TeamModelBudgetLimiter(Protocol):
     ) -> bool: ...
 
 
+class _ModelMaxBudgetHolder(Protocol):
+    @property
+    def model_max_budget(self) -> Mapping[str, object] | None: ...
+
+
+def _model_max_budget_of(holder: _ModelMaxBudgetHolder) -> Mapping[str, object] | None:
+    return holder.model_max_budget
+
+
+class _EndUserModelBudgetLimiter(Protocol):
+    async def is_end_user_within_model_budget(
+        self, end_user_id: str, end_user_model_max_budget: Mapping[str, object], model: str
+    ) -> bool: ...
+
+
 class _EveryModelBudgetLimiter(Protocol):
     async def is_key_within_model_budget(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> bool: ...
 
@@ -521,6 +537,27 @@ async def _check_team_model_budget(
             team_id=valid_token.team_id,
             team_model_max_budget=team_model_max_budget,
             key_model_max_budget=key_model_max_budget,
+            model=model_name,
+        )
+
+
+async def _check_end_user_model_budget(
+    end_user_object: LiteLLM_EndUserTable | None,
+    model_max_budget_limiter: _EndUserModelBudgetLimiter,
+    models: Sequence[str],
+) -> None:
+    """Enforce the `model_max_budget` of the end user's budget (its linked one or the default applied to it).
+
+    Reads the request's end-user row, not the token: the master key's cached auth object keeps
+    the limits of whichever end user it was cached with."""
+    budget_table: Final = end_user_object.litellm_budget_table if end_user_object is not None else None
+    end_user_model_max_budget: Final = _model_max_budget_of(budget_table) if budget_table is not None else None
+    if end_user_object is None or not end_user_model_max_budget:
+        return
+    for model_name in models:
+        await model_max_budget_limiter.is_end_user_within_model_budget(
+            end_user_id=end_user_object.user_id,
+            end_user_model_max_budget=end_user_model_max_budget,
             model=model_name,
         )
 
@@ -3122,7 +3159,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                         )
 
                     # Recompute after a potential budget-fallback rewrite so
-                    # the end-user check below validates the final model
+                    # the user check below validates the final model
                     current_model = _get_model_from_request_context(
                         request_data=request_data,
                         route=route,
@@ -3139,22 +3176,6 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                         model_max_budget_limiter=model_max_budget_limiter,
                         models=current_models,
                     )
-
-                # Check 5b. End-user model max budget
-                end_user_mmb: Final = valid_token.end_user_model_max_budget
-                if (
-                    end_user_mmb is not None
-                    and isinstance(end_user_mmb, dict)
-                    and len(end_user_mmb) > 0
-                    and current_models
-                    and valid_token.end_user_id is not None
-                ):
-                    for model_name in current_models:
-                        await model_max_budget_limiter.is_end_user_within_model_budget(
-                            end_user_id=valid_token.end_user_id,
-                            end_user_model_max_budget=end_user_mmb,
-                            model=model_name,
-                        )
 
         # Check 6: Additional Common Checks across jwt + key auth
         if valid_token.team_id is not None:
@@ -3724,9 +3745,7 @@ async def run_centralized_common_checks(
     project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (
         None if isinstance(project_result, BaseException) else project_result
     )
-    end_user_object: Final[LiteLLM_EndUserTable | None] = (
-        None if isinstance(end_user_result, BaseException) else end_user_result
-    )
+    end_user_object: Final = end_user_result if isinstance(end_user_result, LiteLLM_EndUserTable) else None
     global_proxy_spend: float | None = None if isinstance(global_spend_result, BaseException) else global_spend_result
     carry_team_and_user_budget_state(
         valid_token=user_api_key_auth_obj,
@@ -3853,6 +3872,11 @@ async def run_centralized_common_checks(
             )
             await _check_team_model_budget(
                 valid_token=user_api_key_auth_obj,
+                model_max_budget_limiter=model_max_budget_limiter,
+                models=models,
+            )
+            await _check_end_user_model_budget(
+                end_user_object=end_user_object,
                 model_max_budget_limiter=model_max_budget_limiter,
                 models=models,
             )
