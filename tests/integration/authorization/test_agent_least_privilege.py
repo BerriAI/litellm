@@ -313,7 +313,7 @@ def test_agent_access_default_deny_toggles_at_runtime_through_config_api(
             for field in config_fields.json()
             if object_value(field)["field_name"] == "agent_access_default_deny"
         )
-        assert setting["field_type"] == "Boolean" and setting["field_value"] == "true", setting
+        assert setting["field_type"] == "Boolean" and setting["field_value"] is True, setting
         eventually(
             lambda: tuple(_card(candidate, agent_id, ungranted_key) for _ in range(8)),
             lambda responses: all(response.status_code == 403 for response in responses),

@@ -7,7 +7,7 @@ import contextlib
 import dataclasses
 import json
 import unittest
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from httpx import Response
 
 import litellm
+from litellm.constants import EMPTY_MAPPING
 from litellm.proxy._types import ProxyException
 from litellm.proxy.proxy_server import app
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
@@ -174,6 +175,105 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
         assert events[0]["object"] == "chat.completion.chunk", result.text
         assert "response.failed" not in result.text
         assert "error" in events[-1]
+
+
+_COMPACTION_ITEM: Final = {
+    "type": "compaction",
+    "encrypted_content": json.dumps({"type": "compaction", "content": "the cat is named Biscuit"}),
+}
+_HISTORY_BEFORE_COMPACTION: Final = (
+    {"role": "user", "content": "a long turn " * 200},
+    {"role": "assistant", "content": "a long reply " * 200},
+)
+_TURN_AFTER_COMPACTION: Final = {"role": "user", "content": "what is the cat's name?"}
+
+
+async def _cursor_stream_failure_prompt_tokens(
+    monkeypatch: pytest.MonkeyPatch, request_input: list[Mapping[str, str]], fails_after_output: bool
+) -> int:
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    class _FailureRowRecorder(CustomLogger):
+        prompt_tokens: int | None = None
+
+        async def async_post_call_failure_hook(
+            self,
+            request_data: dict,
+            original_exception: Exception,
+            user_api_key_dict: object,
+            traceback_str: str | None = None,
+        ) -> None:
+            usage: Final = request_data.get("combined_usage_object")
+            self.prompt_tokens = usage.prompt_tokens if isinstance(usage, litellm.Usage) else None
+
+    model: Final = "gpt-6-astra"
+    upstream_url: Final = "https://streaming.example/v1"
+    created: Final = {
+        "type": "response.created",
+        "sequence_number": 0,
+        "response": {
+            "id": "resp_upstream",
+            "object": "response",
+            "created_at": 1,
+            "status": "in_progress",
+            "model": model,
+            "output": [],
+        },
+    }
+    output_delta: Final = {
+        "type": "response.output_text.delta",
+        "sequence_number": 1,
+        "item_id": "msg_partial",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "Biscuit",
+    }
+    failed: Final = {"type": "error", "error": {"message": "upstream broke", "code": "server_error", "type": None}}
+    events: Final = (created, output_delta, failed) if fails_after_output else (created, failed)
+    wire: Final = "".join("data: " + json.dumps(event) + "\n\n" for event in events)
+    recorder: Final = _FailureRowRecorder()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {"model": "openai/" + model, "api_base": upstream_url, "api_key": "fixture-key"},
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
+    with respx.mock as transport:
+        transport.post(upstream_url + "/responses").respond(
+            200, content=wire, headers={"Content-Type": "text/event-stream"}
+        )
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+            result: Final = await client.post(
+                "/cursor/chat/completions", json={"model": model, "stream": True, "input": request_input}
+            )
+    assert recorder.prompt_tokens is not None, result.text
+    return recorder.prompt_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fails_after_output", [False, True])
+async def test_a_failed_cursor_stream_counts_its_input_from_the_newest_compaction_item(
+    monkeypatch: pytest.MonkeyPatch, fails_after_output: bool
+) -> None:
+    """Cursor's route maps to no call type, yet it dispatches a Responses call, which sends
+    the provider only the newest compaction item onward, so the failure row counts that much."""
+    resent: Final = await _cursor_stream_failure_prompt_tokens(
+        monkeypatch, [*_HISTORY_BEFORE_COMPACTION, _COMPACTION_ITEM, _TURN_AFTER_COMPACTION], fails_after_output
+    )
+    dispatched_after_trim: Final = await _cursor_stream_failure_prompt_tokens(
+        monkeypatch, [_COMPACTION_ITEM, _TURN_AFTER_COMPACTION], fails_after_output
+    )
+
+    assert resent == dispatched_after_trim
 
 
 @pytest.mark.asyncio
@@ -4176,6 +4276,7 @@ class TestResponsesInputTokens:
         llm_router: litellm.Router | None = None,
         response_id_security: object | None = None,
         managed_files: object | None = None,
+        headers: Mapping[str, str] = EMPTY_MAPPING,
     ) -> tuple[Response, AsyncMock]:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -4208,7 +4309,7 @@ class TestResponsesInputTokens:
             app.dependency_overrides[_proxy_managed_files_hook] = lambda: managed_files
         try:
             client = TestClient(app)
-            response = client.post(path, json=body, headers={"Authorization": "Bearer sk-9876"})
+            response = client.post(path, json=body, headers={"Authorization": "Bearer sk-9876", **headers})
             return response, token_counter_mock
         finally:
             app.dependency_overrides.pop(user_api_key_auth, None)
@@ -4452,6 +4553,84 @@ class TestResponsesInputTokens:
 
         assert (response.status_code, response.json().get("input_tokens")) == (200, 7), response.text
         assert sent == [{"model": "gpt-4o-mini", "input": "hi"}]
+
+    @pytest.mark.parametrize(
+        "path", ["/v1/responses/input_tokens", "/responses/input_tokens", "/openai/v1/responses/input_tokens"]
+    )
+    def test_count_logs_one_line_with_the_callers_call_id_model_and_count(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+        path: str,
+    ) -> None:
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
+        from litellm.proxy.proxy_server import count_request_tokens
+
+        gpt: Final = {"model": "openai/gpt-4o-mini", "api_key": "test-key", "api_base": "https://count.test/v1"}
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "count-log-gpt",
+                    "litellm_params": gpt,
+                    "model_info": {"id": "count-log-responses-deployment"},
+                }
+            ]
+        )
+        monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+        monkeypatch.setattr(
+            openai_count_tokens_http,
+            "get_async_httpx_client",
+            lambda *args, **kwargs: AsyncHTTPHandler(
+                transport=httpx.MockTransport(
+                    lambda request: httpx.Response(
+                        200, json={"object": "response.input_tokens", "input_tokens": 7}, request=request
+                    )
+                )
+            ),
+        )
+
+        response, _ = self._post_input_tokens(
+            {"model": "count-log-gpt", "input": "hi"},
+            path=path,
+            counter=AsyncMock(side_effect=count_request_tokens),
+            llm_router=router,
+            headers={"x-litellm-call-id": "count-log-responses"},
+        )
+
+        assert (response.status_code, response.json().get("input_tokens")) == (200, 7), response.text
+        assert token_count_log_lines() == (
+            {
+                "litellm_call_id": "count-log-responses",
+                "request_model": "count-log-gpt",
+                "model_id": "count-log-responses-deployment",
+                "model_used": "gpt-4o-mini",
+                "input_tokens": 7,
+                "count_source": "provider",
+                "status_code": 200,
+            },
+        )
+
+    def test_count_rejected_before_counting_logs_the_400_it_answers(
+        self, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+    ) -> None:
+        response, counter = self._post_input_tokens(
+            {"model": "count-log-gpt"}, headers={"x-litellm-call-id": "count-log-no-input"}
+        )
+
+        assert response.status_code == 400, response.text
+        counter.assert_not_awaited()
+        assert token_count_log_lines() == (
+            {
+                "litellm_call_id": "count-log-no-input",
+                "request_model": "count-log-gpt",
+                "model_id": None,
+                "model_used": None,
+                "input_tokens": None,
+                "count_source": None,
+                "status_code": 400,
+            },
+        )
 
     def test_a_managed_file_the_key_cannot_read_answers_403_without_a_count(self) -> None:
         from litellm.integrations.custom_logger import CustomLogger
@@ -4832,3 +5011,26 @@ def test_responses_routes_document_response_models_in_openapi_schema():
     assert "output" in ok_200_properties("/v1/responses/{response_id}", "get")
     assert "deleted" in ok_200_properties("/v1/responses/{response_id}", "delete")
     assert "data" in ok_200_properties("/v1/responses/{response_id}/input_items", "get")
+
+
+_COMPACTION_SUMMARY: Final = "The user planned a Tokyo trip."
+_NEXT_TURN: Final = {"type": "message", "role": "user", "content": "And Osaka?"}
+_COMPACTED_INPUT: Final = [
+    {"type": "message", "role": "user", "content": "Plan a Tokyo trip. " * 200},
+    {"type": "message", "role": "assistant", "content": "Day one, Asakusa. " * 200},
+    {
+        "type": "compaction",
+        "id": "cmp_1",
+        "encrypted_content": json.dumps({"type": "compaction", "content": _COMPACTION_SUMMARY}),
+    },
+    _NEXT_TURN,
+]
+_SUMMARY_INPUT: Final = [{"type": "message", "role": "user", "content": _COMPACTION_SUMMARY}, _NEXT_TURN]
+
+
+def test_input_token_count_reads_a_compaction_item_as_its_summary():
+    from litellm.proxy.response_api_endpoints.endpoints import _responses_input_as_token_count_messages
+
+    assert _responses_input_as_token_count_messages(_COMPACTED_INPUT, None) == (
+        _responses_input_as_token_count_messages(_SUMMARY_INPUT, None)
+    )

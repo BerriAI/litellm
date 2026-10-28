@@ -33,7 +33,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import ProviderConfigManager, resolve_api_key_secret_reference
 
-from ..litellm_core_utils.core_helpers import normalize_drop_params
+from ..litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from ..litellm_core_utils.credential_accessor import CredentialAccessor
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -81,6 +81,13 @@ def _with_resolved_session_model(session: dict[str, object], model_name: str) ->
     if "model" not in session:
         return session
     return {**session, "model": model_name}
+
+
+def _resolved_request_session(request_data: Mapping[str, object], model_name: str) -> Mapping[str, object] | None:
+    session: Final = as_str_mapping(request_data.get("session"))
+    if not isinstance(session, dict):
+        return None
+    return _with_resolved_session_model(session, model_name)
 
 
 def _build_litellm_metadata(kwargs: dict) -> dict[str, object]:
@@ -189,8 +196,9 @@ async def acreate_realtime_client_secret(
         custom_llm_provider=custom_llm_provider,
     )
     request_data: Final = req.model_dump(exclude_none=True, exclude={"model"})
-    if isinstance(request_data.get("session"), dict):
-        request_data["session"] = _with_resolved_session_model(request_data["session"], model_name)
+    resolved_session: Final = _resolved_request_session(request_data, model_name)
+    if resolved_session is not None:
+        request_data["session"] = resolved_session
     return await base_llm_http_handler.async_realtime_client_secret_handler(
         api_base=resolved_api_base,
         api_key=await _realtime_http_bearer_token(

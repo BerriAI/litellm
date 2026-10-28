@@ -5,6 +5,7 @@ from collections.abc import Generator, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 from typing import Final, Literal
 from urllib.parse import urlparse
@@ -463,6 +464,26 @@ def test_arize_destination_drops_openinference_content(rig: Rig) -> None:
     assert not any(name.startswith(("llm.input_messages.", "llm.output_messages.")) for name in model), sorted(model)
     assert "input.value" not in model and "output.value" not in model, sorted(model)
     assert model.get("llm.model_name"), sorted(model)
+
+
+def test_arize_destination_gets_no_langfuse_request_metadata(rig: Rig) -> None:
+    team, key = rig.team_key(
+        None, "arize-meta", callback="arize", variables={"arize_space_key": "space-meta", "arize_api_key": "arize-meta"}
+    )
+    cursors: Final = rig.cursors()
+    sent: Final = _served(rig.send(key))
+    operator: Final = _arrived(rig.sinks.operator, cursors.operator, sent, frozenset())
+    assert any("langfuse.observation.metadata" in span["attributes"] for span in _model_spans(operator)), _names(
+        operator
+    )
+    tenant: Final = _arrived(rig.sinks.arize, cursors.arize, sent, frozenset(), ("arize-space-id", "space-meta"))
+    models: Final = [span["attributes"] for span in _model_spans(tenant)]
+    assert any(attributes.get("langfuse.trace.metadata.team_id") == team for attributes in models), models
+    assert not [
+        name
+        for name in chain.from_iterable(models)
+        if name == "langfuse.observation.metadata" or name.startswith("langfuse.trace.metadata.user_api_key_")
+    ], models
 
 
 def test_weave_destination_drops_its_content(rig: Rig) -> None:

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
+import anthropic
 import httpx
 import openai
 import pytest
@@ -703,3 +704,124 @@ async def test_sagemaker_chat_container_outage_mid_burst_answers_every_call_once
     assert statuses == {
         served.call_id: "failure" if served.call.marker in down else "success" for served in answered
     }, rows
+
+
+_MID_STREAM_ERROR: Final = "synthetic mid-stream container failure"
+
+
+@dataclass(frozen=True, slots=True)
+class _CutStream:
+    call_id: str
+    text: str
+    errors: tuple[str, ...]
+    finished: bool
+
+
+async def _chat_chunks_until_error(
+    stream: openai.AsyncStream[openai.types.chat.ChatCompletionChunk],
+) -> AsyncIterator[openai.types.chat.ChatCompletionChunk | openai.APIError]:
+    try:
+        async for chunk in stream:
+            yield chunk
+    except openai.APIError as error:
+        yield error
+
+
+async def _chat_cut(gateway: Gateway, model: str, prompt: str) -> _CutStream:
+    async with async_openai_client(gateway) as client:
+        stream: Final = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=16,
+            stream=True,
+            extra_body=dict(NO_CACHE),
+        )
+        items: Final = tuple([item async for item in _chat_chunks_until_error(stream)])
+    chunks: Final = tuple(item for item in items if not isinstance(item, openai.APIError))
+    choices: Final = tuple(itertools.chain.from_iterable(chunk.choices for chunk in chunks))
+    return _CutStream(
+        call_id=stream.response.headers["x-litellm-call-id"],
+        text="".join(choice.delta.content or "" for choice in choices),
+        errors=tuple(item.message for item in items if isinstance(item, openai.APIError)),
+        finished=any(choice.finish_reason for choice in choices),
+    )
+
+
+async def _anthropic_events_until_error(
+    stream: anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent],
+) -> AsyncIterator[anthropic.types.RawMessageStreamEvent | anthropic.APIError]:
+    try:
+        async for event in stream:
+            yield event
+    except anthropic.APIError as error:
+        yield error
+
+
+async def _messages_cut(gateway: Gateway, model: str, prompt: str) -> _CutStream:
+    async with async_anthropic_client(gateway) as client:
+        stream: Final = await client.messages.create(
+            model=model,
+            max_tokens=16,
+            messages=[{"role": "user", "content": prompt}],
+            stream=True,
+            extra_body=dict(NO_CACHE),
+        )
+        items: Final = tuple([item async for item in _anthropic_events_until_error(stream)])
+    events: Final = tuple(item for item in items if not isinstance(item, anthropic.APIError))
+    deltas: Final = tuple(event.delta for event in events if event.type == "content_block_delta")
+    return _CutStream(
+        call_id=stream.response.headers["x-litellm-call-id"],
+        text="".join(delta.text for delta in deltas if delta.type == "text_delta"),
+        errors=tuple(str(item) for item in items if isinstance(item, anthropic.APIError)),
+        finished=any(event.type == "message_stop" for event in events),
+    )
+
+
+def _is_error_event(event: Mapping[str, JsonValue]) -> bool:
+    return "error" in event or event.get("type") in ("error", "response.failed")
+
+
+def _responses_cut(gateway: Gateway, model: str, prompt: str) -> _CutStream:
+    with gateway.client.stream(
+        "POST",
+        "/v1/responses",
+        json={"model": model, "input": prompt, "max_output_tokens": 16, "stream": True, **NO_CACHE},
+        headers={"Authorization": f"Bearer {gateway.key}"},
+    ) as response:
+        lines: Final = tuple(response.iter_lines())
+    events: Final = tuple(
+        JSON_OBJECT.validate_json(line.removeprefix("data: ")) for line in lines if line.startswith("data: {")
+    )
+    return _CutStream(
+        call_id=response.headers["x-litellm-call-id"],
+        text="".join(
+            string_value(event["delta"]) for event in events if event.get("type") == "response.output_text.delta"
+        ),
+        errors=tuple(json.dumps(event) for event in events if _is_error_event(event)),
+        finished=any(event.get("type") == "response.completed" for event in events),
+    )
+
+
+_CUT_DRIVERS: Final[Mapping[Endpoint, Callable[[Gateway, str, str], _CutStream]]] = MappingProxyType(
+    {
+        "chat": lambda gateway, model, prompt: asyncio.run(_chat_cut(gateway, model, prompt)),
+        "messages": lambda gateway, model, prompt: asyncio.run(_messages_cut(gateway, model, prompt)),
+        "responses": _responses_cut,
+    }
+)
+
+
+@pytest.mark.parametrize("endpoint", _ENDPOINTS)
+def test_sagemaker_chat_stream_failure_after_the_first_chunks_reaches_every_endpoint_as_an_error_and_a_failed_spend_row(
+    gateway: Gateway, endpoint: Endpoint
+) -> None:
+    events: Final = vllm_stream_events(f"sagemaker-chat-{uuid.uuid4().hex}")
+    reply: Final = event_stream_reply((*events[:2], _sse({"error": {"message": _MID_STREAM_ERROR, "code": 500}})))
+
+    with wire_server(lambda _request: reply) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, {})
+        cut: Final = _CUT_DRIVERS[endpoint](gateway, model, marked_prompt())
+        only_request(wire)
+    assert (cut.text, cut.finished) == ("".join(CONTENT), False), cut
+    assert any(_MID_STREAM_ERROR in error for error in cut.errors), cut
+    assert _spend_row(cut.call_id)["status"] == "failure", cut

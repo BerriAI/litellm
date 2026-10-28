@@ -1,3 +1,4 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,7 @@ interface GuardrailDetailViewProps {
 }
 
 const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack, accessToken, onGuardrailCreated }) => {
+  const term = useTerminology();
   const [isAddFormVisible, setIsAddFormVisible] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
 
@@ -66,7 +68,7 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
         <h1 className="m-0 text-[28px] font-normal leading-tight text-foreground">{card.name}</h1>
       </div>
 
-      <p className="m-0 mb-5 text-sm leading-relaxed text-muted-foreground">{card.description}</p>
+      <p className="m-0 mb-5 text-sm leading-relaxed text-muted-foreground">{term(card.description)}</p>
 
       {/* Action buttons — outlined style like Vertex */}
       <div className="mb-8 flex gap-2.5">
@@ -101,7 +103,7 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
           {/* Left column — overview + details table */}
           <div className="min-w-0 flex-1">
             <h2 className="m-0 mb-3 text-lg font-normal text-foreground">Overview</h2>
-            <p className="m-0 mb-8 text-sm leading-[1.7] text-foreground">{card.description}</p>
+            <p className="m-0 mb-8 text-sm leading-[1.7] text-foreground">{term(card.description)}</p>
 
             <h2 className="m-0 mb-1 text-lg font-normal text-foreground">Guardrail Details</h2>
             <p className="m-0 mb-4 text-[13px] text-muted-foreground">Details are as follows</p>

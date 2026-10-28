@@ -22,7 +22,7 @@ _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
 }
 
 
-def _normalize_duration(duration: str) -> str:
+def normalize_duration(duration: str) -> str:
     return _BUDGET_DURATION_WORD_ALIASES.get(duration.strip().lower(), duration)
 
 
@@ -61,7 +61,7 @@ def duration_in_seconds(duration: str) -> int:
 
     Returns time in seconds till when budget needs to be reset
     """
-    value, unit = _extract_from_regex(duration=_normalize_duration(duration))
+    value, unit = _extract_from_regex(duration=normalize_duration(duration))
 
     if unit == "s":
         return value
@@ -89,7 +89,7 @@ def duration_in_seconds_from(start: datetime, duration: str) -> int:
     month of a different length needs its own start to know when it ends. Every other
     unit is a fixed length and ignores `start`.
     """
-    value, unit = _extract_from_regex(duration=_normalize_duration(duration))
+    value, unit = _extract_from_regex(duration=normalize_duration(duration))
     if unit == "mo":
         return _months_in_seconds(start=start, months=value)
     return duration_in_seconds(duration)
@@ -129,7 +129,7 @@ def get_next_standardized_reset_time(
     current_time, _ = _setup_timezone(current_time, timezone_str)
 
     # Parse duration
-    value, unit = _parse_duration(_normalize_duration(duration))
+    value, unit = _parse_duration(normalize_duration(duration))
     if value is None:
         verbose_logger.warning(
             "Unrecognized budget_duration %r; falling back to a next-midnight reset. "
@@ -171,7 +171,7 @@ def get_budget_window_start(duration: str, reset_at: datetime) -> datetime:
     """Start of the budget period that ends at `reset_at`, under the same rules
     `get_next_standardized_reset_time` used to pick it: `30d` and `Nmo` span calendar
     months and a duration it does not recognize resets at the next midnight."""
-    value, unit = _parse_duration(_normalize_duration(duration))
+    value, unit = _parse_duration(normalize_duration(duration))
     if value is None:
         return reset_at - timedelta(days=1)
     match unit:
