@@ -32,22 +32,31 @@ def _in_us_west_2() -> str:
         ({}, TokenCountSettings(framing=97, count_model=_OPUS_US_EAST_1)),
         (
             {"token_count_framing": 5, "token_count_model": {"model": "custom-model", "region": "ap-southeast-4"}},
-            TokenCountSettings(framing=5, count_model=TokenCountModel(model="custom-model", region="ap-southeast-4")),
+            TokenCountSettings(
+                framing=5,
+                count_model=TokenCountModel(model="custom-model", region="ap-southeast-4", configured=True),
+            ),
         ),
         (
             {"token_count_model": {"model": "custom-model", "litellm_provider": "bedrock_mantle"}},
             TokenCountSettings(
                 framing=97,
-                count_model=TokenCountModel(model="custom-model", region=None, litellm_provider="bedrock_mantle"),
+                count_model=TokenCountModel(
+                    model="custom-model", region=None, litellm_provider="bedrock_mantle", configured=True
+                ),
             ),
         ),
         (
             {"token_count_model": {"model": "custom-model"}},
-            TokenCountSettings(framing=97, count_model=TokenCountModel(model="custom-model", region=None)),
+            TokenCountSettings(
+                framing=97, count_model=TokenCountModel(model="custom-model", region=None, configured=True)
+            ),
         ),
         (
             {"token_count_model": {"model": "custom-model", "region": " "}},
-            TokenCountSettings(framing=97, count_model=TokenCountModel(model="custom-model", region=None)),
+            TokenCountSettings(
+                framing=97, count_model=TokenCountModel(model="custom-model", region=None, configured=True)
+            ),
         ),
         ({"token_count_framing": 0}, TokenCountSettings(framing=0, count_model=_OPUS_US_EAST_1)),
         (
@@ -80,26 +89,26 @@ def test_config_overrides_the_cost_map_default_key_by_key(
 
 
 @pytest.mark.parametrize(
-    ("deployment_region", "configured", "expected_region"),
+    ("deployment_region", "configured", "expected"),
     [
-        ("us-west-2", {}, "us-east-1"),
-        ("eu-central-1", {}, None),
-        ("ca-central-1", {}, None),
-        ("us-gov-west-1", {}, None),
+        ("us-west-2", {}, _OPUS_US_EAST_1),
+        ("eu-central-1", {}, TokenCountModel(model="anthropic.claude-opus-5-5", region=None)),
+        ("ca-central-1", {}, TokenCountModel(model="anthropic.claude-opus-5-5", region=None)),
+        ("us-gov-west-1", {}, TokenCountModel(model="anthropic.claude-opus-5-5", region=None)),
         (
             "eu-central-1",
             {"token_count_model": {"model": "anthropic.claude-opus-5-5", "region": "us-east-1"}},
-            "us-east-1",
+            TokenCountModel(model="anthropic.claude-opus-5-5", region="us-east-1", configured=True),
         ),
     ],
 )
 def test_shipped_count_region_never_takes_the_prompt_out_of_the_deployment_geography(
-    deployment_region: str, configured: dict[str, object], expected_region: str | None
+    deployment_region: str, configured: dict[str, object], expected: TokenCountModel
 ) -> None:
     settings: Final = resolve_token_count_settings(
         configured=configured, default=_DEFAULT, deployment_region=lambda: deployment_region
     )
-    assert settings.count_model == TokenCountModel(model="anthropic.claude-opus-5-5", region=expected_region)
+    assert settings.count_model == expected
 
 
 @pytest.mark.parametrize("prefix", ("", "bedrock/", "bedrock_mantle/"))
