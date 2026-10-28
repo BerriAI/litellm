@@ -3,22 +3,28 @@ Unit tests for tool_registry_writer.py — uses a mock prisma client
 that exposes litellm_tooltable.upsert / find_many / find_unique.
 """
 
+import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from prisma.errors import PrismaError
+from prisma.errors import PrismaError, RawQueryError
 
-
+from litellm.constants import DB_SPEND_UPDATE_JOB_NAME, REDIS_TOOL_DISCOVERY_BUFFER_KEY, TOOL_DISCOVERY_COMMIT_JOB_NAME
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
+from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import ToolDiscoveryQueue
 from litellm.proxy.db.tool_registry_writer import (
     ToolPolicyRegistry,
     batch_upsert_tools,
+    commit_tool_discoveries,
     get_tool,
     get_tool_policy_registry,
     get_tools_by_names,
     list_tools,
     update_tool_policy,
 )
+from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
 
 
 def _mock_row(**kwargs):
@@ -62,6 +68,7 @@ def _make_prisma(
     prisma = MagicMock()
     prisma.db.litellm_tooltable = MagicMock()
     prisma.db.litellm_tooltable.upsert = AsyncMock(return_value=upsert_return)
+    prisma.db.execute_raw = AsyncMock(return_value=1)
     prisma.db.litellm_tooltable.find_many = AsyncMock(
         return_value=find_many_rows if find_many_rows is not None else []
     )
@@ -73,28 +80,32 @@ def _make_prisma(
     return prisma
 
 
+def _statement(prisma) -> tuple[str, tuple[object, ...]]:
+    prisma.db.execute_raw.assert_awaited_once()
+    sql, *params = prisma.db.execute_raw.call_args.args
+    return sql, tuple(params)
+
+
 @pytest.mark.asyncio
-async def test_batch_upsert_tools_calls_upsert():
+async def test_batch_upsert_tools_inserts_a_new_tool_with_the_batch_call_count_and_adds_it_on_conflict():
     prisma = _make_prisma()
-    items = [{"tool_name": "tool_a", "origin": "mcp_server", "created_by": None}]
-    await batch_upsert_tools(prisma, items)
-    prisma.db.litellm_tooltable.upsert.assert_awaited_once()
-    call_kw = prisma.db.litellm_tooltable.upsert.call_args.kwargs
-    assert call_kw["where"] == {"tool_name": "tool_a"}
-    assert call_kw["data"]["create"]["tool_name"] == "tool_a"
-    assert call_kw["data"]["create"]["origin"] == "mcp_server"
-    assert call_kw["data"]["create"]["input_policy"] == "untrusted"
-    assert call_kw["data"]["create"]["output_policy"] == "untrusted"
-    assert call_kw["data"]["create"]["call_count"] == 1
-    assert call_kw["data"]["update"]["call_count"] == {"increment": 1}
-    assert "updated_at" in call_kw["data"]["update"]
+    await batch_upsert_tools(
+        prisma, [{"tool_name": "tool_a", "origin": "mcp_server", "created_by": None, "call_count": 4}]
+    )
+    sql, params = _statement(prisma)
+    assert sql.startswith('INSERT INTO "LiteLLM_ToolTable"')
+    assert 'ON CONFLICT ("tool_name") DO UPDATE SET' in sql
+    assert '"call_count" = "LiteLLM_ToolTable"."call_count" + EXCLUDED."call_count"' in sql
+    assert '"input_policy"' not in sql, "policies come from the table defaults and are never overwritten"
+    assert params[1:] == ("tool_a", "mcp_server", 4, "system", "system", None, None, None, None)
+    prisma.db.litellm_tooltable.upsert.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_batch_upsert_tools_empty_list():
     prisma = _make_prisma()
     await batch_upsert_tools(prisma, [])
-    prisma.db.litellm_tooltable.upsert.assert_not_awaited()
+    prisma.db.execute_raw.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -102,21 +113,22 @@ async def test_batch_upsert_tools_skips_empty_names():
     prisma = _make_prisma()
     items = [{"tool_name": "", "origin": None}, {"tool_name": None}]  # type: ignore[list-item]
     await batch_upsert_tools(prisma, items)
-    prisma.db.litellm_tooltable.upsert.assert_not_awaited()
+    prisma.db.execute_raw.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_batch_upsert_multiple_tools_calls_upsert_per_tool():
+async def test_batch_upsert_many_tools_is_one_statement_with_one_row_per_distinct_tool():
     prisma = _make_prisma()
     items = [
-        {"tool_name": "tool_a", "origin": "mcp_server", "created_by": None},
-        {"tool_name": "tool_b", "origin": "user_defined", "created_by": "alice"},
+        {"tool_name": "tool_a", "origin": "mcp_server", "created_by": None, "call_count": 2},
+        {"tool_name": "tool_b", "origin": "user_defined", "created_by": "alice", "call_count": 1},
+        {"tool_name": "tool_a", "origin": "user_defined", "created_by": "bob", "call_count": 5},
     ]
     await batch_upsert_tools(prisma, items)
-    assert prisma.db.litellm_tooltable.upsert.await_count == 2
-    calls = prisma.db.litellm_tooltable.upsert.call_args_list
-    assert calls[0].kwargs["where"]["tool_name"] == "tool_a"
-    assert calls[1].kwargs["where"]["tool_name"] == "tool_b"
+    sql, params = _statement(prisma)
+    assert sql.count("$1::text") == 1 and "$11::text" in sql and "$21::text" not in sql
+    assert params[1:10] == ("tool_a", "mcp_server", 7, "system", "system", None, None, None, None)
+    assert params[11:20] == ("tool_b", "user_defined", 1, "alice", "alice", None, None, None, None)
 
 
 @pytest.mark.asyncio
@@ -264,20 +276,14 @@ async def test_update_tool_policy_calls_upsert_then_get_tool():
     assert call_kw["where"] == {"tool_name": "my_tool"}
     assert call_kw["data"]["update"]["input_policy"] == "blocked"
     assert call_kw["data"]["update"]["updated_by"] == "admin"
-    prisma.db.litellm_tooltable.find_unique.assert_awaited_with(
-        where={"tool_name": "my_tool"}
-    )
+    prisma.db.litellm_tooltable.find_unique.assert_awaited_with(where={"tool_name": "my_tool"})
 
 
 @pytest.mark.asyncio
 async def test_get_tools_by_names_returns_policy_map():
     rows = [
-        _mock_row(
-            tool_name="tool_a", input_policy="trusted", output_policy="untrusted"
-        ),
-        _mock_row(
-            tool_name="tool_b", input_policy="blocked", output_policy="untrusted"
-        ),
+        _mock_row(tool_name="tool_a", input_policy="trusted", output_policy="untrusted"),
+        _mock_row(tool_name="tool_b", input_policy="blocked", output_policy="untrusted"),
     ]
     prisma = _make_prisma(find_many_rows=rows)
     result = await get_tools_by_names(prisma, ["tool_a", "tool_b"])
@@ -285,9 +291,7 @@ async def test_get_tools_by_names_returns_policy_map():
         "tool_a": ("trusted", "untrusted"),
         "tool_b": ("blocked", "untrusted"),
     }
-    prisma.db.litellm_tooltable.find_many.assert_awaited_once_with(
-        where={"tool_name": {"in": ["tool_a", "tool_b"]}}
-    )
+    prisma.db.litellm_tooltable.find_many.assert_awaited_once_with(where={"tool_name": {"in": ["tool_a", "tool_b"]}})
 
 
 @pytest.mark.asyncio
@@ -382,12 +386,8 @@ async def test_sync_tool_policy_from_db_retries_on_transport_error_first_read():
         return []
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_tooltable.find_many = AsyncMock(
-        side_effect=_flaky_find_many
-    )
-    mock_prisma_client.db.litellm_objectpermissiontable.find_many = AsyncMock(
-        return_value=[]
-    )
+    mock_prisma_client.db.litellm_tooltable.find_many = AsyncMock(side_effect=_flaky_find_many)
+    mock_prisma_client.db.litellm_objectpermissiontable.find_many = AsyncMock(return_value=[])
     mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
     mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
     mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
@@ -397,10 +397,7 @@ async def test_sync_tool_policy_from_db_retries_on_transport_error_first_read():
     assert len(invocations) == 2
     mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
     reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
-    assert (
-        reconnect_kwargs["reason"]
-        == "sync_tool_policy_from_db_tools_lookup_failure"
-    )
+    assert reconnect_kwargs["reason"] == "sync_tool_policy_from_db_tools_lookup_failure"
     assert registry.is_initialized()
 
 
@@ -421,9 +418,7 @@ async def test_sync_tool_policy_from_db_retries_on_transport_error_second_read()
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_tooltable.find_many = AsyncMock(return_value=[])
-    mock_prisma_client.db.litellm_objectpermissiontable.find_many = AsyncMock(
-        side_effect=_flaky_perms_find_many
-    )
+    mock_prisma_client.db.litellm_objectpermissiontable.find_many = AsyncMock(side_effect=_flaky_perms_find_many)
     mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
     mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
     mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
@@ -433,7 +428,142 @@ async def test_sync_tool_policy_from_db_retries_on_transport_error_second_read()
     assert len(perms_invocations) == 2
     mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
     reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
-    assert (
-        reconnect_kwargs["reason"]
-        == "sync_tool_policy_from_db_perms_lookup_failure"
+    assert reconnect_kwargs["reason"] == "sync_tool_policy_from_db_perms_lookup_failure"
+
+
+class _InMemoryRedis:
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+        self.lists: dict[str, list[object]] = {}
+
+    async def async_set_cache(self, key: str, value: str, nx: bool = False, **kwargs: object) -> bool | None:
+        if nx and key in self.store:
+            return None
+        self.store[key] = json.dumps(value)
+        return True
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> str | None:
+        raw = self.store.get(key)
+        return json.loads(raw) if raw is not None else None
+
+    async def async_delete_cache(self, key: str) -> int:
+        return 1 if self.store.pop(key, None) is not None else 0
+
+    async def async_rpush_pipeline(self, rpush_list: list[RedisPipelineRpushOperation]) -> list[int]:
+        for op in rpush_list:
+            self.lists.setdefault(op["key"], []).extend(op["values"])
+        return [len(self.lists[op["key"]]) for op in rpush_list]
+
+    async def async_lpop_pipeline(self, lpop_list: list[RedisPipelineLpopOperation]) -> list[list[object] | None]:
+        return [self.lists.pop(op["key"], None) for op in lpop_list]
+
+
+def _postgres_rejection(sqlstate: str) -> RawQueryError:
+    return RawQueryError(
+        data={"user_facing_error": {"error_code": "P2010", "meta": {"code": sqlstate, "message": "db error"}}}
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "lock_held_by_another_pod",
+    [None, DB_SPEND_UPDATE_JOB_NAME, TOOL_DISCOVERY_COMMIT_JOB_NAME],
+    ids=["free", "spend_lock_held", "tool_lock_held"],
+)
+async def test_commit_with_redis_writes_every_workers_tools_in_one_statement_from_the_tool_lock_holder_only(
+    lock_held_by_another_pod: str | None,
+):
+    redis = _InMemoryRedis()
+    if lock_held_by_another_pod is not None:
+        assert await PodLockManager(redis_cache=redis).acquire_lock(cronjob_id=lock_held_by_another_pod)
+    other_worker = ToolDiscoveryQueue()
+    other_worker.add_update({"tool_name": "get_weather", "origin": "mcp_server"})
+    other_worker.add_update({"tool_name": "search", "origin": "user_defined"})
+    await RedisUpdateBuffer(redis_cache=redis).store_tool_discoveries_in_redis(other_worker)
+
+    queue = ToolDiscoveryQueue()
+    queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+    queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+    prisma_client = MagicMock()
+    prisma_client.db.execute_raw = AsyncMock(return_value=2)
+    prisma_client.db.litellm_tooltable.upsert = AsyncMock()
+
+    await commit_tool_discoveries(
+        prisma_client=prisma_client,
+        tool_discovery_queue=queue,
+        redis_update_buffer=RedisUpdateBuffer(redis_cache=redis),
+        pod_lock_manager=PodLockManager(redis_cache=redis),
+        use_redis_buffer=True,
+    )
+
+    assert queue.flush() == [], "every worker hands its tools to redis each tick"
+    prisma_client.db.litellm_tooltable.upsert.assert_not_awaited()
+    if lock_held_by_another_pod == TOOL_DISCOVERY_COMMIT_JOB_NAME:
+        prisma_client.db.execute_raw.assert_not_awaited()
+        assert len(redis.lists[REDIS_TOOL_DISCOVERY_BUFFER_KEY]) == 2, "non-holders leave their tools for the holder"
+        return
+    assert REDIS_TOOL_DISCOVERY_BUFFER_KEY not in redis.lists, "the spend lock must not gate the tool drain"
+    prisma_client.db.execute_raw.assert_awaited_once()
+    sql, *params = prisma_client.db.execute_raw.call_args.args
+    assert sql.startswith('INSERT INTO "LiteLLM_ToolTable"') and 'ON CONFLICT ("tool_name")' in sql
+    rows = {params[i + 1]: params[i + 3] for i in range(0, len(params), 10)}
+    assert rows == {"get_weather": 3, "search": 1}, f"one row per tool summed across workers, got {params}"
+
+
+@pytest.mark.asyncio
+async def test_commit_without_redis_writes_only_this_workers_tools_in_one_statement_and_never_touches_redis():
+    redis = _InMemoryRedis()
+    queue = ToolDiscoveryQueue()
+    queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+    queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+    queue.add_update({"tool_name": "search", "origin": "user_defined"})
+    prisma_client = MagicMock()
+    prisma_client.db.execute_raw = AsyncMock(return_value=2)
+
+    await commit_tool_discoveries(
+        prisma_client=prisma_client,
+        tool_discovery_queue=queue,
+        redis_update_buffer=RedisUpdateBuffer(redis_cache=redis),
+        pod_lock_manager=PodLockManager(redis_cache=redis),
+        use_redis_buffer=False,
+    )
+
+    assert redis.lists == {}, "without the buffer flag nothing goes through redis"
+    assert queue.flush() == []
+    prisma_client.db.execute_raw.assert_awaited_once()
+    sql, *params = prisma_client.db.execute_raw.call_args.args
+    assert 'ON CONFLICT ("tool_name")' in sql
+    rows = {params[i + 1]: params[i + 3] for i in range(0, len(params), 10)}
+    assert rows == {"get_weather": 2, "search": 1}, f"got {params}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "requeued"),
+    [
+        (Exception("connection reset"), True),
+        (_postgres_rejection("23502"), False),
+    ],
+    ids=["connection_error_goes_back_to_redis", "rejected_row_is_dropped"],
+)
+async def test_failed_tool_table_write_requeues_the_rows_only_when_they_provably_did_not_apply(
+    failure: Exception, requeued: bool
+):
+    redis = _InMemoryRedis()
+    queue = ToolDiscoveryQueue()
+    queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+    prisma_client = MagicMock()
+    prisma_client.db.execute_raw = AsyncMock(side_effect=failure)
+
+    await commit_tool_discoveries(
+        prisma_client=prisma_client,
+        tool_discovery_queue=queue,
+        redis_update_buffer=RedisUpdateBuffer(redis_cache=redis),
+        pod_lock_manager=PodLockManager(redis_cache=redis),
+        use_redis_buffer=True,
+    )
+
+    prisma_client.db.execute_raw.assert_awaited_once()
+    left_in_redis = [json.loads(entry) for entry in redis.lists.get(REDIS_TOOL_DISCOVERY_BUFFER_KEY, [])]
+    expected = [[{"tool_name": "get_weather", "origin": "user_defined", "call_count": 1}]] if requeued else []
+    assert left_in_redis == expected, f"requeued={requeued} but redis holds {left_in_redis}"
