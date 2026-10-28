@@ -17,7 +17,7 @@ import litellm
 from litellm.proxy import proxy_server
 from litellm.proxy import utils as proxy_utils
 from litellm.proxy.utils import create_model_info_response
-from litellm.types.router import DeploymentModelListingInfo
+from litellm.types.router import DeploymentModelListingInfo, ModelGroupInfo
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -49,6 +49,7 @@ def patched_models(monkeypatch):
     router.get_routable_upstream_model = MagicMock(return_value="gpt-4")
     router.get_configured_display_name = MagicMock(return_value=None)
     router.get_configured_service_tiers = MagicMock(return_value=())
+    router.get_model_group_info = MagicMock(return_value=None)
 
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
@@ -458,6 +459,28 @@ def test_codex_format_carries_configured_service_tiers(client, auth_as, patched_
     ]
     assert claude["service_tiers"] == []
     assert all("service_tiers" not in m for m in openai_response.json()["data"])
+
+
+@pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
+def test_codex_reasoning_levels_are_the_ones_the_requesting_codex_parses(client, auth_as, patched_models, params):
+    """Both listing paths hand the route's ``client_version`` to the catalog: Codex before 0.138.0 cannot
+    parse max, so it is offered there only to a newer release."""
+    patched_models.get_model_group_info = MagicMock(
+        return_value=ModelGroupInfo(
+            model_group="gpt-4", providers=["openai"], supported_reasoning_efforts=("low", "max")
+        )
+    )
+
+    with auth_as():
+        current = client.get("/v1/models", params={**params, "client_version": "0.165.0"})
+        older = client.get("/v1/models", params={**params, "client_version": "0.137.0"})
+
+    assert [[level["effort"] for level in m["supported_reasoning_levels"]] for m in current.json()["models"]] == [
+        ["low", "max"]
+    ] * 2
+    assert [[level["effort"] for level in m["supported_reasoning_levels"]] for m in older.json()["models"]] == [
+        ["low"]
+    ] * 2
 
 
 @pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
