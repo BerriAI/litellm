@@ -1188,22 +1188,18 @@ async def make_agent_public(
             if agent is None:
                 raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
-        config: Final = await proxy_config.get_config()
-
-        current_public_agent_groups: Final = list(litellm.public_agent_groups or [])
-        if not AGENT_REGISTRY.ids_for_agent(agent.agent_id).isdisjoint(current_public_agent_groups):
+        stored_public_agent_groups: Final = await proxy_config.append_to_list_setting(
+            section_name="litellm_settings",
+            key="public_agent_groups",
+            item=agent.agent_id,
+            listed_as=AGENT_REGISTRY.ids_for_agent(agent.agent_id),
+        )
+        if stored_public_agent_groups is None:
             raise HTTPException(
                 status_code=400,
                 detail=f"Agent with name {agent.agent_name} already in public agent groups",
             )
-        updated_public_agent_groups: Final = [*current_public_agent_groups, agent.agent_id]
-
-        if "litellm_settings" not in config or config["litellm_settings"] is None:
-            config["litellm_settings"] = {}
-
-        config["litellm_settings"]["public_agent_groups"] = updated_public_agent_groups
-
-        await proxy_config.save_config(new_config=config)
+        updated_public_agent_groups: Final = list(stored_public_agent_groups)
 
         litellm.public_agent_groups = updated_public_agent_groups
 

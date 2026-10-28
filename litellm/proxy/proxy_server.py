@@ -5441,6 +5441,17 @@ _CONFIG_PERSISTED_SECTIONS: Final = ("general_settings", "router_settings", "lit
 _CONFIG_UNMANAGED_EXCLUSIONS: Final = frozenset(("environment_variables", "model_list"))
 _CONFIG_SECTION_VALUES: Final = TypeAdapter(Mapping[str, JsonValue])
 _CONFIG_SECTION_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))"
+_STRING_LIST: Final = TypeAdapter(list[str])
+_CONFIG_MAPPING: Final = TypeAdapter(Mapping[str, object])
+
+
+def _with_list_item(
+    section: Mapping[str, JsonValue], *, key: str, item: str, listed_as: frozenset[str]
+) -> Mapping[str, JsonValue]:
+    current: Final = _STRING_LIST.validate_python(section.get(key) or [])
+    if not listed_as.isdisjoint(current):
+        return section
+    return MappingProxyType({**section, key: [*current, item]})
 
 
 class _ConfigParamWhere(TypedDict):
@@ -5967,6 +5978,63 @@ class ProxyConfig:
         removed_keys: frozenset[str],
         prisma_client: PrismaClient,
     ) -> Mapping[str, JsonValue] | None:
+        return await self._rewrite_config_section(
+            section_name=section_name,
+            prisma_client=prisma_client,
+            rewrite=lambda existing_section: MappingProxyType(
+                {
+                    key: value
+                    for key, value in chain(
+                        ((key, value) for key, value in existing_section.items() if key not in removed_keys),
+                        changed_keys.items(),
+                    )
+                }
+            ),
+        )
+
+    async def append_to_list_setting(
+        self, *, section_name: Section, key: str, item: str, listed_as: frozenset[str]
+    ) -> tuple[str, ...] | None:
+        if prisma_client is None or not (
+            general_settings_view().get("store_model_in_db", False) is True or store_model_in_db
+        ):
+            return await self._append_to_file_list_setting(
+                section_name=section_name, key=key, item=item, listed_as=listed_as
+            )
+        store: Final = self._settings_stores[section_name]
+        if store.owned_by_config(key):
+            if not listed_as.isdisjoint(_STRING_LIST.validate_python(store.get(key) or [])):
+                return None
+            self._raise_config_owned(section_name=section_name, rejected=(key,), store=store)
+        written_section: Final = await self._rewrite_config_section(
+            section_name=section_name,
+            prisma_client=prisma_client,
+            rewrite=lambda existing_section: _with_list_item(existing_section, key=key, item=item, listed_as=listed_as),
+        )
+        if written_section is None:
+            return None
+        store.apply_db_row(section_name, written_section)
+        await invalidate_config_param(section_name)
+        return tuple(_STRING_LIST.validate_python(written_section[key]))
+
+    async def _append_to_file_list_setting(
+        self, *, section_name: Section, key: str, item: str, listed_as: frozenset[str]
+    ) -> tuple[str, ...] | None:
+        config: Final = _CONFIG_MAPPING.validate_python(await self.get_config())
+        section: Final = _CONFIG_SECTION_VALUES.validate_python(config.get(section_name) or {})
+        updated_section: Final = _with_list_item(section, key=key, item=item, listed_as=listed_as)
+        if updated_section == section:
+            return None
+        await self.save_config(new_config={**config, section_name: dict(updated_section)})
+        return tuple(_STRING_LIST.validate_python(updated_section[key]))
+
+    async def _rewrite_config_section(
+        self,
+        *,
+        section_name: str,
+        prisma_client: PrismaClient,
+        rewrite: Callable[[Mapping[str, JsonValue]], Mapping[str, JsonValue]],
+    ) -> Mapping[str, JsonValue] | None:
         async with prisma_client.tx() as tx:
             await tx.query_raw(_CONFIG_SECTION_LOCK_SQL, section_name)
             config_table: Final = cast("TableActions[_ConfigParamRow]", tx.litellm_config)
@@ -5980,15 +6048,7 @@ class ProxyConfig:
                 if isinstance(existing_value, Mapping)
                 else MappingProxyType({})
             )
-            merged_section: Final[Mapping[str, JsonValue]] = MappingProxyType(
-                {
-                    key: value
-                    for key, value in chain(
-                        ((key, value) for key, value in existing_section.items() if key not in removed_keys),
-                        changed_keys.items(),
-                    )
-                }
-            )
+            merged_section: Final = rewrite(existing_section)
             if merged_section == existing_section:
                 return None
             serialized_section: Final = json.dumps(dict(merged_section))
