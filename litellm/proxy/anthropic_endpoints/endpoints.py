@@ -18,6 +18,7 @@ from litellm.anthropic_interface.exceptions import (
     AnthropicExceptionMapping,
 )
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError
 from litellm.litellm_core_utils.tool_fields import first_validation_error
 from litellm.llms.anthropic.messages.context_management import (
     AnthropicContextManagementError,
@@ -412,6 +413,10 @@ async def count_tokens(
             call_endpoint=True,
             messages_format="anthropic",
             **_count_tokens_body_options(data, auto_drop_params),
+        )
+    except UnsupportedContentTypeError as e:
+        return _anthropic_error_json_response(
+            ProxyException(message=str(e), type="invalid_request_error", param="messages", code=400), request
         )
     except HTTPException as e:
         return _anthropic_error_json_response(proxy_exception_from_http_exception(e, {}), request)
