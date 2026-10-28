@@ -99,6 +99,14 @@ def test_attach_guardrail_information_copies_recorded_entries_onto_model_respons
     assert "guardrail_information" not in response.model_dump()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [{"code": None}, {}, {"code": "not-a-status"}])
+async def test_parse_event_data_for_error_defaults_invalid_code_to_internal_error(error):
+    event = f"data: {json.dumps({'error': error})}\n\n"
+
+    assert await _parse_event_data_for_error(event) == status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
 def test_attach_guardrail_information_reports_empty_list_when_nothing_ran():
     response = litellm.ModelResponse()
 
@@ -2104,15 +2112,15 @@ class TestCommonRequestProcessingHelpers:
             ),  # Valid string-integer code
             (
                 'data: {"error": {"code": "invalid_code", "message": "error"}}',
-                None,
+                500,
             ),  # Invalid string code
             (
                 'data: {"error": {"code": 99, "message": "too low"}}',
-                None,
+                500,
             ),  # Integer code too low
             (
                 'data: {"error": {"code": 600, "message": "too high"}}',
-                None,
+                500,
             ),  # Integer code too high
             (
                 'data: {"id": "123", "content": "hello"}',
@@ -2127,11 +2135,11 @@ class TestCommonRequestProcessingHelpers:
             ("id: 123", None),  # Non-SSE event line
             (
                 'data: {"error": {"message": "some error"}}',
-                None,
+                500,
             ),  # Error event without 'code' field
             (
                 'data: {"error": {"code": null, "message": "code is null"}}',
-                None,
+                500,
             ),  # Error with null code
         ],
     )
