@@ -2396,7 +2396,7 @@ def test_anthropic_model_supports_speed_param_recognizes_supporting_models(model
         "azure_ai/claude-opus-4-8",
         "anthropic.claude-opus-4-8",
         # Anthropic removed Opus 4.7 fast mode on 2026-07-24 and answers 400 for `speed` on it
-        # (platform.claude.com/docs/en/build-with-claude/fast-mode, read 2026-10-28)
+        # (code.claude.com/docs/en/fast-mode, platform.claude.com/docs/en/build-with-claude/fast-mode, read 2026-10-28)
         "claude-opus-4-7",
         "claude-opus-4-7-20260416",
     ],
