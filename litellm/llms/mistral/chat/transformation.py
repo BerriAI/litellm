@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_litellm_internal_message_fields,
     strip_none_values_from_message,
 )
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
@@ -220,8 +221,7 @@ class MistralConfig(OpenAIGPTConfig):
         )
 
         # if api_base does not end with /v1 we add it
-        if api_base is not None and not api_base.endswith("/v1"):  # Mistral always needs a /v1 at the end
-            api_base = api_base + "/v1"
+        api_base = ensure_api_route(api_base, "v1")
         dynamic_api_key: Final = (
             api_key
             or get_secret_str("MISTRAL_AZURE_API_KEY")  # for Azure AI Mistral

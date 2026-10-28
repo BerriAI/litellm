@@ -1,15 +1,19 @@
 import inspect
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 from litellm import main
-from litellm.rust_bridge.catalog import Route, RouteContext
+from litellm.rust_bridge import detectors
+from litellm.rust_bridge.catalog import Feature, Route, RouteContext
+from litellm.rust_bridge.chat_completions import detectors as route_detectors
 from litellm.rust_bridge.chat_completions.entrypoints import (
     NATIVE_ACOMPLETION,
     NATIVE_COMPLETION,
 )
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.public_call import (
+    AsyncFlag,
     NativeCall,
     bind,
     native_call,
@@ -44,6 +48,7 @@ def _python_acompletion() -> PythonAcompletion:
 
 _PYTHON_COMPLETION: Final = _python_completion()
 _COMPLETION: Final = signature(_PYTHON_COMPLETION)
+_FLAG: Final = AsyncFlag("acompletion", sync=_COMPLETION)
 _PYTHON_ACOMPLETION: Final = _python_acompletion()
 _ACOMPLETION: Final = signature(_PYTHON_ACOMPLETION)
 
@@ -61,11 +66,32 @@ def _public_request(
     return native_call(legacy, args, kwargs)
 
 
+_FEATURES: Final[detectors.Detectors] = MappingProxyType(
+    {
+        **detectors.COMMON,
+        Feature.MOCK_RESPONSE: route_detectors.chat_mock_response,
+        Feature.AGENTIC_LOOP_HOOK: route_detectors.chat_agentic_loop_hook,
+        Feature.RESPONSE_CACHE: detectors.response_cache,
+        Feature.STREAMING: detectors.streaming,
+        Feature.DROP_PARAMS: detectors.drop_params,
+        Feature.MODIFY_PARAMS: detectors.modify_params,
+        Feature.EXTRA_BODY: detectors.extra_body,
+        Feature.RETRIES_FALLBACKS: route_detectors.chat_retries_fallbacks,
+        Feature.PROMPT_MANAGEMENT: detectors.prompt_management,
+        Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
+        Feature.MODEL_PARAM_GATING: route_detectors.chat_model_param_gating,
+        Feature.MODEL_LIST: route_detectors.model_list,
+        Feature.MODEL_ALIAS_MAP: route_detectors.model_alias_map,
+    }
+)
+
+
 def _context(request: NativeCall) -> RouteContext:
     return RouteContext(
         Route.CHAT_COMPLETIONS,
         provider=optional_str(request.resolved.get("custom_llm_provider")),
         model=str(request.resolved["model"]),
+        features=detectors.detected(_FEATURES, request),
     )
 
 
@@ -73,7 +99,6 @@ _DISPATCH: Final = PublicDispatch(
     route=Route.CHAT_COMPLETIONS,
     request=lambda args, kwargs: _public_request(_COMPLETION, args, kwargs),
     context=_context,
-    bypass=lambda request: request.kwargs.get("acompletion") is True,
 )
 
 _ADISPATCH: Final = PublicDispatch(
@@ -88,9 +113,11 @@ def completion(
     **kwargs: object,  # kwargs-ok: preserve the public chat completions call shape
 ) -> ChatResult | Coroutine[object, object, ChatResult]:
     python: Final = _PYTHON_COMPLETION
+    if _FLAG.requested(kwargs):
+        return acompletion(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_COMPLETION,
         native=native_call_hook,
@@ -101,7 +128,7 @@ async def acompletion(*args: object, **kwargs: object) -> ChatResult:  # kwargs-
     python: Final = _PYTHON_ACOMPLETION
     return await _ADISPATCH.arun(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_ACOMPLETION,
         native=native_call_hook,
