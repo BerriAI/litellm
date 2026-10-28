@@ -622,7 +622,6 @@ _RESPONSES_REQUEST_FIELDS: Final = frozenset(get_type_hints(ResponsesAPIOptional
 
 @dataclass(frozen=True, slots=True)
 class _UntranslatableResponsesFields:
-    """Responses request fields the chat completions bridge cannot translate and ``drop_params`` does not drop."""
 
     fields: tuple[str, ...]
 
