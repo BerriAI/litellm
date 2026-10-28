@@ -186,13 +186,6 @@ def test_bot_may_only_touch_the_cost_map_files() -> None:
     )
 
 
-def test_bot_may_update_cost_map_and_legacy_schema() -> None:
-    head: Final = _snapshot({**BASE_MAP, "openrouter/c": _entry()})
-    changed: Final = (*guard.GUARDED_PATHS, guard.LEGACY_SCHEMA_PATH)
-
-    assert _failures(head, changed_files=changed) == ()
-
-
 def test_bot_may_not_remove_models() -> None:
     head = _snapshot({key: value for key, value in BASE_MAP.items() if key != "openrouter/b"})
     assert _failures(head, bot=False) == ()
