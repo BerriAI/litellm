@@ -7,10 +7,12 @@
 
 import fnmatch
 import os
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from collections.abc import Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
+from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic_core import PydanticSerializationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
@@ -19,7 +21,9 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -38,6 +42,10 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 GUARDRAIL_NAME: Final = "generic_guardrail_api"
+_CHAT_ROW: Final[TypeAdapter[AllMessageValues]] = TypeAdapter(AllMessageValues)
+_SENT_ROW: Final = TypeAdapter(Mapping[str, object])
+_SENT_ROWS: Final = TypeAdapter(Sequence[Mapping[str, object]])
+_JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 # Headers whose values are forwarded as-is (case-insensitive). Glob patterns supported (e.g. x-stainless-*, x-litellm*).
 _HEADER_VALUE_ALLOWLIST: Final = frozenset(
@@ -57,6 +65,21 @@ _HEADER_VALUE_ALLOWLIST: Final = frozenset(
 # Placeholder for headers that exist but are not on the allowlist (we don't expose their value).
 _HEADER_PRESENT_PLACEHOLDER: Final = "[present]"
 
+_AFTER_CONNECT_FAILURES: Final = (
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.RemoteProtocolError,
+)
+
+
+def _after_connect_failure(error: Timeout | httpx.TransportError) -> httpx.TransportError | None:
+    """AsyncHTTPHandler re-raises connect and read timeouts as the same litellm Timeout, so the phase comes from
+    the httpx error it was raised while handling."""
+    origin: Final = error if isinstance(error, httpx.TransportError) else error.__cause__ or error.__context__
+    return origin if isinstance(origin, _AFTER_CONNECT_FAILURES) else None
+
 
 def _header_value_allowed(
     header_name: str,
@@ -75,7 +98,7 @@ def _header_value_allowed(
 
 
 def _sanitize_inbound_headers(
-    headers: object,
+    headers: Mapping[object, object] | None,
     extra_allowlist: set[str] | None = None,
 ) -> dict[str, str] | None:
     """
@@ -102,6 +125,13 @@ def _sanitize_inbound_headers(
             sanitized[key] = _HEADER_PRESENT_PLACEHOLDER
 
     return sanitized or None
+
+
+def _logged_inbound_headers(details: Mapping[str, object]) -> Mapping[object, object] | None:
+    litellm_params: Final = as_str_mapping(details.get("litellm_params", {}))
+    metadata: Final = as_str_mapping(litellm_params.get("metadata", {})) if litellm_params is not None else None
+    headers: Final = metadata.get("headers", None) if metadata is not None else None
+    return headers if isinstance(headers, dict) else None
 
 
 def _extract_inbound_headers(
@@ -141,7 +171,7 @@ def _extract_inbound_headers(
     if logging_obj and getattr(logging_obj, "model_call_details", None):
         try:
             details: Final = logging_obj.model_call_details or {}
-            headers = details.get("litellm_params", {}).get("metadata", {}).get("headers", None)
+            headers = _logged_inbound_headers(details)
             if headers:
                 return _sanitize_inbound_headers(headers, extra_allowlist=extra_allowlist)
         except Exception:
@@ -150,23 +180,65 @@ def _extract_inbound_headers(
     return None
 
 
+def _is_contained_in(part: JsonValue, whole: JsonValue) -> bool:
+    pending: Final[list[tuple[JsonValue, JsonValue]]] = [(part, whole)]  # mutable-ok: worklist, recursion is banned
+    while pending:
+        match pending.pop():
+            case dict() as part_dict, dict() as whole_dict:
+                if not part_dict.keys() <= whole_dict.keys():
+                    return False
+                pending.extend((value, whole_dict[key]) for key, value in part_dict.items())
+            case list() as part_list, list() as whole_list:
+                if len(part_list) != len(whole_list):
+                    return False
+                pending.extend(zip(part_list, whole_list, strict=True))
+            case part_leaf, whole_leaf if part_leaf != whole_leaf:
+                return False
+            case _:
+                pass
+    return True
+
+
+def _is_shown_row(shown: AllMessageValues, returned: AllMessageValues) -> bool:
+    return returned == shown
+
+
+def _is_echo(original: AllMessageValues, returned: AllMessageValues) -> bool:
+    """A server that parses rows with its own message types and echoes them back drops the
+    keys those types do not declare. That is still an echo as long as nothing changed and
+    every key the chat completion types declare is kept."""
+    if returned == original:
+        return True
+    try:
+        sent: Final[JsonValue] = _JSON.validate_json(_SENT_ROW.dump_json(original))
+        declared: Final[JsonValue] = _JSON.validate_json(
+            _CHAT_ROW.dump_json(_CHAT_ROW.validate_python(original), warnings="error")
+        )
+        echoed: Final[JsonValue] = _JSON.validate_python(returned)
+    except (ValidationError, PydanticSerializationError):
+        return False
+    return _is_contained_in(echoed, sent) and _is_contained_in(declared, echoed)
+
+
 def _structured_rows_to_write_back(
     original_rows: Sequence[AllMessageValues] | None,
-    shown_rows: Sequence[AllMessageValues] | None,
+    compared_rows: Sequence[AllMessageValues] | None,
     returned_rows: Sequence[AllMessageValues],
+    is_echo: Callable[[AllMessageValues, AllMessageValues], bool],
 ) -> tuple[AllMessageValues, ...] | None:
-    """The request model drops row keys its message types do not declare, so a
-    row the server echoes back verbatim is restored to the original row object.
-    A server that echoes every row back unchanged has not rewritten anything
-    per row, so its answer is read from texts, as it was before rows could be
-    returned at all."""
-    if original_rows is None or shown_rows is None or len(returned_rows) != len(original_rows):
+    """A row the server echoes back is restored to the original row object. A server
+    that echoes every row back has not rewritten anything per row, so its answer is
+    read from texts, as it was before rows could be returned at all."""
+    if original_rows is None or compared_rows is None or len(returned_rows) != len(original_rows):
         return tuple(returned_rows)
-    if all(returned == shown for shown, returned in zip(shown_rows, returned_rows)):
+    echoed: Final = tuple(
+        is_echo(compared, returned) for compared, returned in zip(compared_rows, returned_rows, strict=True)
+    )
+    if all(echoed):
         return None
     return tuple(
-        original if returned == shown else returned
-        for original, shown, returned in zip(original_rows, shown_rows, returned_rows)
+        original if was_echoed else returned
+        for original, returned, was_echoed in zip(original_rows, returned_rows, echoed, strict=True)
     )
 
 
@@ -194,21 +266,32 @@ class GenericGuardrailAPI(CustomGuardrail):
 
     def __init__(
         self,
-        headers: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
         additional_provider_specific_params: Mapping[str, object] | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         fail_on_error: bool | None = True,
+        forward_messages_as_sent: bool | None = False,
         extra_headers: list | None = None,
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
+        streaming_buffer_until_moderated: bool | None = None,
+        num_retries: int | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
+        fresh_handler_factory: Callable[[], AsyncHTTPHandler] | None = None,
         **kwargs,
     ):
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
+        self.fresh_handler_factory: Callable[[], AsyncHTTPHandler] = fresh_handler_factory or (
+            lambda: AsyncHTTPHandler(timeout=self.async_handler.timeout)
+        )
+        self.num_retries: int = num_retries or 0
         self.headers = headers or {}
-        self.extra_headers = extra_headers or []
+        self.extra_headers: Sequence[object] = extra_headers or []
 
         # If api_key is provided, add it as x-api-key header
         if api_key:
@@ -234,6 +317,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = unreachable_fallback
 
         self.fail_on_error: bool = True if fail_on_error is None else fail_on_error
+        self.forward_messages_as_sent: bool = bool(forward_messages_as_sent)
 
         # Read by UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook
         # via getattr(guardrail_to_apply, "streaming_*", default).
@@ -250,6 +334,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
             "block_only" if streaming_transform_mode is None else streaming_transform_mode
         )
+        if streaming_buffer_until_moderated is not None:
+            self.streaming_buffer_until_moderated: bool = streaming_buffer_until_moderated
 
         # Set supported event hooks
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -313,15 +399,17 @@ class GenericGuardrailAPI(CustomGuardrail):
         http_status_code: int | None = None,
     ) -> GenericGuardrailAPIInputs:
         status_suffix: Final = f" http_status_code={http_status_code}" if http_status_code else ""
+        error_type: Final = "HTTPStatusError" if isinstance(error, httpx.HTTPStatusError) else type(error).__name__
         verbose_proxy_logger.critical(
             "Generic Guardrail API error (fail-open). Proceeding without guardrail.%s "
-            "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s",
+            "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s error_type=%s",
             status_suffix,
             getattr(self, "guardrail_name", None),
             getattr(self, "api_base", None),
             input_type,
             getattr(logging_obj, "litellm_call_id", None) if logging_obj else None,
             getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None,
+            error_type,
             exc_info=error,
         )
         # Keep flow going - treat as action=NONE (no modifications)
@@ -329,17 +417,27 @@ class GenericGuardrailAPI(CustomGuardrail):
         return_inputs.update(inputs)
         return return_inputs
 
-    def _build_request_headers(self) -> dict:
+    def _build_request_headers(self) -> Mapping[str, str]:
         """Build HTTP headers for the guardrail API request."""
-        headers: Final = {"Content-Type": "application/json"}
-        if self.headers:
-            headers.update(self.headers)
-        return headers
+        return {"Content-Type": "application/json", **self.headers}
+
+    def _request_body(
+        self,
+        guardrail_request: GenericGuardrailAPIRequest,
+        structured_messages: Sequence[AllMessageValues] | None,
+    ) -> Mapping[str, object]:
+        body: Final[Mapping[str, object]] = guardrail_request.model_dump(mode="json")
+        if not self.forward_messages_as_sent or structured_messages is None:
+            return body
+        return {
+            **body,
+            "structured_messages": _SENT_ROWS.dump_python(_SENT_ROWS.validate_python(structured_messages), mode="json"),
+        }
 
     def _build_guardrail_return_inputs(
         self,
         *,
-        texts: list,
+        texts: list[str],
         images: list[str] | None,
         tools: list[ChatCompletionToolParam] | None,
         structured_messages: Sequence[AllMessageValues] | None,
@@ -358,13 +456,18 @@ class GenericGuardrailAPI(CustomGuardrail):
             return_inputs["tools"] = guardrail_response.tools
         elif tools:
             return_inputs["tools"] = tools
+        compared_rows, is_echo = (
+            (structured_messages, _is_echo) if self.forward_messages_as_sent else (shown_messages, _is_shown_row)
+        )
         rows_to_write_back: Final = (
-            _structured_rows_to_write_back(structured_messages, shown_messages, guardrail_response.structured_messages)
+            _structured_rows_to_write_back(
+                structured_messages, compared_rows, guardrail_response.structured_messages, is_echo
+            )
             if guardrail_response.structured_messages
             else None
         )
         if rows_to_write_back is not None:
-            return_inputs["structured_messages"] = list(rows_to_write_back)  # mutable-ok: guardrail inputs take a list
+            return_inputs["structured_messages"] = list(rows_to_write_back)
         if guardrail_response.stream_holdback_chars is not None:
             return_inputs["stream_holdback_chars"] = guardrail_response.stream_holdback_chars
         return return_inputs
@@ -389,6 +492,35 @@ class GenericGuardrailAPI(CustomGuardrail):
             )
         verbose_proxy_logger.error("Generic Guardrail API: failed to make request: %s", str(error))
         raise Exception(f"Generic Guardrail API failed: {error}")
+
+    async def _post_check(
+        self,
+        payload: Mapping[str, object],
+        headers: Mapping[str, str],
+        retries_left: int,
+        fresh: bool = False,
+    ) -> httpx.Response:
+        handler: Final = self.fresh_handler_factory() if fresh else self.async_handler
+        try:
+            return await handler.post(
+                url=self.api_base, json=dict(payload), headers=dict(headers), timeout=self.timeout
+            )
+        except (Timeout, httpx.TransportError) as error:
+            failure: Final = _after_connect_failure(error)
+            if retries_left < 1 or failure is None:
+                raise
+            verbose_proxy_logger.warning(
+                "Generic Guardrail API check timed out or lost its connection, retrying on a fresh connection. "
+                "guardrail_name=%s api_base=%s error_type=%s retries_left=%d",
+                getattr(self, "guardrail_name", None),
+                self.api_base,
+                type(failure).__name__,
+                retries_left - 1,
+            )
+        finally:
+            if fresh:
+                await handler.close()
+        return await self._post_check(payload, headers, retries_left - 1, fresh=True)
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -435,12 +567,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         request_body: Final = request_data.get("body") or {}
 
         # Merge additional provider specific params from config and dynamic params
-        additional_params: Final = {**self.additional_provider_specific_params}
-
-        # Get dynamic params from request if available
-        dynamic_params: Final = self.get_guardrail_dynamic_request_body_params(request_body)
-        if dynamic_params:
-            additional_params.update(dynamic_params)
+        dynamic_params: Final[Mapping[str, object]] = self.get_guardrail_dynamic_request_body_params(request_body) or {}
+        additional_params: Final = {**self.additional_provider_specific_params, **dynamic_params}
 
         # Extract user API key metadata
         user_metadata: Final = self._extract_user_api_key_metadata(request_data)
@@ -462,7 +590,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 litellm_version=litellm_version,
                 images=images,
                 tools=([GuardrailToolParam.model_validate(t) for t in tools] if tools else None),
-                structured_messages=structured_messages,
+                structured_messages=None if self.forward_messages_as_sent else structured_messages,
                 tool_calls=tool_calls,
                 additional_provider_specific_params=additional_params,
                 input_type=input_type,
@@ -473,10 +601,10 @@ class GenericGuardrailAPI(CustomGuardrail):
 
             # Make the API request
             # Use mode="json" to ensure all iterables are converted to lists
-            response: Final = await self.async_handler.post(
-                url=self.api_base,
-                json=guardrail_request.model_dump(mode="json"),
-                headers=headers,
+            response: Final = await self._post_check(
+                self._request_body(guardrail_request, structured_messages),
+                headers,
+                self.num_retries,
             )
 
             response.raise_for_status()

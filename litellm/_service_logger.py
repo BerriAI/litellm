@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import litellm
+from litellm._internal_context import current_service_target
 from litellm._logging import verbose_logger
 
 from .integrations.custom_logger import CustomLogger
@@ -15,7 +16,7 @@ from .types.services import ServiceLoggerPayload, ServiceTypes
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
     Span = _Span | Any
     OTELClass = OpenTelemetry
@@ -151,6 +152,11 @@ class ServiceLogging(CustomLogger):
         except Exception as e:
             verbose_logger.exception("Error dispatching service event - %s", e)
 
+    def redis_breaker_hook(self, transitions_to: str | None, failure_class: str | None) -> None:
+        prometheus_logger: Final[PrometheusServicesLogger | None] = getattr(self, "prometheusServicesLogger", None)
+        if prometheus_logger is not None:
+            prometheus_logger.redis_breaker_hook(transitions_to=transitions_to, failure_class=failure_class)
+
     def service_success_hook(
         self,
         service: ServiceTypes,
@@ -159,6 +165,7 @@ class ServiceLogging(CustomLogger):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: float | datetime | None = None,
+        caller: str | None = None,
     ):
         """
         Handles both sync and async monitoring by checking for existing event loop.
@@ -172,6 +179,7 @@ class ServiceLogging(CustomLogger):
                 service=service,
                 duration=duration,
                 call_type=call_type,
+                caller=caller,
                 parent_otel_span=parent_otel_span,
                 start_time=start_time,
                 end_time=end_time,
@@ -187,6 +195,7 @@ class ServiceLogging(CustomLogger):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: float | datetime | None = None,
+        caller: str | None = None,
     ):
         """
         Handles both sync and async monitoring by checking for existing event loop.
@@ -200,6 +209,7 @@ class ServiceLogging(CustomLogger):
                 duration=duration,
                 error=error,
                 call_type=call_type,
+                caller=caller,
                 parent_otel_span=parent_otel_span,
                 start_time=start_time,
                 end_time=end_time,
@@ -215,6 +225,7 @@ class ServiceLogging(CustomLogger):
         start_time: datetime | float | None = None,
         end_time: datetime | float | None = None,
         event_metadata: dict | None = None,
+        caller: str | None = None,
     ):
         """
         - For counting if the redis, postgres call is successful
@@ -228,6 +239,8 @@ class ServiceLogging(CustomLogger):
             service=service,
             duration=duration,
             call_type=call_type,
+            caller=caller,
+            target=current_service_target() if service == ServiceTypes.REDIS else None,
             event_metadata=event_metadata,
         )
 
@@ -313,6 +326,7 @@ class ServiceLogging(CustomLogger):
         start_time: datetime | float | None = None,
         end_time: float | datetime | None = None,
         event_metadata: dict | None = None,
+        caller: str | None = None,
     ):
         """
         - For counting if the redis, postgres call is unsuccessful
@@ -332,6 +346,8 @@ class ServiceLogging(CustomLogger):
             service=service,
             duration=duration,
             call_type=call_type,
+            caller=caller,
+            target=current_service_target() if service == ServiceTypes.REDIS else None,
             event_metadata=event_metadata,
         )
 

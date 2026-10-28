@@ -1,25 +1,34 @@
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_BATCHES_ROUTE
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import (
+    native_messages_reported_cost,
+    override_stamped_response_cost,
+    response_cost_in_hidden_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
 from litellm.llms.anthropic import get_anthropic_config
-from litellm.llms.anthropic.chat.handler import (
-    ModelResponseIterator as AnthropicModelResponseIterator,
+from litellm.llms.anthropic.messages.stream_assembly import (
+    build_complete_streaming_response,
+    build_complete_streaming_response_legacy,
+    build_usage_only_response_from_chunks,
+    collapse_pure_text_chunks,
+    split_sse_chunk_into_events,
 )
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
@@ -32,9 +41,8 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
 from litellm.types.utils import (
-    Choices,
+    CompletionTokensDetailsWrapper,
     LiteLLMBatch,
-    Message,
     ModelResponse,
     TextCompletionResponse,
     Usage,
@@ -47,6 +55,51 @@ if TYPE_CHECKING:
 else:
     PassThroughEndpointLogging = Any
     EndpointType = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _event_payload(event: str) -> Mapping[str, object] | None:
+    data_lines: Final = tuple(
+        line.strip()[len("data:") :].strip() for line in event.splitlines() if line.strip().startswith("data:")
+    )
+    if not data_lines or data_lines[0] in ("", "[DONE]"):
+        return None
+    try:
+        return _JSON_OBJECT.validate_json(data_lines[0])
+    except ValidationError:
+        return None
+
+
+def _bedrock_trace_payload(all_chunks: Sequence[str | bytes]) -> Mapping[str, object] | None:
+    payloads: Final = (
+        _event_payload(event)
+        for chunk in reversed(all_chunks)
+        for event in reversed(split_sse_chunk_into_events(chunk))
+    )  # comprehension-ok: chunk then event, read newest first
+    return next(
+        (payload for payload in payloads if payload is not None and BEDROCK_INVOKE_TRACE_FIELD in payload), None
+    )
+
+
+def _message_delta_usages(all_chunks: Sequence[str | bytes]) -> Iterator[object]:
+    for chunk in reversed(all_chunks):
+        yield from (
+            payload.get("usage")
+            for payload in map(_event_payload, reversed(split_sse_chunk_into_events(chunk)))
+            if payload is not None and payload.get("type") == "message_delta"
+        )
+
+
+def _stamp_reported_stream_cost(
+    response: ModelResponse, all_chunks: Sequence[str | bytes], logging_obj: LiteLLMLoggingObj
+) -> None:
+    """The final ``message_delta`` is where a provider that prices its own responses reports the cost."""
+    provider: Final = logging_obj.model_call_details.get("custom_llm_provider")
+    costs: Final = (native_messages_reported_cost(usage, provider) for usage in _message_delta_usages(all_chunks))
+    reported: Final = next((cost for cost in costs if cost is not None), None)
+    if reported is not None:
+        override_stamped_response_cost(response, reported)
 
 
 class AnthropicPassthroughLoggingHandler:
@@ -100,6 +153,7 @@ class AnthropicPassthroughLoggingHandler:
             json_mode=False,
             litellm_params={},
         )
+        logging_obj.record_native_bedrock_guardrail(response_body)  # pyright: ignore[reportUnknownArgumentType]  # response_body is an untyped dict param
 
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=litellm_model_response,
@@ -170,7 +224,7 @@ class AnthropicPassthroughLoggingHandler:
         all_chunks: Sequence[str | bytes], model: str, speed: str | None
     ) -> ModelResponse | None:
         try:
-            return AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            return AnthropicPassthroughLoggingHandler.build_usage_only_response_from_chunks(
                 all_chunks=all_chunks, model=model, speed=speed
             )
         except Exception as e:  # noqa: BLE001  # the usage-only fallback must never raise out of failure logging
@@ -185,7 +239,7 @@ class AnthropicPassthroughLoggingHandler:
         speed: str | None,
     ) -> ModelResponse | TextCompletionResponse | None:
         try:
-            assembled: Final = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            assembled: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
                 all_chunks=all_chunks,
                 litellm_logging_obj=litellm_logging_obj,
                 model=model,
@@ -218,6 +272,7 @@ class AnthropicPassthroughLoggingHandler:
         )
         if not isinstance(response, ModelResponse):
             return response
+        _stamp_reported_stream_cost(response, all_chunks, litellm_logging_obj)
         recovered_usage: Final = AnthropicPassthroughLoggingHandler._recover_interrupted_stream_output_tokens(
             response=response, all_chunks=all_chunks, model=model
         )
@@ -282,13 +337,21 @@ class AnthropicPassthroughLoggingHandler:
             if custom_llm_provider and not model.startswith(f"{custom_llm_provider}/")
             else model
         )
+        custom_pricing: Final = use_custom_pricing_for_model(
+            litellm_params=(logging_obj.litellm_params if hasattr(logging_obj, "litellm_params") else None)
+        )
+        reported_cost: Final = (
+            response_cost_in_hidden_params(litellm_model_response)
+            if isinstance(litellm_model_response, ModelResponse)
+            else None
+        )
+        if reported_cost is not None and not custom_pricing:
+            return reported_cost
         return litellm.completion_cost(
             completion_response=litellm_model_response,
             model=model_for_cost,
             custom_llm_provider=custom_llm_provider,
-            custom_pricing=use_custom_pricing_for_model(
-                litellm_params=(logging_obj.litellm_params if hasattr(logging_obj, "litellm_params") else None)
-            ),
+            custom_pricing=custom_pricing,
             router_model_id=logging_obj.get_router_model_id(),
         )
 
@@ -303,13 +366,13 @@ class AnthropicPassthroughLoggingHandler:
                 if not line.startswith("data:"):
                     continue
                 try:
-                    data = json.loads(line[len("data:") :].strip())
+                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
                 except (json.JSONDecodeError, ValueError):
                     continue
                 if not isinstance(data, dict):
                     continue
                 if data.get("type") == "message_start":
-                    value = (data.get("message") or {}).get(field)
+                    value = _JSON_OBJECT.validate_python(data.get("message") or {}).get(field)
                     if isinstance(value, str) and value:
                         return value
         return None
@@ -343,10 +406,8 @@ class AnthropicPassthroughLoggingHandler:
                 if not line.startswith("data:"):
                     continue
                 try:
-                    data = json.loads(line[len("data:") :].strip())
+                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
                 except (json.JSONDecodeError, ValueError):
-                    continue
-                if not isinstance(data, dict):
                     continue
                 etype = data.get("type")
                 if etype == "message_delta":
@@ -397,7 +458,7 @@ class AnthropicPassthroughLoggingHandler:
         # Anthropic costing reads completion_tokens_details.text_tokens, so the
         # stale message_start placeholder there must be corrected too or spend
         # stays undercounted even after completion_tokens is fixed.
-        details: Final = getattr(usage, "completion_tokens_details", None)
+        details: Final[CompletionTokensDetailsWrapper | None] = getattr(usage, "completion_tokens_details", None)
         if details is not None and getattr(details, "text_tokens", None) is not None:
             details.text_tokens = recovered_output_tokens
         return usage
@@ -466,7 +527,7 @@ class AnthropicPassthroughLoggingHandler:
             return kwargs
 
     @staticmethod
-    def _handle_logging_anthropic_collected_chunks(
+    def handle_logging_anthropic_collected_chunks(
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
@@ -498,6 +559,7 @@ class AnthropicPassthroughLoggingHandler:
                 "result": None,
                 "kwargs": {},
             }
+        litellm_logging_obj.record_native_bedrock_guardrail(_bedrock_trace_payload(all_chunks))
         kwargs: Final = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=complete_streaming_response,
             model=model,
@@ -513,385 +575,15 @@ class AnthropicPassthroughLoggingHandler:
             "kwargs": kwargs,
         }
 
-    @staticmethod
-    def _split_sse_chunk_into_events(chunk: str | bytes) -> list[str]:
-        """
-        Split a chunk that may contain multiple SSE events into individual events.
+    _handle_logging_anthropic_collected_chunks = handle_logging_anthropic_collected_chunks
 
-        SSE format: "event: type\ndata: {...}\n\n"
-        Multiple events in a single chunk are separated by double newlines.
-
-        Args:
-            chunk: Raw chunk string that may contain multiple SSE events
-
-        Returns:
-            List of individual SSE event strings (each containing "event: X\ndata: {...}")
-        """
-        # Handle bytes input
-        if isinstance(chunk, bytes):
-            chunk = chunk.decode("utf-8")
-
-        # Split on double newlines to separate SSE events
-        # Filter out empty strings
-        events: Final = [event.strip() for event in chunk.split("\n\n") if event.strip()]
-
-        return events
-
-    @staticmethod
-    def _build_complete_streaming_response(
-        all_chunks: Sequence[str | bytes],
-        litellm_logging_obj: LiteLLMLoggingObj,
-        model: str,
-        speed: str | None = None,
-    ) -> ModelResponse | TextCompletionResponse | None:
-        """
-        Builds complete response from raw Anthropic chunks.
-
-        Fast path: for the dominant case of a pure-text streaming response
-        (no tool_use / thinking / non-text content blocks), the long run of
-        ``content_block_delta`` text deltas is collapsed into a single
-        equivalent SSE event before conversion. ``chunk_parser`` and
-        ``stream_chunk_builder`` remain the single source of truth for chunk
-        shape, usage math and finish-reason mapping, so the rebuilt response
-        (and therefore the logged/billed payload) is identical -- this is
-        asserted by a parity test. Anything non-trivial falls back to the
-        unchanged legacy reconstruction.
-
-        Per-event Pydantic ``ModelResponseStream`` construction dominated
-        event-loop CPU under concurrent streaming; collapsing the homogeneous
-        text run removes O(num_output_tokens) of it.
-        """
-        collapsed: Final = AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(all_chunks)
-        if collapsed is not None:
-            return AnthropicPassthroughLoggingHandler._build_complete_streaming_response_legacy(
-                all_chunks=collapsed,
-                litellm_logging_obj=litellm_logging_obj,
-                model=model,
-                speed=speed,
-            )
-        return AnthropicPassthroughLoggingHandler._build_complete_streaming_response_legacy(
-            all_chunks=all_chunks,
-            litellm_logging_obj=litellm_logging_obj,
-            model=model,
-            speed=speed,
-        )
-
-    # Anthropic SSE block/delta types that the fast path is NOT allowed to
-    # collapse -- their presence forces the unchanged legacy path so tool
-    # calls, thinking, citations, etc. keep byte-identical reconstruction.
-    _FAST_PATH_DISALLOWED_DELTA_TYPES = frozenset(
-        {
-            "input_json_delta",
-            "thinking_delta",
-            "signature_delta",
-            "citations_delta",
-        }
-    )
-
-    @staticmethod
-    def _collapse_pure_text_chunks(
-        all_chunks: Sequence[str | bytes],
-    ) -> list[str] | None:
-        """
-        Return a new chunk list with the contiguous run of text-only
-        ``content_block_delta`` events replaced by a single equivalent event,
-        or ``None`` if the stream is not a pure single-text-block response
-        (in which case the caller uses the legacy path unchanged).
-
-        Only ``message_start`` / ``content_block_start(text)`` /
-        ``content_block_delta(text_delta)`` / ``content_block_stop`` /
-        ``message_delta`` / ``message_stop`` / ``ping`` events are accepted.
-        Any other content-block type or delta type returns ``None``.
-        """
-        normalized: Final[list[str]] = []
-        for raw in all_chunks:
-            line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-            for ev in line.split("\n\n"):
-                ev = ev.strip()
-                if ev:
-                    normalized.append(ev)
-
-        text_block_indexes: Final[set] = set()
-        out: Final[list[str]] = []
-        pending_text: list[str] = []
-        pending_index: int | None = None
-        saw_any_text_delta = False
-
-        def flush() -> None:
-            nonlocal pending_text, pending_index
-            if pending_text:
-                merged: Final = {
-                    "type": "content_block_delta",
-                    "index": pending_index if pending_index is not None else 0,
-                    "delta": {"type": "text_delta", "text": "".join(pending_text)},
-                }
-                out.append("data: " + json.dumps(merged))
-                pending_text = []
-                pending_index = None
-
-        for ev in normalized:
-            idx = ev.find("data:")
-            if idx == -1:
-                # Bare "event: <name>" line. The legacy converter turns this
-                # into an empty ModelResponseStream that contributes nothing
-                # to stream_chunk_builder. Drop the high-frequency interior
-                # markers (content_block_delta / ping); keep every other
-                # bare event line verbatim so chunk ordering and the
-                # load-bearing chunks[0] (event: message_start) are retained.
-                name = ev[len("event:") :].strip() if ev.startswith("event:") else ""
-                if name in ("content_block_delta", "ping"):
-                    continue
-                flush()
-                out.append(ev)
-                continue
-
-            json_str = ev[idx + len("data:") :].strip()
-            try:
-                data = json.loads(json_str)
-            except (json.JSONDecodeError, ValueError):
-                return None
-
-            etype = data.get("type")
-            if etype == "content_block_start":
-                block = data.get("content_block") or {}
-                if block.get("type") != "text":
-                    return None
-                text_block_indexes.add(data.get("index"))
-                flush()
-                out.append(ev)
-            elif etype == "content_block_delta":
-                delta = data.get("delta") or {}
-                dtype = delta.get("type")
-                if dtype in AnthropicPassthroughLoggingHandler._FAST_PATH_DISALLOWED_DELTA_TYPES:
-                    return None
-                if dtype != "text_delta":
-                    return None
-                cur_index = data.get("index")
-                if cur_index not in text_block_indexes:
-                    return None
-                # Defensive: Anthropic sends blocks strictly sequentially
-                # (start/deltas/stop, then next block), so pending_text from
-                # block N must be flushed by content_block_stop before block
-                # N+1's deltas arrive. If we ever see a delta whose index
-                # disagrees with the current pending buffer, the stream is
-                # interleaved -- fall back to legacy rather than risk merging
-                # text from different blocks under a single index.
-                if pending_text and pending_index is not None and cur_index != pending_index:
-                    return None
-                saw_any_text_delta = True
-                pending_index = cur_index
-                pending_text.append(delta.get("text") or "")
-            elif etype == "ping":
-                # Interior no-op; legacy maps it to an empty chunk.
-                continue
-            else:
-                # message_start / content_block_stop / message_delta /
-                # message_stop / error: pass through unchanged.
-                flush()
-                out.append(ev)
-
-        flush()
-
-        if not saw_any_text_delta:
-            return None
-        return out
-
-    @staticmethod
-    def _build_complete_streaming_response_legacy(
-        all_chunks: Sequence[str | bytes],
-        litellm_logging_obj: LiteLLMLoggingObj,
-        model: str,
-        speed: str | None = None,
-    ) -> ModelResponse | TextCompletionResponse | None:
-        """
-        Original reconstruction: convert every SSE event to a generic chunk
-        and assemble via stream_chunk_builder. Kept verbatim as the fallback
-        / source of truth for the fast path's parity test.
-
-        - Splits multi-event chunks into individual SSE events
-        - Converts str chunks to generic chunks
-        - Converts generic chunks to litellm chunks (OpenAI format)
-        - Builds complete response from litellm chunks
-        """
-        verbose_proxy_logger.debug("Building complete streaming response from %d chunks", len(all_chunks))
-        anthropic_model_response_iterator: Final = AnthropicModelResponseIterator(
-            streaming_response=None,
-            sync_stream=False,
-            speed=speed,
-        )
-        all_openai_chunks: Final = []
-
-        # Process each chunk - a chunk may contain multiple SSE events
-        for _chunk_str in all_chunks:
-            # Split chunk into individual SSE events
-            individual_events = AnthropicPassthroughLoggingHandler._split_sse_chunk_into_events(_chunk_str)
-
-            # Process each individual event
-            for event_str in individual_events:
-                try:
-                    # Skip OpenAI-style [DONE] sentinels some Anthropic-compatible
-                    # providers emit. Match the whole SSE line so a valid chunk whose
-                    # text payload happens to contain "[DONE]" is not dropped.
-                    if any(line.strip() == "data: [DONE]" for line in event_str.split("\n")):
-                        continue
-                    transformed_openai_chunk = anthropic_model_response_iterator.convert_str_chunk_to_generic_chunk(
-                        chunk=event_str
-                    )
-                    if transformed_openai_chunk is not None:
-                        all_openai_chunks.append(transformed_openai_chunk)
-
-                except (StopIteration, StopAsyncIteration):
-                    break
-                except json.JSONDecodeError:
-                    # Some upstreams emit non-JSON SSE lines; skip them so the
-                    # logging pipeline is not broken by a single bad frame.
-                    verbose_proxy_logger.debug(
-                        "Skipping non-JSON SSE event: %s",
-                        event_str[:200],
-                    )
-                    continue
-
-        complete_streaming_response: Final = litellm.stream_chunk_builder(
-            chunks=all_openai_chunks,
-            logging_obj=litellm_logging_obj,
-        )
-        verbose_proxy_logger.debug("Complete streaming response built: %s", complete_streaming_response)
-        return complete_streaming_response
-
-    @staticmethod
-    def _extract_sse_data(event_str: str) -> dict | None:
-        """Parse the JSON object from the ``data:`` line of an Anthropic SSE event."""
-        for line in event_str.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("data:"):
-                payload = stripped[len("data:") :].strip()
-                if not payload or payload == "[DONE]":
-                    return None
-                try:
-                    return cast(dict, json.loads(payload))
-                except (ValueError, TypeError):
-                    return None
-        return None
-
-    @staticmethod
-    def _build_usage_only_response_from_chunks(
-        all_chunks: Sequence[str | bytes],
-        model: str,
-        speed: str | None = None,
-    ) -> ModelResponse | None:
-        """
-        Build a usage-bearing ModelResponse from Anthropic SSE token-usage events, for
-        cost tracking when stream_chunk_builder cannot reassemble the stream.
-
-        Anthropic emits usage in ``message_start`` (uncached input + cache tokens, and an
-        initial output_tokens) and the final ``message_delta`` (cumulative output_tokens)
-        regardless of the content/tool shape, so cost is recoverable even when full
-        content assembly fails. Returns ``None`` if no usage event is found.
-        """
-        input_tokens = 0
-        cache_read = 0
-        cache_creation = 0
-        cache_creation_5m: int | None = None
-        cache_creation_1h: int | None = None
-        output_tokens = 0
-        web_search_requests: int | None = None
-        tool_search_requests: int | None = None
-        inference_geo: str | None = None
-        speed_from_stream: str | None = None
-        stop_reason: str | None = None
-        found_usage = False
-        resolved_model = model
-        for _chunk_str in all_chunks:
-            for event_str in AnthropicPassthroughLoggingHandler._split_sse_chunk_into_events(_chunk_str):
-                data = AnthropicPassthroughLoggingHandler._extract_sse_data(event_str)
-                if not data:
-                    continue
-                event_type = data.get("type")
-                if event_type == "message_start":
-                    message = data.get("message") or {}
-                    if not resolved_model or resolved_model == "unknown":
-                        resolved_model = message.get("model") or resolved_model
-                    usage = message.get("usage") or {}
-                    input_tokens = usage.get("input_tokens") or input_tokens
-                    cache_read = usage.get("cache_read_input_tokens") or cache_read
-                    cache_creation = usage.get("cache_creation_input_tokens") or cache_creation
-                    _cc = usage.get("cache_creation")
-                    if isinstance(_cc, dict):
-                        cache_creation_5m = _cc.get("ephemeral_5m_input_tokens")
-                        cache_creation_1h = _cc.get("ephemeral_1h_input_tokens")
-                    if usage.get("inference_geo") is not None:
-                        inference_geo = usage.get("inference_geo")
-                    if isinstance(usage.get("speed"), str):
-                        speed_from_stream = usage.get("speed")
-                    if usage.get("output_tokens") is not None:
-                        output_tokens = usage.get("output_tokens")
-                    found_usage = True
-                elif event_type == "message_delta":
-                    _delta_stop = (data.get("delta") or {}).get("stop_reason")
-                    if _delta_stop:
-                        stop_reason = _delta_stop
-                    usage = data.get("usage") or {}
-                    if usage.get("output_tokens") is not None:
-                        output_tokens = usage.get("output_tokens")
-                    _stu = usage.get("server_tool_use")
-                    if isinstance(_stu, dict):
-                        if _stu.get("web_search_requests") is not None:
-                            web_search_requests = _stu.get("web_search_requests")
-                        if _stu.get("tool_search_requests") is not None:
-                            tool_search_requests = _stu.get("tool_search_requests")
-                    if usage.get("cache_read_input_tokens") is not None:
-                        cache_read = usage.get("cache_read_input_tokens")
-                    if usage.get("inference_geo") is not None:
-                        inference_geo = usage.get("inference_geo")
-                    if isinstance(usage.get("speed"), str):
-                        speed_from_stream = usage.get("speed")
-                    found_usage = True
-        if not found_usage:
-            return None
-        # If only the 5m/1h split was provided, derive the cache_creation total from it.
-        if not cache_creation and (cache_creation_5m or cache_creation_1h):
-            cache_creation = (cache_creation_5m or 0) + (cache_creation_1h or 0)
-        # build usage via the same AnthropicConfig.calculate_usage path the success
-        # cases use, so prompt_tokens are cache-inclusive and cache / server_tool_use /
-        # inference_geo tokens are priced instead of left at $0
-        usage_object: Final[dict] = {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-        }
-        if cache_read:
-            usage_object["cache_read_input_tokens"] = cache_read
-        if cache_creation:
-            usage_object["cache_creation_input_tokens"] = cache_creation
-        if cache_creation_5m is not None or cache_creation_1h is not None:
-            usage_object["cache_creation"] = {
-                "ephemeral_5m_input_tokens": cache_creation_5m or 0,
-                "ephemeral_1h_input_tokens": cache_creation_1h or 0,
-            }
-        if web_search_requests is not None or tool_search_requests is not None:
-            _server_tool_use: Final[dict] = {}
-            if web_search_requests is not None:
-                _server_tool_use["web_search_requests"] = web_search_requests
-            if tool_search_requests is not None:
-                _server_tool_use["tool_search_requests"] = tool_search_requests
-            usage_object["server_tool_use"] = _server_tool_use
-        if inference_geo is not None:
-            usage_object["inference_geo"] = inference_geo
-        if speed_from_stream is not None:
-            usage_object["speed"] = speed_from_stream
-        usage_obj: Final = AnthropicConfig().calculate_usage(
-            usage_object=usage_object, reasoning_content=None, speed=speed
-        )
-        return ModelResponse(
-            model=resolved_model,
-            choices=[
-                Choices(
-                    finish_reason=(map_finish_reason(stop_reason) if stop_reason else "stop"),
-                    index=0,
-                    message=Message(role="assistant", content=""),
-                )
-            ],
-            usage=usage_obj,
-        )
+    _split_sse_chunk_into_events = staticmethod(split_sse_chunk_into_events)
+    build_complete_streaming_response = staticmethod(build_complete_streaming_response)
+    _build_complete_streaming_response = build_complete_streaming_response
+    _collapse_pure_text_chunks = staticmethod(collapse_pure_text_chunks)
+    _build_complete_streaming_response_legacy = staticmethod(build_complete_streaming_response_legacy)
+    build_usage_only_response_from_chunks = staticmethod(build_usage_only_response_from_chunks)
+    _build_usage_only_response_from_chunks = build_usage_only_response_from_chunks
 
     @staticmethod
     def batch_creation_handler(

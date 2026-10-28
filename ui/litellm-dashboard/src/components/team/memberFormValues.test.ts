@@ -4,6 +4,7 @@ import {
   buildMemberFormValues,
   emptyMemberFormValues,
   memberFieldNames,
+  tempBudgetPairError,
   type MemberFieldsConfig,
 } from "./memberFormValues";
 
@@ -22,6 +23,16 @@ const teamConfig: MemberFieldsConfig = {
     { name: "tpm_limit", label: "TPM", type: "numerical" },
     { name: "rpm_limit", label: "RPM", type: "numerical" },
     { name: "allowed_models", label: "Models", type: "multi-select" },
+  ],
+};
+
+const tempBudgetConfig: MemberFieldsConfig = {
+  roleOptions,
+  showUserId: true,
+  additionalFields: [
+    { name: "max_budget_in_team", label: "Budget", type: "numerical" },
+    { name: "temp_budget_increase", label: "Temp Increase", type: "numerical" },
+    { name: "temp_budget_expiry", label: "Temp Expiry", type: "utc-datetime" },
   ],
 };
 
@@ -117,6 +128,30 @@ describe("buildMemberFormValues", () => {
     ).toStrictEqual(unlimitedMember);
   });
 
+  it("seeds a stored temporary budget increase and its expiry, keeping a 0 increase as 0", () => {
+    const tempBudgetMember = {
+      user_id: "u1",
+      role: "user",
+      max_budget_in_team: 10,
+      temp_budget_increase: 0,
+      temp_budget_expiry: "2030-01-01T00:00:00Z",
+    };
+    expect(buildMemberFormValues("edit", tempBudgetMember, tempBudgetConfig)).toStrictEqual(tempBudgetMember);
+  });
+
+  it("collapses a missing temporary budget increase and expiry to null", () => {
+    const noTempBudget = {
+      user_id: "u1",
+      role: "user",
+      max_budget_in_team: null,
+      temp_budget_increase: null,
+      temp_budget_expiry: null,
+    };
+    expect(buildMemberFormValues("edit", { user_id: "u1", role: "user" }, tempBudgetConfig)).toStrictEqual(
+      noTempBudget,
+    );
+  });
+
   it("falls back to the configured default role when the member has none", () => {
     expect(buildMemberFormValues("edit", { user_id: "u1", role: "" }, { ...orgConfig, defaultRole: "user" }).role).toBe(
       "user",
@@ -155,6 +190,17 @@ describe("emptyMemberFormValues", () => {
       user_id: "",
       role: "",
     });
+  });
+
+  it("clears a utc-datetime field to null", () => {
+    const cleared = {
+      user_id: "",
+      role: "",
+      max_budget_in_team: null,
+      temp_budget_increase: null,
+      temp_budget_expiry: null,
+    };
+    expect(emptyMemberFormValues(tempBudgetConfig)).toStrictEqual(cleared);
   });
 
   it("clears numeric, duration and multi-select fields to values their controls accept", () => {
@@ -199,9 +245,12 @@ describe("buildMemberFormData", () => {
     });
   });
 
-  it.each(["max_budget_in_team", "tpm_limit", "rpm_limit"])("turns a blank %s into null", (key) => {
-    expect(buildMemberFormData({ [key]: "   " })[key]).toBeNull();
-  });
+  it.each(["max_budget_in_team", "tpm_limit", "rpm_limit", "temp_budget_increase"])(
+    "turns a blank %s into null",
+    (key) => {
+      expect(buildMemberFormData({ [key]: "   " })[key]).toBeNull();
+    },
+  );
 
   it.each(["user_email", "user_id", "budget_duration"])("leaves a blank %s as an empty string", (key) => {
     expect(buildMemberFormData({ [key]: "   " })[key]).toBe("");
@@ -224,5 +273,29 @@ describe("buildMemberFormData", () => {
       "user_id",
       "role",
     ]);
+  });
+});
+
+describe("tempBudgetPairError", () => {
+  it.each([
+    [{ temp_budget_increase: 50, temp_budget_expiry: "2030-01-01T00:00:00.000Z" }],
+    [{ temp_budget_increase: "0", temp_budget_expiry: "2030-01-01T00:00:00.000Z" }],
+    [{ temp_budget_increase: 0, temp_budget_expiry: "2030-01-01T00:00:00.000Z" }],
+    [{ temp_budget_increase: null, temp_budget_expiry: null }],
+    [{ temp_budget_increase: "", temp_budget_expiry: null }],
+    [{}],
+  ])("accepts %j", (values) => {
+    expect(tempBudgetPairError(values)).toBeNull();
+  });
+
+  it("points at the missing increase when only the expiry is set", () => {
+    expect(tempBudgetPairError({ temp_budget_increase: "", temp_budget_expiry: "2030-01-01T00:00:00.000Z" })).toBe(
+      "temp_budget_increase",
+    );
+  });
+
+  it("points at the missing expiry when only the increase is set", () => {
+    expect(tempBudgetPairError({ temp_budget_increase: 25, temp_budget_expiry: null })).toBe("temp_budget_expiry");
+    expect(tempBudgetPairError({ temp_budget_increase: 0, temp_budget_expiry: undefined })).toBe("temp_budget_expiry");
   });
 });

@@ -15,6 +15,7 @@ from collections.abc import Mapping
 import httpx
 
 from litellm.types.agents import (
+    AgentCreateRequest,
     AgentCreateResponse,
     AgentDeleteResult,
     AgentListResponse,
@@ -50,10 +51,9 @@ class BaseAgentsAPIConfig(ABC):
     @abstractmethod
     def transform_create_request(
         self,
-        name: str,
-        litellm_params: Mapping[str, object],
-    ) -> dict[str, object]:
-        """Map name + litellm_params to the provider's create-agent body."""
+        create_request: AgentCreateRequest,
+    ) -> Mapping[str, object]:
+        """Map the create request to the provider's create-agent body."""
 
     @abstractmethod
     def transform_create_response(

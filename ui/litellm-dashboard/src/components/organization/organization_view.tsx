@@ -1,6 +1,7 @@
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { organizationKeys, useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useQueryClient } from "@tanstack/react-query";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { MoneyCell } from "@/components/shared/table_cells";
 import CopyButton from "@/components/shared/CopyButton";
@@ -25,6 +26,8 @@ import {
 import ObjectPermissionsView from "../object_permissions_view";
 import MemberModal from "../team/EditMembership";
 import { OrgSettingsForm } from "./org-settings/OrgSettingsForm";
+import { ORGANIZATION_TAB_URL_KEY, ORGANIZATION_TABS, type OrganizationTab } from "./organizationTabs";
+import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -33,7 +36,6 @@ interface OrganizationInfoProps {
   is_org_admin: boolean;
   is_proxy_admin: boolean;
   userModels: string[];
-  editOrg: boolean;
 }
 
 const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
@@ -43,7 +45,6 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   is_org_admin,
   is_proxy_admin,
   userModels,
-  editOrg,
 }) => {
   const queryClient = useQueryClient();
   const { data: orgData, isLoading: loading } = useOrganization(organizationId);
@@ -53,9 +54,15 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const canEditOrg = is_org_admin || is_proxy_admin;
   const { data: teams } = useTeams();
-  const { onTabChange, hasVisited } = useVisitedTabs(editOrg ? "settings" : "overview");
+  const [tab, setTab] = useUrlTab(ORGANIZATION_TABS, "overview", ORGANIZATION_TAB_URL_KEY);
+  const { onTabChange, hasVisited } = useVisitedTabs(tab);
 
   const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
+
+  const handleTabChange = (value: OrganizationTab) => {
+    setTab(value);
+    onTabChange(value);
+  };
 
   const handleMemberAdd = async (values: any) => {
     try {
@@ -128,6 +135,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     {
       title: "Spend (USD)",
       key: "spend",
+      numeric: true,
       sortValue: (record: Member) => orgMemberFor(record)?.spend ?? null,
       render: (record: Member) => <MoneyCell value={orgMemberFor(record)?.spend} decimals={4} />,
     },
@@ -158,7 +166,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         </div>
       </div>
 
-      <Tabs defaultValue={editOrg ? "settings" : "overview"} onValueChange={onTabChange} className="mb-4">
+      <Tabs value={tab} onValueChange={handleTabChange} className="mb-4">
         <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
@@ -186,7 +194,15 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
             <Card>
               <CardContent>
-                <p className="text-sm text-muted-foreground">Budget Status</p>
+                <p className="text-sm text-muted-foreground">
+                  Budget Status
+                  <BudgetPeriodTooltip
+                    spend={orgData.spend}
+                    maxBudget={orgData.litellm_budget_table.max_budget}
+                    budgetDuration={orgData.litellm_budget_table.budget_duration}
+                    budgetResetAt={orgData.litellm_budget_table.budget_reset_at}
+                  />
+                </p>
                 <div className="mt-2 text-sm text-foreground">
                   <p className="text-xl font-semibold">${formatNumberWithCommas(orgData.spend, 4)}</p>
                   <p>

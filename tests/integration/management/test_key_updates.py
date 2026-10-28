@@ -3,8 +3,8 @@ from hashlib import sha256
 
 import pytest
 
-from integration._support.client import Gateway, object_value
-from integration._support.database import read_rows
+from tests.integration._support.client import Gateway, object_value
+from tests.integration._support.database import read_rows
 
 
 @pytest.mark.covers("mgmt.key.update.preserves_independent_fields")

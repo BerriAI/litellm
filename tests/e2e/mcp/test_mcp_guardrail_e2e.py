@@ -23,6 +23,7 @@ import pytest
 from datadog_mcp import SEARCH_LOGS_TOOL, assert_dd_mcp_creds, register_datadog_mcp
 from e2e_config import DD_SEARCH_FROM, unique_marker
 from e2e_http import Result, Success, UnknownApiError
+from e2e_metadata import Domain, Route, Subject, meta
 from lifecycle import ResourceManager
 from mcp_client import McpCallToolResponse, McpClient, McpToolArguments
 
@@ -81,6 +82,12 @@ class TestMcpToolCallGuardrail:
     @pytest.mark.covers(
         "guardrail.litellm_content_filter.pre_mcp_call.blocks",
         exercised_on=["mcp_operations"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.MCP,
+        )
     )
     def test_content_filter_blocks_banned_keyword_in_tool_args(
         self, client: McpClient, resources: ResourceManager

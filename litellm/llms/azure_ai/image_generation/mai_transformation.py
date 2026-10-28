@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -12,8 +13,9 @@ from litellm.types.utils import ImageResponse
 from litellm.utils import convert_to_model_response_object
 
 if TYPE_CHECKING:
-    import tiktoken
     from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
+
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
@@ -40,9 +42,9 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
         if "/mai/" in path:
             prefix, _, _ = path.partition("/images/")
-            path = f"{prefix}/images/generations"
+            path = join_api_base(prefix, "images/generations")
         else:
-            path = f"{path}/mai/v1/images/generations"
+            path = join_api_base(path, "mai/v1/images/generations")
 
         if separator:
             return f"{path}?{query}"
@@ -62,9 +64,9 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
         if "/mai/" in path:
             prefix, _, _ = path.partition("/images/")
-            path = f"{prefix}/images/edits"
+            path = join_api_base(prefix, "images/edits")
         else:
-            path = f"{path}/mai/v1/images/edits"
+            path = join_api_base(path, "mai/v1/images/edits")
 
         if separator:
             return f"{path}?{query}"
@@ -245,7 +247,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:

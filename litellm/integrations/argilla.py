@@ -7,7 +7,8 @@ import json
 import os
 import random
 import types
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
 from pydantic import BaseModel
@@ -49,7 +50,7 @@ class ArgillaLogger(CustomBatchLogger):
         if litellm.argilla_transformation_object is None:
             raise Exception("'litellm.argilla_transformation_object' is required, to log your payload to Argilla.")
         self.validate_argilla_transformation_object(litellm.argilla_transformation_object)
-        self.argilla_transformation_object = litellm.argilla_transformation_object
+        self.argilla_transformation_object: Mapping[str, str] = litellm.argilla_transformation_object
         self.default_credentials = self.get_credentials_from_env(
             argilla_api_key=argilla_api_key,
             argilla_dataset_name=argilla_dataset_name,
@@ -69,7 +70,7 @@ class ArgillaLogger(CustomBatchLogger):
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
-    def validate_argilla_transformation_object(self, argilla_transformation_object: dict[str, Any]):
+    def validate_argilla_transformation_object(self, argilla_transformation_object: Mapping[str, object]):
         if not isinstance(argilla_transformation_object, dict):
             raise Exception("'argilla_transformation_object' must be a dictionary, to log your payload to Argilla.")
 
@@ -115,7 +116,7 @@ class ArgillaLogger(CustomBatchLogger):
             ARGILLA_DATASET_NAME=_credentials_dataset_name,
         )
 
-    def get_chat_messages(self, payload: StandardLoggingPayload) -> list[dict[str, Any]]:
+    def get_chat_messages(self, payload: StandardLoggingPayload) -> list[dict[str, object]]:
         payload_messages: Final = payload.get("messages", None)
 
         if payload_messages is None:

@@ -1,7 +1,7 @@
 import json
 import os
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
@@ -25,9 +25,8 @@ from litellm.utils import token_counter
 from ..common_utils import HuggingFaceError, hf_task_list, hf_tasks, output_parser
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:
@@ -38,6 +37,10 @@ class _TokenEncoding(Protocol):
     """Tokenizer handle the caller passes in; only `encode` is used, to count completion tokens."""
 
     def encode(self, text: str, /) -> Sequence[object]: ...
+
+
+def _header_value(headers: Mapping[str, str], key: str, default: str) -> str:
+    return headers.get(key, default)
 
 
 tgi_models_cache = None
@@ -84,13 +87,13 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         typical_p: float | None = None,
         watermark: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[dict[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> dict[str, object]:
         return super().get_config()
 
     def get_special_options_params(self):
@@ -352,17 +355,17 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         model: str,
         data: dict,
         api_key: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, str]]:
         streamed_response: Final = CustomStreamWrapper(
             completion_stream=response.iter_lines(),
             model=model,
             custom_llm_provider="huggingface",
             logging_obj=logging_obj,
         )
-        content = ""
+        content: str = ""
         for chunk in streamed_response:
             content += chunk["choices"][0]["delta"]["content"]
-        completion_response: Final[list[dict[str, Any]]] = [{"generated_text": content}]
+        completion_response: Final[list[dict[str, str]]] = [{"generated_text": content}]
         ## LOGGING
         logging_obj.post_call(
             input=data,
@@ -444,14 +447,13 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         except Exception:
             # this should remain non blocking we should not block a response returning if calculating usage fails
             pass
-        output_text: Final = model_response["choices"][0]["message"].get("content", "")
+        first_message: Final = model_response.choices[0].message
+        output_text: Final = first_message.content
         if output_text is not None and len(output_text) > 0:
             completion_tokens = 0
             try:
                 if encoding is not None:
-                    completion_tokens = len(
-                        encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-                    )  ##[TODO] use the llama2 tokenizer here
+                    completion_tokens = len(encoding.encode(output_text))  ##[TODO] use the llama2 tokenizer here
             except Exception:
                 # this should remain non blocking we should not block a response returning if calculating usage fails
                 pass
@@ -466,7 +468,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             total_tokens=prompt_tokens + completion_tokens,
         )
         setattr(model_response, "usage", usage)
-        model_response._hidden_params["original_response"] = completion_response
+        model_response.hidden_params["original_response"] = completion_response
         return model_response
 
     def transform_response(
@@ -479,14 +481,14 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
         ## Some servers might return streaming responses even though stream was not set to true. (e.g. Baseten)
         task: Final = litellm_params.get("task", None)
         is_streamed = False
-        if raw_response.__dict__["headers"].get("Content-Type", "") == "text/event-stream":
+        if _header_value(raw_response.headers, "Content-Type", "") == "text/event-stream":
             is_streamed = True
 
         # iterate over the complete streamed response, and return the final answer

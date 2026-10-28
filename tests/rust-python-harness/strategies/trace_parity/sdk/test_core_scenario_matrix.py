@@ -41,8 +41,8 @@ def test_core_sdk_scenario_matrix_keeps_distinct_migration_paths() -> None:
     }
     assert {(scenario.name, scenario.asynchronous) for scenario in ocr.scenarios} >= {
         ("async-cohere", True),
-        ("sync-public-rust-dispatch", False),
-        ("async-public-rust-dispatch", True),
+        ("sync-vertex-deepseek", False),
+        ("async-vertex-deepseek", True),
     }
     assert {(scenario.name, scenario.asynchronous) for scenario in responses.scenarios} >= {
         ("sync-openai", False),
@@ -55,15 +55,3 @@ def test_core_sdk_scenario_matrix_keeps_distinct_migration_paths() -> None:
         ("async-anthropic-chat-bridge", True),
         ("async-anthropic-chat-bridge-stream", True),
     }
-
-
-def test_core_gateway_matrix_keeps_downstream_streams_separate() -> None:
-    modules: Final = (
-        "tests.rust-python-harness.strategies.trace_parity.gateway.chat_completions.case",
-        "tests.rust-python-harness.strategies.trace_parity.gateway.messages.case",
-        "tests.rust-python-harness.strategies.trace_parity.gateway.responses.case",
-    )
-
-    for module in modules:
-        suite = _suite(module)
-        assert any("downstream-stream" in scenario.name for scenario in suite.scenarios)

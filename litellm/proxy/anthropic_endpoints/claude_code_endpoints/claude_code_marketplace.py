@@ -21,22 +21,26 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Annotated, Final, Protocol, TypedDict
+from types import MappingProxyType
+from typing import Annotated, Final, Protocol, TypedDict, get_args
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_access import (
     SkillVisibility,
-    skill_visibility,
+    resolve_skill_visibility,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.proxy.claude_code_endpoints import (
+    InstallationPreference,
     ListPluginsResponse,
     PluginListItem,
     PluginResponse,
@@ -70,9 +74,27 @@ class _MarketplaceEntry(TypedDict, total=False):
     homepage: object
     keywords: object
     category: object
+    installationPreference: ReadOnly[InstallationPreference]
 
 
-async def _get_prisma_client() -> object:
+_INSTALLATION_PREFERENCES: Final[tuple[InstallationPreference, ...]] = get_args(InstallationPreference)
+MANIFEST_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+_SELF_INSTALLING_PREFERENCES: Final[frozenset[InstallationPreference]] = frozenset({"auto_install", "required"})
+
+
+def get_installation_preference(manifest: Mapping[str, object]) -> InstallationPreference | None:
+    value: Final = manifest.get("installation_preference")
+    if value is None or value in _INSTALLATION_PREFERENCES:
+        return value
+    verbose_proxy_logger.warning(
+        "Plugin %s has unknown installation_preference %r, serving it as unset", manifest.get("name"), value
+    )
+    return None
+
+
+async def get_prisma_client() -> object:
     """Get the prisma client from proxy_server."""
     from litellm.proxy.proxy_server import prisma_client
 
@@ -82,6 +104,9 @@ async def _get_prisma_client() -> object:
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
     return prisma_client
+
+
+_get_prisma_client: Final = get_prisma_client
 
 
 @router.get(
@@ -98,7 +123,7 @@ async def get_marketplace(request: Request, key: str | None = None):
 
     Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
     the key is authenticated and the catalog also holds the disabled plugins granted
-    to it through `object_permission.skills` on the key or its team.
+    to it through `object_permission.skills` or an access group on the key or its team.
 
     Returns:
         Marketplace catalog with list of available plugins and their git sources.
@@ -111,12 +136,12 @@ async def get_marketplace(request: Request, key: str | None = None):
         ```
     """
     try:
-        prisma_client: Final = await _get_prisma_client()
+        prisma_client: Final = await get_prisma_client()
 
         caller: Final[UserAPIKeyAuth | None] = (
             await user_api_key_auth(request=request, api_key=f"Bearer {key}") if key else None
         )
-        visibility: Final[SkillVisibility] = skill_visibility(caller)
+        visibility: Final[SkillVisibility] = await resolve_skill_visibility(caller)
         plugins: Final[Sequence[_PluginRecord]] = await ClaudeCodePluginRepository(prisma_client).table.find_many(
             where=visibility.where()
         )
@@ -136,10 +161,16 @@ async def get_marketplace(request: Request, key: str | None = None):
                 verbose_proxy_logger.warning("Plugin %s has no source field, skipping", plugin.name)
                 continue
 
-            entry: _MarketplaceEntry = {
-                "name": plugin.name,
-                "source": manifest["source"],
-            }
+            installation_preference = get_installation_preference(manifest)
+            entry: _MarketplaceEntry = (
+                {"name": plugin.name, "source": manifest["source"]}
+                if installation_preference is None
+                else {
+                    "name": plugin.name,
+                    "source": manifest["source"],
+                    "installationPreference": installation_preference,
+                }
+            )
 
             if plugin.version:
                 entry["version"] = plugin.version
@@ -246,9 +277,30 @@ def _validate_plugin_source(source: Mapping[str, str]) -> None:
         )
 
 
+def _validate_installation_preference(spec: PluginSpec) -> None:
+    if spec.installation_preference is None:
+        return
+    if spec.source.get("source") != "archive":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "installation_preference needs an archive source, the only plugins Claude Desktop lists "
+                "from a marketplace.json URL"
+            },
+        )
+    if spec.installation_preference in _SELF_INSTALLING_PREFERENCES and not spec.source.get("sha256"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"installation_preference '{spec.installation_preference}' needs the archive's sha256, "
+                "since Claude Desktop installs only pinned archives on its own"
+            },
+        )
+
+
 def _build_plugin_manifest(name: str, spec: PluginSpec) -> Mapping[str, object]:
     """Build the stored manifest dict shared by plugin create and update."""
-    dumped: Final[Mapping[str, object]] = spec.model_dump(exclude_none=True)
+    dumped: Final[Mapping[str, object]] = MappingProxyType(spec.model_dump(exclude_none=True))
     return {"name": name, **{key: value for key, value in dumped.items() if value and key != "name"}}
 
 
@@ -306,6 +358,7 @@ async def register_plugin(
         - homepage: Plugin homepage URL (optional)
         - keywords: Search keywords (optional)
         - category: Plugin category (optional)
+        - installation_preference: 'available', 'auto_install', or 'required' (optional)
 
     Returns:
         Registration status (action is always "created") and plugin information.
@@ -328,7 +381,7 @@ async def register_plugin(
     try:
         _require_proxy_admin(user_api_key_dict)
 
-        prisma_client: Final = await _get_prisma_client()
+        prisma_client: Final = await get_prisma_client()
 
         if not re.match(r"^[a-z0-9-]+$", request.name):
             raise HTTPException(
@@ -337,6 +390,7 @@ async def register_plugin(
             )
 
         _validate_plugin_source(request.source)
+        _validate_installation_preference(request)
 
         existing: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
             where={"name": request.name}
@@ -374,6 +428,7 @@ async def register_plugin(
                 version=plugin.version,
                 description=plugin.description,
                 source=request.source,
+                installation_preference=request.installation_preference,
                 enabled=plugin.enabled,
             ),
         )
@@ -408,9 +463,9 @@ async def list_plugins(
         List of plugins with their metadata.
     """
     try:
-        prisma_client: Final = await _get_prisma_client()
+        prisma_client: Final = await get_prisma_client()
 
-        visibility: Final[SkillVisibility] = skill_visibility(user_api_key_dict)
+        visibility: Final[SkillVisibility] = await resolve_skill_visibility(user_api_key_dict)
         plugins: Final[Sequence[_PluginRecord]] = await ClaudeCodePluginRepository(prisma_client).table.find_many(
             where={"enabled": True} if enabled_only else visibility.where()
         )
@@ -435,6 +490,7 @@ async def list_plugins(
                     category=manifest.get("category"),
                     domain=manifest.get("domain"),
                     namespace=manifest.get("namespace"),
+                    installation_preference=get_installation_preference(MANIFEST_FIELDS.validate_python(manifest)),
                     enabled=p.enabled,
                     created_at=p.created_at.isoformat() if p.created_at else None,
                     updated_at=p.updated_at.isoformat() if p.updated_at else None,
@@ -478,7 +534,7 @@ async def get_plugin(
         Plugin details including source and metadata.
     """
     try:
-        prisma_client: Final = await _get_prisma_client()
+        prisma_client: Final = await get_prisma_client()
 
         plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
             where={"name": plugin_name}
@@ -490,7 +546,7 @@ async def get_plugin(
                 detail={"error": f"Plugin '{plugin_name}' not found"},
             )
 
-        if not skill_visibility(user_api_key_dict).allows(plugin):
+        if not (await resolve_skill_visibility(user_api_key_dict)).allows(plugin):
             raise HTTPException(
                 status_code=403,
                 detail={"error": f"Plugin '{plugin_name}' is not granted to this key"},
@@ -508,6 +564,7 @@ async def get_plugin(
             "homepage": manifest.get("homepage"),
             "keywords": manifest.get("keywords"),
             "category": manifest.get("category"),
+            "installation_preference": get_installation_preference(manifest),
             "enabled": plugin.enabled,
             "created_at": plugin.created_at.isoformat() if plugin.created_at else None,
             "updated_at": plugin.updated_at.isoformat() if plugin.updated_at else None,
@@ -558,6 +615,7 @@ async def update_plugin(
         - homepage: Plugin homepage URL (optional)
         - keywords: Search keywords (optional)
         - category: Plugin category (optional)
+        - installation_preference: 'available', 'auto_install', or 'required' (optional)
 
     Returns:
         Update status (action is always "updated") and plugin information.
@@ -579,12 +637,13 @@ async def update_plugin(
     try:
         _require_proxy_admin(user_api_key_dict)
 
-        prisma_client: Final = await _get_prisma_client()
+        prisma_client: Final = await get_prisma_client()
 
         _validate_plugin_source(request.source)
+        _validate_installation_preference(request)
 
         existing: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
-            where={"name": plugin_name}  # mutable-ok: prisma query arguments must be plain dicts
+            where={"name": plugin_name}
         )
         if not existing:
             raise _error_response(404, f"Plugin '{plugin_name}' not found")
@@ -592,8 +651,8 @@ async def update_plugin(
         manifest: Final[Mapping[str, object]] = _build_plugin_manifest(plugin_name, request)
 
         plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.update(
-            where={"name": plugin_name},  # mutable-ok: prisma query arguments must be plain dicts
-            data={  # mutable-ok: prisma query arguments must be plain dicts
+            where={"name": plugin_name},
+            data={
                 "version": request.version,
                 "description": request.description,
                 "manifest_json": json.dumps(manifest),
@@ -615,6 +674,7 @@ async def update_plugin(
                 version=plugin.version,
                 description=plugin.description,
                 source=request.source,
+                installation_preference=request.installation_preference,
                 enabled=plugin.enabled,
             ),
         )
@@ -646,7 +706,7 @@ async def enable_plugin(
     try:
         _require_proxy_admin(user_api_key_dict)
 
-        prisma_client: Final = await _get_prisma_client()
+        prisma_client: Final = await get_prisma_client()
 
         plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
             where={"name": plugin_name}
@@ -695,7 +755,7 @@ async def disable_plugin(
     try:
         _require_proxy_admin(user_api_key_dict)
 
-        prisma_client: Final = await _get_prisma_client()
+        prisma_client: Final = await get_prisma_client()
 
         plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
             where={"name": plugin_name}
@@ -744,7 +804,7 @@ async def delete_plugin(
     try:
         _require_proxy_admin(user_api_key_dict)
 
-        prisma_client: Final = await _get_prisma_client()
+        prisma_client: Final = await get_prisma_client()
 
         plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
             where={"name": plugin_name}

@@ -23,6 +23,7 @@ from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_ssl_configuration,
@@ -222,7 +223,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return []
 
     @staticmethod
-    def _iter_schema_string_refs(data: Mapping[str, Any]):
+    def _iter_schema_string_refs(data: Mapping[str, object]):
         """Yield ``(container, key)`` for every non-empty schema string the proxy
         forwards to the model inside tool/function and structured-output schemas:
         each ``tools[].function`` and legacy ``functions[]`` entry plus the
@@ -235,10 +236,10 @@ class CatoNetworksGuardrail(CustomGuardrail):
         list_keys: Final = ("enum", "examples")
 
         stack: Final[list] = []
-        for tool in data.get("tools") or []:
+        for tool in iter_items(data.get("tools") or ()):
             if isinstance(tool, dict) and isinstance(tool.get("function"), dict):
                 stack.append(tool["function"])
-        for function in data.get("functions") or []:
+        for function in iter_items(data.get("functions") or ()):
             if isinstance(function, dict):
                 stack.append(function)
         response_format: Final = data.get("response_format")
@@ -264,7 +265,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 stack.extend(reversed(node))
 
     @classmethod
-    def _extra_inspection_sources(cls, data: Mapping[str, Any]) -> Sequence[tuple[str, Sequence[Mapping[str, str]]]]:
+    def _extra_inspection_sources(cls, data: Mapping[str, object]) -> Sequence[tuple[str, Sequence[Mapping[str, str]]]]:
         """Text the proxy forwards to the model outside chat ``messages``:
         Responses-API ``input`` and ``instructions``, legacy completion
         ``prompt`` and tool/function/``response_format`` schema strings. Returned
@@ -305,6 +306,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             f"{self.api_base}/fw/v1/analyze",
             headers=headers,
             json={"messages": self._inspection_messages(data)},
+            timeout=self.timeout,
         )
         response.raise_for_status()
         res: Final[_CatoAnalyzeResponse] = response.json()
@@ -336,7 +338,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         )
         raise HTTPException(status_code=400, detail=detection_message)
 
-    def _anonymize_request(self, res: Any, data: dict) -> dict:
+    def _anonymize_request(self, res: _CatoAnalyzeResponse, data: dict) -> dict:
         verbose_proxy_logger.info("Cato: anonymize action")
         redacted_chat: Final = res.get("redacted_chat")
         if not redacted_chat:
@@ -379,7 +381,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return data
 
     @classmethod
-    def _apply_extra_redaction(cls, data: dict, field: str, redacted: list) -> bool:
+    def _apply_extra_redaction(cls, data: dict, field: str, redacted: Sequence[Mapping[str, object]]) -> bool:
         if field == "input":
             input_only: Final = {"input": data["input"]}
             if not redacted:
@@ -400,7 +402,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return True
 
     @classmethod
-    def _apply_schema_string_redaction(cls, data: dict, redacted: list) -> None:
+    def _apply_schema_string_redaction(cls, data: dict, redacted: Sequence[Mapping[str, object]]) -> None:
         redactions: Final = iter(redacted)
         for container, key in cls._iter_schema_string_refs(data):
             replacement = next(redactions, None)
@@ -408,7 +410,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 container[key] = replacement["content"]
 
     @staticmethod
-    def _apply_prompt_redaction(data: dict, redacted: list) -> None:
+    def _apply_prompt_redaction(data: dict, redacted: Sequence[Mapping[str, object]]) -> None:
         contents: Final = [m.get("content") for m in redacted if isinstance(m, dict)]
         prompt: Final = data.get("prompt")
         if isinstance(prompt, str):
@@ -445,6 +447,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 litellm_call_id=call_id,
             ),
             json={"messages": inspection_messages + [{"role": "assistant", "content": output}]},
+            timeout=self.timeout,
         )
         response.raise_for_status()
         res: Final[_CatoAnalyzeResponse] = response.json()

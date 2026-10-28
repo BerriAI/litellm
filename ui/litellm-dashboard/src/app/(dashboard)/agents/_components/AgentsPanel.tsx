@@ -1,3 +1,4 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useState, useEffect } from "react";
 import { Info, Plus } from "lucide-react";
 import { getAgentsList, deleteAgentCall } from "@/components/networking";
@@ -31,6 +32,7 @@ interface AgentsResponse {
 }
 
 const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams }) => {
+  const term = useTerminology();
   const [agentsList, setAgentsList] = useState<Agent[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -140,15 +142,16 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
       <div className="flex flex-col gap-2 mb-4">
         <h1 className="text-2xl font-bold">Agents</h1>
         <p className="text-sm text-muted-foreground">
-          List of A2A-spec agents that are available to be used in your organization. Go to AI Hub, to make agents
-          public.
+          {term(
+            "List of A2A-spec agents that are available to be used in your organization. Go to AI Hub, to make agents public.",
+          )}
         </p>
         <Alert className="mb-3">
           <Info />
-          <AlertTitle>Why do agents need keys?</AlertTitle>
+          <AlertTitle>How do agents authenticate?</AlertTitle>
           <AlertDescription>
-            Keys scope access to an agent and allow it to call MCP tools. Assign a key when creating an agent or from
-            the Virtual Keys page.
+            Agents can authenticate with a virtual key or a trusted identity provider using JWT. Configure an identity
+            binding when adding or editing an agent. JWT authentication does not require a virtual key.
           </AlertDescription>
         </Alert>
         {isAdmin && (
