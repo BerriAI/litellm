@@ -1,5 +1,5 @@
 import builtins
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 from os import PathLike
 from typing import IO, TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeAlias, Union
@@ -1482,15 +1482,42 @@ One of: completed, failed, in_progress, cancelled, queued, or incomplete.
 """
 
 
-_NULL_DROPPED_OUTPUT_ITEM_KEYS: Final = frozenset(
-    (
-        ("reasoning", "status"),
-        ("reasoning", "content"),
-        ("reasoning", "encrypted_content"),
-        ("tool_search_call", "created_by"),
-        ("tool_search_output", "created_by"),
-    )
-)
+_NULL_DROPPED_REASONING_ITEM_KEYS: Final = frozenset(("status", "content", "encrypted_content"))
+
+
+def _as_json_object(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _as_json_array(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, list) else None
+
+
+def _drops_when_null(item_type: object, key: object) -> bool:
+    return key == "created_by" or (item_type == "reasoning" and key in _NULL_DROPPED_REASONING_ITEM_KEYS)
+
+
+def _without_null_created_by(entry: object) -> object:
+    entry_object: Final = _as_json_object(entry)
+    if entry_object is None:
+        return entry
+    return {k: v for k, v in entry_object.items() if k != "created_by" or v is not None}
+
+
+def _replayable_output_value(item_type: object, key: object, value: object) -> object:
+    entries: Final = _as_json_array(value)
+    if item_type != "shell_call_output" or key != "output" or entries is None:
+        return value
+    return [_without_null_created_by(entry) for entry in entries]
+
+
+def _replayable_output_item(item: Mapping[object, object]) -> Mapping[object, object]:
+    item_type: Final = item.get("type")
+    return {
+        k: _replayable_output_value(item_type, k, v)
+        for k, v in item.items()
+        if v is not None or not _drops_when_null(item_type, k)
+    }
 
 
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
@@ -1565,34 +1592,17 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
 
     @field_serializer("output", mode="wrap")
     @classmethod
-    def _serialize_output_filter_reasoning_nulls(cls, value, handler, _info):
+    def _serialize_output_filter_reasoning_nulls(cls, value, handler: SerializerFunctionWrapHandler, _info):
         """
-        Filter null status/content/encrypted_content from reasoning output items.
-
-        Mirrors the request-side filtering in
-        OpenAIResponsesAPIConfig._handle_reasoning_item() which filters these
-        same fields before sending requests to providers.
-
-        Without this, reasoning items include null fields that cause SDK errors
-        (e.g., the OpenAI C# SDK crashes on status=null).
-
-        Issue: https://github.com/BerriAI/litellm/issues/16824
+        Drop the nulls the SDK types default in but providers never send: created_by on every output item
+        (OpenAI rejects it when `output` is replayed as `input`), and status/content/encrypted_content on
+        reasoning items (the OpenAI C# SDK crashes on status=null, issue #16824).
         """
-        serialized: Final = handler(value)
-        if not isinstance(serialized, list):
+        serialized: Final[object] = handler(value)
+        items: Final = _as_json_array(serialized)
+        if items is None:
             return serialized
-        return [
-            (
-                {
-                    k: v
-                    for k, v in item.items()
-                    if v is not None or (item.get("type"), k) not in _NULL_DROPPED_OUTPUT_ITEM_KEYS
-                }
-                if isinstance(item, dict)
-                else item
-            )
-            for item in serialized
-        ]
+        return [_replayable_output_item(obj) if (obj := _as_json_object(item)) is not None else item for item in items]
 
     @property
     def output_text(self) -> str:

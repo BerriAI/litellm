@@ -494,6 +494,74 @@ class TestResponsesAPIReasoningNullFields:
         assert dumped["instructions"] is None
 
 
+_OUTPUT_ITEMS_OPENAI_SENDS_WITHOUT_CREATED_BY: Final = (
+    {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"},
+    {
+        "id": "apc_1",
+        "type": "apply_patch_call",
+        "call_id": "call_1",
+        "status": "completed",
+        "operation": {"type": "delete_file", "path": "a.py"},
+    },
+    {"id": "apco_1", "type": "apply_patch_call_output", "call_id": "call_1", "status": "completed"},
+    {
+        "id": "sh_1",
+        "type": "shell_call",
+        "call_id": "call_2",
+        "status": "completed",
+        "action": {"commands": ["ls"], "max_output_length": None, "timeout_ms": None},
+    },
+    {
+        "id": "sho_1",
+        "type": "shell_call_output",
+        "call_id": "call_2",
+        "status": "completed",
+        "output": [{"stdout": "a.py", "stderr": "", "outcome": {"type": "exit", "exit_code": 0}}],
+    },
+    {"id": "tsc_1", "type": "tool_search_call", "arguments": {}, "execution": "server", "status": "completed"},
+)
+
+
+def _created_by_paths(value: object, path: str = "") -> tuple[str, ...]:
+    if isinstance(value, dict):
+        return tuple(
+            found
+            for key, child in value.items()
+            for found in ((f"{path}.{key}",) if key == "created_by" else _created_by_paths(child, f"{path}.{key}"))
+        )
+    if isinstance(value, list):
+        return tuple(found for index, child in enumerate(value) for found in _created_by_paths(child, f"{path}[{index}]"))
+    return ()
+
+
+@pytest.mark.parametrize("item", _OUTPUT_ITEMS_OPENAI_SENDS_WITHOUT_CREATED_BY, ids=lambda item: item["type"])
+def test_output_item_replays_without_a_created_by_the_provider_never_sent(item):
+    response: Final = ResponsesAPIResponse.model_validate(
+        {"id": "resp_1", "created_at": 1741476542, "object": "response", "status": "completed", "output": [item]}
+    )
+
+    assert _created_by_paths(json.loads(response.model_dump_json())["output"]) == ()
+    assert _created_by_paths(response.model_dump()["output"]) == ()
+
+
+def test_output_item_keeps_a_created_by_the_provider_sent():
+    item: Final = {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": "user_1"}
+    response: Final = ResponsesAPIResponse.model_validate(
+        {"id": "resp_1", "created_at": 1741476542, "object": "response", "status": "completed", "output": [item]}
+    )
+
+    assert json.loads(response.model_dump_json())["output"] == [item]
+
+
+def test_shell_call_output_the_sdk_cannot_type_serializes_as_sent():
+    item: Final = {"id": "sho_1", "type": "shell_call_output", "output": ["a.py"]}
+    response: Final = ResponsesAPIResponse.model_validate(
+        {"id": "resp_1", "created_at": 1741476542, "object": "response", "status": "completed", "output": [item]}
+    )
+
+    assert json.loads(response.model_dump_json())["output"] == [item]
+
+
 def test_normalize_fine_tuning_job_dict_maps_azure_pending():
     from litellm.llms.openai.fine_tuning.handler import _normalize_fine_tuning_job_dict
 
