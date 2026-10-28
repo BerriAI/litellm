@@ -5,15 +5,19 @@ from types import MappingProxyType, UnionType
 from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 
 import orjson
-from fastapi import Request, UploadFile, status
+from fastapi import HTTPException, Request, UploadFile, status
+from pydantic import TypeAdapter, ValidationError
 from starlette._utils import get_route_path
-from starlette.requests import HTTPConnection
+from starlette.datastructures import FormData
+from starlette.requests import ClientDisconnect, HTTPConnection
 from typing_extensions import NotRequired, ReadOnly, Required, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
+    LITELLM_CLIENT_DISCONNECT_DETAIL,
+    LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
 )
 from litellm.integrations.otel.runtime import phase_event
@@ -29,6 +33,8 @@ _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-
 _BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobuf", "application/protobuf"})
 
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
+_DECODED_JSON: Final = TypeAdapter(object)
+_JSON_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
 
 
 def resolve_inference_model(
@@ -159,13 +165,11 @@ def coerce_numeric_form_fields(
     }
 
 
-def _parse_binary_body(body: bytes) -> dict:
+def _parse_binary_body(body: bytes) -> dict[str, object]:
     """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
     try:
-        parsed: Final = orjson.loads(body)
-        if isinstance(parsed, dict):
-            return parsed
-    except orjson.JSONDecodeError:
+        return dict(_JSON_REQUEST_BODY.validate_python(orjson.loads(body)))
+    except (orjson.JSONDecodeError, ValidationError):
         pass
     return {}
 
@@ -189,6 +193,46 @@ def is_otlp_trace_request(request: HTTPConnection) -> bool:
     return request.scope.get("method") == "POST" and get_route_path(request.scope) in {"/v1/traces", "/v1/logs"}
 
 
+def _parse_form_metadata(raw_metadata: str) -> object:
+    """The JSON body path rejects a lone surrogate escape (``"\\ud800"``) with a
+    400 because no provider or database can encode it. ``json.loads`` accepts
+    the escape, so the multipart ``metadata`` field gets the same check."""
+    parsed: Final[object] = json.loads(raw_metadata)
+    try:
+        json.dumps(parsed, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as e:
+        raise ProxyException(
+            message=f"Invalid form payload: metadata {e}",
+            type="invalid_request_error",
+            param="metadata",
+            code=status.HTTP_400_BAD_REQUEST,
+        ) from e
+    return parsed
+
+
+async def _read_form_data(request: Request) -> FormData:
+    try:
+        form_data: Final = await request.form()
+        _mark_body_received(_declared_content_length(request.headers))
+    except ClientDisconnect:
+        raise
+    except Exception as e:
+        # ``request.form()`` raises on malformed multipart (missing
+        # boundary, malformed chunk encoding, …). Surface as 400 so
+        # the auth-time pre-read does not silently cache ``{}`` while
+        # a later raw-body re-read sees the original payload —
+        # banned-param checks must see the same body the handler
+        # acts on.
+        verbose_proxy_logger.error("Invalid form payload: %s", e)
+        raise ProxyException(
+            message=f"Invalid form payload: {e}",
+            type="invalid_request_error",
+            param="request_body",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    return form_data
+
+
 async def read_request_body(request: Request | None) -> dict:
     """
     Safely read the request body and parse it as JSON.
@@ -199,10 +243,9 @@ async def read_request_body(request: Request | None) -> dict:
     Returns:
     - dict: Parsed request data as a dictionary or an empty dictionary if parsing fails
     """
+    if request is None:
+        return {}
     try:
-        if request is None:
-            return {}
-
         if is_otlp_trace_request(request):
             return {}
 
@@ -219,26 +262,13 @@ async def read_request_body(request: Request | None) -> dict:
             _mark_body_received(len(binary_body))
             parsed_body = _parse_binary_body(binary_body)
         elif _is_form_content_type(content_type):
-            try:
-                form_data: Final = await request.form()
-                _mark_body_received(_declared_content_length(request.headers))
-            except Exception as e:
-                # ``request.form()`` raises on malformed multipart (missing
-                # boundary, malformed chunk encoding, …). Surface as 400 so
-                # the auth-time pre-read does not silently cache ``{}`` while
-                # a later raw-body re-read sees the original payload —
-                # banned-param checks must see the same body the handler
-                # acts on.
-                verbose_proxy_logger.error("Invalid form payload: %s", e)
-                raise ProxyException(
-                    message=f"Invalid form payload: {e}",
-                    type="invalid_request_error",
-                    param="request_body",
-                    code=status.HTTP_400_BAD_REQUEST,
-                )
-            parsed_body = dict(form_data)
-            if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
-                parsed_body["metadata"] = json.loads(parsed_body["metadata"])
+            form_body: Final = dict(await _read_form_data(request))
+            raw_metadata: Final = form_body.get("metadata")
+            parsed_body = (
+                {**form_body, "metadata": _parse_form_metadata(raw_metadata)}
+                if isinstance(raw_metadata, str)
+                else form_body
+            )
         else:
             # Read the request body
             body: Final = await request.body()
@@ -249,7 +279,7 @@ async def read_request_body(request: Request | None) -> dict:
                 parsed_body = {}
             else:
                 try:
-                    parsed_body = orjson.loads(body)
+                    parsed_body = dict(_JSON_REQUEST_BODY.validate_python(orjson.loads(body)))
                 except orjson.JSONDecodeError as e:
                     # The surrogate-repair fallback below runs two full-body re.sub
                     # passes, which block the event loop on multi-MB malformed bodies.
@@ -275,8 +305,9 @@ async def read_request_body(request: Request | None) -> dict:
                     body_str = re.sub(r"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]", "", body_str)
 
                     try:
-                        parsed_body = json.loads(body_str)
-                        json.dumps(parsed_body, ensure_ascii=False).encode("utf-8")
+                        decoded_body: Final = _DECODED_JSON.validate_python(json.loads(body_str))
+                        json.dumps(decoded_body, ensure_ascii=False).encode("utf-8")
+                        parsed_body = dict(_JSON_REQUEST_BODY.validate_python(decoded_body))
                     except (json.JSONDecodeError, UnicodeEncodeError):
                         # json.loads accepts lone surrogate escapes that no provider can encode
                         verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
@@ -291,10 +322,49 @@ async def read_request_body(request: Request | None) -> dict:
         safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
         return parsed_body
 
+    except ValidationError as e:
+        from fastapi.routing import APIRoute
+
+        from litellm.proxy.auth.auth_utils import (
+            request_dispatched_to_pass_through_endpoint,
+            request_dispatched_to_provider_pass_through,
+        )
+        from litellm.proxy.lens.buffering import LensRoute
+
+        route: Final[object] = request.scope.get("route")
+        if (
+            request_dispatched_to_pass_through_endpoint(request)
+            or request_dispatched_to_provider_pass_through(request)
+            or isinstance(route, LensRoute)
+            or (
+                isinstance(route, APIRoute)
+                and route.body_field is not None
+                and not route.body_field.field_info.is_required()
+                and (await request.body()).strip() == b"null"
+            )
+        ):
+            return {}
+        raise ProxyException(
+            message="Invalid JSON payload: expected an object",
+            type="invalid_request_error",
+            param="request_body",
+            code=status.HTTP_400_BAD_REQUEST,
+        ) from e
     except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException) as e:
         # Re-raise ProxyException as-is
         verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
         raise
+    except ClientDisconnect as e:
+        from litellm.proxy.proxy_server import (
+            _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; the Starlette HTTPException handler does not stamp the OTel server span opened at auth time, so the body reader must before it aborts
+        )
+
+        verbose_proxy_logger.info("Client disconnected before the request body was fully received")
+        disconnected: Final = HTTPException(
+            status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail=LITELLM_CLIENT_DISCONNECT_DETAIL
+        )
+        _close_dangling_otel_server_span(request, LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, exc=disconnected)
+        raise disconnected from e
     except Exception as e:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception("Unexpected error reading request body - %s", e)
@@ -370,6 +440,16 @@ def safe_set_request_parsed_body(
 _safe_set_request_parsed_body: Final = safe_set_request_parsed_body
 
 
+def detach_request_parsed_body(
+    request: Request, request_data: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: the client's body copy, which the base tag merges write into
+    client_body: Final = dict(request_data)
+    cached: Final[object] = request.scope.get("parsed_body")
+    if isinstance(cached, tuple) and cached[1] is request_data:
+        request.scope["parsed_body"] = (cached[0], client_body)  # rebind-ok: cache holds the client copy
+    return client_body
+
+
 def rewrite_request_model(
     request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
     request: Request | None,
@@ -382,7 +462,9 @@ def rewrite_request_model(
     if request is None:
         return
     cached_body: Final = _safe_get_request_parsed_body(request=request)
-    body: Final = {**cached_body, "model": model} if cached_body is not None else request_data
+    body: Final = (
+        {**_JSON_REQUEST_BODY.validate_python(cached_body), "model": model} if cached_body is not None else request_data
+    )
     safe_set_request_parsed_body(request=request, parsed_body=body)
     request._json = body  # pyright: ignore[reportPrivateUsage]  # Starlette JSON cache
     request._body = orjson.dumps(body)  # pyright: ignore[reportPrivateUsage]  # Starlette body cache
@@ -545,7 +627,7 @@ async def convert_upload_files_to_file_data(
     return data
 
 
-async def get_request_body(request: Request) -> dict[str, Any]:
+async def get_request_body(request: Request) -> dict[str, object]:
     """
     Read the request body and parse it as JSON.
     """
@@ -665,7 +747,7 @@ def get_tags_from_request_body(request_body: Mapping[str, object]) -> list[str]:
     if isinstance(metadata, str):
         from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
-        parsed: Final[object] = safe_json_loads(metadata)
+        parsed: Final[object] = _DECODED_JSON.validate_python(safe_json_loads(metadata))
         metadata = parsed if isinstance(parsed, dict) else {}
     elif not isinstance(metadata, dict):
         metadata = {}

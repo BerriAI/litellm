@@ -33,6 +33,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { credentialOptions } from "@/components/shared/credentialOptions";
 
 const EMBEDDING_MODEL_RENAME_PROVIDERS = new Set(["milvus", "valkey", "mongodb"]);
 
@@ -159,11 +161,6 @@ const EMPTY_VALUES: VectorStoreFormValues = {
   valkey_embedding_field: "embedding",
 };
 
-interface CredentialOption {
-  label: string;
-  value: string | null;
-}
-
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
     {label}
@@ -224,14 +221,6 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
 
     loadModels();
   }, [accessToken]);
-
-  const credentialOptions: CredentialOption[] = [
-    { value: null, label: "None" },
-    ...credentials.map((credential) => ({
-      value: credential.credential_name,
-      label: credential.credential_name,
-    })),
-  ];
 
   const makeProviderChangeHandler = (onChange: (provider: string) => void) => (provider: string | null) => {
     if (provider === null) return;
@@ -495,35 +484,14 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                   "Optionally select API provider credentials for this vector store eg. Bedrock API KEY",
                 )}
               >
-                {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                  <Combobox
-                    items={credentialOptions}
-                    value={credentialOptions.find((option) => option.value === value) ?? null}
-                    onValueChange={(option: CredentialOption | null) => onChange(option ? option.value : undefined)}
-                    itemToStringLabel={(option: CredentialOption) => option.label}
-                    isItemEqualToValue={(option: CredentialOption, selected: CredentialOption) =>
-                      option.value === selected.value
-                    }
-                  >
-                    <ComboboxInput
-                      id={id}
-                      aria-invalid={ariaInvalid}
-                      aria-describedby={ariaDescribedBy}
-                      placeholder="Select or search for existing credentials"
-                      className="w-full"
-                      showClear={value !== undefined}
-                    />
-                    <ComboboxContent>
-                      <ComboboxEmpty>No matching credentials</ComboboxEmpty>
-                      <ComboboxList>
-                        {(option: CredentialOption) => (
-                          <ComboboxItem key={option.label} value={option}>
-                            {option.label}
-                          </ComboboxItem>
-                        )}
-                      </ComboboxList>
-                    </ComboboxContent>
-                  </Combobox>
+                {({ id, value, onChange }) => (
+                  <SearchSelect
+                    inputId={id}
+                    placeholder="Select or search for existing credentials"
+                    options={credentialOptions(credentials)}
+                    value={value ?? ""}
+                    onValueChange={(selected) => onChange(selected === "" || selected === null ? undefined : selected)}
+                  />
                 )}
               </FormField>
 

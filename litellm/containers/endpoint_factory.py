@@ -36,6 +36,7 @@ RESPONSE_TYPES: Final[dict[str, type]] = {
     "DeleteContainerFileResponse": DeleteContainerFileResponse,
 }
 _ENDPOINTS_DOCUMENT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_ENDPOINT_RESULT: Final = TypeAdapter(object)
 
 
 def _load_endpoints_config() -> dict:
@@ -173,7 +174,7 @@ def create_async_endpoint_function(
             init_response: Final = await loop.run_in_executor(None, func_with_context)
 
             if asyncio.iscoroutine(init_response):
-                response = await init_response
+                response = _ENDPOINT_RESULT.validate_python(await init_response)
             else:
                 response = init_response
 

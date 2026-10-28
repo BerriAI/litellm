@@ -1,7 +1,14 @@
 import { test, expect } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { CHAT_MODEL_A, CHAT_MODEL_B, MOCK_RESPONSE_TEXT, createVirtualKey } from "../../helpers/traffic";
-import { keySourceSelect, onlyVisible, openPlayground, selectModel, sendMessage } from "../../helpers/playground";
+import {
+  keySourceSelect,
+  openPlayground,
+  openRequestSettings,
+  selectModel,
+  sendMessage,
+  enterVirtualKey,
+} from "../../helpers/playground";
 
 /**
  * The one flow that exercises the dashboard's own LLM call path rather than an admin CRUD endpoint,
@@ -14,8 +21,9 @@ test.describe("Playground", () => {
     test(`chats with ${model} using the current UI session`, async ({ page }) => {
       await openPlayground(page);
 
-      // "Current UI Session" is the default: the logged-in admin's key, nothing pasted.
-      await expect(keySourceSelect(page)).toContainText("Current UI Session");
+      await openRequestSettings(page);
+      await expect(keySourceSelect(page)).toContainText("Current UI session");
+      await page.keyboard.press("Escape");
 
       await selectModel(page, model);
       const prompt = `playground ping for ${model}`;
@@ -34,14 +42,7 @@ test.describe("Playground", () => {
 
     await openPlayground(page);
 
-    // Switch the source to "Virtual Key" and paste the key we just minted.
-    await keySourceSelect(page).click();
-    await onlyVisible(page.getByRole("option", { name: "Virtual Key" })).click({ timeout: 15_000 });
-
-    const keyInput = onlyVisible(page.getByPlaceholder("Enter custom Virtual Key"));
-    await expect(keyInput).toBeVisible({ timeout: 10_000 });
-    await keyInput.fill(key);
-
+    await enterVirtualKey(page, key);
     await selectModel(page, CHAT_MODEL_A);
     await sendMessage(page, "playground ping via virtual key");
 

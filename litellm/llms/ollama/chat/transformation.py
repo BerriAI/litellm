@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_images_from_message,
     extract_reasoning_content,
 )
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.ollama import (
@@ -218,14 +219,7 @@ class OllamaChatConfig(BaseConfig):
 
         Some providers need `model` in `api_base`
         """
-        if api_base is None:
-            api_base = "http://localhost:11434"
-        if api_base.endswith("/api/chat"):
-            url = api_base
-        else:
-            url = f"{api_base}/api/chat"
-
-        return url
+        return ensure_api_route(api_base or "http://localhost:11434", "api/chat")
 
     def transform_request(
         self,

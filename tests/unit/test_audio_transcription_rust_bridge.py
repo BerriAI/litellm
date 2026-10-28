@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from types import SimpleNamespace
 from typing import Final
 
 import pytest
 
 import litellm
 from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
-from litellm.rust_bridge import bindings, configuration
+from litellm.rust_bridge import configuration
+from litellm.rust_bridge._native import RustBridgeDeclined, RustUpstreamError
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.transcription.native import NATIVE_ATRANSCRIPTION, NATIVE_TRANSCRIPTION
 
@@ -28,18 +28,8 @@ TRANSCRIPTION_FIELDS: Final = frozenset(
 )
 
 
-class RustBridgeDeclined(Exception):
-    pass
-
-
-class RustUpstreamError(Exception):
-    pass
-
-
 @pytest.fixture(autouse=True)
 def isolated_bridge(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
-    native: Final = SimpleNamespace(RustBridgeDeclined=RustBridgeDeclined, RustUpstreamError=RustUpstreamError)
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
     monkeypatch.delenv("LITELLM_RUST", raising=False)
     configuration.reset_rust_configuration()
     yield
@@ -99,7 +89,7 @@ def test_dispatch_marshals_audio_into_rust_call() -> None:
         "timeout_seconds": 5.0,
     }
     assert response.text == "rust"
-    assert bridge.calls == (NativeCall(args=(), kwargs=expected, bound=expected),)
+    assert bridge.calls == (NativeCall(args=(), kwargs=expected, base={}),)
 
 
 @pytest.mark.parametrize("disable", ("process", "environment"))
@@ -164,7 +154,7 @@ async def test_async_dispatch_marshals_audio_into_rust_call() -> None:
         "timeout_seconds": 5.0,
     }
     assert response.text == "async rust"
-    assert bridge.calls == (NativeCall(args=(), kwargs=expected, bound=expected),)
+    assert bridge.calls == (NativeCall(args=(), kwargs=expected, base={}),)
 
 
 def test_bedrock_transcription_dispatches_to_rust_from_sdk_entrypoint() -> None:
@@ -175,8 +165,8 @@ def test_bedrock_transcription_dispatches_to_rust_from_sdk_entrypoint() -> None:
 
     assert isinstance(response, litellm.TranscriptionResponse)
     assert response.text == "rust"
-    assert bridge.calls[0].bound["model"] == MODEL.removeprefix("bedrock/")
-    assert frozenset(bridge.calls[0].bound) == TRANSCRIPTION_FIELDS
+    assert bridge.calls[0].resolved["model"] == MODEL.removeprefix("bedrock/")
+    assert frozenset(bridge.calls[0].resolved) == TRANSCRIPTION_FIELDS
 
 
 @pytest.mark.asyncio
@@ -187,8 +177,8 @@ async def test_bedrock_atranscription_dispatches_to_rust_from_sdk_entrypoint() -
     response: Final = await litellm.atranscription(model=MODEL, file=AUDIO_FILE)
 
     assert response.text == "async rust"
-    assert tuple(call.bound["model"] for call in bridge.calls) == (MODEL.removeprefix("bedrock/"),)
-    assert frozenset(bridge.calls[0].bound) == TRANSCRIPTION_FIELDS
+    assert tuple(call.resolved["model"] for call in bridge.calls) == (MODEL.removeprefix("bedrock/"),)
+    assert frozenset(bridge.calls[0].resolved) == TRANSCRIPTION_FIELDS
 
 
 @pytest.mark.asyncio

@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl } from "@/components/networking";
 import { MCPToolset } from "@/components/mcp_tools/types";
 import { copyToClipboard } from "@/utils/dataUtils";
 
@@ -30,7 +30,7 @@ export function displayToolName(serverPrefix: string | undefined, toolName: stri
 }
 
 export function toolsetEndpointUrl(toolsetName: string): string {
-  return `${getProxyBaseUrl()}/toolset/${toolsetName}/mcp`;
+  return `${getGatewayBaseUrl()}/toolset/${toolsetName}/mcp`;
 }
 
 interface ToolsetRowActionsProps {

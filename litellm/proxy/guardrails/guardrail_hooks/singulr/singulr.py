@@ -402,6 +402,9 @@ class SingulrGuardrail(CustomGuardrail):
             )
         return inputs
 
+    def supports_structured_messages(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
