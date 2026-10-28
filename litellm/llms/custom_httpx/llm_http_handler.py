@@ -365,10 +365,10 @@ class _SignedBodyKwargs(TypedDict, total=False):
     json: ReadOnly[dict[str, object]]
 
 
-def _is_json_content(response: httpx.Response) -> bool:
-    content_types: Final = httpx.Headers(response.headers).get_list("content-type")
-    media_types: Final = (value.split(";")[0].strip().lower() for value in content_types)
-    return "application/json" in media_types
+def _is_sized_json_body(response: httpx.Response) -> bool:
+    headers: Final = httpx.Headers(response.headers)
+    media_types: Final = (value.split(";")[0].strip().lower() for value in headers.get_list("content-type"))
+    return "content-length" in headers and "application/json" in media_types
 
 
 def _is_json_document(content: bytes) -> bool:
@@ -3035,7 +3035,7 @@ class BaseLLMHTTPHandler:
                     **body_kwargs,
                 )
                 if caller_requested_stream:
-                    if fake_stream is True or (_is_json_content(response) and _is_json_document(response.read())):
+                    if fake_stream is True or (_is_sized_json_body(response) and _is_json_document(response.read())):
                         return MockResponsesAPIStreamingIterator(
                             response=response,
                             model=model,
@@ -3239,7 +3239,7 @@ class BaseLLMHTTPHandler:
 
                 if caller_requested_stream:
                     if fake_stream is True or (
-                        _is_json_content(response) and _is_json_document(await response.aread())
+                        _is_sized_json_body(response) and _is_json_document(await response.aread())
                     ):
                         return MockResponsesAPIStreamingIterator(
                             response=response,

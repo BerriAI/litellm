@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import gzip
 import io
@@ -467,6 +468,51 @@ async def test_responses_stream_answered_with_one_json_response_replays_it_as_ev
     assert chunks[-1].type == "response.completed"
     assert chunks[-1].response.output_text == "Hello"
     assert chunks[-1].response.usage.total_tokens == 30
+
+
+class _GatedStream(httpx.AsyncByteStream):
+    def __init__(self, first: bytes, rest: bytes, gate: asyncio.Event) -> None:
+        self._first = first
+        self._rest = rest
+        self._gate = gate
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._first
+        await self._gate.wait()
+        yield self._rest
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_responses_stream_labeled_json_without_a_length_yields_events_before_it_ends() -> None:
+    created: Final = {
+        "type": "response.created",
+        "sequence_number": 0,
+        "response": {**response_payload(), "status": "in_progress", "output": [], "usage": None},
+    }
+    completed: Final = {"type": "response.completed", "sequence_number": 1, "response": response_payload()}
+    gate: Final = asyncio.Event()
+    respx.post(f"{BASE}/api/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            stream=_GatedStream(
+                f"event: response.created\ndata: {json.dumps(created)}\n\n".encode(),
+                f"event: response.completed\ndata: {json.dumps(completed)}\n\n".encode(),
+                gate,
+            ),
+        )
+    )
+
+    stream: Final = await asyncio.wait_for(
+        litellm.aresponses(model=f"bigmodel/{MODEL}", input="Hello", stream=True), timeout=10
+    )
+    first: Final = await asyncio.wait_for(anext(stream), timeout=10)
+    gate.set()
+    rest: Final = tuple([chunk async for chunk in stream])
+    assert first.type == "response.created"
+    assert rest[-1].type == "response.completed"
+    assert rest[-1].response.output_text == "Hello"
 
 
 @pytest.mark.parametrize("event_type", ("response.failed", "error"))
