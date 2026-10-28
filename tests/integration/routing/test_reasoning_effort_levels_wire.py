@@ -45,6 +45,8 @@ from integration.routing._reasoning_effort_levels_support import (
 )
 from pydantic import JsonValue
 
+from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+
 CHAT: Final = "/v1/chat/completions"
 MESSAGES: Final = "/v1/messages"
 RESPONSES: Final = "/v1/responses"
@@ -141,7 +143,7 @@ def _invoke_chat(effort: str, thinking: Mapping[str, JsonValue], betas: tuple[st
         "messages": [{"role": "user", "content": [{"type": "text", "text": prompt(marker)}]}],
         "thinking": dict(thinking),
         "output_config": {"effort": effort},
-        "max_tokens": 4096,
+        "max_tokens": DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
         "anthropic_version": "bedrock-2023-05-31",
         "anthropic_beta": list(betas),
     }
