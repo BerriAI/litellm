@@ -995,6 +995,7 @@ def test_openai_gpt5_converse_rejects_effort_level_disabled_in_model_map(
     assert "thinking" not in additional_request_params
     dropped: Final = [r.getMessage() for r in caplog.records if "Dropping reasoning_effort='minimal'" in r.getMessage()]
     assert len(dropped) == 1 and model in dropped[0]
+    assert "model_info" not in dropped[0]
 
 
 @pytest.mark.parametrize(

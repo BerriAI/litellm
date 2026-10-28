@@ -34,7 +34,7 @@ inference profile, so the model is named ``us.openai.gpt-5.6-sol`` or
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable, Collection, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import Final
 
@@ -52,11 +52,11 @@ from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools,
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX,
+    DROP_DISABLED_REASONING_EFFORT_WARNING,
     BedrockError,
     bedrock_reasoning_effort_disabled,
     bedrock_supports_openai_responses,
 )
-from litellm.llms.openai.chat.gpt_reasoning_transformation import DROP_REFUSED_REASONING_EFFORT_WARNING
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
@@ -158,13 +158,13 @@ def inline_remote_image_urls(
 
 
 def _without_disabled_reasoning_effort(
-    params: Mapping[str, object], model: str, drop_params: bool, declared_reasoning_efforts: Collection[str]
+    params: Mapping[str, object], model: str, drop_params: bool
 ) -> dict[str, object]:  # mutable-ok: becomes the map_openai_params return value
     reasoning: Final = params.get("reasoning")
     effort: Final = reasoning.get("effort") if isinstance(reasoning, Mapping) else None
     if not isinstance(reasoning, Mapping) or not isinstance(effort, str):
         return dict(params)
-    if effort in declared_reasoning_efforts or not bedrock_reasoning_effort_disabled(model=model, effort=effort):
+    if not bedrock_reasoning_effort_disabled(model=model, effort=effort):
         return dict(params)
     if not (drop_params or litellm.drop_params):
         raise litellm.UnsupportedParamsError(
@@ -174,7 +174,7 @@ def _without_disabled_reasoning_effort(
             ),
             status_code=400,
         )
-    verbose_logger.warning(DROP_REFUSED_REASONING_EFFORT_WARNING, "reasoning.effort", effort, model, model)
+    verbose_logger.warning(DROP_DISABLED_REASONING_EFFORT_WARNING, "reasoning.effort", effort, model)
     rest: Final = {key: value for key, value in reasoning.items() if key != "effort"}
     without_reasoning: Final = {key: value for key, value in params.items() if key != "reasoning"}
     return {**without_reasoning, "reasoning": rest} if rest else without_reasoning
@@ -282,16 +282,14 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
             fake_stream=fake_stream,
         )
 
-    def map_openai_params_for_deployment(
+    def map_openai_params(
         self,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-        *,
-        declared_reasoning_efforts: Collection[str],
-    ) -> Mapping[str, object]:
-        mapped: Final = super().map_openai_params_for_deployment(
-            response_api_optional_params, model, drop_params, declared_reasoning_efforts=declared_reasoning_efforts
+    ) -> dict:  # mutable-ok: signature fixed by the override contract
+        mapped: Final = super().map_openai_params(
+            response_api_optional_params=response_api_optional_params, model=model, drop_params=drop_params
         )
         unsupported: Final = tuple(sorted(BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS & mapped.keys()))
         if unsupported:
@@ -300,7 +298,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
                 unsupported,
             )
         supported: Final[dict[str, object]] = {key: value for key, value in mapped.items() if key not in unsupported}
-        params: Final = _without_disabled_reasoning_effort(supported, model, drop_params, declared_reasoning_efforts)
+        params: Final = _without_disabled_reasoning_effort(supported, model, drop_params)
         tools: Final = params.get("tools")
         if not isinstance(tools, list):
             return params

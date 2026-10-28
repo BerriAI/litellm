@@ -1260,6 +1260,12 @@ def _mantle_api_base_from_env() -> str | None:
     return next((base[: -len(suffix)] for suffix in _MANTLE_OPENAI_BASE_SUFFIXES if base.endswith(suffix)), base)
 
 
+DROP_DISABLED_REASONING_EFFORT_WARNING: Final = (
+    "Dropping %s=%r for Bedrock model=%r (drop_params=True) because the model map marks that level unsupported. "
+    "Send a level the model supports."
+)
+
+
 def bedrock_reasoning_effort_disabled(model: str, effort: str) -> bool:
     from litellm.utils import is_explicitly_disabled_factory
 

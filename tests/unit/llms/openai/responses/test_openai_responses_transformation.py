@@ -2410,6 +2410,7 @@ class TestResponsesSurfaceSharesTheEffortRule:
             fragment in drop_warnings[0]
             for fragment in (repr(refused), "gpt-6.1-sol", "model_info.reasoning_effort_levels")
         )
+        assert "model_info.base_model" not in drop_warnings[0]
 
     def test_dropping_reasoning_for_a_model_without_supports_reasoning_logs_one_warning(
         self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
@@ -2438,6 +2439,31 @@ class TestResponsesSurfaceSharesTheEffortRule:
 
         assert "reasoning" not in mapped
         assert not [record for record in caplog.records if "Dropping" in record.getMessage()]
+
+    def test_turning_reasoning_off_warns_when_only_custom_pricing_describes_the_model(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        litellm.register_model(
+            {
+                "pricing-only-test-model": {
+                    "litellm_provider": "openai",
+                    "mode": "responses",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                }
+            }
+        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "none"}},
+                model="pricing-only-test-model",
+                drop_params=True,
+            )
+
+        assert "reasoning" not in mapped
+        drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+        assert len(drop_warnings) == 1
+        assert all(fragment in drop_warnings[0] for fragment in ("'none'", "pricing-only-test-model"))
 
     def test_a_forwarded_effort_logs_no_drop_warning(
         self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture

@@ -2167,3 +2167,58 @@ def test_reasoning_drop_warns_unless_a_mapped_non_reasoning_model_was_asked_for_
 
     assert not set(reasoning_kwargs) & set(optional_params)
     assert any("Dropping" in record.getMessage() for record in caplog.records) is warns
+
+
+@pytest.mark.parametrize("reasoning_kwargs", [{"reasoning_effort": "none"}, {"thinking": {"type": "disabled"}}])
+def test_turning_reasoning_off_warns_when_only_custom_pricing_describes_the_model(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture, reasoning_kwargs: dict[str, object]
+) -> None:
+    litellm.register_model(
+        {
+            "azure/pricing-only-test-deployment": {
+                "litellm_provider": "azure",
+                "mode": "chat",
+                "input_cost_per_token": 0.000001,
+                "output_cost_per_token": 0.000002,
+            }
+        }
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="pricing-only-test-deployment", custom_llm_provider="azure", drop_params=True, **reasoning_kwargs
+        )
+
+    assert not set(reasoning_kwargs) & set(optional_params)
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("pricing-only-test-deployment", "model_info.base_model"))
+
+
+def test_dropping_reasoning_for_a_catalog_reasoning_model_does_not_suggest_base_model(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    assert litellm.model_cost["azure/gpt-5.6-sol"].get("supports_reasoning") is True
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="gpt-5.6-sol", custom_llm_provider="azure", thinking={"type": "disabled"}, drop_params=True
+        )
+
+    assert "thinking" not in optional_params
+    drop_warnings: Final = [
+        record.getMessage() for record in caplog.records if "Dropping thinking" in record.getMessage()
+    ]
+    assert len(drop_warnings) == 1
+    assert "model_info.base_model" not in drop_warnings[0]
+
+
+def test_turning_reasoning_off_for_a_catalog_non_reasoning_model_drops_it_silently(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="gpt-4o", custom_llm_provider="azure", reasoning_effort="none", drop_params=True
+        )
+
+    assert "reasoning_effort" not in optional_params
+    assert not [record for record in caplog.records if "Dropping" in record.getMessage()]

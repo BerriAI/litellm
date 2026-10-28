@@ -22,7 +22,6 @@ import litellm
 from litellm.llms.bedrock_mantle.responses.transformation import (
     BedrockMantleResponsesAPIConfig,
 )
-from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -401,16 +400,6 @@ class TestBedrockMantleSamplingParams:
         assert ("top_p" in mapped) is survives
         assert ("temperature" in mapped) is survives
 
-    def test_effort_level_the_deployment_declares_is_forwarded(self, local_cost_map) -> None:
-        params: Final = ResponsesAPIRequestUtils.get_optional_params_responses_api(
-            model="openai.gpt-5.6-luna",
-            responses_api_provider_config=BedrockMantleResponsesAPIConfig(),
-            response_api_optional_params={"reasoning": {"effort": "minimal"}},
-            drop_params=False,
-            declared_reasoning_efforts=("minimal", "high"),
-        )
-        assert params["reasoning"] == {"effort": "minimal"}
-
     def test_top_p_without_drop_params_raises_only_while_reasoning_is_active(self, local_cost_map):
         with pytest.raises(litellm.UnsupportedParamsError):
             BedrockMantleResponsesAPIConfig().map_openai_params(
@@ -582,6 +571,30 @@ class TestBedrockMantleServiceTier:
             )
         assert mock_warning.call_count == 1
         assert "priority" in str(mock_warning.call_args)
+
+
+class TestBedrockMantleRefusedEffort:
+    def test_dropping_a_refused_effort_does_not_suggest_declaring_levels_mantle_ignores(
+        self, local_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        refused: Final = next(
+            level
+            for level in ("none", "minimal", "low")
+            if litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is False
+        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            params: Final = BedrockMantleResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": refused}},
+                model="openai.gpt-6.1-sol",
+                drop_params=True,
+            )
+
+        assert "reasoning" not in params
+        drop_warnings: Final = [
+            record.getMessage() for record in caplog.records if f"Dropping reasoning.effort={refused!r}" in record.getMessage()
+        ]
+        assert len(drop_warnings) == 1
+        assert "model_info" not in drop_warnings[0]
 
 
 class TestBedrockMantleReasoningSummary:

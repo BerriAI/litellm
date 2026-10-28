@@ -91,7 +91,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry, GetModelCostMap
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
@@ -4985,13 +4985,33 @@ def _turns_reasoning_off(value: object) -> bool:
             return False
 
 
-def _is_mapped_non_reasoning_model(model: str, custom_llm_provider: str | None) -> bool:
+def is_known_non_reasoning_model(model: str, custom_llm_provider: str | None) -> bool:
     info: Final = lookup_model_info_for_registration(model, custom_llm_provider)
-    return not isinstance(info, ModelInfoLookupMiss) and info.get("supports_reasoning") is not True
+    if isinstance(info, ModelInfoLookupMiss) or info.get("supports_reasoning") is True:
+        return False
+    return info.get("supports_reasoning") is False or info["key"] in GetModelCostMap.loaded_model_cost_map()
+
+
+def has_catalog_entry(model: str, custom_llm_provider: str | None) -> bool:
+    info: Final = lookup_model_info_for_registration(model, custom_llm_provider)
+    return not isinstance(info, ModelInfoLookupMiss) and info["key"] in GetModelCostMap.loaded_model_cost_map()
+
+
+def _dropped_reasoning_warning(model: str, custom_llm_provider: str | None) -> str:
+    return "".join(
+        (
+            "Dropping %s=%r for model=%r (drop_params=True) because %s does not support %s for it.",
+            (
+                ""
+                if has_catalog_entry(model, custom_llm_provider)
+                else " If the deployment is a reasoning model, set model_info.base_model to its underlying model."
+            ),
+        )
+    )
 
 
 def _warns_on_dropped_reasoning(value: object, model: str, custom_llm_provider: str | None) -> bool:
-    return not (_turns_reasoning_off(value) and _is_mapped_non_reasoning_model(model, custom_llm_provider))
+    return not (_turns_reasoning_off(value) and is_known_non_reasoning_model(model, custom_llm_provider))
 
 
 def get_optional_params(
@@ -5098,9 +5118,7 @@ def get_optional_params(
                         unsupported_params[reasoning_param], base_model or model, custom_llm_provider
                     ):
                         verbose_logger.warning(
-                            "Dropping %s=%r for model=%r (drop_params=True) because %s does not support %s for it. "
-                            "If the deployment is a reasoning model, set model_info.base_model to its underlying "
-                            "model.",
+                            _dropped_reasoning_warning(base_model or model, custom_llm_provider),
                             reasoning_param,
                             unsupported_params[reasoning_param],
                             model,

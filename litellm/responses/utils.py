@@ -134,7 +134,7 @@ def _provider_mapped_params(
     if (
         declared_reasoning_efforts
         and isinstance(config, OpenAIResponsesAPIConfig)
-        and type(config).map_openai_params is OpenAIResponsesAPIConfig.map_openai_params
+        and config.honors_declared_reasoning_efforts()
     ):
         return config.map_openai_params_for_deployment(
             params, model, drop_params, declared_reasoning_efforts=declared_reasoning_efforts

@@ -16,7 +16,6 @@ import litellm
 from litellm.llms.bedrock.common_utils import bedrock_supports_openai_responses
 from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig, _without_disabled_reasoning_effort
 from litellm.responses.file_search.emulated_handler import should_use_emulated_file_search
-from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -356,13 +355,14 @@ class TestDisabledReasoningEffort:
             r.getMessage() for r in caplog.records if "Dropping reasoning.effort='minimal'" in r.getMessage()
         ]
         assert len(dropped) == 1 and model in dropped[0]
+        assert "model_info" not in dropped[0]
 
     def test_bedrock_disabled_effort_drop_warns_on_its_own(
         self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
     ) -> None:
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
             params: Final = _without_disabled_reasoning_effort(
-                {"reasoning": {"effort": "minimal"}, "max_output_tokens": 64}, MODEL, True, ()
+                {"reasoning": {"effort": "minimal"}, "max_output_tokens": 64}, MODEL, True
             )
         assert params == {"max_output_tokens": 64}
         dropped: Final = [
@@ -381,17 +381,6 @@ class TestDisabledReasoningEffort:
             response_api_optional_params={"reasoning": {"effort": "low"}}, model=MODEL, drop_params=False
         )
         assert params == {"reasoning": {"effort": "low"}}
-
-    @pytest.mark.parametrize("model", ["us.openai.gpt-5.6-luna", MODEL])
-    def test_effort_level_the_deployment_declares_is_forwarded(self, model: str, local_model_cost_map: None) -> None:
-        params: Final = ResponsesAPIRequestUtils.get_optional_params_responses_api(
-            model=model,
-            responses_api_provider_config=_cfg(),
-            response_api_optional_params={"reasoning": {"effort": "minimal"}},
-            drop_params=False,
-            declared_reasoning_efforts=("minimal", "high"),
-        )
-        assert params["reasoning"] == {"effort": "minimal"}
 
 
 def _never_fetch(url: str) -> str:

@@ -26,8 +26,8 @@ from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_reasoning_transformation import (
-    DROP_REFUSED_REASONING_EFFORT_WARNING,
     is_gpt_reasoning_series_name,
+    refused_reasoning_effort_warning,
     unsupported_reasoning_effort_message,
 )
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
@@ -329,6 +329,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return info["key"] in _bundled_openai_reasoning_models()
 
     @staticmethod
+    def _is_known_non_reasoning_model(model: str) -> bool:
+        from litellm.utils import is_known_non_reasoning_model
+
+        return is_known_non_reasoning_model(model.split("/")[-1], LlmProviders.OPENAI.value)
+
+    @staticmethod
     def _requests_reasoning_effort(reasoning: object) -> bool:
         return OpenAIResponsesAPIConfig._requested_effort(reasoning) is not None
 
@@ -380,6 +386,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
         )
 
+    def honors_declared_reasoning_efforts(self) -> bool:
+        return type(self).map_openai_params is OpenAIResponsesAPIConfig.map_openai_params
+
     def map_openai_params_for_deployment(
         self,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
@@ -407,7 +416,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         ):
             if drop_params or litellm.drop_params:
                 dropped_reasoning: Final = params.pop("reasoning", None)
-                if self._requested_effort(dropped_reasoning) != "none":
+                if self._requested_effort(dropped_reasoning) != "none" or not self._is_known_non_reasoning_model(model):
                     verbose_logger.warning(DROP_UNSUPPORTED_REASONING_WARNING, dropped_reasoning, model)
             else:
                 raise litellm.UnsupportedParamsError(
@@ -435,7 +444,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                         status_code=400,
                     )
                 verbose_logger.warning(
-                    DROP_REFUSED_REASONING_EFFORT_WARNING, "reasoning.effort", requested_effort, model, lookup_name
+                    refused_reasoning_effort_warning(
+                        suggest_declared_levels=self.honors_declared_reasoning_efforts(), suggest_base_model=False
+                    ),
+                    "reasoning.effort",
+                    requested_effort,
+                    model,
+                    lookup_name,
                 )
                 remaining: Final = reasoning.copy()
                 remaining.pop("effort", None)
