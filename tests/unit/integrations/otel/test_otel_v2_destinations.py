@@ -3043,7 +3043,7 @@ class TestPresetDegradation:
             "https://otlp.nr-data.net",
         ]
 
-    def test_a_credentialless_newrelic_without_a_base_exporter_falls_back(self, monkeypatch):
+    def test_a_credentialless_newrelic_fallback_does_not_export_to_stdout(self, monkeypatch, capfd):
         from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
 
         monkeypatch.delenv("NEW_RELIC_LICENSE_KEY", raising=False)
@@ -3055,7 +3055,11 @@ class TestPresetDegradation:
         logger = in_fresh_context(_maybe_construct_otel_v2, "newrelic", [])
         is_otel_v2_enabled.cache_clear()
 
-        assert logger is None
+        assert logger is not None
+        capfd.readouterr()
+        emit(logger.tracer_provider)
+        logger.tracer_provider.force_flush()
+        assert capfd.readouterr().out == ""
 
     def test_an_explicit_console_exporter_keeps_a_credentialless_preset_on_v2(self, monkeypatch, capfd):
         """``OTEL_EXPORTER=console`` reads exactly like the placeholder ``_normalize``
@@ -3277,8 +3281,7 @@ ARIZE_DEST = OtelDestination(
 
 class _ExporterCapture:
     """Stands an in-memory exporter in for every exporter the provider builds, keyed
-    by the headers it would have sent (``None`` for the stdout placeholder), so a test
-    reads what each account received rather than which processors were wired."""
+    by the headers it would have sent, so tests read which destinations received spans."""
 
     def __init__(self) -> None:
         self.built: tuple[tuple[str | None, InMemorySpanExporter], ...] = ()
@@ -3348,8 +3351,7 @@ class TestArizeTenantOnly:
 
         assert capture.received() == {
             "space_id=space-operator,api_key=key-operator": ("chat gpt-4",),
-            None: ("chat gpt-4",),
-        }, "the operator's space, plus the stdout placeholder every credentialed preset keeps today"
+        }
 
     def test_the_standard_otlp_headers_still_reach_the_operators_space(self, monkeypatch):
         credential_less_arize(monkeypatch)
@@ -3362,8 +3364,7 @@ class TestArizeTenantOnly:
 
         assert capture.received() == {
             "space_id=space-operator,api_key=key-operator": ("chat gpt-4",),
-            None: ("chat gpt-4",),
-        }, "the operator's space, plus the stdout placeholder every credentialed preset keeps today"
+        }
 
     def test_a_credential_less_arize_still_delivers_a_team_destination(self, monkeypatch):
         from litellm.integrations.otel.plumbing.providers import attach_tenant_fan_out
