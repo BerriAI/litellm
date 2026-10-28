@@ -1058,6 +1058,29 @@ def test_each_check_kind_counts_exactly_the_rows_postgres_would_reject(scratch_d
     }
 
 
+_BACKFILL_THEN_SET_NOT_NULL: Final = (
+    'UPDATE "preflight_backfill" SET "c" = \'filled\' WHERE "c" IS NULL; -- data-migration-ok: small table\n'
+    'ALTER TABLE "preflight_backfill" ALTER COLUMN "c" SET NOT NULL;\n'
+)
+
+
+@requires_db
+def test_a_migration_that_fills_a_column_before_setting_it_not_null_passes_the_check_and_applies(
+    scratch_database: str,
+) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute('CREATE TABLE "preflight_backfill" ("id" INTEGER PRIMARY KEY, "c" TEXT)')
+        conn.execute("INSERT INTO \"preflight_backfill\" VALUES (1, NULL), (2, 'kept')")
+        checks: Final = migration_data_checks.checks_for_migration("probe", _BACKFILL_THEN_SET_NOT_NULL)
+        findings: Final = migration_data_checks.find_blockers(conn, "public", checks)
+        for statement in migration_data_checks.statements(_BACKFILL_THEN_SET_NOT_NULL):
+            conn.execute(statement)  # pyright: ignore[reportArgumentType]  # test SQL
+        values: Final = conn.execute('SELECT "c" FROM "preflight_backfill" ORDER BY "id"').fetchall()
+
+    assert findings == (), migration_data_checks.report(findings)
+    assert values == [("filled",), ("kept",)]
+
+
 @requires_db
 @pytest.mark.parametrize(
     ("index_columns", "s_value", "t_value", "longest_fitting_key", "described_as"),

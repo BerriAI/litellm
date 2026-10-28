@@ -8,6 +8,7 @@ from litellm_proxy_extras.migration_data_checks import (
     BlockedChange,
     Check,
     CouldNotVerify,
+    backfilled_columns,
     btree_max_entry_bytes,
     checks_for_index,
     checks_for_migration,
@@ -86,6 +87,53 @@ def test_comments_and_blank_statements_are_dropped_before_matching() -> None:
     assert _shape(checks_for_migration("x", migration_sql)) == _shape(
         checks_for_statement(API_KEY_INDEX_AS_SHIPPED_IN_V1_103_0, "x")
     )
+
+
+BACKFILL_THEN_SET_NOT_NULL: Final = (
+    'UPDATE "T" SET "c" = \'x\' WHERE "c" IS NULL; -- data-migration-ok: bounded by the rows of a small table\n'
+    'ALTER TABLE "T" ALTER COLUMN "c" SET NOT NULL;\n'
+)
+
+
+def test_a_column_an_earlier_update_in_the_migration_fills_gets_no_nulls_check() -> None:
+    assert _shape(checks_for_migration("x", BACKFILL_THEN_SET_NOT_NULL)) == ()
+
+
+@pytest.mark.parametrize(
+    "migration_sql",
+    (
+        'ALTER TABLE "T" ALTER COLUMN "c" SET NOT NULL; UPDATE "T" SET "c" = \'x\' WHERE "c" IS NULL;',
+        'UPDATE "T" SET "c" = \'x\' WHERE "d" IS NULL; ALTER TABLE "T" ALTER COLUMN "c" SET NOT NULL;',
+        'UPDATE "T" SET "c" = \'x\' WHERE "c" IS NULL AND "d" = 1; ALTER TABLE "T" ALTER COLUMN "c" SET NOT NULL;',
+        'UPDATE "T" SET "c" = NULL; ALTER TABLE "T" ALTER COLUMN "c" SET NOT NULL;',
+        'UPDATE "U" SET "c" = \'x\'; ALTER TABLE "T" ALTER COLUMN "c" SET NOT NULL;',
+        'UPDATE "T" SET "c" = "O"."v" FROM "O" WHERE "O"."i" = "T"."i"; ALTER TABLE "T" ALTER COLUMN "c" SET NOT NULL;',
+    ),
+    ids=("update after", "other column", "narrower where", "set to null", "other table", "update from"),
+)
+def test_an_update_that_may_leave_a_null_behind_keeps_the_nulls_check(migration_sql: str) -> None:
+    assert _shape(checks_for_migration("x", migration_sql)) == (("nulls", "T", ("c",)),)
+
+
+@pytest.mark.parametrize(
+    ("statement", "expected"),
+    (
+        ('UPDATE "T" SET "c" = \'x\' WHERE "c" IS NULL', frozenset({("T", "c")})),
+        ('UPDATE public."T" SET c = 1, d = now(), e = NULL', frozenset({("T", "c"), ("T", "d")})),
+        ('UPDATE "T" SET "c" = \'x\', "d" = 1 WHERE "c" IS NULL', frozenset({("T", "c")})),
+        ('UPDATE "T" SET ("c", "d") = (1, 2)', frozenset()),
+        ("SELECT 1", frozenset()),
+    ),
+)
+def test_an_update_names_the_columns_it_leaves_without_nulls(
+    statement: str, expected: frozenset[tuple[str, str]]
+) -> None:
+    assert backfilled_columns(statement) == expected
+
+
+def test_the_shipped_shadow_eval_backfill_keeps_only_its_index_check() -> None:
+    migration_sql: Final = (MIGRATIONS / "20260817000000_shadow_eval_multi_key" / "migration.sql").read_text()
+    assert _shape(checks_for_migration("x", migration_sql)) == (("too_long", "LiteLLM_ShadowEvalJob", ("group_id",)),)
 
 
 def test_every_shipped_migration_is_readable_and_the_later_indexes_on_text_columns_get_a_check() -> None:

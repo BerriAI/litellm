@@ -18,7 +18,7 @@ import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import reduce
-from itertools import accumulate
+from itertools import accumulate, chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
@@ -126,6 +126,11 @@ _PLAIN_COLUMN: Final = re.compile(rf"^{_IDENT}(?:\s+(?:ASC|DESC|NULLS\s+(?:FIRST
 _COMMENT: Final = re.compile(r"--[^\n]*")
 _NOT_NULL: Final = re.compile(r"\bNOT\s+NULL\b", re.IGNORECASE)
 _HAS_DEFAULT: Final = re.compile(r"\bDEFAULT\b|\bGENERATED\b", re.IGNORECASE)
+_UPDATE: Final = re.compile(
+    rf"^\s*UPDATE\s+(?:ONLY\s+)?{_QUALIFIED}\s+SET\s+(.*?)(?:\s+(FROM|WHERE)\s+(.*))?$", re.IGNORECASE | re.DOTALL
+)
+_ASSIGNMENT: Final = re.compile(rf"^{_IDENT}\s*=\s*(.*)$", re.DOTALL)
+_IS_NULL: Final = re.compile(rf"^{_IDENT}\s+IS\s+NULL$", re.IGNORECASE)
 
 
 def migration_data_check_timeout_seconds() -> float:
@@ -248,11 +253,44 @@ def checks_for_statement(statement_text: str, source: str) -> tuple[Check, ...]:
     return ()
 
 
+def backfilled_columns(statement_text: str) -> frozenset[tuple[str, str]]:
+    """The (table, column) pairs an UPDATE leaves without a NULL: every column it sets to
+    something other than NULL when it has no WHERE, or that one column when its WHERE is
+    `<column> IS NULL`. Any other shape, including an UPDATE ... FROM, fills nothing for sure."""
+    update: Final = _UPDATE.match(statement_text)
+    if update is None:
+        return frozenset()
+    table, assignments, clause, condition = update.groups()
+    matches: Final = tuple(_ASSIGNMENT.match(assignment) for assignment in _split_top_level(assignments))
+    filled: Final = frozenset(
+        match.group(1) for match in matches if match is not None and match.group(2).strip().upper() != "NULL"
+    )
+    if clause is None:
+        return frozenset((table, column) for column in filled)
+    is_null: Final = _IS_NULL.match(condition.strip()) if clause.upper() == "WHERE" else None
+    if is_null is None or is_null.group(1) not in filled:
+        return frozenset()
+    return frozenset({(table, is_null.group(1))})
+
+
+def _filled_before(ordered: tuple[str, ...], position: int) -> frozenset[tuple[str, str]]:
+    return frozenset(chain.from_iterable(backfilled_columns(statement_text) for statement_text in ordered[:position]))
+
+
+def _checks_still_needed(statement_text: str, source: str, filled: frozenset[tuple[str, str]]) -> Iterator[Check]:
+    for check in checks_for_statement(statement_text, source):
+        if check.kind != "nulls" or (check.table, check.columns[0]) not in filled:
+            yield check
+
+
 def checks_for_migration(name: str, migration_sql: str) -> tuple[Check, ...]:
+    """The checks of every statement, minus the `nulls` check of a column that an earlier
+    UPDATE in the same migration fills, since `prisma migrate deploy` runs that UPDATE first."""
+    ordered: Final = statements(migration_sql)
     return tuple(
         check
-        for statement_text in statements(migration_sql)
-        for check in checks_for_statement(statement_text, f"migration {name}")
+        for position, statement_text in enumerate(ordered)
+        for check in _checks_still_needed(statement_text, f"migration {name}", _filled_before(ordered, position))
     )  # comprehension-ok: flattening the per-statement checks of one migration
 
 
