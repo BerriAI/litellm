@@ -3,7 +3,7 @@ from typing import Final
 import httpx
 
 import litellm
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -82,3 +82,8 @@ class VLLMModelInfo(BaseLLMModelInfo):
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return VLLMError(status_code=status_code, message=error_message, headers=headers)
+
+    def get_token_counter(self) -> BaseTokenCounter | None:
+        from litellm.llms.hosted_vllm.count_tokens.token_counter import HostedVLLMTokenCounter
+
+        return HostedVLLMTokenCounter()

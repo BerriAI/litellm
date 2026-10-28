@@ -51,6 +51,26 @@ def test_acount_tokens_routes_to_anthropic():
         assert result.request_model == "anthropic/claude-3-5-sonnet-20241022"
 
 
+def test_acount_tokens_routes_to_hosted_vllm_count_endpoint():
+    """acount_tokens forwards a hosted_vllm deployment to the backend count endpoint."""
+    with patch(
+        "litellm.llms.hosted_vllm.count_tokens.token_counter.hosted_vllm_count_tokens_handler.handle_count_tokens_request",
+        new_callable=AsyncMock,
+        return_value={"input_tokens": 42},
+    ) as handler:
+        result = asyncio.run(
+            litellm.acount_tokens(
+                model="hosted_vllm/Qwen/Qwen3-0.6B",
+                messages=[{"role": "user", "content": "Hello vLLM!"}],
+                api_base="https://vllm.example.com",
+            )
+        )
+
+        assert result.total_tokens == 42
+        assert result.tokenizer_type == "hosted_vllm_api"
+        assert handler.await_count == 1
+
+
 def test_acount_tokens_fallback_to_local():
     """Test that unsupported providers fall back to local tiktoken counting."""
     result = asyncio.run(

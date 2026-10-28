@@ -303,6 +303,152 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         proxy_server.count_request_tokens = original_token_counter
 
 
+def _hosted_vllm_count_peer(backend_count: int, calls: list[httpx.Request]):
+    def peer(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"input_tokens": backend_count})
+
+    return peer
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_messages_count_tokens_forwards_to_the_backend_count_endpoint():
+    """
+    A hosted_vllm deployment must count through the backend's own count_tokens route, so the
+    number is the one generation will consume, instead of a local estimate from another tokenizer.
+    """
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    peer_calls: Final[list[httpx.Request]] = []
+    api_base: Final = "https://vllm.example.com/qwen3-06b"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "vllm-counted",
+                "litellm_params": {"model": "hosted_vllm/Qwen/Qwen3-0.6B", "api_base": api_base},
+            }
+        ]
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
+
+    async def mock_read_request_body(request):
+        return {
+            "model": "vllm-counted",
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        }
+
+    with (
+        patch.object(proxy_server, "llm_router", llm_router),
+        patch.object(anthropic_endpoints, "read_request_body", mock_read_request_body),
+        patch.object(
+            anthropic_count_tokens_handler,
+            "get_async_httpx_client",
+            lambda **_: AsyncHTTPHandler(transport=httpx.MockTransport(_hosted_vllm_count_peer(41, peer_calls))),
+        ),
+    ):
+        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+
+    assert response == {"input_tokens": 41}
+    assert len(peer_calls) == 1
+    assert str(peer_calls[0].url) == f"{api_base}/v1/messages/count_tokens"
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_count_tokens_missing_backend_route_falls_back_to_a_local_estimate():
+    """
+    A hosted_vllm server without the count route must not fail the count: the local estimate
+    answers instead, so clients that call count_tokens still get a number.
+    """
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "vllm-plain",
+                "litellm_params": {"model": "hosted_vllm/Qwen/Qwen3-0.6B", "api_base": "https://plain.example.com"},
+            }
+        ]
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
+
+    async def mock_read_request_body(request):
+        return {"model": "vllm-plain", "messages": [{"role": "user", "content": "hi"}]}
+
+    def absent_route(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "Not Found"})
+
+    with (
+        patch.object(proxy_server, "llm_router", llm_router),
+        patch.object(anthropic_endpoints, "read_request_body", mock_read_request_body),
+        patch.object(
+            anthropic_count_tokens_handler,
+            "get_async_httpx_client",
+            lambda **_: AsyncHTTPHandler(transport=httpx.MockTransport(absent_route)),
+        ),
+    ):
+        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+
+    assert isinstance(response, dict)
+    assert isinstance(response.get("input_tokens"), int)
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_count_tokens_surfaces_a_backend_auth_failure_as_an_anthropic_error():
+    """
+    A backend rejecting the count credential must reach the client as the Anthropic envelope for
+    the real status, so the fallback estimate never hides a broken key.
+    """
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "vllm-keyed",
+                "litellm_params": {
+                    "model": "hosted_vllm/Qwen/Qwen3-0.6B",
+                    "api_base": "https://keyed.example.com",
+                    "api_key": "wrong-key",
+                },
+            }
+        ]
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
+
+    async def mock_read_request_body(request):
+        return {"model": "vllm-keyed", "messages": [{"role": "user", "content": "hi"}]}
+
+    def unauthorized(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401, json={"type": "error", "error": {"type": "AuthenticationError", "message": "invalid api key"}}
+        )
+
+    with (
+        patch.object(proxy_server, "llm_router", llm_router),
+        patch.object(anthropic_endpoints, "read_request_body", mock_read_request_body),
+        patch.object(
+            anthropic_count_tokens_handler,
+            "get_async_httpx_client",
+            lambda **_: AsyncHTTPHandler(transport=httpx.MockTransport(unauthorized)),
+        ),
+    ):
+        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 401
+    detail = json.loads(bytes(response.body))
+    assert detail["type"] == "error"
+    assert detail["error"]["message"]
+
+
 @pytest.mark.asyncio
 async def test_internal_token_counter_anthropic_provider_detection():
     """
