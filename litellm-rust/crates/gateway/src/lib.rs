@@ -68,7 +68,7 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
         resources,
         http,
         secrets,
-        ModelRouter::from_model_list(&config.model_list),
+        ModelRouter::from_config(config),
     )?))
 }
 
@@ -109,16 +109,16 @@ pub async fn build_mcp(
         || !config.policies.is_empty()
         || !config.policy_attachments.is_empty()
     {
-        return Err(Error::McpSetting("guardrails or policies".into()));
+        return Err(Error::McpGuardrails);
     }
     Auth::from_config(config, secrets.clone())
         .validate()
         .await?;
-    let client = pool.mcp_client(http)?;
+    let client = pool.client(http, ClientVariant::NoRedirect)?;
     Ok(Some(
         litellm_gateway_mcp::ConfiguredGateway::connect(
             &config.mcp_servers,
-            client,
+            (*client).clone(),
             secrets.as_ref(),
             shutdown,
         )

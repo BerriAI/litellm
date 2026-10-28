@@ -50,7 +50,10 @@ from litellm.proxy.common_utils.openai_error_payload import (
     with_litellm_call_id,
 )
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
-from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
+from litellm.proxy.litellm_pre_call_utils import (
+    forwarded_anthropic_oauth_token,
+    should_auto_drop_params_for_agentic_cli,
+)
 from litellm.router import Router
 
 router: Final = APIRouter()
@@ -412,6 +415,7 @@ async def count_tokens(
             request=token_request,
             call_endpoint=True,
             messages_format="anthropic",
+            client_oauth_token=forwarded_anthropic_oauth_token(request.headers),
             **_count_tokens_body_options(data, auto_drop_params),
         )
     except UnsupportedContentTypeError as e:

@@ -16,7 +16,7 @@ fn configuration_preserves_deployment_parameters(#[case] parameters: &str) {
         "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: provider/model\n      {parameters}"
     ))
     .unwrap();
-    let router = Router::from_model_list(&config.model_list);
+    let router = Router::from_config(&config);
     let deployment = router.get(&config.model_list[0].model_name).unwrap();
     let params = &config.model_list[0].litellm_params;
 
@@ -44,7 +44,7 @@ fn configuration_types_the_provider_params_of_a_deployment() {
       azure_ad_token: ignored-by-every-group",
     )
     .unwrap();
-    let router = Router::from_model_list(&config.model_list);
+    let router = Router::from_config(&config);
     let params = &router.get("public-model").unwrap().litellm_params;
 
     assert_eq!(
@@ -74,7 +74,7 @@ fn lookup_uses_public_names(#[case] name: &str, #[case] expected: Option<&str>) 
       model: provider/b",
     )
     .unwrap();
-    let router = Router::from_model_list(&config.model_list);
+    let router = Router::from_config(&config);
 
     assert_eq!(router.get(name).map(|entry| entry.model.as_str()), expected);
 }
@@ -83,11 +83,7 @@ fn lookup_uses_public_names(#[case] name: &str, #[case] expected: Option<&str>) 
 fn empty_configuration_has_no_deployment() {
     let config = Config::from_yaml("model_list: []").unwrap();
 
-    assert!(
-        Router::from_model_list(&config.model_list)
-            .get("")
-            .is_none()
-    );
+    assert!(Router::from_config(&config).get("").is_none());
     assert!(Router::default().get("unknown").is_none());
 }
 
@@ -121,4 +117,39 @@ fn programmatic_deployments_preserve_overrides_and_last_entry_wins() {
     assert_eq!(selected.custom_llm_provider, deployment.custom_llm_provider);
     assert_eq!(selected.timeout, deployment.timeout);
     assert_eq!(selected.shaping, deployment.shaping);
+}
+
+#[rstest]
+#[case::unset("", "", false)]
+#[case::deployment_flag("", "\n      drop_params: true", true)]
+#[case::deployment_word("", "\n      drop_params: \" True \"", true)]
+#[case::deployment_off("", "\n      drop_params: false", false)]
+#[case::deployment_unknown_word("", "\n      drop_params: maybe", false)]
+#[case::global_flag("litellm_settings:\n  drop_params: true\n", "", true)]
+#[case::global_word("litellm_settings:\n  drop_params: \"true\"\n", "", true)]
+#[case::global_off("litellm_settings:\n  drop_params: false\n", "", false)]
+#[case::global_over_deployment_off(
+    "litellm_settings:\n  drop_params: true\n",
+    "\n      drop_params: false",
+    true
+)]
+fn configured_drop_params_reach_the_deployment(
+    #[case] settings: &str,
+    #[case] deployment: &str,
+    #[case] expected: bool,
+) {
+    let config = Config::from_yaml(&format!(
+        "{settings}model_list:\n  - model_name: public-model\n    litellm_params:\n      model: provider/model{deployment}"
+    ))
+    .unwrap();
+
+    assert_eq!(
+        Router::from_config(&config)
+            .get("public-model")
+            .unwrap()
+            .shaping
+            .settings
+            .drop_params,
+        expected
+    );
 }

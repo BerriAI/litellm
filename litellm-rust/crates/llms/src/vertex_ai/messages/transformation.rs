@@ -591,13 +591,16 @@ mod tests {
         }))
         .unwrap();
         let headers: Headers = vec![("anthropic-version".to_string(), requested.to_string())];
+        let Error::InvalidRequest(detail) = VERTEX_ANTHROPIC_MESSAGES_CONFIG
+            .request_body(request, &headers, false)
+            .unwrap_err()
+        else {
+            panic!("expected an invalid request");
+        };
         assert_eq!(
-            VERTEX_ANTHROPIC_MESSAGES_CONFIG
-                .request_body(request, &headers, false)
-                .unwrap_err()
-                .to_string(),
+            detail.to_string(),
             format!(
-                "invalid request: claude-sonnet-4-5 does not support anthropic-version={requested}. \
+                "claude-sonnet-4-5 does not support anthropic-version={requested}. \
                  To drop unsupported params, set `litellm.drop_params = True`."
             )
         );
