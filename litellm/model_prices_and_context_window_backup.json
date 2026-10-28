@@ -15764,7 +15764,6 @@
             "us": 1.1
         },
         "supports_output_config": true,
-        "supports_speed": true,
         "prompt_cache_min_tokens": 2048,
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
@@ -15807,7 +15806,6 @@
             "us": 1.1
         },
         "supports_output_config": true,
-        "supports_speed": true,
         "prompt_cache_min_tokens": 2048
     },
     "claude-fable-5": {
