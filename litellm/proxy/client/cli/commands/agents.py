@@ -146,8 +146,9 @@ def build_agent_env(
     ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY is left in the environment, since either one makes
     Claude Code stop using the subscription (and its connectors).
     With subscription=True the OpenAI profile keeps Codex on its ChatGPT login: the key goes to
-    LITELLM_PROXY_API_KEY, which Codex sends in the x-litellm-api-key header, and OPENAI_API_KEY is
-    left exactly as the caller had it, so the key is never offered to Codex as an OpenAI credential.
+    LITELLM_PROXY_API_KEY, which Codex sends in the x-litellm-api-key header, and OPENAI_API_KEY and
+    OPENAI_BASE_URL are left exactly as the caller had them, so the key is never offered to Codex as an
+    OpenAI credential and a child process never pairs the caller's own OpenAI key with the proxy URL.
     """
     env: Final = dict(base_env)
     root: Final = base_url.rstrip("/")
@@ -166,10 +167,10 @@ def build_agent_env(
         if ENABLE_GATEWAY_MODEL_DISCOVERY_ENV not in env:
             env[ENABLE_GATEWAY_MODEL_DISCOVERY_ENV] = ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE
     if PROFILE_OPENAI in profiles:
-        env[OPENAI_BASE_URL_ENV] = root + "/v1"
         if subscription:
             env[LITELLM_PROXY_API_KEY_ENV] = api_key
         else:
+            env[OPENAI_BASE_URL_ENV] = root + "/v1"
             env[OPENAI_API_KEY_ENV] = api_key
     if PROFILE_LITELLM in profiles:
         env[LITELLM_PROXY_API_KEY_ENV] = api_key

@@ -331,17 +331,18 @@ class TestBuildAgentEnv:
 
     def test_subscription_routes_openai_agents_without_offering_the_key_as_an_openai_credential(self):
         env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"openai"}), subscription=True)
-        assert env["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
+        assert "OPENAI_BASE_URL" not in env
         assert env["LITELLM_PROXY_API_KEY"] == "sk-key"
         assert "OPENAI_API_KEY" not in env
         assert "ANTHROPIC_CUSTOM_HEADERS" not in env
 
-    def test_subscription_leaves_the_users_own_openai_key_as_it_was(self):
-        base = {"OPENAI_API_KEY": "sk-users-openai"}
+    def test_subscription_leaves_the_users_own_openai_key_and_base_url_as_they_were(self):
+        base = {"OPENAI_API_KEY": "sk-users-openai", "OPENAI_BASE_URL": "https://api.openai.com/v1"}
         env = build_agent_env(base, "http://localhost:4000", "sk-key", frozenset({"openai"}), subscription=True)
         assert env["OPENAI_API_KEY"] == "sk-users-openai"
+        assert env["OPENAI_BASE_URL"] == "https://api.openai.com/v1"
         assert env["LITELLM_PROXY_API_KEY"] == "sk-key"
-        assert base == {"OPENAI_API_KEY": "sk-users-openai"}
+        assert base == {"OPENAI_API_KEY": "sk-users-openai", "OPENAI_BASE_URL": "https://api.openai.com/v1"}
 
     def test_default_mode_does_not_touch_custom_headers(self):
         env = build_agent_env(
@@ -1676,7 +1677,7 @@ class TestRunAgent:
         assert launched["args"][0] == "codex"
         assert launched["args"][-3:] == ("exec", "--settings", "kept")
         assert _codex_config(launched["args"][1:-3])["model_provider"] == "litellm_subscription"
-        assert launched["env"]["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
+        assert "OPENAI_BASE_URL" not in launched["env"]
         assert launched["env"]["LITELLM_PROXY_API_KEY"] == "sk-key"
         assert "OPENAI_API_KEY" not in launched["env"]
 
