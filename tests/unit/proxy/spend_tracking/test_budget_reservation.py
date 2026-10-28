@@ -474,6 +474,23 @@ async def test_model_group_alias_of_an_openai_group_reserves_on_that_groups_toke
 
 
 @pytest.mark.asyncio
+async def test_model_group_alias_of_a_group_no_openai_model_serves_reserves_on_the_alias_as_written():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-5-5",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "sk-test"},
+            }
+        ],
+        model_group_alias={"claude-alias": "claude-sonnet-5-5"},
+    )
+
+    assert await _input_tokens(router, "claude-alias") == {
+        "claude-alias": litellm.token_counter(model="claude-alias", messages=_MULTILINGUAL_MESSAGES)
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("group", "counted_as"),
     [("gpt-6.1-sol", "my-model"), ("openai/gpt-6.1-sol", "my-model"), ("mixed", "my-model"), ("gpt-4o", "gpt-4o")],

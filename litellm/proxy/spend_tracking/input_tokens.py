@@ -55,17 +55,17 @@ def _approximate_input_size(request_body: Mapping[str, object]) -> int:
 def tokenizer_models(model: str, llm_router: Router | None) -> tuple[str, ...]:
     """The names to count a request for `model` with, keeping the largest count.
 
-    An alias counts as its target group. A group served only by OpenAI models counts as those models, so it gets
+    An alias resolves to its target group. A group served only by OpenAI models counts as those models, so it gets
     their tokenizer. A group that also serves other models counts as its OpenAI models and as the requested name with
     the encoding tiktoken gives that name as written, so the other deployments keep that count without loading their
-    vendor's tokenizer. Any other group counts as its own name."""
+    vendor's tokenizer. A group no OpenAI model serves counts as the requested name, alias or not."""
     if llm_router is None:
         return (model,)
     group: Final = resolve_model_group_alias(llm_router.model_group_alias, model) or model
     served: Final = llm_router.served_openai_models(group)
     openai_served: Final = tuple(served_model for served_model in served if served_model is not None)
     if not openai_served:
-        return (group,)
+        return (model,)
     if len(openai_served) == len(served):
         return openai_served
     return (unresolved_tokenizer_model(model), *openai_served)
