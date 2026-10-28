@@ -1,6 +1,7 @@
 """One Redis pipeline per backend for the post-call writes of a request: spend counters, rate-limit token
-scripts and slot releases, deployment TPM and the response-cache SET all ride the post-call batch, which
-goes out once the success/failure callbacks have run (or at the deadline when no callback phase closes it)."""
+scripts and slot releases and deployment TPM all ride the post-call batch, which goes out once the success/failure
+callbacks have run (or at the deadline when no callback phase closes it). The response-cache SET stays direct so the
+next identical request can hit it while the callbacks are still running."""
 
 from __future__ import annotations
 
@@ -9,7 +10,6 @@ import datetime
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -19,7 +19,6 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_batch import (
     active_post_call_redis_batch,
-    active_request_redis_batches,
     drain_post_call_redis_batches,
     flush_post_call_redis_batches,
     request_redis_batch_scope,
@@ -30,8 +29,8 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_RELEASE_SCRIPT,
     TOKEN_INCREMENT_SCRIPT,
     ParallelSlotAcquisition,
+    PROXY_MaxParallelRequestsHandler_v3,
     RequestRateLimiterStash,
-    _PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement
 from litellm.proxy.utils import InternalUsageCache
@@ -96,14 +95,16 @@ def _names(client: FakeClient, index: int = 0) -> list[str]:
     return [command[0] for command in client.pipelines[index].commands]
 
 
-def _limiter(redis_cache: FakeRedisCache) -> _PROXY_MaxParallelRequestsHandler_v3:
+def _limiter(redis_cache: FakeRedisCache) -> PROXY_MaxParallelRequestsHandler_v3:
     dual_cache = DualCache()
     dual_cache.attach_redis_cache(redis_cache)
-    return _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(dual_cache=dual_cache))
+    return PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(dual_cache=dual_cache))
 
 
 def _slot_stash(slot_id: str, *counter_keys: str) -> RequestRateLimiterStash:
-    return RequestRateLimiterStash(parallel_slot=ParallelSlotAcquisition(slot_id=slot_id, counter_keys=list(counter_keys)))
+    return RequestRateLimiterStash(
+        parallel_slot=ParallelSlotAcquisition(slot_id=slot_id, counter_keys=list(counter_keys))
+    )
 
 
 def _token_ops(*keys: str) -> list[RedisPipelineIncrementOperation]:
@@ -140,13 +141,9 @@ async def test_every_post_call_owner_rides_one_pipeline_that_goes_out_when_the_c
     client = FakeClient(_ok_replies)
     redis_cache = PostCallFakeRedisCache(client)
     limiter = _limiter(redis_cache)
-    response_cache = _response_cache(redis_cache)
     tpm, router_cache = _tpm_router(redis_cache)
 
     with request_redis_batch_scope():
-        await response_cache.async_add_cache(
-            {"id": "resp"}, messages=[{"role": "user", "content": "hi"}], model="gpt", ttl=120
-        )
         await tpm.async_log_success_event(_tpm_kwargs(), None, None, None)
         await limiter.async_increment_tokens_with_ttl_preservation(_token_ops("{api_key:k1}:tokens"))
         await limiter._release_stashed_parallel_slot(
@@ -156,7 +153,7 @@ async def test_every_post_call_owner_rides_one_pipeline_that_goes_out_when_the_c
         await flush_post_call_redis_batches()
 
     assert len(client.pipelines) == 1
-    assert _names(client) == ["SET", "INCRBYFLOAT", "EXPIRE", "EVALSHA", "EVALSHA"]
+    assert _names(client) == ["INCRBYFLOAT", "EXPIRE", "EVALSHA", "EVALSHA"]
     evalshas = [c for c in client.pipelines[0].commands if c[0] == "EVALSHA"]
     assert [c[1] for c in evalshas] == [sha_of(TOKEN_INCREMENT_SCRIPT), sha_of(PARALLEL_RELEASE_SCRIPT)]
     assert redis_cache.alone == []
@@ -169,40 +166,42 @@ async def test_every_post_call_owner_rides_one_pipeline_that_goes_out_when_the_c
 
 
 @pytest.mark.asyncio
-async def test_the_response_cache_write_is_the_same_set_the_direct_path_issues():
+async def test_the_response_cache_set_reaches_redis_before_the_post_call_pipeline_goes_out():
     client = FakeClient(_ok_replies)
     redis_cache = PostCallFakeRedisCache(client)
     response_cache = _response_cache(redis_cache)
     kwargs = {"messages": [{"role": "user", "content": "hi"}], "model": "gpt", "ttl": 120}
+    cache_key = response_cache.get_cache_key(**kwargs)
 
     with request_redis_batch_scope():
         await response_cache.async_add_cache({"id": "resp"}, **kwargs)
+        assert redis_cache.store[cache_key]["response"] == {"id": "resp"}
         await flush_post_call_redis_batches()
 
-    cache_key = response_cache.get_cache_key(**kwargs)
-    (command,) = client.pipelines[0].commands
-    assert (command[0], command[1], command[3]) == ("SET", cache_key, 120)
-    assert json.loads(command[2])["response"] == {"id": "resp"}
+    assert client.pipelines == []
+    (direct_set,) = redis_cache.alone
+    assert (direct_set[0], direct_set[1], direct_set[2]["ttl"]) == ("SET", cache_key, 120)
 
 
 @pytest.mark.asyncio
-async def test_a_chat_response_written_through_the_handler_dual_cache_lands_in_memory_and_rides_the_pipeline():
+async def test_a_chat_response_written_through_the_handler_dual_cache_is_in_memory_and_redis_at_once():
     client = FakeClient(_ok_replies)
     redis_cache = PostCallFakeRedisCache(client)
     response_cache = _response_cache(redis_cache)
     handler_cache = DualCache(redis_cache=redis_cache, in_memory_cache=InMemoryCache())
     kwargs = {"messages": [{"role": "user", "content": "hi"}], "model": "gpt", "ttl": 120}
+    cache_key = response_cache.get_cache_key(**kwargs)
 
     with request_redis_batch_scope():
         await response_cache.async_add_cache('{"id": "resp"}', dynamic_cache_object=handler_cache, **kwargs)
-        cache_key = response_cache.get_cache_key(**kwargs)
         in_memory = await handler_cache.in_memory_cache.async_get_cache(cache_key)
         assert in_memory["response"] == '{"id": "resp"}'
-        assert redis_cache.alone == []
+        assert redis_cache.store[cache_key]["response"] == '{"id": "resp"}'
         await flush_post_call_redis_batches()
 
-    (command,) = client.pipelines[0].commands
-    assert (command[0], command[1], command[3]) == ("SET", cache_key, 120)
+    assert client.pipelines == []
+    (direct_set,) = redis_cache.alone
+    assert (direct_set[0], direct_set[1], direct_set[2]["ttl"]) == ("SET", cache_key, 120)
 
 
 @pytest.mark.asyncio
@@ -215,10 +214,8 @@ async def test_a_failed_operation_fails_only_its_owner_and_the_owner_applies_its
     client = FakeClient(replies)
     redis_cache = PostCallFakeRedisCache(client)
     limiter = _limiter(redis_cache)
-    response_cache = _response_cache(redis_cache)
 
     with request_redis_batch_scope():
-        await response_cache.async_add_cache({"id": "resp"}, messages=[{"role": "user", "content": "hi"}], model="gpt")
         await limiter.async_increment_tokens_with_ttl_preservation(_token_ops("{api_key:k1}:tokens"))
         await limiter.async_increment_tokens_with_ttl_preservation(_token_ops("{team:t1}:tokens"))
         await flush_post_call_redis_batches()
@@ -277,22 +274,6 @@ async def test_a_slot_released_before_the_response_reaches_redis_at_once_not_on_
         await flush_post_call_redis_batches()
 
     assert client.pipelines == []
-
-
-@pytest.mark.asyncio
-async def test_a_deferred_response_cache_set_without_a_ttl_expires_in_redis_like_the_direct_path():
-    client = FakeClient(_ok_replies)
-    redis_cache = PostCallFakeRedisCache(client)
-    dual_cache = DualCache(redis_cache=redis_cache, in_memory_cache=InMemoryCache(), default_in_memory_ttl=300)
-
-    await dual_cache.async_set_cache("direct", {"id": "resp"})
-    with request_redis_batch_scope():
-        await dual_cache.async_set_cache_post_call("deferred", {"id": "resp"}, None)
-        await flush_post_call_redis_batches()
-
-    (command,) = client.pipelines[0].commands
-    assert (command[0], command[1], command[3]) == ("SET", "deferred", redis_cache.alone[0][2]["ttl"])
-    assert command[3] == 300
 
 
 @pytest.mark.asyncio
@@ -382,20 +363,6 @@ async def test_two_backends_get_one_post_call_pipeline_each():
 
     assert len(a_client.pipelines) == 1 and len(b_client.pipelines) == 1
     assert [c[1] for c in a_client.pipelines[0].commands if c[0] == "INCRBYFLOAT"] == ["x", "z"]
-
-
-@pytest.mark.asyncio
-async def test_a_numeric_string_ttl_reaches_redis_as_the_direct_path_would_send_it():
-    client = FakeClient(_ok_replies)
-    response_cache = _response_cache(PostCallFakeRedisCache(client))
-    kwargs = {"messages": [{"role": "user", "content": "hi"}], "model": "gpt", "ttl": "3600"}
-
-    with request_redis_batch_scope():
-        await response_cache.async_add_cache({"id": "resp"}, **kwargs)
-        await flush_post_call_redis_batches()
-
-    (command,) = client.pipelines[0].commands
-    assert (command[0], command[3]) == ("SET", 3600)
 
 
 @pytest.mark.asyncio
@@ -547,115 +514,3 @@ async def test_a_cancelled_post_call_flush_keeps_the_shared_spend_counter_and_co
     assert redis_cache.alone == [], "a cancel says nothing about the shared counter, so Redis keeps it"
     assert spend_cache.in_memory_cache.get_cache("spend:key:k1") == 3.5, "the local copy counts the cancelled spend"
     assert spend_cache.in_memory_cache.get_cache("spend:team:t1") is None, "an absent local copy is not seeded"
-
-
-@pytest.mark.asyncio
-async def test_the_update_cache_read_armed_before_accounting_rides_the_pipeline_of_the_reconcile_read():
-    from litellm.proxy.proxy_server import _read_update_cache_values, arm_update_cache_read
-
-    client = FakeClient(_ok_replies)
-    redis_cache = PostCallFakeRedisCache(client)
-    cache = DualCache()
-    cache.attach_redis_cache(redis_cache)
-    keys = ["user-1", "team_id:t1"]
-
-    with request_redis_batch_scope() as request:
-        await arm_update_cache_read(keys, cache=cache)
-        assert client.pipelines == []
-        await request.batch(redis_cache).mget(["spend:key:k1"])  # the spend reconcile read of the same request
-        values = await _read_update_cache_values(keys, None, cache=cache)
-
-    assert len(client.pipelines) == 1
-    assert client.pipelines[0].commands == [("MGET", "user-1", "team_id:t1"), ("MGET", "spend:key:k1")]
-    assert values == {"user-1": {"spend": 1.0}, "team_id:t1": {"spend": 1.0}}
-    assert redis_cache.alone == []
-    assert active_request_redis_batches() is None
-
-
-@pytest.mark.asyncio
-async def test_an_update_cache_read_armed_for_other_keys_is_ignored_and_the_read_happens_as_before():
-    from litellm.proxy.proxy_server import _read_update_cache_values, arm_update_cache_read
-
-    redis_cache = PostCallFakeRedisCache(FakeClient(_ok_replies))
-    redis_cache.store["team_id:t1"] = {"spend": 2.0}
-    cache = DualCache()
-    cache.attach_redis_cache(redis_cache)
-
-    with request_redis_batch_scope():
-        await arm_update_cache_read(["user-1"], cache=cache)
-        values = await _read_update_cache_values(["team_id:t1"], None, cache=cache)
-
-    assert values == {"team_id:t1": {"spend": 2.0}}
-    assert ("MGET", ("team_id:t1",)) in redis_cache.alone
-
-
-@pytest.mark.asyncio
-async def test_the_update_cache_read_sees_a_cached_spend_written_while_the_spend_was_persisted(monkeypatch):
-    from litellm.proxy import proxy_server
-    from litellm.proxy.hooks.proxy_track_cost_callback import _update_database_and_spend_counters
-
-    cached_user_spend = {"user-1": 1.0}
-
-    def replies(command: tuple[object, ...]) -> object:
-        if command[0] == "MGET":
-            return [
-                json.dumps({"spend": cached_user_spend[key]}) if key in cached_user_spend else b"0.5"
-                for key in command[1:]
-            ]
-        return _ok_replies(command)
-
-    client = FakeClient(replies)
-    redis_cache = PostCallFakeRedisCache(client)
-    spend_cache = DualCache()
-    spend_cache.attach_redis_cache(redis_cache)
-    user_cache = DualCache()
-    user_cache.attach_redis_cache(redis_cache)
-    monkeypatch.setattr(proxy_server, "spend_counter_cache", spend_cache)
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", user_cache)
-
-    async def _read_on_the_request_pipeline_then_a_concurrent_callback_writes_the_user(**kwargs: object) -> bool:
-        request = active_request_redis_batches()
-        assert request is not None
-        await request.batch(redis_cache).mget(["key-object"])
-        cached_user_spend["user-1"] = 5.0
-        return True
-
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(
-        side_effect=_read_on_the_request_pipeline_then_a_concurrent_callback_writes_the_user
-    )
-    reservation = {
-        "reserved_cost": 0.5,
-        "entries": [
-            {
-                "counter_key": "spend:key:k1",
-                "entity_type": "Key",
-                "entity_id": "k1",
-                "reserved_cost": 0.5,
-                "applied_adjustment": 0.0,
-            }
-        ],
-        "finalized": False,
-    }
-
-    with request_redis_batch_scope():
-        charged = await _update_database_and_spend_counters(
-            proxy_logging_obj=proxy_logging_obj,
-            increment_spend_counters=proxy_server.increment_spend_counters,
-            user_api_key="k1",
-            user_id="user-1",
-            end_user_id=None,
-            team_id=None,
-            org_id=None,
-            kwargs={},
-            completion_response=None,
-            start_time=datetime.datetime.now(),
-            end_time=datetime.datetime.now(),
-            response_cost=0.2,
-            budget_reservation=reservation,
-            update_cache_read_keys=("user-1",),
-        )
-        values = await proxy_server._read_update_cache_values(("user-1",), None)
-
-    assert charged is True
-    assert values == {"user-1": {"spend": 5.0}}, client.pipelines

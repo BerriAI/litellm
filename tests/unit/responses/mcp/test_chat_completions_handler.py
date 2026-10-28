@@ -1,15 +1,22 @@
+import asyncio
 import json
 import sys
 import types
+from collections.abc import Mapping, Sequence
+from datetime import datetime
+from types import MappingProxyType
+from typing import Final, cast
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import respx
 from httpx import Response
-from unittest.mock import AsyncMock, patch
+from mcp.types import Tool as MCPTool
 
 import litellm
-from litellm.types.utils import ModelResponse
-
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.responses.mcp import chat_completions_handler
 from litellm.responses.mcp.chat_completions_handler import (
     acompletion_with_mcp,
@@ -18,6 +25,7 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.utils import ModelResponse, StandardLoggingPayload
 
 
 @pytest.mark.asyncio
@@ -44,7 +52,7 @@ async def test_acompletion_with_mcp_without_auto_execution_calls_model(monkeypat
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda tools: True),
     )
     monkeypatch.setattr(
@@ -58,17 +66,17 @@ async def test_acompletion_with_mcp_without_auto_execution_calls_model(monkeypat
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: ["openai-tool"]),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: False),
     )
     captured_secret_fields = {}
@@ -119,7 +127,7 @@ async def test_acompletion_with_mcp_passes_mcp_server_auth_headers_to_process_to
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda t: True),
     )
     monkeypatch.setattr(
@@ -129,17 +137,17 @@ async def test_acompletion_with_mcp_passes_mcp_server_auth_headers_to_process_to
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: ["openai-tool"]),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: False),
     )
 
@@ -172,15 +180,16 @@ async def test_acompletion_with_mcp_passes_mcp_server_auth_headers_to_process_to
 
 @pytest.mark.asyncio
 async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
-    from litellm.utils import CustomStreamWrapper
+    from unittest.mock import MagicMock
+
     from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
         ModelResponseStream,
         StreamingChoices,
-        Delta,
-        ChatCompletionDeltaToolCall,
-        Function,
     )
-    from unittest.mock import MagicMock
+    from litellm.utils import CustomStreamWrapper
 
     tools = [{"type": "function", "function": {"name": "tool"}}]
 
@@ -292,7 +301,7 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda tools: True),
     )
     monkeypatch.setattr(
@@ -306,22 +315,22 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: tools),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: True),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_extract_tool_calls_from_chat_response",
+        "extract_tool_calls_from_chat_response",
         staticmethod(
             lambda **_: [
                 {
@@ -338,12 +347,12 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_execute_tool_calls",
+        "execute_tool_calls",
         mock_execute,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_create_follow_up_messages_for_chat",
+        "create_follow_up_messages_for_chat",
         staticmethod(
             lambda **_: [
                 {"role": "user", "content": "hello"},
@@ -423,9 +432,9 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
     Test that acompletion_with_mcp adds MCP metadata to CustomStreamWrapper
     and it appears in the final chunk's delta.provider_specific_fields.
     """
-    from litellm.utils import CustomStreamWrapper
-    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+    from litellm.utils import CustomStreamWrapper
 
     tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
     openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
@@ -499,7 +508,7 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda tools: True),
     )
     monkeypatch.setattr(
@@ -513,17 +522,17 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: openai_tools),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: False),
     )
     monkeypatch.setattr(
@@ -579,8 +588,8 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
     Test that acompletion_with_mcp makes the initial LLM call with streaming=True
     when stream=True is requested, instead of making a non-streaming call first.
     """
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
     from litellm.utils import CustomStreamWrapper
-    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
 
     tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
     openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
@@ -638,7 +647,7 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda tools: True),
     )
     monkeypatch.setattr(
@@ -652,22 +661,22 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: openai_tools),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: True),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_extract_tool_calls_from_chat_response",
+        "extract_tool_calls_from_chat_response",
         staticmethod(
             lambda **_: [
                 {
@@ -684,12 +693,12 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_execute_tool_calls",
+        "execute_tool_calls",
         mock_execute,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_create_follow_up_messages_for_chat",
+        "create_follow_up_messages_for_chat",
         staticmethod(
             lambda **_: [
                 {"role": "user", "content": "hello"},
@@ -753,14 +762,14 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
     - mcp_list_tools should be in the first chunk
     - mcp_tool_calls and mcp_call_results should be in the final chunk of initial response
     """
-    from litellm.utils import CustomStreamWrapper
     from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
         ModelResponseStream,
         StreamingChoices,
-        Delta,
-        ChatCompletionDeltaToolCall,
-        Function,
     )
+    from litellm.utils import CustomStreamWrapper
 
     tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
     openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
@@ -880,7 +889,7 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda tools: True),
     )
     monkeypatch.setattr(
@@ -894,22 +903,22 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: openai_tools),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: True),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_extract_tool_calls_from_chat_response",
+        "extract_tool_calls_from_chat_response",
         staticmethod(lambda **_: tool_calls),
     )
 
@@ -918,12 +927,12 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_execute_tool_calls",
+        "execute_tool_calls",
         mock_execute,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_create_follow_up_messages_for_chat",
+        "create_follow_up_messages_for_chat",
         staticmethod(
             lambda **_: [
                 {"role": "user", "content": "hello"},
@@ -1074,7 +1083,7 @@ async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatc
     )
     monkeypatch.setattr(mcp_handler_module, "function_setup", mock_function_setup)
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.call_tool",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager.call_tool",
         mock_call_tool,
     )
 
@@ -1094,7 +1103,7 @@ async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatc
     user_api_key_auth.api_key = "test_key"
 
     # Call _execute_tool_calls
-    result = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    result = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map=tool_server_map,
         tool_calls=tool_calls,
         user_api_key_auth=user_api_key_auth,
@@ -1182,7 +1191,7 @@ async def test_acompletion_with_mcp_streaming_drain_error_does_not_drop_final_ch
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda tools: True),
     )
     monkeypatch.setattr(
@@ -1196,22 +1205,22 @@ async def test_acompletion_with_mcp_streaming_drain_error_does_not_drop_final_ch
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: openai_tools),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: True),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_extract_tool_calls_from_chat_response",
+        "extract_tool_calls_from_chat_response",
         staticmethod(lambda **_: []),
     )
     monkeypatch.setattr(
@@ -1300,7 +1309,7 @@ async def test_acompletion_with_mcp_streaming_drains_inner_stream_after_exhausti
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda tools: True),
     )
     monkeypatch.setattr(
@@ -1314,22 +1323,22 @@ async def test_acompletion_with_mcp_streaming_drains_inner_stream_after_exhausti
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: openai_tools),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: True),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_extract_tool_calls_from_chat_response",
+        "extract_tool_calls_from_chat_response",
         staticmethod(lambda **_: []),
     )
     monkeypatch.setattr(
@@ -1357,7 +1366,7 @@ async def test_acompletion_with_mcp_streaming_drains_inner_stream_after_exhausti
 @pytest.mark.asyncio
 @respx.mock
 async def test_acompletion_with_mcp_forwards_unserved_external_mcp_tool_to_the_provider(monkeypatch):
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
     zapier_tool = {"type": "mcp", "server_label": "zapier", "server_url": "https://mcp.zapier.com/api/mcp/mcp"}
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", types.SimpleNamespace(prisma_client=None))
@@ -1396,14 +1405,15 @@ async def test_acompletion_with_mcp_forwards_unserved_external_mcp_tool_to_the_p
 @pytest.mark.parametrize("selection_source", ["metadata", "litellm_metadata", "body"])
 @pytest.mark.parametrize("logging_failure", [False, True])
 async def test_request_selected_mcp_guardrail_blocks_before_upstream(monkeypatch, selected, stream, selection_source, logging_failure):
-    from litellm.exceptions import GuardrailRaisedException
     from mcp.types import Tool
+
     from litellm.caching.caching import DualCache
+    from litellm.exceptions import GuardrailRaisedException
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.proxy import proxy_server
-    from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_ObjectPermissionTable
-    from litellm.proxy._experimental.mcp_server import mcp_server_manager, server, tool_registry
-    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+    from litellm.proxy.mcp_server import mcp_server_manager, server, tool_registry
+    from litellm.proxy.mcp_server.faults.list_outcomes import AggregateToolListing
     from litellm.proxy.utils import ProxyLogging
     from litellm.types.guardrails import GuardrailEventHooks
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -1479,3 +1489,226 @@ async def test_request_selected_mcp_guardrail_blocks_before_upstream(monkeypatch
     assert upstream.await_count == (0 if selected else 1)
     tool_message = model_call.await_args.kwargs["messages"][-1]
     assert ("request-selected MCP block" in tool_message["content"]) is selected
+
+
+_ECHO_ARGUMENTS: Final = '{"value": "PING"}'
+_CHAT_ROUND_ONE: Final = MappingProxyType(
+    {
+        "id": "chatcmpl-round-one",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-5.6",
+        "choices": (
+            MappingProxyType(
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": MappingProxyType(
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": (
+                                MappingProxyType(
+                                    {
+                                        "id": "call_echo",
+                                        "type": "function",
+                                        "function": MappingProxyType({"name": "echo", "arguments": _ECHO_ARGUMENTS}),
+                                    }
+                                ),
+                            ),
+                        }
+                    ),
+                }
+            ),
+        ),
+        "usage": MappingProxyType(
+            {
+                "prompt_tokens": 71,
+                "completion_tokens": 19,
+                "total_tokens": 90,
+                "prompt_tokens_details": MappingProxyType({"cached_tokens": 32}),
+            }
+        ),
+    }
+)
+_CHAT_ROUND_TWO: Final = MappingProxyType(
+    {
+        "id": "chatcmpl-round-two",
+        "object": "chat.completion",
+        "created": 2,
+        "model": "gpt-5.6",
+        "choices": (
+            MappingProxyType(
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": MappingProxyType({"role": "assistant", "content": "PING"}),
+                }
+            ),
+        ),
+        "usage": MappingProxyType(
+            {
+                "prompt_tokens": 149,
+                "completion_tokens": 5,
+                "total_tokens": 154,
+                "prompt_tokens_details": MappingProxyType({"cached_tokens": 64}),
+            }
+        ),
+    }
+)
+_CONTEXT_WINDOW_ERROR: Final = MappingProxyType(
+    {
+        "error": MappingProxyType(
+            {
+                "message": "Your input exceeds the context window of this model.",
+                "type": "invalid_request_error",
+                "param": "messages",
+                "code": "context_length_exceeded",
+            }
+        )
+    }
+)
+
+
+class _ChatRoundRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: tuple[StandardLoggingPayload, ...] = ()
+        self.failed: tuple[StandardLoggingPayload, ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.logged = (*self.logged, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.failed = (*self.failed, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+
+
+def _chat_round_cost(body: Mapping[str, object]) -> float:
+    return litellm.completion_cost(
+        completion_response=ModelResponse(**json.loads(json.dumps(body, default=dict))),
+        model="gpt-5.6",
+        custom_llm_provider="openai",
+    )
+
+
+async def _settled() -> None:
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+
+async def _auto_execute_chat_echo(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, rounds: Sequence[Response], call_id: str
+) -> tuple[_ChatRoundRecorder, ModelResponse | Exception]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://mcp-chat-rounds.example.com/v1/chat/completions").mock(side_effect=list(rounds))
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = Logging(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Call echo with PING"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id=call_id,
+        function_id=call_id,
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    echo_tool: Final = MCPTool.model_validate(
+        {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
+        by_name=False,
+    )
+    with (
+        patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            "process_mcp_tools_without_openai_transform",
+            AsyncMock(return_value=([echo_tool], {"echo": "demo"})),
+        ),
+        patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            "execute_tool_calls",
+            AsyncMock(return_value=[{"tool_call_id": "call_echo", "result": "PING", "name": "echo"}]),
+        ),
+    ):
+        try:
+            response: Final = await litellm.acompletion(
+                model="openai/gpt-5.6",
+                messages=[{"role": "user", "content": "Call echo with PING"}],
+                tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
+                api_key="sk-mcp-chat-rounds",
+                api_base="https://mcp-chat-rounds.example.com/v1",
+                litellm_logging_obj=logging_obj,
+            )
+        except Exception as error:
+            await _settled()
+            return recorder, error
+    await _settled()
+    assert isinstance(response, ModelResponse)
+    return recorder, response
+
+
+def _ok(body: Mapping[str, object]) -> Response:
+    return Response(200, content=json.dumps(body, default=dict))
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_logs_one_row_billing_both_rounds_and_matching_the_client_cost(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    recorder, response = await _auto_execute_chat_echo(
+        respx_mock, monkeypatch, (_ok(_CHAT_ROUND_ONE), _ok(_CHAT_ROUND_TWO)), "mcp-chat-rounds-both"
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "PING"
+    both_rounds: Final = _chat_round_cost(_CHAT_ROUND_ONE) + _chat_round_cost(_CHAT_ROUND_TWO)
+    assert len(recorder.logged) == 1
+    row: Final = recorder.logged[0]
+    assert row["id"] == response.id
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (71 + 149, 19 + 5)
+    assert row["metadata"]["usage_object"]["prompt_tokens_details"]["cached_tokens"] == 32 + 64
+    assert row["response_cost"] == pytest.approx(both_rounds)
+    assert row["cost_breakdown"]["total_cost"] == pytest.approx(both_rounds)
+    assert response.hidden_params["response_cost"] == pytest.approx(both_rounds)
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (71 + 149, 19 + 5)
+    assert recorder.failed == ()
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_without_a_tool_call_logs_the_one_round_it_made(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    recorder, response = await _auto_execute_chat_echo(
+        respx_mock, monkeypatch, (_ok(_CHAT_ROUND_TWO),), "mcp-chat-rounds-no-tool-call"
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert len(recorder.logged) == 1
+    assert recorder.logged[0]["id"] == response.id
+    assert (recorder.logged[0]["prompt_tokens"], recorder.logged[0]["completion_tokens"]) == (149, 5)
+    assert recorder.logged[0]["response_cost"] == pytest.approx(_chat_round_cost(_CHAT_ROUND_TWO))
+    assert response.hidden_params["response_cost"] == pytest.approx(recorder.logged[0]["response_cost"])
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follow_up_fails(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    recorder, outcome = await _auto_execute_chat_echo(
+        respx_mock,
+        monkeypatch,
+        (_ok(_CHAT_ROUND_ONE), Response(400, content=json.dumps(_CONTEXT_WINDOW_ERROR, default=dict))),
+        "mcp-chat-rounds-follow-up-fails",
+    )
+
+    assert isinstance(outcome, litellm.BadRequestError)
+    assert recorder.logged == ()
+    assert len(recorder.failed) == 1
+    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71, 19)
+    assert recorder.failed[0]["response_cost"] == pytest.approx(_chat_round_cost(_CHAT_ROUND_ONE))
+    assert recorder.failed[0]["response_cost"] > 0

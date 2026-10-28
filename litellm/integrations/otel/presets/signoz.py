@@ -91,5 +91,5 @@ def signoz_dynamic_headers(
 ) -> dict[str, str]:  # mutable-ok: DYNAMIC_HEADERS_BY_CALLBACK returns a dict
     key: Final = params.get("signoz_ingestion_key")
     if _tenant_endpoint_is_unusable(params) or not key:
-        return {}  # mutable-ok: same registry contract
-    return {"signoz-ingestion-key": key}  # mutable-ok: same registry contract
+        return {}
+    return {"signoz-ingestion-key": key}

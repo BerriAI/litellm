@@ -8,16 +8,13 @@ def test_create_aiohttp_transport_sets_enable_cleanup_closed_when_needed(monkeyp
     session_mock = MagicMock(name="session")
     monkeypatch.setattr(http_handler_module, "AIOHTTP_NEEDS_CLEANUP_CLOSED", True)
 
-    with patch.object(
-        http_handler_module, "TCPConnector", return_value=connector_mock
-    ) as mock_tcp_connector:
-        with patch.object(
-            http_handler_module, "ClientSession", return_value=session_mock
-        ), patch.object(http_handler_module, "DummyCookieJar", return_value=MagicMock(name="cookie_jar")):
-            transport = http_handler_module.AsyncHTTPHandler._create_aiohttp_transport(
-                shared_session=None
-            )
-            transport._get_valid_client_session()
+    with patch.object(http_handler_module, "TCPConnector", return_value=connector_mock) as mock_tcp_connector:
+        with (
+            patch.object(http_handler_module, "ClientSession", return_value=session_mock),
+            patch.object(http_handler_module, "DummyCookieJar", return_value=MagicMock(name="cookie_jar")),
+        ):
+            transport = http_handler_module.AsyncHTTPHandler.create_aiohttp_transport(shared_session=None)
+            transport.get_valid_client_session()
 
     assert mock_tcp_connector.call_args.kwargs["enable_cleanup_closed"] is True
 
@@ -31,15 +28,12 @@ def test_create_aiohttp_transport_omits_enable_cleanup_closed_when_not_needed(
     session_mock = MagicMock(name="session")
     monkeypatch.setattr(http_handler_module, "AIOHTTP_NEEDS_CLEANUP_CLOSED", False)
 
-    with patch.object(
-        http_handler_module, "TCPConnector", return_value=connector_mock
-    ) as mock_tcp_connector:
-        with patch.object(
-            http_handler_module, "ClientSession", return_value=session_mock
-        ), patch.object(http_handler_module, "DummyCookieJar", return_value=MagicMock(name="cookie_jar")):
-            transport = http_handler_module.AsyncHTTPHandler._create_aiohttp_transport(
-                shared_session=None
-            )
-            transport._get_valid_client_session()
+    with patch.object(http_handler_module, "TCPConnector", return_value=connector_mock) as mock_tcp_connector:
+        with (
+            patch.object(http_handler_module, "ClientSession", return_value=session_mock),
+            patch.object(http_handler_module, "DummyCookieJar", return_value=MagicMock(name="cookie_jar")),
+        ):
+            transport = http_handler_module.AsyncHTTPHandler.create_aiohttp_transport(shared_session=None)
+            transport.get_valid_client_session()
 
     assert "enable_cleanup_closed" not in mock_tcp_connector.call_args.kwargs

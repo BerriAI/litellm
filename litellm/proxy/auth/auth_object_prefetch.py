@@ -12,6 +12,7 @@ from typing import Final, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.caching.redis_cache import RedisCache
@@ -23,11 +24,13 @@ from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, UserAPIKeyAuth
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.user_api_key_cache import (
+    AUTH_OBJECTS_TARGET,
     UserApiKeyCache,
     get_management_object_ttl,
     team_membership_auth_cache_key,
     team_membership_reservation_cache_key,
 )
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.utils import PrismaClient
 
 _RowKind: TypeAlias = Literal["user_row", "team_row", "membership_row", "organization_row", "project_row"]
@@ -222,13 +225,14 @@ def _set_in_memory(memory: _InMemoryCache, cache_key: str, value: object, ttl: f
 async def _read_redis_rows(keys: list[str], redis_cache: RedisCache) -> Mapping[str, object]:
     """On the request pipeline when one is open; a failed pipeline reads as a miss, like ``async_batch_get_cache``."""
     batch: Final = active_request_redis_batch(redis_cache)
-    if batch is None:
-        return await redis_cache.async_batch_get_cache(key_list=keys)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API
-    try:
-        return await batch.mget(keys)
-    except Exception as e:  # noqa: BLE001  # the DB fill below takes over, as it does after a failed MGET today
-        verbose_proxy_logger.debug("auth prefetch Redis read failed, filling from the database: %s", e)
-        return MappingProxyType({})
+    with service_target(AUTH_OBJECTS_TARGET):
+        if batch is None:
+            return await redis_cache.async_batch_get_cache(key_list=keys)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API
+        try:
+            return await batch.mget(keys)
+        except Exception as e:  # noqa: BLE001  # the DB fill below takes over, as it does after a failed MGET today
+            verbose_proxy_logger.debug("auth prefetch Redis read failed, filling from the database: %s", e)
+            return MappingProxyType({})
 
 
 async def _fill_from_redis(entries: Sequence[_CacheEntry], redis_cache: RedisCache, memory: _InMemoryCache) -> None:
@@ -250,7 +254,7 @@ def _validate_row(
     try:
         columns: Final = _RowValues.validate_python(row_value)
         if row in _REFRESH_STAMPED_ROWS:
-            stamped: Final = {**columns, "last_refreshed_at": refreshed_at}  # mutable-ok: validators write into it
+            stamped: Final = {**columns, "last_refreshed_at": refreshed_at}
             return model_type.model_validate(stamped)
         return model_type.model_validate(columns)
     except ValidationError as e:
@@ -261,14 +265,15 @@ def _validate_row(
 async def _fetch_rows(
     refs: AuthObjectRefs, kinds: frozenset[_RowKind], prisma_client: PrismaClient
 ) -> Mapping[str, object]:
-    row: Final[object] = await prisma_client.db.query_first(  # pyright: ignore[reportAny]  # prisma types query_first as Any
-        _SQL,
-        refs.user_id if "user_row" in kinds else None,
-        refs.team_id if kinds & _TEAM_BOUND_ROWS else None,
-        refs.membership_user_id if "membership_row" in kinds else None,
-        refs.organization_id if "organization_row" in kinds else None,
-        refs.project_id if "project_row" in kinds else None,
-    )
+    async with db_span("prefetch_auth_objects", AUTH_OBJECTS_TARGET):
+        row: Final[object] = await prisma_client.db.query_first(  # pyright: ignore[reportAny]  # prisma types query_first as Any
+            _SQL,
+            refs.user_id if "user_row" in kinds else None,
+            refs.team_id if kinds & _TEAM_BOUND_ROWS else None,
+            refs.membership_user_id if "membership_row" in kinds else None,
+            refs.organization_id if "organization_row" in kinds else None,
+            refs.project_id if "project_row" in kinds else None,
+        )
     return _RowValues.validate_python(row) if row is not None else _NO_ROWS
 
 
@@ -283,11 +288,12 @@ async def _write_back(entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: U
     if cache.redis_cache is None:
         return
     batch: Final = active_request_redis_batch(cache.redis_cache)
-    if batch is None:
-        await cache.redis_cache.async_set_cache_pipeline_with_ttls(payloads)
-        return
-    for cache_key, payload, ttl in payloads:  # rides the request's next round trip; the scope drains leftovers
-        batch.set(cache_key, payload, ttl)
+    with service_target(AUTH_OBJECTS_TARGET):
+        if batch is None:
+            await cache.redis_cache.async_set_cache_pipeline_with_ttls(payloads)
+            return
+        for cache_key, payload, ttl in payloads:  # rides the request's next round trip; the scope drains leftovers
+            batch.set(cache_key, payload, ttl)
 
 
 async def _fill_from_db(

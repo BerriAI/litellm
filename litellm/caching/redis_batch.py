@@ -22,9 +22,16 @@ from datetime import timedelta
 from types import MappingProxyType, TracebackType
 from typing import Final, Generic, Protocol, TypeVar
 
+from litellm._internal_context import (
+    REDIS_FAMILIES_METADATA_KEY,
+    current_service_target,
+    service_caller,
+    service_target,
+)
 from litellm._logging import verbose_logger
 from litellm.caching.redis_cache import (
     RedisCache,
+    _get_call_stack_info,  # pyright: ignore[reportPrivateUsage]  # same caller chain every RedisCache method reports
     _run_under_circuit_breaker,  # pyright: ignore[reportPrivateUsage]  # same health signal as every RedisCache method
     log_redis_failure,
 )
@@ -33,7 +40,7 @@ from litellm.types.services import ServiceTypes
 
 _T = TypeVar("_T")
 _ScriptArg = str | bytes | int | float
-SettledHook = Callable[[asyncio.Future[_T]], Awaitable[None] | None]  # mutable-ok: Callable params
+SettledHook = Callable[[asyncio.Future[_T]], Awaitable[None] | None]
 POST_CALL_FLUSH_DEADLINE_SECONDS: Final = 1.0
 
 
@@ -56,12 +63,14 @@ class _Op(Generic[_T]):
     how to run on its own when the batch cannot pipeline (cluster client, or a reply the pipeline cannot
     settle, like NOSCRIPT)."""
 
-    __slots__ = ("future", "settled_hooks")
+    __slots__ = ("caller", "future", "settled_hooks", "target")
 
     def __init__(self) -> None:
         self.future: Final[asyncio.Future[_T]] = asyncio.get_running_loop().create_future()
         self.future.add_done_callback(_mark_retrieved)
         self.settled_hooks: Final[list[SettledHook[_T]]] = []  # mutable-ok: append-only registry
+        self.target: Final = current_service_target()
+        self.caller: Final = _get_call_stack_info()
 
     async def run_settled_hooks(self) -> None:
         for hook in self.settled_hooks:
@@ -100,7 +109,8 @@ class _Op(Generic[_T]):
 
     async def _settle_alone(self) -> None:
         try:
-            self.future.set_result(await self.run_alone())
+            with service_target(self.target), service_caller(self.caller):
+                self.future.set_result(await self.run_alone())
         except Exception as e:  # noqa: BLE001  # the declaring caller owns the failure of its own operation
             self.future.set_exception(e)
 
@@ -139,7 +149,7 @@ class _MGet(_Op[Mapping[str, object]]):
         )
 
     async def run_alone(self) -> Mapping[str, object]:
-        found: Mapping[str, object] = await self._redis_cache.async_batch_get_cache(key_list=list(self._keys))  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API  # mutable-ok: the cache API takes a list
+        found: Mapping[str, object] = await self._redis_cache.async_batch_get_cache(key_list=list(self._keys))  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API
         if any(key not in found for key in self._keys):
             raise ConnectionError("batch get did not return every key")
         return found
@@ -359,6 +369,7 @@ class RedisBatch:
 
     async def _flush_pipeline(self, ops: Sequence[_Op[object]]) -> None:
         start_time: Final = time.time()
+        target, metadata = _pipeline_service_event(ops)
         widths: list[int] = []  # mutable-ok: filled while enqueuing
 
         async def run() -> list[object]:
@@ -371,28 +382,32 @@ class RedisBatch:
             replies: Final = await _run_under_circuit_breaker(self.redis_cache._circuit_breaker, self.name, run)  # pyright: ignore[reportPrivateUsage]  # same breaker as the cache's own methods
         except Exception as e:  # noqa: BLE001  # each declaring caller applies its own Redis fallback
             log_redis_failure(verbose_logger, logging.WARNING, f"{self.name}: pipeline of {len(ops)} ops failed", e)
-            asyncio.create_task(
-                self.redis_cache.service_logger_obj.async_service_failure_hook(
-                    service=ServiceTypes.REDIS,
-                    duration=time.time() - start_time,
-                    error=e,
-                    call_type=f"{self.name}[{len(ops)}]",
-                    start_time=start_time,
-                    end_time=time.time(),
+            with service_target(target):
+                asyncio.create_task(
+                    self.redis_cache.service_logger_obj.async_service_failure_hook(
+                        service=ServiceTypes.REDIS,
+                        duration=time.time() - start_time,
+                        error=e,
+                        call_type=self.name,
+                        start_time=start_time,
+                        end_time=time.time(),
+                        event_metadata=metadata,
+                    )
                 )
-            )
             for op in ops:
                 op.future.set_exception(e)
             return
-        asyncio.create_task(
-            self.redis_cache.service_logger_obj.async_service_success_hook(
-                service=ServiceTypes.REDIS,
-                duration=time.time() - start_time,
-                call_type=f"{self.name}[{len(ops)}]",
-                start_time=start_time,
-                end_time=time.time(),
+        with service_target(target):
+            asyncio.create_task(
+                self.redis_cache.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    call_type=self.name,
+                    start_time=start_time,
+                    end_time=time.time(),
+                    event_metadata=metadata,
+                )
             )
-        )
         retries: list[Awaitable[None]] = []  # mutable-ok: collected while slicing replies
         offset = 0
         for op, width in zip(ops, widths):
@@ -402,6 +417,18 @@ class RedisBatch:
                 retries.append(retry)
         if retries:
             await asyncio.gather(*retries)
+
+
+MIXED_PIPELINE_TARGET: Final = "mixed"
+
+
+def _pipeline_service_event(ops: Sequence[_Op[object]]) -> tuple[str | None, dict[str, int | str]]:
+    """The target and metadata of one pipeline flush: the one key family every op was declared under, or
+    ``"mixed"`` plus the sorted families when owners of several families share the trip."""
+    families: Final = sorted({op.target for op in ops if op.target is not None})
+    if len(families) > 1:
+        return MIXED_PIPELINE_TARGET, {"op_count": len(ops), REDIS_FAMILIES_METADATA_KEY: ",".join(families)}
+    return next(iter(families), None), {"op_count": len(ops)}
 
 
 def _backend_key(redis_cache: RedisCache) -> object:
@@ -488,10 +515,6 @@ class RequestRedisBatches:
     @property
     def batches(self) -> tuple[RedisBatch, ...]:
         return tuple(self._batches.values())
-
-    @property
-    def post_call_batches(self) -> tuple[RedisBatch, ...]:
-        return tuple(self._post_call.values())
 
 
 _active_request_batches: Final[ContextVar[RequestRedisBatches | None]] = ContextVar(

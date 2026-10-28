@@ -4,6 +4,13 @@ import { apiClient } from "@/components/networking";
 import { ApiError } from "@/lib/http/client";
 import type { components } from "@/lib/http/schema";
 import { generatedKey, projectToolResult, type ResultKind } from "./toolResults";
+import {
+  buildUsageChart,
+  usageChartRequestSchema,
+  usageChartSource,
+  type UsageChart,
+  type UsageChartSource,
+} from "./usageChart";
 
 export interface LiteAdminAction {
   id: string;
@@ -15,20 +22,30 @@ export interface LiteAdminAction {
 
 export type ActionResult = { status: "completed"; key?: string } | { status: "unknown"; message: string };
 
+export type AriaAccess =
+  | { mode: "admin" }
+  | { mode: "usage"; scope: { type: "global" } | { type: "user"; userId: string } };
+
 export interface OperationContext {
+  access: AriaAccess;
   accessToken: string;
   signal: AbortSignal;
   assertCurrent: () => void;
   beforeTool: () => void;
   confirm: (action: LiteAdminAction) => Promise<boolean>;
   onResult: (action: LiteAdminAction, result: ActionResult) => void;
+  onChart: (chart: UsageChart) => void;
 }
 
 type Schemas = components["schemas"];
 const text = z.string().min(1).max(200);
 const hash = z.string().regex(/^[a-f0-9]{64}$/i, "Use the key hash from a lookup, not a raw API key.");
-const optional = <Schema extends z.ZodType<unknown>>(schema: Schema) =>
-  schema.nullable().transform((value) => value ?? undefined);
+const optional = <Schema extends z.ZodType<unknown>>(schema: Schema) => schema.nullable();
+type NullsStripped<T> = { [K in keyof T]: Exclude<T[K], null> };
+const stripNulls = <T extends Record<string, unknown>>(args: T): NullsStripped<T> =>
+  Object.fromEntries(
+    Object.entries(args).map(([key, value]) => [key, value === null ? undefined : value]),
+  ) as NullsStripped<T>;
 const optionalText = optional(text);
 const amount = optional(z.number().finite().nonnegative());
 const limit = optional(z.number().int().nonnegative());
@@ -47,15 +64,15 @@ const keyFields = {
 };
 const teamFields = { team_alias: optionalText, organization_id: optionalText, models, ...limits };
 const userFields = {
-  user_email: optional(z.string().email().max(200)),
+  user_email: optional(z.email().max(200)),
   user_alias: optionalText,
   user_role: optional(z.enum(["proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer"])),
   models,
   ...limits,
 };
-const object = <Shape extends z.ZodRawShape>(shape: Shape) => z.object(shape).strict();
+const object = <Shape extends z.ZodRawShape>(shape: Shape) => z.strictObject(shape);
 const dated = <Shape extends z.ZodRawShape>(shape: Shape) =>
-  object({ start_date: z.string().date(), end_date: z.string().date(), ...shape }).refine((value) => {
+  object({ start_date: z.iso.date(), end_date: z.iso.date(), ...shape }).refine((value: Record<string, unknown>) => {
     if (typeof value.start_date !== "string" || typeof value.end_date !== "string") return false;
     const days = (Date.parse(value.end_date) - Date.parse(value.start_date)) / 86_400_000;
     return days >= 0 && days <= 366;
@@ -102,24 +119,45 @@ const requestLogsFields = {
 };
 
 export function createLiteAdminOperations(context: OperationContext) {
+  const usageSources = new Map<string, UsageChartSource>();
   const active = () => {
     context.signal.throwIfAborted();
     context.assertCurrent();
   };
   const auth = { accessToken: context.accessToken, signal: context.signal };
+  const chartDefinition = {
+    name: "render_usage_chart",
+    description:
+      "Show one chart with the answer using the source_id of a successful usage lookup in this turn. Choose daily_spend for spend over time, model_spend or provider_spend for cost comparisons, daily_requests or daily_tokens for trends, or token_breakdown for input/output/cache analysis. Values come directly from that lookup. Follow with a short explanation, not a duplicate table. A later chart replaces the earlier chart for this answer. Read-only.",
+    parameters: usageChartRequestSchema,
+    function: (rawArgs: unknown) => {
+      active();
+      context.beforeTool();
+      const args = usageChartRequestSchema.parse(rawArgs);
+      const source = usageSources.get(args.source_id);
+      if (!source) return { success: false, message: "Fetch usage first and use the source_id from that result." };
+      const chart = buildUsageChart(source, args.view);
+      if (!chart)
+        return { success: false, message: "No recorded data is available for this chart. Explain that in text." };
+      context.onChart(chart);
+      return { success: true, chart };
+    },
+  };
+  const renderChart = zodFunction(chartDefinition);
   const operation =
-    (mode: "read" | "write" | "delete", kind: ResultKind) =>
+    (mode: "read" | "write" | "delete", kind: ResultKind, extraArguments?: Record<string, unknown>) =>
     <Schema extends z.ZodType<Record<string, unknown>>>(
       name: string,
       title: string,
       schema: Schema,
-      execute: (args: z.output<Schema>) => Promise<unknown>,
+      execute: (args: NullsStripped<z.output<Schema>>) => Promise<unknown>,
     ) => {
       const definition = {
         name,
         description: `${title}. Null means omitted or unchanged. ${mode === "read" ? "Read-only." : "Requires the administrator to review and confirm the change."}`,
         parameters: schema,
-        function: async (args: z.output<Schema>) => {
+        function: async (rawArgs: unknown) => {
+          const args = stripNulls(rawArgs as z.output<Schema>);
           active();
           context.beforeTool();
           const action: LiteAdminAction | undefined =
@@ -129,7 +167,10 @@ export function createLiteAdminOperations(context: OperationContext) {
                   id: crypto.randomUUID(),
                   name,
                   title,
-                  arguments: Object.fromEntries(Object.entries(args).filter(([, value]) => value !== undefined)),
+                  arguments: {
+                    ...Object.fromEntries(Object.entries(args).filter(([, value]) => value !== undefined)),
+                    ...extraArguments,
+                  },
                   destructive: mode === "delete",
                 };
           if (action) {
@@ -140,7 +181,7 @@ export function createLiteAdminOperations(context: OperationContext) {
           const outcome = await Promise.resolve()
             .then(() => {
               active();
-              return execute(args);
+              return execute({ ...args, ...extraArguments } as NullsStripped<z.output<Schema>>);
             })
             .then(
               (value) => ({ ok: true, value }) as const,
@@ -165,15 +206,65 @@ export function createLiteAdminOperations(context: OperationContext) {
           }
           const key = name === "key_create" || name === "user_create" ? generatedKey(outcome.value) : undefined;
           if (action) context.onResult(action, { status: "completed", ...(key ? { key } : {}) });
+          const result = projectToolResult(kind, outcome.value, [context.accessToken, ...(key ? [key] : [])]);
+          let reportScope: "Gateway usage" | "All teams" | "All tags" = "Gateway usage";
+          if (name === "get_team_usage_data") reportScope = "All teams";
+          if (name === "get_tag_usage_data") reportScope = "All tags";
+          const source = kind === "usage" ? usageChartSource(result, args, context.access, reportScope) : undefined;
+          const sourceId = source ? crypto.randomUUID() : undefined;
+          if (source && sourceId) usageSources.set(sourceId, source);
           return {
             operation: name,
             success: true,
-            result: projectToolResult(kind, outcome.value, [context.accessToken, ...(key ? [key] : [])]),
+            result,
+            ...(sourceId ? { source_id: sourceId } : {}),
           };
         },
       };
       return zodFunction(definition);
     };
+
+  if (context.access.mode === "usage" && context.access.scope.type === "user") {
+    const userId = context.access.scope.userId;
+    return [
+      renderChart,
+      operation("read", "usage")(
+        "get_usage_data",
+        "View your dated usage totals, daily trends, and top models, providers and keys with prompt, completion, cache-read and cache-creation token counts when available. Do not add cache counts to total_tokens",
+        dated({}),
+        (a) => {
+          if (!userId.trim()) throw new Error("A signed-in user is required to query usage.");
+          return apiClient.get<unknown>("/user/daily/activity/aggregated", {
+            ...auth,
+            query: { ...a, user_id: userId, api_key_limit: 20 },
+          });
+        },
+      ),
+    ];
+  }
+
+  const usageOperations = [
+    renderChart,
+    operation("read", "usage")(
+      "get_usage_data",
+      "View dated global or user usage totals, daily trends, and top models, providers and keys with prompt, completion, cache-read and cache-creation token counts when available. Do not add cache counts to total_tokens",
+      dated({ user_id: optionalText }),
+      (a) => apiClient.get<unknown>("/user/daily/activity/aggregated", { ...auth, query: { ...a, api_key_limit: 20 } }),
+    ),
+    operation("read", "usage")(
+      "get_team_usage_data",
+      "View dated usage by team, including model and provider breakdowns with prompt, completion, cache-read and cache-creation token counts when available. Do not add cache counts to total_tokens. Omit team_ids for all teams",
+      dated({ team_ids: optionalText }),
+      (a) => apiClient.get<unknown>("/team/daily/activity/aggregated", { ...auth, query: { ...a, api_key_limit: 20 } }),
+    ),
+    operation("read", "usage")(
+      "get_tag_usage_data",
+      "View dated usage by tag, including model and provider breakdowns with prompt, completion, cache-read and cache-creation token counts when available. Do not add cache counts to total_tokens. Omit tags for all tags",
+      dated({ tags: optionalText }),
+      (a) => apiClient.get<unknown>("/tag/daily/activity/aggregated", { ...auth, query: { ...a, api_key_limit: 20 } }),
+    ),
+  ];
+  if (context.access.mode === "usage") return usageOperations;
 
   return [
     operation("read", "key")("keys_list", "List virtual keys", object(keysListFields), (a) =>
@@ -197,6 +288,13 @@ export function createLiteAdminOperations(context: OperationContext) {
     ),
     operation("write", "key")("key_update", "Update a virtual key", object({ key: hash, ...keyFields }), (a) =>
       apiClient.post<unknown>("/key/update", { ...auth, body: a satisfies Partial<Schemas["UpdateKeyRequest"]> }),
+    ),
+    operation("write", "key", { team_id: null })(
+      "key_detach_from_team",
+      "Remove a virtual key from its team without deleting the key",
+      object({ key: hash }),
+      (a) =>
+        apiClient.post<unknown>("/key/update", { ...auth, body: a satisfies Partial<Schemas["UpdateKeyRequest"]> }),
     ),
     operation("delete", "key")(
       "key_delete",
@@ -256,10 +354,10 @@ export function createLiteAdminOperations(context: OperationContext) {
     operation("read", "user")("user_info", "View a user", object({ user_id: text }), (a) =>
       apiClient.get<unknown>("/v2/user/info", { ...auth, query: a }),
     ),
-    operation("write", "user")(
+    operation("write", "user", { auto_create_key: false })(
       "user_create",
       "Create a user without a key",
-      object({ user_id: optionalText, ...userFields }).transform((a) => ({ ...a, auto_create_key: false })),
+      object({ user_id: optionalText, ...userFields }),
       (a) => apiClient.post<unknown>("/user/new", { ...auth, body: a satisfies Partial<Schemas["NewUserRequest"]> }),
     ),
     operation("write", "user")("user_update", "Update a user", object({ user_id: text, ...userFields }), (a) =>
@@ -314,6 +412,7 @@ export function createLiteAdminOperations(context: OperationContext) {
       dated({ api_key: hash }),
       (a) => apiClient.get<unknown>("/key/spend/report", { ...auth, query: a }),
     ),
+    ...usageOperations,
     operation("read", "log")(
       "request_logs",
       "List request cost, timing and status, excluding prompts and responses",

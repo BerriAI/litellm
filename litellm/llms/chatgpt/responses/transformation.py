@@ -1,13 +1,16 @@
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from openai.types.responses.response_input_param import ResponseInputItemParam
 
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _safe_convert_created_field,
+    safe_convert_created_field,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.sse_output_recovery import (
@@ -23,36 +26,71 @@ from litellm.types.llms.openai import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
-from ..authenticator import Authenticator
+from ..authenticator import Authenticator, get_cached_authenticator, get_chatgpt_auth_file
 from ..common_utils import (
     CHATGPT_API_BASE,
     GetAccessTokenError,
     ensure_chatgpt_session_id,
+    get_chatgpt_client_credential,
     get_chatgpt_default_headers,
     get_chatgpt_default_instructions,
+    strip_chatgpt_client_credential_headers,
 )
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
+_CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
+
+
+def _system_item_as_developer(item: ResponseInputItemParam) -> ResponseInputItemParam:
+    # The Codex backend 400s on {"type": "message", "role": "system"} items ("System messages are not
+    # allowed") but accepts role=developer in the same position, which is what the Codex CLI sends.
+    if item.get("role") != "system":
+        return item
+    return cast(  # cast-ok: only the role changes, and developer is valid wherever system is
+        ResponseInputItemParam, {**item, "role": "developer"}
+    )
+
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
-    def __init__(self) -> None:
+    def __init__(self, authenticator: Authenticator | None = None) -> None:
         super().__init__()
-        self.authenticator = Authenticator()
+        self.authenticator = authenticator if authenticator is not None else Authenticator()
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.CHATGPT
 
+    def _resolve_authenticator(self, litellm_params: GenericLiteLLMParams | None) -> Authenticator:
+        auth_file: Final = get_chatgpt_auth_file(litellm_params)
+        return get_cached_authenticator(auth_file) if auth_file else self.authenticator
+
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
+    ) -> dict[str, str]:
+        session_id: Final = ensure_chatgpt_session_id(litellm_params)
+        client_credential: Final = get_chatgpt_client_credential(headers)
+        if client_credential is not None:
+            return {
+                **get_chatgpt_default_headers(client_credential.access_token, client_credential.account_id, session_id),
+                **strip_chatgpt_client_credential_headers(headers),
+            }
+        authenticator: Final = self._resolve_authenticator(litellm_params)
+        safe_headers: Final = strip_chatgpt_client_credential_headers(headers)
+        configured_api_key: Final = litellm_params.api_key if litellm_params is not None else None
+        if configured_api_key and not get_chatgpt_auth_file(litellm_params):
+            return {
+                **get_chatgpt_default_headers(
+                    configured_api_key, authenticator.get_account_id(configured_api_key), session_id
+                ),
+                **safe_headers,
+            }
         try:
-            access_token: Final = self.authenticator.get_access_token()
+            access_token: Final = authenticator.get_access_token()
         except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
@@ -60,10 +98,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 message=str(e),
             )
 
-        account_id: Final = self.authenticator.get_account_id()
-        session_id: Final = ensure_chatgpt_session_id(litellm_params)
+        account_id: Final = authenticator.get_account_id()
         default_headers: Final = get_chatgpt_default_headers(access_token, account_id, session_id)
-        return {**default_headers, **headers}
+        return {**default_headers, **safe_headers}
 
     def transform_responses_api_request(
         self,
@@ -75,7 +112,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> dict:
         request: Final = super().transform_responses_api_request(
             model,
-            input,
+            [{"role": "user", "content": input}]
+            if isinstance(input, str)
+            else [_system_item_as_developer(item) for item in input],
             response_api_optional_request_params,
             litellm_params,
             headers,
@@ -108,7 +147,11 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "truncation",
         }
 
-        return {k: v for k, v in request.items() if k in allowed_keys}
+        filtered: Final = {k: v for k, v in request.items() if k in allowed_keys}
+        service_tier: Final = _CHATGPT_SERVICE_TIERS.get(request.get("service_tier"))
+        if service_tier is not None:
+            filtered["service_tier"] = service_tier
+        return filtered
 
     def transform_response_api_response(
         self,
@@ -210,7 +253,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if not response_payload.get("output") and streamed_output_items:
             response_payload["output"] = [item for _, item in sorted(streamed_output_items.items())]
         if "created_at" in response_payload:
-            response_payload["created_at"] = _safe_convert_created_field(response_payload["created_at"])
+            response_payload["created_at"] = safe_convert_created_field(response_payload["created_at"])
         try:
             return ResponsesAPIResponse(**response_payload)
         except Exception:
@@ -219,7 +262,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _extract_error_message(self, parsed_chunk: dict[str, Any]) -> str | None:
         error_obj: Final = parsed_chunk.get("error") or (parsed_chunk.get("response") or {}).get("error")
         if error_obj is None:
-            return None
+            top_level_message: Final = parsed_chunk.get("message")
+            return top_level_message if isinstance(top_level_message, str) else None
         if isinstance(error_obj, dict):
             return error_obj.get("message") or str(error_obj)
         return str(error_obj)
@@ -231,10 +275,13 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> None:
         raw_headers: Final = dict(raw_response.headers)
         processed_headers: Final = process_response_headers(raw_headers)
-        if not hasattr(completed_response, "_hidden_params"):
-            setattr(completed_response, "_hidden_params", {})
-        completed_response._hidden_params["additional_headers"] = processed_headers
-        completed_response._hidden_params["headers"] = raw_headers
+        if not hasattr(completed_response, HIDDEN_PARAMS_ATTR):
+            set_hidden_params(completed_response, {})
+        hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
+            dict[str, object], getattr(completed_response, HIDDEN_PARAMS_ATTR)
+        )
+        hidden_params["additional_headers"] = processed_headers
+        hidden_params["headers"] = raw_headers
 
     def get_complete_url(
         self,
@@ -242,8 +289,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: dict,
     ) -> str:
         api_base = api_base or self.authenticator.get_api_base() or CHATGPT_API_BASE
-        api_base = api_base.rstrip("/")
-        return f"{api_base}/responses"
+        return join_api_base(api_base, "responses")
 
     def supports_native_websocket(self) -> bool:
         """ChatGPT does not support native WebSocket for Responses API"""

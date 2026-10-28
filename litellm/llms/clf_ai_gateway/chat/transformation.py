@@ -53,7 +53,7 @@ class ClfAiGatewayConfig(OpenAIGPTConfig):
         extra: Final = ("reasoning_effort",) if supports_reasoning else ()
         return [*SUPPORTED_OPENAI_PARAMS, *extra]  # mutable-ok: one-shot build, list per base contract
 
-    def _get_openai_compatible_provider_info(
+    def get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         resolved_api_base: Final = (

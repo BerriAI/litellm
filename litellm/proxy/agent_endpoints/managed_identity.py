@@ -49,21 +49,12 @@ class IdentityHistoryKey(TypedDict):
     client_id: ReadOnly[str]
 
 
-class IdentityHistoryWhere(TypedDict):
-    provider_tenant_id_client_id: ReadOnly[IdentityHistoryKey]
-
-
 class IdentityHistoryEntry(IdentityHistoryKey):
     issuer: ReadOnly[str]
 
 
-class IdentityHistoryConnect(TypedDict):
-    where: ReadOnly[IdentityHistoryWhere]
-    create: ReadOnly[IdentityHistoryEntry]
-
-
 class IdentityHistoryWrite(TypedDict):
-    connectOrCreate: ReadOnly[IdentityHistoryConnect]
+    create: ReadOnly[IdentityHistoryEntry]
 
 
 class ManagedWriteFields(TypedDict, total=False):
@@ -128,6 +119,10 @@ def managed_write_fields(
         return AgentIdentityFailure(message=f"Invalid agent identity configuration: {exc}")
 
 
+def _identity_fields(identity: EntraIdentityConfig) -> Mapping[str, object]:
+    return identity.model_dump()
+
+
 def _identity_write(identity: EntraIdentityConfig | None, existing: AgentResponse | None) -> ManagedWriteFields:
     if identity is None:
         unbind: Final[ManagedWriteFields] = {
@@ -143,7 +138,7 @@ def _identity_write(identity: EntraIdentityConfig | None, existing: AgentRespons
         existing
         and existing.identity
         and existing.identity.active
-        and all(getattr(existing.identity, name) == value for name, value in identity.model_dump().items())
+        and all(getattr(existing.identity, name) == value for name, value in _identity_fields(identity).items())
     ):
         unchanged: Final[ManagedWriteFields] = {}
         return unchanged
@@ -161,20 +156,11 @@ def _identity_write(identity: EntraIdentityConfig | None, existing: AgentRespons
     }
     result: Final[ManagedWriteFields] = {
         "retired_identities": {
-            "connectOrCreate": {
-                "where": {
-                    "provider_tenant_id_client_id": {
-                        "provider": identity.provider,
-                        "tenant_id": identity.tenant_id,
-                        "client_id": identity.client_id,
-                    }
-                },
-                "create": {
-                    "provider": identity.provider,
-                    "issuer": identity.issuer,
-                    "tenant_id": identity.tenant_id,
-                    "client_id": identity.client_id,
-                },
+            "create": {
+                "provider": identity.provider,
+                "issuer": identity.issuer,
+                "tenant_id": identity.tenant_id,
+                "client_id": identity.client_id,
             }
         },
         "identity_managed": True,

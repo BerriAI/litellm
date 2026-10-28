@@ -53,11 +53,11 @@ def test_provider_is_registered() -> None:
 def test_default_api_base_and_env_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLF_AI_GATEWAY_API_KEY", "sk-gw-test")
     monkeypatch.delenv("CLF_AI_GATEWAY_API_BASE", raising=False)
-    api_base, api_key = ClfAiGatewayConfig()._get_openai_compatible_provider_info(api_base=None, api_key=None)
+    api_base, api_key = ClfAiGatewayConfig().get_openai_compatible_provider_info(api_base=None, api_key=None)
     assert api_base == "https://api.clfaigateway.dev/v1"
     assert api_key == "sk-gw-test"
 
-    api_base, api_key = ClfAiGatewayConfig()._get_openai_compatible_provider_info(
+    api_base, api_key = ClfAiGatewayConfig().get_openai_compatible_provider_info(
         api_base="https://example.test/v1", api_key="explicit"
     )
     assert api_base == "https://example.test/v1"
