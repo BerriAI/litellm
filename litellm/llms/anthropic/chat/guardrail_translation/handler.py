@@ -596,9 +596,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        *,
+        request_data: dict[str, object] | None = None,  # mutable-ok: the request dict guardrails receive
     ) -> Mapping[str, object]:
         """
-        Process input messages by applying guardrails to text content.
+        Process input messages by applying guardrails to text content. ``request_data`` is what the guardrail sees as
+        the request when ``data`` is only its body, e.g. a provider pass-through route that nests the body
         """
         messages: Final = data.get("messages")
         if messages is None:
@@ -610,7 +613,9 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         # The top-level prompt is translated on its own below so it can be hoisted in front of
         # any mid-turn system entries and scanned first, aligned with that structured position.
-        translation_source: Final = {key: value for key, value in data.items() if key != "system"}
+        request_model: Final = (request_data or {}).get("model")
+        model: Final = data.get("model") or (request_model if isinstance(request_model, str) else "")
+        translation_source: Final = {**{key: value for key, value in data.items() if key != "system"}, "model": model}
         chat_completion_compatible_request: Final = self._translate_to_openai(translation_source)
 
         full_structured_messages: Final = cast(
@@ -682,7 +687,6 @@ class AnthropicMessagesHandler(BaseTranslation):
             if structured_messages:
                 inputs["structured_messages"] = structured_messages
             # Include model information if available
-            model: Final = data.get("model")
             if model:
                 inputs["model"] = model
             original_tool_names: Final = _original_tool_names(
@@ -690,7 +694,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
-                request_data=data,
+                request_data=data if request_data is None else request_data,
                 input_type="request",
                 logging_obj=litellm_logging_obj,
             )
