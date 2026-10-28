@@ -80,7 +80,6 @@ def test_native_logging_observes_level_changes(caplog: pytest.LogCaptureFixture)
     ),
 )
 def test_native_credential_patterns_match_python(text: str) -> None:
-    pytest.importorskip("litellm.rust_bridge._native")
     from litellm.rust_bridge._native import NativeDiagnosticProcessor
 
     processor: Final = NativeDiagnosticProcessor(MINIMUM_CUSTOM_KEY_LENGTH)
@@ -91,7 +90,6 @@ def test_native_credential_patterns_match_python(text: str) -> None:
 
 
 def test_native_client_redaction_matches_python() -> None:
-    pytest.importorskip("litellm.rust_bridge._native")
     from litellm.rust_bridge._native import NativeDiagnosticProcessor
 
     text: Final = "error at /etc/secrets/config on db.internal\nTraceback (most recent call last):\nsecret"
@@ -100,7 +98,6 @@ def test_native_client_redaction_matches_python() -> None:
 
 
 def test_native_diagnostic_batch_matches_python() -> None:
-    pytest.importorskip("litellm.rust_bridge._native")
     from litellm.rust_bridge._native import NativeDiagnosticProcessor
 
     message: Final = "é" * 110 + "sk-" + "q" * 48 + "界" * 1000

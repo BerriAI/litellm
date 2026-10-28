@@ -19,7 +19,7 @@ jobs:
     name: interactions-spec-canary
     if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: read
     outputs:
@@ -39,8 +39,11 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Set up the Rust bridge
+        uses: ./.github/actions/rust-bridge
+
       - name: Install dependencies
-        run: .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra proxy --no-install-project
+        run: .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra proxy
 
       - name: Run the compliance tests against Google's live spec
         id: compliance

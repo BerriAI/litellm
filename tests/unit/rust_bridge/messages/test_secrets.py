@@ -17,8 +17,6 @@ from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagem
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE
 from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
 
-pytest.importorskip("litellm.rust_bridge._native")
-
 pytestmark = pytest.mark.usefixtures("local_model_cost_map")
 
 

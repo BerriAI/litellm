@@ -1306,6 +1306,8 @@ jobs:
           done
   openai-sdk-compat:
     name: OpenAI ${{ matrix.openai-version }} compatibility
+    needs: rust-bridge
+    if: ${{ !cancelled() }}
     permissions:
       contents: read
       pull-requests: read
@@ -1342,10 +1344,18 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Set up the Rust bridge
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 5
+        uses: ./.github/actions/rust-bridge
+        with:
+          artifact: ${{ needs.rust-bridge.outputs.artifact }}
+
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
         run: |
           .github/scripts/uv_sync_with_retries.sh --frozen --group dev --group proxy-dev --extra proxy --no-install-workspace
+          cp rust-bridge-dist/litellm/rust_bridge/_native.* litellm/rust_bridge/
           uv pip install "openai==${OPENAI_VERSION:?}" --exclude-newer-package openai=2026-10-07T00:00:00Z
           uv run --no-sync python -c 'import os, openai; assert openai.__version__ == os.environ["OPENAI_VERSION"], openai.__version__'
 

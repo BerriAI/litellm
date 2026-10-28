@@ -7,7 +7,8 @@ from typing import Final, Generic, NoReturn, TypeAlias, TypeVar
 from typing_extensions import assert_never
 
 from litellm.exceptions import APIError
-from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
+from litellm.rust_bridge import _native
+from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import RouteContext, Rules, decision
 from litellm.rust_bridge.configuration import Decision
 from litellm.rust_bridge.response_metadata import mark_rust_response
@@ -153,15 +154,11 @@ def attempt(
 ) -> RustAttempt[ResultT]:
     if native_call is None:
         return RustUnavailable()
-    exceptions: Final = native_exception_types()
-    if exceptions is None:
-        return RustHandled(adapt(native_call()))
-    declined, upstream = exceptions
     try:
         value: Final = native_call()
-    except declined as error:
+    except _native.RustBridgeDeclined as error:
         return RustDeclined(reason=_decline_reason(error))
-    except upstream as error:
+    except _native.RustUpstreamError as error:
         _raise_upstream(error, context)
     return RustHandled(adapt(value))
 
@@ -174,15 +171,11 @@ async def aattempt(
 ) -> RustAttempt[ResultT]:
     if native_call is None:
         return RustUnavailable()
-    exceptions: Final = native_exception_types()
-    if exceptions is None:
-        return RustHandled(adapt(await native_call()))
-    declined, upstream = exceptions
     try:
         value: Final = await native_call()
-    except declined as error:
+    except _native.RustBridgeDeclined as error:
         return RustDeclined(reason=_decline_reason(error))
-    except upstream as error:
+    except _native.RustUpstreamError as error:
         _raise_upstream(error, context)
     return RustHandled(adapt(value))
 
