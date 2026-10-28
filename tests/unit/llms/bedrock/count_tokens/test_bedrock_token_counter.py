@@ -6,6 +6,7 @@ import httpx
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
+import litellm
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
@@ -290,6 +291,51 @@ async def test_claude_count_rejects_a_lone_responses_tool_without_calling_bedroc
     assert result is not None
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
     assert bedrock.posted_hosts() == ()
+
+
+_CLAUDE_REPLY: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 3, "output_tokens": 1},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment_model",
+    ("bedrock/invoke/us.anthropic.claude-sonnet-5-5", "bedrock_mantle/us.anthropic.claude-sonnet-5-5"),
+)
+async def test_claude_count_sends_the_tool_search_tool_the_deployments_inference_sends(deployment_model: str) -> None:
+    credentials: Final = DEPLOYMENT["litellm_params"]
+    inference: Final = _Bedrock(runtime=(200, _CLAUDE_REPLY), mantle=(200, _CLAUDE_REPLY))
+    await litellm.acompletion(
+        model=deployment_model,
+        messages=MESSAGES,
+        tools=[{"type": "tool_search"}],
+        max_tokens=8,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        **credentials,
+    )
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="bedrock_mantle/us.anthropic.claude-opus-5-5",
+        messages=MESSAGES,
+        contents=None,
+        deployment={"litellm_params": {**credentials, "model": deployment_model}},
+        request_model="claude-sonnet-5-5",
+        tools=[{"type": "tool_search"}],
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 2177)
+    counted_tools: Final = _JSON_BODY.validate_json(bedrock.requests[0].content)["tools"]
+    assert counted_tools == _JSON_BODY.validate_json(inference.requests[0].content)["tools"]
 
 
 @pytest.mark.asyncio
