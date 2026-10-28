@@ -1,6 +1,8 @@
 import asyncio
+import base64
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -405,3 +407,56 @@ async def test_azure_image_generation_request_body():
         call_args = mock_post.call_args
         request_json = call_args.kwargs.get("json", {})
         assert request_json == expected_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("transport", ["headers", "extra_headers", "scoped", "api_key"])
+@pytest.mark.parametrize("saved_key", [None, "fake-saved-gateway-key"])
+async def test_chatgpt_images_forward_client_login_and_workspace(
+    asynchronous: bool,
+    transport: str,
+    saved_key: str | None,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    claims: Final = {"https://api.openai.com/auth": {"chatgpt_account_id": "client-account"}}
+    payload: Final = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    token: Final = f"test.{payload}.test"
+    headers: Final = {"aUtHoRiZaTiOn": f"Bearer {token}", "ChatGPT-Account-Id": "selected-workspace"}
+    credentials: Final = (
+        {"provider_specific_header": {"custom_llm_provider": "chatgpt", "extra_headers": headers}}
+        if transport == "scoped"
+        else {"api_key": token, "extra_headers": {"cHaTgPt-AcCoUnT-Id": "selected-workspace"}}
+        if transport == "api_key"
+        else {transport: {**headers, "cookie": "fake-cookie", "x-litellm-api-key": "fake-gateway-key"}}
+    )
+    route: Final = respx_mock.post("https://chatgpt.com/backend-api/codex/images/generations").mock(
+        return_value=httpx.Response(200, json={"created": 1700000000, "data": [{"b64_json": "aW1n"}]})
+    )
+    params: Final = {
+        "model": "chatgpt/gpt-image-2",
+        "prompt": "A blue circle",
+        "api_key": saved_key,
+        **(
+            {
+                "client": AsyncOpenAI(
+                    api_key="fake", base_url="https://chatgpt.com/backend-api/codex", http_client=httpx.AsyncClient()
+                )
+            }
+            if asynchronous
+            else {}
+        ),
+        **credentials,
+    }
+    response: Final = await litellm.aimage_generation(**params) if asynchronous else litellm.image_generation(**params)
+    assert response.data[0].b64_json == "aW1n"
+    request: Final = route.calls.last.request
+    assert request.headers["authorization"] == f"Bearer {token}"
+    assert request.headers["chatgpt-account-id"] == "selected-workspace"
+    assert request.headers.get_list("content-type") == ["application/json"]
+    assert "cookie" not in request.headers
+    assert "x-litellm-api-key" not in request.headers
+    assert json.loads(request.content) == {"model": "gpt-image-2", "prompt": "A blue circle"}

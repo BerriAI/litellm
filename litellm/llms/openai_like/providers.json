@@ -250,6 +250,14 @@
       "/v1/messages"
     ]
   },
+  "refuseless": {
+    "base_url": "https://api.refuseless.com/v1",
+    "api_key_env": "REFUSELESS_API_KEY",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
+  },
   "streamlake": {
     "base_url": "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
     "api_key_env": "STREAMLAKE_API_KEY",

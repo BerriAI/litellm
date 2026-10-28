@@ -175,7 +175,7 @@ argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload.
 gcs_pub_sub_use_v1: Optional[bool] = False  # if you want to use v1 gcs pubsub logged payload
 generic_api_use_v1: Optional[bool] = False  # if you want to use v1 generic api logged payload
-argilla_transformation_object: Optional[Dict[str, Any]] = None
+argilla_transformation_object: Mapping[str, str] | None = None
 _async_input_callback: List[Union[str, Callable[..., object], "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
@@ -234,6 +234,7 @@ bedrock_neutralize_orphaned_tool_blocks: bool = True
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
 )  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
+anthropic_messages_estimate_initial_input_tokens: bool = False
 # When True, strip the OpenAI-flavored `usage.total_tokens` field that
 # LiteLLM injects into non-streaming /v1/messages responses, bringing the
 # wire response into line with the Anthropic spec (matches the streaming
@@ -333,7 +334,7 @@ in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
 # Proxy Authentication - auto-obtain/refresh OAuth2/JWT tokens for LiteLLM Proxy
-proxy_auth: Optional[Any] = None
+proxy_auth: _ProxyAuthHandlerType | None = None
 ### DEFAULT AZURE API VERSION ###
 AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the latest
 ### DEFAULT WATSONX API VERSION ###
@@ -503,7 +504,7 @@ skill_search_embedding_model: Optional[str] = None
 # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
 # New format: { "displayName": { "url": "...", "index": 0 } }
 # Old format: { "displayName": "url" } (for backward compatibility)
-public_model_groups_links: Dict[str, Union[str, Dict[str, Any]]] = {}
+public_model_groups_links: dict[str, str | dict[str, object]] = {}
 #### REQUEST PRIORITIZATION #######
 priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
 # priority_reservation_settings is lazy-loaded via __getattr__
@@ -683,6 +684,7 @@ openinfer_models: Final[Set[str]] = set()
 streamlake_models: Final[Set[str]] = set()
 v0_models: Set = set()
 morph_models: Set = set()
+opencode_go_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 lambda_ai_models: Set = set()
 inception_models: Set = set()
 hyperbolic_models: Set = set()
@@ -973,6 +975,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
             morph_models.add(key)
+        elif value.get("litellm_provider") == "opencode_go":
+            opencode_go_models.add(key)
         elif value.get("litellm_provider") == "lambda_ai":
             lambda_ai_models.add(key)
         elif value.get("litellm_provider") == "inception":
@@ -1141,6 +1145,7 @@ model_list = list(
     | streamlake_models
     | v0_models
     | morph_models
+    | opencode_go_models
     | lambda_ai_models
     | inception_models
     | black_forest_labs_models
@@ -1259,6 +1264,7 @@ def _build_models_by_provider() -> dict:
         "streamlake": streamlake_models,
         "v0": v0_models,
         "morph": morph_models,
+        "opencode_go": opencode_go_models,
         "lambda_ai": lambda_ai_models,
         "inception": inception_models,
         "hyperbolic": hyperbolic_models,
@@ -1729,6 +1735,9 @@ if TYPE_CHECKING:
     from .llms.hosted_vllm.decisions.transformation import (
         HostedVLLMDecisionsConfig as HostedVLLMDecisionsConfig,
     )
+    from .llms.lm_studio.decisions.transformation import (
+        LMStudioDecisionsConfig as LMStudioDecisionsConfig,
+    )
     from .llms.laya.decisions.transformation import (
         LayaDecisionsConfig as LayaDecisionsConfig,
     )
@@ -1737,6 +1746,9 @@ if TYPE_CHECKING:
     )
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
+    )
+    from .llms.azure.decisions.transformation import (
+        AzureDecisionsConfig as AzureDecisionsConfig,
     )
     from .llms.azure_ai.decisions.transformation import (
         AzureAIDecisionsConfig as AzureAIDecisionsConfig,
@@ -1782,10 +1794,10 @@ if TYPE_CHECKING:
         SagemakerNovaConfig as SagemakerNovaConfig,
     )
     from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
-    from .llms.anthropic.pass_through.messages.transformation import (
+    from .llms.anthropic.messages.native.transformation import (
         AnthropicMessagesConfig as AnthropicMessagesConfig,
     )
-    from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    from .llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeMessagesConfig as AmazonAnthropicClaudeMessagesConfig,
     )
     from .llms.bedrock.messages.mantle_transformation import (
@@ -1808,7 +1820,7 @@ if TYPE_CHECKING:
     from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
         VertexAIAnthropicConfig as VertexAIAnthropicConfig,
     )
-    from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
+    from .llms.vertex_ai.vertex_ai_partner_models.llama.transformation import (
         VertexAILlama3Config as VertexAILlama3Config,
     )
     from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
@@ -1835,10 +1847,10 @@ if TYPE_CHECKING:
     from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
         AmazonQwen3Config as AmazonQwen3Config,
     )
-    from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
+    from .llms.bedrock.chat.invoke_transformations.anthropic_legacy_text_completions_transformation import (
         AmazonAnthropicConfig as AmazonAnthropicConfig,
     )
-    from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    from .llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeConfig as AmazonAnthropicClaudeConfig,
     )
     from .llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation import (
@@ -2000,7 +2012,7 @@ if TYPE_CHECKING:
         GradientAIConfig as GradientAIConfig,
     )
     from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig as OpenAIGPTConfig
-    from .llms.openai.chat.gpt_5_transformation import (
+    from .llms.openai.chat.gpt_reasoning_transformation import (
         OpenAIGPT5Config as OpenAIGPT5Config,
     )
     from .llms.openai.transcriptions.whisper_transformation import (
@@ -2141,7 +2153,7 @@ if TYPE_CHECKING:
     from .llms.azure.chat.gpt_transformation import (
         AzureOpenAIConfig as AzureOpenAIConfig,
     )
-    from .llms.azure.chat.gpt_5_transformation import (
+    from .llms.azure.chat.gpt_reasoning_transformation import (
         AzureOpenAIGPT5Config as AzureOpenAIGPT5Config,
     )
     from .llms.azure.completion.transformation import (
@@ -2294,6 +2306,10 @@ if TYPE_CHECKING:
         LiteLLM_UpperboundKeyGenerateParams,
     )
     from litellm.utils import ModelResponseListIterator as _ModelResponseListIterator
+    from collections.abc import Awaitable
+    from litellm.types.utils import ModelResponse as _ModelResponseType
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper as _CustomStreamWrapperType
+    from litellm.proxy_auth import ProxyAuthHandler as _ProxyAuthHandlerType
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
@@ -2317,7 +2333,7 @@ if TYPE_CHECKING:
     supports_audio_output: Callable[..., bool]
     supports_system_messages: Callable[..., bool]
     supports_reasoning: Callable[..., bool]
-    acreate: Callable[..., Any]
+    acreate: Callable[..., Awaitable[_ModelResponseType | _CustomStreamWrapperType]]
     get_max_tokens: Callable[..., int]
     get_model_info: Callable[..., _ModelInfoType]
     register_prompt_template: Callable[..., None]
@@ -2615,8 +2631,10 @@ def __getattr__(name: str) -> Any:
             cancel_run,
             delete_run,
         )
+        from types import MappingProxyType
 
-        return locals()[name]
+        evals_exports: Final[Mapping[str, object]] = MappingProxyType(locals())
+        return evals_exports[name]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
