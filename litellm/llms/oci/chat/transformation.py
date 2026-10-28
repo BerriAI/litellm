@@ -676,12 +676,16 @@ class OCIChatConfig(BaseConfig):
                 chatRequest=chat_request,
             )
         else:
+            model_name: Final = model[4:] if model.lower().startswith("oci/") else model
+            merge_system_messages: Final = model_name.lower().startswith("google.gemini")
             data = OCICompletionPayload(
                 compartmentId=oci_compartment_id,
                 servingMode=serving_mode,
                 chatRequest=OCIChatRequestPayload(
                     apiFormat=vendor.value,
-                    messages=adapt_messages_to_generic_oci_standard(messages),
+                    messages=adapt_messages_to_generic_oci_standard(
+                        messages, merge_system_messages=merge_system_messages
+                    ),
                     **self._get_optional_params(vendor, optional_params, model),
                 ),
             )

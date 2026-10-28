@@ -166,8 +166,35 @@ def adapt_messages_to_generic_oci_standard_tool_response(role: str, tool_call_id
     )
 
 
+def _merge_system_oci_messages(messages: list[OCIMessage]) -> list[OCIMessage]:
+    system_messages: Final = [m for m in messages if m.role == "SYSTEM"]
+    if len(system_messages) <= 1:
+        return messages
+    texts: Final = [
+        part.text
+        for message in system_messages
+        for part in (message.content or [])
+        if isinstance(part, OCITextContentPart) and part.text
+    ]
+    if not texts:
+        return messages
+    merged: Final = OCIMessage(
+        role="SYSTEM",
+        content=[OCITextContentPart(text="\n".join(texts))],
+        toolCalls=None,
+        toolCallId=None,
+    )
+    first_system_index: Final = next(i for i, m in enumerate(messages) if m.role == "SYSTEM")
+    return [
+        merged if i == first_system_index else message
+        for i, message in enumerate(messages)
+        if message.role != "SYSTEM" or i == first_system_index
+    ]
+
+
 def adapt_messages_to_generic_oci_standard(
     messages: list[AllMessageValues],
+    merge_system_messages: bool = False,
 ) -> list[OCIMessage]:
     """Convert an OpenAI-format message array to OCI GENERIC format."""
     new_messages: Final = []
@@ -203,6 +230,8 @@ def adapt_messages_to_generic_oci_standard(
                 )
             new_messages.append(adapt_messages_to_generic_oci_standard_tool_response(role, tool_call_id, content))
 
+    if merge_system_messages:
+        return _merge_system_oci_messages(new_messages)
     return new_messages
 
 

@@ -2164,3 +2164,72 @@ class TestOpenAIPrefixMaxTokensKey:
         chat_request = _oci_chat_request("openai.gpt-5", {"max_tokens": 64})
         assert chat_request["maxCompletionTokens"] == 64
         assert "maxTokens" not in chat_request
+
+
+class TestOCIGeminiSystemMessageMerging:
+    def _chat_messages(self, model, messages):
+        return OCIChatConfig().transform_request(
+            model=model,
+            messages=messages,  # type: ignore
+            optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
+            litellm_params={},
+            headers={},
+        )["chatRequest"]["messages"]
+
+    def test_gemini_merges_multiple_system_messages_into_one(self):
+        messages = [
+            {"role": "system", "content": "End every answer with the word PINEAPPLE."},
+            {"role": "system", "content": "Start every answer with the word BANANA."},
+            {"role": "user", "content": "What is 2+2?"},
+        ]
+        assert self._chat_messages("google.gemini-2.5-flash", messages) == [
+            {
+                "role": "SYSTEM",
+                "content": [
+                    {
+                        "type": "TEXT",
+                        "text": "End every answer with the word PINEAPPLE.\nStart every answer with the word BANANA.",
+                    }
+                ],
+            },
+            {"role": "USER", "content": [{"type": "TEXT", "text": "What is 2+2?"}]},
+        ]
+
+    def test_gemini_merges_mid_conversation_system_message_at_first_system_position(self):
+        messages = [
+            {"role": "system", "content": "End every answer with the word PINEAPPLE."},
+            {"role": "user", "content": "What is 2+2?"},
+            {"role": "assistant", "content": "Four."},
+            {"role": "system", "content": "Also be concise."},
+        ]
+        assert self._chat_messages("oci/google.gemini-2.5-flash", messages) == [
+            {
+                "role": "SYSTEM",
+                "content": [
+                    {
+                        "type": "TEXT",
+                        "text": "End every answer with the word PINEAPPLE.\nAlso be concise.",
+                    }
+                ],
+            },
+            {"role": "USER", "content": [{"type": "TEXT", "text": "What is 2+2?"}]},
+            {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "Four."}]},
+        ]
+
+    def test_non_gemini_generic_model_keeps_system_messages_separate(self):
+        messages = [
+            {"role": "system", "content": "End every answer with the word PINEAPPLE."},
+            {"role": "system", "content": "Start every answer with the word BANANA."},
+            {"role": "user", "content": "What is 2+2?"},
+        ]
+        assert self._chat_messages("xai.grok-4", messages) == [
+            {
+                "role": "SYSTEM",
+                "content": [{"type": "TEXT", "text": "End every answer with the word PINEAPPLE."}],
+            },
+            {
+                "role": "SYSTEM",
+                "content": [{"type": "TEXT", "text": "Start every answer with the word BANANA."}],
+            },
+            {"role": "USER", "content": [{"type": "TEXT", "text": "What is 2+2?"}]},
+        ]
