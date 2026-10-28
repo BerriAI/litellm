@@ -10,7 +10,7 @@ serde = ["dep:serde"]
 schema = ["serde", "dep:schemars"]
 
 [dependencies]
-jiff = { version = "0.2.37", default-features = false, features = ["std"] }
+jiff = { version = "0.2.37", default-features = false, features = ["std", "tzdb-bundle-always"] }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 thiserror.workspace = true

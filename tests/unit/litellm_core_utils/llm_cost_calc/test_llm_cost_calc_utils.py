@@ -10,9 +10,7 @@ from litellm._internal_context import pinned_billing_time
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
-    PromptTokensDetailsResult,
     TokenRates,
-    _calculate_input_cost,
     _get_token_base_cost,
     _is_off_peak,
     _is_within_off_peak_window,
@@ -1919,7 +1917,7 @@ def test_calculate_cost_component_with_string_values():
 
 
 def test_string_cost_values_edge_cases():
-    """Test edge cases for string cost value handling."""
+    """A numeric string is a price, a word is not, and a row with one bad price is unpriced (decision 20)"""
     from unittest.mock import patch
 
     # Test with mixed string and float cost values
@@ -1954,14 +1952,7 @@ def test_string_cost_values_edge_cases():
             model="test-model", usage=usage, custom_llm_provider="test-provider"
         )
 
-    # Expected costs:
-    # Prompt: 1000 * 1e-6 + 100 * 0 (invalid string becomes 0)
-    # Completion: 500 * 2e-6 + 50 * 2e-6 (audio tokens fall back to base cost when output_cost_per_audio_token is None)
-    expected_prompt_cost = 1000 * 1e-6
-    expected_completion_cost = 500 * 2e-6 + 50 * 2e-6
-
-    assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
-    assert round(completion_cost, 12) == round(expected_completion_cost, 12)
+    assert (prompt_cost, completion_cost) == (0.0, 0.0)
 
 
 def test_string_cost_values_with_threshold():
@@ -2225,46 +2216,38 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
     """
     Regression test: when cache_creation_tokens is 0 but cache_creation_token_details
     has non-zero ephemeral tokens, the cost must still be calculated.
-    This ensures the guard in _calculate_input_cost doesn't skip
-    calculate_cache_writing_cost when only ephemeral token details are present.
     """
     cache_creation_cost = 3.75e-06
     cache_creation_cost_above_1hr = 6e-06
-
-    prompt_tokens_details: PromptTokensDetailsResult = {
-        "cache_hit_tokens": 0,
-        "cache_hit_audio_tokens": 0,
-        "cache_creation_tokens": 0,
-        "cache_creation_token_details": CacheCreationTokenDetails(
-            ephemeral_5m_input_tokens=100,
-            ephemeral_1h_input_tokens=200,
+    usage = Usage(
+        prompt_tokens=300,
+        completion_tokens=0,
+        total_tokens=300,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=0,
+            cache_creation_tokens=0,
+            cache_creation_token_details=CacheCreationTokenDetails(
+                ephemeral_5m_input_tokens=100,
+                ephemeral_1h_input_tokens=200,
+            ),
         ),
-        "text_tokens": 0,
-        "audio_tokens": 0,
-        "image_tokens": 0,
-        "video_tokens": 0,
-        "character_count": 0,
-        "image_count": 0,
-        "video_length_seconds": 0.0,
-        "audio_length_seconds": 0.0,
-        "query_count": 0,
-    }
-
-    model_info: ModelInfo = {}
-
-    result = _calculate_input_cost(
-        prompt_tokens_details=prompt_tokens_details,
-        model_info=model_info,
-        prompt_base_cost=0.0,
-        cache_read_cost=0.0,
-        cache_creation_cost=cache_creation_cost,
-        cache_creation_cost_by_ttl={"1hr": cache_creation_cost_above_1hr, "12hr": cache_creation_cost_above_1hr},
     )
 
-    # Expected: (100 * 3.75e-06) + (200 * 6e-06) = 0.000375 + 0.0012 = 0.001575
-    expected = (100 * cache_creation_cost) + (200 * cache_creation_cost_above_1hr)
-    assert result > 0, "Cost should not be zero when ephemeral token details are present"
-    assert round(result, 6) == round(expected, 6)
+    prompt_cost, _ = generic_cost_per_token(
+        model="litellm-test-ephemeral-cache-writes",
+        usage=usage,
+        custom_llm_provider="anthropic",
+        model_info=cast(
+            ModelInfo,
+            {
+                "input_cost_per_token": 0.0,
+                "cache_creation_input_token_cost": cache_creation_cost,
+                "cache_creation_input_token_cost_above_1hr": cache_creation_cost_above_1hr,
+            },
+        ),
+    )
+
+    assert prompt_cost == pytest.approx(100 * cache_creation_cost + 200 * cache_creation_cost_above_1hr)
 
 
 def test_service_tier_ultrafast_pricing():

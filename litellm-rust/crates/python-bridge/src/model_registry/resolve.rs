@@ -11,6 +11,7 @@ use pyo3::types::{PyDict, PyTuple};
 use serde_json::Value;
 
 use super::name_index::NameIndex;
+use crate::cost::PricesHandle;
 
 const CANDIDATES_MODULE: &str = "litellm.rust_bridge.host.model_names";
 
@@ -51,6 +52,22 @@ impl Resolved {
     /// The row as `resolve` read it, for the Python steps that still merge into it
     fn row(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         to_py(py, self.fields.as_ref())
+    }
+
+    /// The row's typed prices and uplifts. `resolve` already reported a row whose prices do not lower as `Invalid`
+    #[getter]
+    fn prices(&self) -> PricesHandle {
+        PricesHandle::lower(&self.key, &self.fields).unwrap_or_default()
+    }
+}
+
+impl Invalid {
+    pub(crate) fn new(key: String, errors: Vec<String>, fields: Arc<Fields>) -> Self {
+        Self {
+            key,
+            errors,
+            fields,
+        }
     }
 }
 

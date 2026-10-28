@@ -68,7 +68,7 @@ pub struct Billing {
     /// From `web_search_billing_unit`, whether web search and Maps grounding bill per query or once per prompt
     pub web_search: WebSearchUnit,
     /// Whether `tiered_pricing` bills each meter in its own tier or the whole call at the tier the input picks.
-    /// Dashscope rows bill the whole call (inferred, 10 checks no other row has that shape)
+    /// A prompt-token tier table bills the whole call, main's `_get_tiered_base_costs`
     pub tier_scope: TierScope,
 }
 

@@ -86,7 +86,7 @@ impl Located {
         Self::new(path_to_pointer(path), error)
     }
 
-    pub(crate) fn prepend(&mut self, key: &str) {
+    pub fn prepend(&mut self, key: &str) {
         let prefix = escape_pointer_segment(key);
         self.path = if self.path.is_empty() {
             format!("/{prefix}")

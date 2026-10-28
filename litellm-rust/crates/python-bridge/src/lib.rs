@@ -1,6 +1,7 @@
 mod cache;
 mod callable;
 mod coercion;
+mod cost;
 mod credentials;
 mod diagnostics;
 mod errors;
@@ -24,6 +25,8 @@ mod _native {
         types::{PyModule, PyTuple},
     };
 
+    #[pymodule_export]
+    use crate::cost::{CallContext, Line, Priced, PricesHandle, Unpriced, Usage};
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;

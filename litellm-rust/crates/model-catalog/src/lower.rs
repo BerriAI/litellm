@@ -141,7 +141,12 @@ fn billing(wire: &EntryWire, rates: &BTreeMap<Price, UnitPrice>) -> Billing {
             Some(WebSearchBillingUnit::PerQuery) => WebSearchUnit::PerQuery,
             Some(WebSearchBillingUnit::PerPrompt) | None => WebSearchUnit::PerPrompt,
         },
-        tier_scope: if provider == Some("dashscope") && wire.tier_rows.is_some() {
+        tier_scope: if wire
+            .tier_rows
+            .iter()
+            .flatten()
+            .any(|row| row.range.is_some())
+        {
             TierScope::WholeCall
         } else {
             TierScope::PerMeter
@@ -958,9 +963,13 @@ mod tests {
         json!({"litellm_provider": "gemini", "web_search_billing_unit": "per_query"}),
         Billing { web_search: WebSearchUnit::PerQuery, ..Billing::default() }
     )]
-    #[case::dashscope_tiers_bill_the_whole_call(
-        json!({"litellm_provider": "dashscope", "tiered_pricing": [{"range": [0, 32000], "input_cost_per_token": 1e-6}]}),
+    #[case::token_tiers_bill_the_whole_call(
+        json!({"litellm_provider": "openai", "tiered_pricing": [{"range": [0, 32000], "input_cost_per_token": 1e-6}]}),
         Billing { tier_scope: TierScope::WholeCall, ..Billing::default() }
+    )]
+    #[case::result_tiers_bill_per_meter(
+        json!({"litellm_provider": "exa_ai", "tiered_pricing": [{"max_results_range": [1, 25], "input_cost_per_query": 5e-3}]}),
+        Billing::default()
     )]
     fn billing_is_lowered_from_the_row_and_its_provider(
         #[case] entry: Value,

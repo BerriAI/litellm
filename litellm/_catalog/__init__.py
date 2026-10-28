@@ -4,6 +4,7 @@ import os
 import sys
 from typing import Final
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.rust_bridge._native import (
     Bundled,
@@ -25,6 +26,16 @@ from litellm.rust_bridge._native import (
 Source = Remote | File | Bundled
 
 CATALOG: Final = Catalog.bound_to(sys.modules["litellm"], "model_cost")
+
+_REPORTED_INVALID_ROWS: Final[set[str]] = set()  # mutable-ok: logs each bad live row once per process
+
+
+def report_invalid(invalid: Invalid) -> None:
+    """Logs a row that fails validation, once per key per process (decision 20)"""
+    if invalid.key in _REPORTED_INVALID_ROWS:
+        return
+    _REPORTED_INVALID_ROWS.add(invalid.key)
+    verbose_logger.warning("litellm.model_cost[%r] fails validation: %s", invalid.key, "; ".join(invalid.errors))
 
 
 def default_source() -> Source:
@@ -54,4 +65,5 @@ __all__ = [
     "Unavailable",
     "default_source",
     "overlay",
+    "report_invalid",
 ]

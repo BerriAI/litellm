@@ -31,6 +31,54 @@ pub enum Weekday {
     Sunday,
 }
 
+impl Schedule {
+    /// Whether `at` is off-peak. A window applies on its weekdays, read on the calendar `weekday_timezone` names (UTC
+    /// when it names none or an unknown zone), or every day. Its start is inclusive and its end exclusive, a window may
+    /// wrap past midnight, and one whose start equals its end covers the whole day
+    pub fn is_open(&self, at: jiff::Timestamp) -> bool {
+        let utc = at.to_zoned(jiff::tz::TimeZone::UTC);
+        let second_of_day = u32::from(utc.hour().unsigned_abs()) * 3600
+            + u32::from(utc.minute().unsigned_abs()) * 60
+            + u32::from(utc.second().unsigned_abs());
+        let calendar = self
+            .weekday_timezone
+            .as_deref()
+            .map(str::trim)
+            .filter(|zone| !zone.is_empty())
+            .and_then(|zone| jiff::tz::TimeZone::get(zone).ok())
+            .unwrap_or(jiff::tz::TimeZone::UTC);
+        let weekday = Weekday::from_iso(
+            at.to_zoned(calendar)
+                .weekday()
+                .to_monday_one_offset()
+                .unsigned_abs(),
+        );
+        self.windows.iter().any(|window| {
+            let on_day = window
+                .weekdays
+                .as_ref()
+                .is_none_or(|days| weekday.is_some_and(|weekday| days.contains(&weekday)));
+            on_day
+                && window
+                    .hours
+                    .iter()
+                    .any(|hours| hours.contains(second_of_day))
+        })
+    }
+}
+
+impl UtcWindow {
+    fn contains(self, second_of_day: u32) -> bool {
+        let start = u32::from(self.start_minute) * 60;
+        let end = u32::from(self.end_minute) * 60;
+        if start < end {
+            (start..end).contains(&second_of_day)
+        } else {
+            second_of_day >= start || second_of_day < end
+        }
+    }
+}
+
 impl FromStr for UtcWindow {
     type Err = InvalidUtcWindow;
 
@@ -213,6 +261,54 @@ mod tests {
         #[case] expected: Option<Weekday>,
     ) {
         assert_eq!(name.parse().ok(), expected);
+    }
+
+    fn schedule(
+        hours: &str,
+        weekdays: Option<Vec<Weekday>>,
+        weekday_timezone: Option<&str>,
+    ) -> Schedule {
+        Schedule {
+            windows: vec![Window {
+                hours: vec![hours.parse().unwrap()],
+                weekdays,
+            }],
+            weekday_timezone: weekday_timezone.map(str::to_owned),
+        }
+    }
+
+    #[rstest]
+    #[case::inside("2026-10-28T10:00:00Z", "10:00-18:30", true)]
+    #[case::end_is_exclusive("2026-10-28T18:30:00Z", "10:00-18:30", false)]
+    #[case::wrapped_after_midnight("2026-10-28T01:59:59Z", "22:00-02:00", true)]
+    #[case::wrapped_outside("2026-10-28T12:00:00Z", "22:00-02:00", false)]
+    #[case::whole_day("2026-10-28T12:00:00Z", "00:00-00:00", true)]
+    fn a_window_opens_at_its_start_and_closes_at_its_end(
+        #[case] at: &str,
+        #[case] hours: &str,
+        #[case] open: bool,
+    ) {
+        assert_eq!(
+            schedule(hours, None, None).is_open(at.parse().unwrap()),
+            open
+        );
+    }
+
+    #[rstest]
+    #[case::utc_wednesday(None, Weekday::Wednesday, true)]
+    #[case::shanghai_thursday(Some("Asia/Shanghai"), Weekday::Thursday, true)]
+    #[case::shanghai_not_wednesday(Some("Asia/Shanghai"), Weekday::Wednesday, false)]
+    #[case::unknown_zone_reads_utc(Some("Mars/Base"), Weekday::Wednesday, true)]
+    fn weekdays_are_read_on_the_named_calendar(
+        #[case] weekday_timezone: Option<&str>,
+        #[case] weekday: Weekday,
+        #[case] open: bool,
+    ) {
+        let at = "2026-10-28T17:00:00Z".parse().unwrap();
+        assert_eq!(
+            schedule("16:30-00:30", Some(vec![weekday]), weekday_timezone).is_open(at),
+            open
+        );
     }
 
     #[rstest]

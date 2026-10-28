@@ -528,7 +528,8 @@ async def test_completion_sagemaker(
 
     assert route.called
     assert response.choices[0].message.content == "SageMaker reply"
-    assert litellm.completion_cost(completion_response=response) == pytest.approx(rate)
+    assert litellm.completion_cost(completion_response=response, custom_cost_per_second=rate) == pytest.approx(rate)
+    assert "sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614" not in litellm.model_cost
 
 
 @pytest.mark.asyncio

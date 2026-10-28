@@ -48,7 +48,9 @@ litellm-secrets-types.workspace = true
 litellm-llms-types.workspace = true
 litellm-router-types.workspace = true
 litellm-host-python.workspace = true
+litellm-cost.workspace = true
 litellm-model-catalog.workspace = true
+jiff = { version = "0.2.37", default-features = false, features = ["std"] }
 litellm-model-catalog-refresh.workspace = true
 indexmap = "2.14.0"
 litellm-token-counter = { path = "../token-counter", default-features = false }

@@ -10590,3 +10590,46 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     assert entry is not None
     assert entry[1]["input_cost_per_token_above_300k_tokens"] == 0.03
     assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
+
+
+@pytest.mark.parametrize(
+    "bad_price",
+    [pytest.param("abc", id="word"), pytest.param(-1.0, id="negative"), pytest.param(float("nan"), id="nan")],
+)
+def test_a_directly_written_bad_price_is_unpriced_and_logged_once(
+    bad_price: object, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Decision 20. On main the same 1000 prompt tokens gave a TypeError, -0.001 or nan"""
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    key: Final = f"litellm-test-bad-price-{type(bad_price).__name__}-{bad_price!r}"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        key,
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": bad_price, "output_cost_per_token": 1e-6},
+    )
+    response: Final = litellm.ModelResponse(
+        model=key, usage=litellm.Usage(prompt_tokens=1000, completion_tokens=0, total_tokens=1000)
+    )
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        per_token: Final = cost_per_token(model=key, prompt_tokens=1000, completion_tokens=0, custom_llm_provider="openai")
+        total: Final = completion_cost(completion_response=response, model=key, custom_llm_provider="openai")
+
+    assert per_token == (0.0, 0.0)
+    assert total == 0.0
+    assert [record for record in caplog.records if key in record.getMessage() and "fails validation" in record.getMessage()] != []
+    assert len([record for record in caplog.records if key in record.getMessage()]) == 1
+
+
+def test_a_directly_written_null_price_is_unpriced_like_a_missing_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    key: Final = "litellm-test-null-price"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        key,
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": None, "output_cost_per_token": 1e-6},
+    )
+
+    assert cost_per_token(model=key, prompt_tokens=1000, completion_tokens=0, custom_llm_provider="openai") == (0.0, 0.0)

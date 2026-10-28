@@ -103,6 +103,7 @@ class Provenance:
 @final
 class Resolved:
     key: str
+    prices: Prices
     def model_info(self, provider: str | None = None) -> dict[str, JsonValue]: ...
     def supports(self, capability: str) -> bool: ...
     def row(self) -> dict[str, JsonValue]: ...
@@ -117,6 +118,69 @@ class Invalid:
     errors: list[str]
     def model_info(self, provider: str | None = None) -> dict[str, JsonValue]: ...
     def row(self) -> dict[str, JsonValue]: ...
+
+@final
+class Prices:
+    @staticmethod
+    def from_row(row: Mapping[str, object], key: str = "model_info") -> Prices | Invalid: ...
+    def price(self, usage: Usage, call: CallContext) -> Priced | Unpriced | Invalid: ...
+
+@final
+class Usage:
+    def __init__(
+        self,
+        *,
+        prompt_tokens: int,
+        text: int,
+        output_text: int,
+        audio: int = 0,
+        image: int = 0,
+        video: int = 0,
+        cache_read: int = 0,
+        cache_read_audio: int = 0,
+        cache_read_explicit: int = 0,
+        cache_write_5m: int = 0,
+        cache_write_1h: int = 0,
+        cache_write_12h: int = 0,
+        output_audio: int = 0,
+        output_image: int = 0,
+        output_video: int = 0,
+        reasoning: int = 0,
+    ) -> None: ...
+
+
+@final
+class CallContext:
+    def __init__(
+        self,
+        *,
+        service_tier: str | None,
+        channel: Literal["online", "batch", "decisions"],
+        data_residency: str | None,
+        vertex_location: str | None,
+        at: datetime,
+        custom_pricing: Mapping[str, object] | None,
+    ) -> None: ...
+
+@final
+class Line:
+    meter: str
+    quantity: int
+    unit_price: float
+    amount: float
+    fallback_from: str | None
+
+@final
+class Priced:
+    total: float
+    prompt: float
+    completion: float
+    lines: tuple[Line, ...]
+    missing: tuple[str, ...]
+
+@final
+class Unpriced:
+    missing: tuple[str, ...]
 
 @final
 class Registered:
