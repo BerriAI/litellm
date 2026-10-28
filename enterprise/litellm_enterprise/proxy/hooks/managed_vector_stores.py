@@ -12,6 +12,9 @@ from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.managed_resources import BaseManagedResource
 from litellm.llms.base_llm.managed_resources.utils import (
+    extract_model_id_from_unified_id,
+    extract_provider_resource_id_from_unified_id,
+    extract_target_model_names_from_unified_id,
     generate_unified_id_string,
     is_base64_encoded_unified_id,
 )
@@ -36,6 +39,27 @@ else:
     Span = Any
     InternalUsageCache = Any
     PrismaClient = Any
+
+
+_ROUTED_VECTOR_STORE_CALL_TYPES: Final = frozenset(
+    {"avector_store_search", "avector_store_retrieve", "avector_store_delete"}
+)
+
+
+def _route_to_provider_vector_store(data: dict[str, object]) -> dict[str, object]:
+    vector_store_id: Final = data.get("vector_store_id")
+    decoded_id: Final = is_base64_encoded_unified_id(vector_store_id) if isinstance(vector_store_id, str) else False
+    if not decoded_id:
+        return data
+    routing_model: Final = extract_model_id_from_unified_id(decoded_id) or next(
+        iter(extract_target_model_names_from_unified_id(decoded_id)), None
+    )
+    provider_resource_id: Final = extract_provider_resource_id_from_unified_id(decoded_id)
+    return {
+        **data,
+        **({"model": routing_model} if routing_model else {}),
+        **({"vector_store_id": provider_resource_id} if provider_resource_id else {}),
+    }
 
 
 class _PROXY_LiteLLMManagedVectorStores(
@@ -322,78 +346,10 @@ class _PROXY_LiteLLMManagedVectorStores(
         Returns:
             Modified request data or None
         """
-        from litellm.llms.base_llm.managed_resources.utils import (
-            is_base64_encoded_unified_id,
-            parse_unified_id,
-        )
-
-        # Handle vector store search operations
-        if call_type == "avector_store_search":
-            vector_store_id = data.get("vector_store_id")
-            
-            if vector_store_id:
-                # Check if it's a managed vector store ID
-                decoded_id = is_base64_encoded_unified_id(vector_store_id)
-                
-                if decoded_id:
-                    verbose_logger.debug(
-                        f"Processing managed vector store search: {vector_store_id}"
-                    )
-                    
-                    # Check access
-                    has_access = await self.can_user_access_unified_resource_id(
-                        vector_store_id, user_api_key_dict
-                    )
-                    
-                    if not has_access:
-                        raise HTTPException(
-                            status_code=403,
-                            detail=f"User {user_api_key_dict.user_id} does not have access to vector store {vector_store_id}",
-                        )
-                    
-                    # Parse the unified ID to extract components
-                    parsed_id = parse_unified_id(vector_store_id)
-                    
-                    if parsed_id:
-                        # Extract the model ID and provider resource ID
-                        model_id = parsed_id.get("model_id")
-                        provider_resource_id = parsed_id.get("provider_resource_id")
-                        target_model_names = parsed_id.get("target_model_names", [])
-                        
-                        verbose_logger.debug(
-                            f"Decoded vector store - model_id: {model_id}, provider_resource_id: {provider_resource_id}, target_model_names: {target_model_names}"
-                        )
-                        
-                        # Determine which model to use for routing
-                        # Priority: model_id (deployment ID) > first target_model_name
-                        routing_model = None
-                        if model_id:
-                            routing_model = model_id
-                        elif target_model_names and len(target_model_names) > 0:
-                            routing_model = target_model_names[0]
-                        
-                        # Set the model for routing
-                        if routing_model:
-                            data["model"] = routing_model
-                            verbose_logger.info(
-                                f"Routing vector store search to model: {routing_model}"
-                            )
-                        
-                        # Replace the unified ID with the provider-specific ID
-                        if provider_resource_id:
-                            data["vector_store_id"] = provider_resource_id
-                            verbose_logger.debug(
-                                f"Replaced unified ID with provider resource ID: {provider_resource_id}"
-                            )
-        
-        # Handle vector store retrieve/delete operations
-        elif call_type in ("avector_store_retrieve", "avector_store_delete"):
-            await self.check_managed_vector_store_access(data, user_api_key_dict)
-            
-            # If it's a managed vector store, we'll handle it in the endpoint
-            # No need to transform here as the endpoint will route to the hook
-            
-        return data
+        if call_type not in _ROUTED_VECTOR_STORE_CALL_TYPES:
+            return data
+        await self.check_managed_vector_store_access(data, user_api_key_dict)
+        return _route_to_provider_vector_store(data)
 
     # ============================================================================
     #                     POST-CALL HOOK (For Response Transformation)
