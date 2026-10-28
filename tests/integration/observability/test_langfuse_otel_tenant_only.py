@@ -137,3 +137,40 @@ def test_a_tenant_langfuse_project_gets_user_session_and_tags_without_operator_k
     assert "langfuse.observation.metadata" in tenant[0]["attributes"], sorted(tenant[0]["attributes"])
     assert len(operator) == 1, [span["name"] for span in operator]
     assert "langfuse.observation.metadata" not in operator[0]["attributes"], sorted(operator[0]["attributes"])
+
+
+def test_a_tenant_langfuse_project_gets_the_keys_langfuse_environment(
+    proxy: Gateway, provider: Wire, audit_sinks: SpanSinks
+) -> None:
+    logging: Final[list[JsonValue]] = [
+        {
+            "callback_name": "langfuse_otel",
+            "callback_type": "success",
+            "callback_vars": {**langfuse_callback_variables(audit_sinks), "langfuse_environment": "prod"},
+        }
+    ]
+    with proxy.scenario() as scenario:
+        model: Final = scenario.model(api_base=provider.url + "/v1")
+        key: Final = scenario.key(key_alias=f"lf-tenant-env-{uuid.uuid4().hex}", metadata={"logging": logging})
+        since: Final = (recorded_spans(audit_sinks.tenant)[0], recorded_spans(audit_sinks.operator)[0])
+        trace_id: Final = uuid.uuid4().hex
+        response: Final = proxy.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": f"lf-tenant-env-{trace_id}"}]},
+            key=key,
+            headers={"traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01"},
+        )
+        assert response.status_code == 200, response.text
+
+        tenant: Final = held(
+            lambda: _trace_spans(audit_sinks.tenant, since[0], trace_id), _one_model_span, holding=3, seconds=40
+        )
+        operator: Final = held(
+            lambda: _trace_spans(audit_sinks.operator, since[1], trace_id), _one_model_span, holding=3, seconds=40
+        )
+
+    assert [span["resource"].get("langfuse.environment") for span in tenant] == ["prod"] * len(tenant), [
+        span["name"] for span in tenant
+    ]
+    assert not any("langfuse.environment" in span["resource"] for span in operator), [span["name"] for span in operator]

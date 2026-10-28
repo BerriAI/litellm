@@ -3481,6 +3481,65 @@ class TestLangfuseDestinationFields:
         assert "langfuse.observation.metadata" in to_langfuse
         assert "langfuse.observation.metadata" not in received[None]
 
+    @pytest.mark.parametrize(
+        ("key_environment", "tracing_environment", "expected"),
+        [
+            ("prod", None, {"langfuse.environment": "prod"}),
+            ("prod", "staging", {"langfuse.environment": "prod"}),
+            (None, "staging", {"langfuse.environment": "staging"}),
+            (None, None, {}),
+        ],
+        ids=["key", "key-over-env", "env", "neither"],
+    )
+    def test_a_langfuse_destination_names_the_environment_the_legacy_logger_wrote(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        key_environment: str | None,
+        tracing_environment: str | None,
+        expected: Mapping[str, str],
+    ) -> None:
+        if tracing_environment is None:
+            monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
+        else:
+            monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", tracing_environment)
+
+        destination: Final = destination_for(
+            "langfuse_otel",
+            StandardCallbackDynamicParams(
+                langfuse_public_key="pk", langfuse_secret_key="sk", langfuse_environment=key_environment
+            ),
+        )
+
+        assert destination is not None
+        assert dict(destination.resource_attributes) == expected
+
+    def test_only_the_langfuse_destination_gets_the_keys_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        credential_less_proxy(monkeypatch)
+        capture: Final = _ExporterCapture()
+        for kind in ("otlp_grpc", "otlp_http", "console"):
+            monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
+        config: Final = OpenTelemetryV2Config()
+        provider: Final = build_tracer_provider(config, tenant_overrides=True)
+        attach_tenant_fan_out(provider, config)
+        emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
+        destination: Final = destination_for(
+            "langfuse_otel", {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_environment": "prod"}
+        )
+        assert destination is not None
+
+        def with_destination() -> None:
+            set_request_destinations(deliverable_destinations((destination,), provider))
+            emitter.emit(SpanRole.LLM_CALL, _MODEL_CALL_WITHOUT_CONTENT)
+
+        in_fresh_context(with_destination)
+        provider.force_flush()
+
+        environments: Final = {
+            headers: exporter.get_finished_spans()[0].resource.attributes.get("langfuse.environment")
+            for headers, exporter in capture.built
+        }
+        assert environments == {destination.header_string(): "prod", None: None}
+
     @staticmethod
     def _attributes(
         destinations: tuple[OtelDestination, ...], limit: int | None, call: LLMCallSpanData

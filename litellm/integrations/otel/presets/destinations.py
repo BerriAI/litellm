@@ -111,7 +111,7 @@ _REQUIRED_HEADERS_BY_CALLBACK: Final[Mapping[str, frozenset[str]]] = MappingProx
 _NO_ATTRS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
-def _arize_project() -> Mapping[str, str]:
+def _arize_project(_params: StandardCallbackDynamicParams) -> Mapping[str, str]:
     from litellm.integrations.arize.arize import ArizeLogger
 
     project: Final = ArizeLogger.get_arize_config().project_name
@@ -124,10 +124,18 @@ def _arize_default_project() -> Mapping[str, str]:
     return MappingProxyType({"model_id": ARIZE_DEFAULT_PROJECT})
 
 
-#: Resource attributes the operator chose for a backend, applied to every export the
-#: team receives over the span's own resource: ``ARIZE_PROJECT_NAME`` for Arize.
-_RESOURCE_ATTRIBUTES_BY_CALLBACK: Final[Mapping[str, Callable[[], Mapping[str, str]]]] = MappingProxyType(
-    {"arize": _arize_project}
+def _langfuse_environment(params: StandardCallbackDynamicParams) -> Mapping[str, str]:
+    """The key's or team's ``langfuse_environment``, else ``LANGFUSE_TRACING_ENVIRONMENT``."""
+    from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+
+    environment: Final = params.get("langfuse_environment") or os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
+    return MappingProxyType({LangfuseSpanAttributes.LANGFUSE_ENVIRONMENT.value: environment} if environment else {})
+
+
+#: Resource attributes a backend gets on every export the team receives, over the
+#: span's own resource: ``ARIZE_PROJECT_NAME`` for Arize, the Langfuse environment.
+_RESOURCE_ATTRIBUTES_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], Mapping[str, str]]]] = (
+    MappingProxyType({"arize": _arize_project, "langfuse_otel": _langfuse_environment})
 )
 
 #: Resource attributes a backend needs on every export to accept it, filled only where
@@ -137,12 +145,14 @@ _RESOURCE_DEFAULTS_BY_CALLBACK: Final[Mapping[str, Callable[[], Mapping[str, str
 )
 
 
-def _resource_attributes(callback_name: str, service_name: str | None) -> Mapping[str, str]:
+def _resource_attributes(
+    callback_name: str, service_name: str | None, params: StandardCallbackDynamicParams
+) -> Mapping[str, str]:
     backend: Final = _RESOURCE_ATTRIBUTES_BY_CALLBACK.get(callback_name)
     return MappingProxyType(
         {
             **({"service.name": service_name} if service_name else {}),
-            **(backend() if backend is not None else {}),
+            **(backend(params) if backend is not None else {}),
         }
     )
 
@@ -214,7 +224,7 @@ def destination_for(
     return OtelDestination(
         endpoint=endpoint,
         headers=MappingProxyType(dict(headers)),
-        resource_attributes=_resource_attributes(callback_name, service_name),
+        resource_attributes=_resource_attributes(callback_name, service_name, params),
         resource_defaults=_resource_defaults(callback_name),
         callback_name=callback_name,
         protocol=protocol,
