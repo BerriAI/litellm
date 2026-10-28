@@ -450,3 +450,93 @@ class TestGpt5MaxCompletionTokens:
         )
         assert out.get("maxTokens") == 64
         assert "maxCompletionTokens" not in out
+
+
+class TestOCIGeminiSystemMessageMerging:
+    """Tests for merging multiple system messages for Gemini models on OCI (fixes #48813)."""
+
+    def test_is_oci_gemini_model(self):
+        from litellm.llms.oci.chat.generic import is_oci_gemini_model
+
+        assert is_oci_gemini_model("oci/google.gemini-2.5-flash") is True
+        assert is_oci_gemini_model("google.gemini-2.5-pro") is True
+        assert is_oci_gemini_model("oci/gemini-flash") is True
+        assert is_oci_gemini_model("oci/xai.grok-4.20") is False
+        assert is_oci_gemini_model("meta.llama-3.3-70b-instruct") is False
+        assert is_oci_gemini_model(None) is False
+
+    def test_single_system_message_at_top_remains_unchanged(self):
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello"},
+        ]
+        res = adapt_messages_to_generic_oci_standard(messages, model="oci/google.gemini-2.5-flash")
+        assert len(res) == 2
+        assert res[0].role == "SYSTEM"
+        assert res[0].content[0].text == "You are a helpful assistant."
+        assert res[1].role == "USER"
+        assert res[1].content[0].text == "Hello"
+
+    def test_multiple_consecutive_system_messages_merged_for_gemini(self):
+        messages = [
+            {"role": "system", "content": "End every answer with PINEAPPLE."},
+            {"role": "system", "content": "Start every answer with BANANA."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+        res = adapt_messages_to_generic_oci_standard(messages, model="oci/google.gemini-2.5-flash")
+        assert len(res) == 2
+        assert res[0].role == "SYSTEM"
+        assert res[0].content[0].text == "End every answer with PINEAPPLE.\n\nStart every answer with BANANA."
+        assert res[1].role == "USER"
+        assert res[1].content[0].text == "What is the capital of France?"
+
+    def test_interspersed_system_messages_merged_to_top_for_gemini(self):
+        messages = [
+            {"role": "system", "content": "System prompt A."},
+            {"role": "user", "content": "User prompt 1."},
+            {"role": "assistant", "content": "Assistant reply 1."},
+            {"role": "system", "content": "System prompt B."},
+            {"role": "user", "content": "User prompt 2."},
+        ]
+        res = adapt_messages_to_generic_oci_standard(messages, model="oci/google.gemini-2.5-flash")
+        assert len(res) == 4
+        assert res[0].role == "SYSTEM"
+        assert res[0].content[0].text == "System prompt A.\n\nSystem prompt B."
+        assert res[1].role == "USER"
+        assert res[1].content[0].text == "User prompt 1."
+        assert res[2].role == "ASSISTANT"
+        assert res[2].content[0].text == "Assistant reply 1."
+        assert res[3].role == "USER"
+        assert res[3].content[0].text == "User prompt 2."
+
+    def test_non_gemini_models_preserve_multiple_system_messages(self):
+        messages = [
+            {"role": "system", "content": "System prompt A."},
+            {"role": "user", "content": "User prompt 1."},
+            {"role": "system", "content": "System prompt B."},
+        ]
+        res = adapt_messages_to_generic_oci_standard(messages, model="oci/xai.grok-4.20")
+        assert len(res) == 3
+        assert res[0].role == "SYSTEM"
+        assert res[0].content[0].text == "System prompt A."
+        assert res[1].role == "USER"
+        assert res[1].content[0].text == "User prompt 1."
+        assert res[2].role == "SYSTEM"
+        assert res[2].content[0].text == "System prompt B."
+
+    def test_multipart_content_blocks_in_system_messages_merged(self):
+        messages = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "Instruction part 1. "}],
+            },
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "Instruction part 2."}],
+            },
+            {"role": "user", "content": "Hi"},
+        ]
+        res = adapt_messages_to_generic_oci_standard(messages, model="oci/google.gemini-2.5-flash")
+        assert len(res) == 2
+        assert res[0].role == "SYSTEM"
+        assert res[0].content[0].text == "Instruction part 1. \n\nInstruction part 2."

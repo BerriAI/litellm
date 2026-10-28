@@ -8,7 +8,7 @@ parsing, and streaming chunk parsing for models served with
 
 import datetime
 import hashlib
-from typing import Final
+from typing import Final, cast
 
 import httpx
 from pydantic import ValidationError
@@ -166,10 +166,67 @@ def adapt_messages_to_generic_oci_standard_tool_response(role: str, tool_call_id
     )
 
 
+def _extract_message_text(content: object) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return str(content)
+
+
+def is_oci_gemini_model(model: str | None) -> bool:
+    if not model:
+        return False
+    name = model[4:] if model.lower().startswith("oci/") else model
+    return name.lower().startswith("google.gemini") or "gemini" in name.lower()
+
+
+def _prepare_messages_for_gemini(
+    messages: list[AllMessageValues],
+) -> list[AllMessageValues]:
+    """Merge multiple system messages into a single SYSTEM message at index 0 for Gemini on OCI."""
+    system_messages: Final = [m for m in messages if m.get("role") == "system"]
+    if len(system_messages) <= 1:
+        if len(system_messages) == 1 and messages[0].get("role") == "system":
+            return messages
+        if len(system_messages) == 1:
+            non_system = [m for m in messages if m.get("role") != "system"]
+            return [system_messages[0], *non_system]
+        return messages
+
+    non_system_messages: Final = [m for m in messages if m.get("role") != "system"]
+    merged_texts: Final = [text for m in system_messages if (text := _extract_message_text(m.get("content")))]
+    merged_content = "\n\n".join(merged_texts)
+    merged_system_message = cast(
+        AllMessageValues,
+        {"role": "system", "content": merged_content},
+    )
+    return [merged_system_message, *non_system_messages]
+
+
 def adapt_messages_to_generic_oci_standard(
     messages: list[AllMessageValues],
+    model: str | None = None,
 ) -> list[OCIMessage]:
-    """Convert an OpenAI-format message array to OCI GENERIC format."""
+    """Convert an OpenAI-format message array to OCI GENERIC format.
+
+    When targeting Gemini models on OCI, merges multiple system messages into
+    a single SYSTEM message at the start of the list to prevent earlier system
+    prompts from being silently ignored by the backend (fixes #48813).
+    """
+    if is_oci_gemini_model(model):
+        messages = _prepare_messages_for_gemini(messages)
+
     new_messages: Final = []
     for message in messages:
         role = message["role"]

@@ -681,7 +681,7 @@ class OCIChatConfig(BaseConfig):
                 servingMode=serving_mode,
                 chatRequest=OCIChatRequestPayload(
                     apiFormat=vendor.value,
-                    messages=adapt_messages_to_generic_oci_standard(messages),
+                    messages=adapt_messages_to_generic_oci_standard(messages, model=model),
                     **self._get_optional_params(vendor, optional_params, model),
                 ),
             )
