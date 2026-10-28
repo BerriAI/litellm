@@ -49,7 +49,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
 )
 
-from .common_utils import is_unsignable_thinking_block
+from .common_utils import has_blank_redacted_data, is_unsignable_thinking_block
 
 CONVERTED_SYSTEM_NOTE: Final = (
     "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
@@ -267,27 +267,22 @@ def _block_index_by_message(blocks: Sequence[tuple[bool, tuple[int, ...]]]) -> M
 
 def _thinking_block_renders(block: object) -> bool:
     """A thinking block the converter keeps: one Anthropic can verify, so never bridged encrypted reasoning."""
-    return message_field(block, "type") in _THINKING_BLOCK_TYPES and not is_unsignable_thinking_block(block)
+    return message_field(block, "type") in _THINKING_BLOCK_TYPES and not (
+        is_unsignable_thinking_block(block) or has_blank_redacted_data(block)
+    )
 
 
 def _assistant_part_renders(part: object) -> bool:
     """A text part always renders: the converter pads empty text with a placeholder."""
     part_type: Final = message_field(part, "type")
-    if part_type == "thinking":
+    if part_type in _THINKING_BLOCK_TYPES:
         return _thinking_block_renders(part)
     return part_type in _RENDERED_ASSISTANT_PART_TYPES or (
         isinstance(part_type, str) and part_type.endswith("_tool_result")
     )
 
 
-def _separate_thinking_blocks_render(message: object, parts: Sequence[object]) -> bool:
-    """``thinking_blocks`` reach the wire only when no inline thinking part claims the slot.
-
-    The converter skips the separate blocks as soon as the content list carries a
-    ``thinking`` or ``redacted_thinking`` part, whether or not that part itself renders.
-    """
-    if any(message_field(part, "type") in _THINKING_BLOCK_TYPES for part in parts):
-        return False
+def _separate_thinking_blocks_render(message: object) -> bool:
     return any(_thinking_block_renders(block) for block in parts_of(message_field(message, "thinking_blocks")))
 
 
@@ -404,7 +399,7 @@ def _assistant_renders(message: object, answered: frozenset[str]) -> bool:
     parts: Final = parts_of(content)
     return (
         any(_assistant_part_renders(part) for part in parts)
-        or _separate_thinking_blocks_render(message, parts)
+        or _separate_thinking_blocks_render(message)
         or _tool_calls_render(message, answered)
         or bool(message_field(message, "function_call"))
         or bool(message_field(message_field(message, "provider_specific_fields"), "compaction_blocks"))
@@ -414,10 +409,11 @@ def _assistant_renders(message: object, answered: frozenset[str]) -> bool:
 def _renders(message: object, answered: frozenset[str]) -> bool:
     """Whether ``anthropic_messages_pt`` puts a block on the wire for this message.
 
-    A tool message always becomes a ``tool_result`` and a user message with string
-    content always becomes a text block (empty text gets a placeholder). A user list
-    renders only through parts of a type the converter emits; ``None``, an empty list,
-    and a list of other parts vanish. Assistant messages follow ``_assistant_renders``.
+    A tool message always becomes a ``tool_result``, and a user message with string or
+    missing content (``None``, an empty list) always puts its turn on the wire, an empty
+    turn getting a placeholder. A user list renders only through parts of a type the
+    converter emits, so a list of only other parts vanishes. Assistant messages follow
+    ``_assistant_renders``.
     """
     role: Final = message_field(message, "role")
     if role in _TOOL_ROLES:
@@ -425,8 +421,10 @@ def _renders(message: object, answered: frozenset[str]) -> bool:
     if role == "assistant":
         return _assistant_renders(message, answered)
     content: Final = message_field(message, "content")
-    return isinstance(content, str) or any(
-        message_field(part, "type") in _RENDERED_PART_TYPES for part in parts_of(content)
+    return (
+        isinstance(content, str)
+        or not content
+        or any(message_field(part, "type") in _RENDERED_PART_TYPES for part in parts_of(content))
     )
 
 
@@ -484,7 +482,7 @@ def _runs_by_anchor(
 ) -> Mapping[int, tuple[tuple[int, ...], ...]]:
     anchored: Final = tuple(sorted(((anchor, run) for run, anchor in anchors if anchor is not None), key=itemgetter(0)))
     return MappingProxyType(
-        {anchor: tuple(run for _, run in group) for anchor, group in groupby(anchored, key=itemgetter(0))}
+        {anchor: tuple(run for _, run in group) for anchor, group in groupby(anchored, key=lambda entry: entry[0])}
     )
 
 

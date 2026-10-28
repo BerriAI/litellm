@@ -23,7 +23,7 @@ from litellm.types.vector_store_files import (
     VectorStoreFileObject,
     VectorStoreFileUpdateRequest,
 )
-from litellm.utils import ProviderConfigManager, client
+from litellm.utils import ProviderConfigManager, client, load_credentials_from_list
 from litellm.vector_store_files.utils import VectorStoreFileRequestUtils
 
 base_llm_http_handler = BaseLLMHTTPHandler()
@@ -49,6 +49,7 @@ def _prepare_registry_credentials(
             kwargs.update(registry_credentials)
     except Exception:
         pass
+    load_credentials_from_list(kwargs)
 
 
 @client

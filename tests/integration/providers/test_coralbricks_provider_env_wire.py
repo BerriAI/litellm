@@ -27,6 +27,8 @@ from integration.providers._coralbricks import (
 )
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 ENV_KEY: Final = "cb_env_integration_key"
 CONFIG_MODEL: Final = "coralbricks-env-config"
 
