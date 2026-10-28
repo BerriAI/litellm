@@ -1,11 +1,14 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
+import asyncio
+import contextvars
 import copy
 import functools
 import itertools
 import re
 from collections.abc import Callable, Mapping, Sequence
-from typing import Final
+from concurrent.futures import ThreadPoolExecutor
+from typing import Final, TypeVar
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -24,6 +27,15 @@ _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
+
+_MODEL_LISTING_POOL: Final = ThreadPoolExecutor(thread_name_prefix="litellm-model-listing")
+
+_Listed: Final = TypeVar("_Listed")
+
+
+async def run_model_listing(listing: Callable[[], _Listed]) -> _Listed:
+    context: Final = contextvars.copy_context()
+    return await asyncio.get_running_loop().run_in_executor(_MODEL_LISTING_POOL, context.run, listing)
 
 
 def _check_wildcard_routing(model: str) -> bool:
@@ -204,7 +216,7 @@ def get_complete_model_list(
     include_model_access_groups: bool | None = False,
     only_model_access_groups: bool | None = False,
     team_id: str | None = None,
-    expand_deployed_wildcard_routes: bool = True,
+    expand_wildcard_routes: bool = True,
 ) -> list[str]:
     """Logic for returning complete model list for a given key + team pair"""
 
@@ -250,7 +262,7 @@ def get_complete_model_list(
         return_wildcard_routes=return_wildcard_routes,
         llm_router=llm_router,
         team_id=team_id,
-        expand_deployed_wildcard_routes=expand_deployed_wildcard_routes,
+        expand_wildcard_routes=expand_wildcard_routes,
     )
 
     complete_model_list: Final = unique_models + all_wildcard_models
@@ -418,7 +430,11 @@ def get_known_models_from_wildcard(
         wildcard_provider_prefix, wildcard_suffix = wildcard_model_to_expand.split("/", 1)
     except ValueError:  # safely fail
         return []
-    deployment_pattern_naming_listed_ids: Final = _deployment_pattern_naming_listed_ids(wildcard_suffix, litellm_params)
+    deployment_pattern_naming_listed_ids: Final = (
+        wildcard_model_to_expand
+        if wildcard_model_to_expand != wildcard_model
+        else _deployment_pattern_naming_listed_ids(wildcard_suffix, litellm_params)
+    )
 
     # Use provider from litellm_params when available, otherwise from wildcard prefix
     # (e.g., "openai" from "openai/*" - needed for BYOK where wildcard isn't in router)
@@ -541,7 +557,7 @@ def _get_wildcard_models(
     return_wildcard_routes: bool | None = False,
     llm_router: Router | None = None,
     team_id: str | None = None,
-    expand_deployed_wildcard_routes: bool = True,
+    expand_wildcard_routes: bool = True,
 ) -> list[str]:
     models_to_remove: Final = set()
     routes_to_model: Final = _routes_to_model(_cached_wildcard_routing(llm_router), team_id)
@@ -552,10 +568,10 @@ def _get_wildcard_models(
                 all_wildcard_models.append(model)
 
             models_to_remove.add(model)
+            if not expand_wildcard_routes:
+                continue
 
             model_list = llm_router.get_model_list(model_name=model, team_id=team_id) if llm_router else None
-            if model_list and not expand_deployed_wildcard_routes:
-                continue
             if model_list:
                 for router_model in model_list:
                     all_wildcard_models.extend(

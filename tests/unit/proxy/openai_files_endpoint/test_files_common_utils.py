@@ -894,25 +894,49 @@ def test_a_provider_credential_lookup_never_lists_an_openrouter_wildcards_live_c
     assert catalog_route.call_count == 0
 
 
-def test_a_key_allowed_a_wider_wildcard_than_any_deployment_gets_the_matching_deployments_credentials(
+@pytest.mark.parametrize(
+    ("key_models", "deployments", "custom_llm_provider", "api_key"),
+    [
+        (
+            ["anthropic/*"],
+            (("anthropic/claude-*", "anthropic/claude-*", "anthropic-narrow-key"),),
+            "anthropic",
+            "anthropic-narrow-key",
+        ),
+        (["anthropic/claude-3*"], (("anthropic/*", "anthropic/*", "anthropic-wide-key"),), "anthropic", "anthropic-wide-key"),
+        (["openrouter/*"], (("openrouter/openai/*", "openrouter/openai/*", "sk-or-narrow"),), "openrouter", "sk-or-narrow"),
+        (
+            ["team/*"],
+            (("team/*", "openrouter/*", "sk-or-team"), ("team/openai/*", "openai/*", "openai-team-key")),
+            "openai",
+            "openai-team-key",
+        ),
+    ],
+)
+def test_a_key_wildcard_finds_the_deployment_it_grants_without_listing_any_provider_catalog(
     monkeypatch: pytest.MonkeyPatch,
+    key_models: list[str],
+    deployments: tuple[tuple[str, str, str], ...],
+    custom_llm_provider: str,
+    api_key: str,
 ):
-    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
     router: Final = Router(
         model_list=[
-            {
-                "model_name": "anthropic/claude-*",
-                "litellm_params": {"model": "anthropic/claude-*", "api_key": "anthropic-deployment-key"},
-            }
+            {"model_name": model_name, "litellm_params": {"model": model, "api_key": deployment_key}}
+            for model_name, model, deployment_key in deployments
         ]
     )
 
-    credentials: Final = get_team_provider_credentials(
-        llm_router=router,
-        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", models=["anthropic/*"]),
-        custom_llm_provider="anthropic",
-        include_accessible_deployments=True,
-    )
+    with respx.mock(assert_all_called=False) as respx_mock:
+        catalog_requests: Final = respx_mock.route().mock(return_value=httpx.Response(200, json={"data": []}))
+        credentials: Final = get_team_provider_credentials(
+            llm_router=router,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", models=key_models),
+            custom_llm_provider=custom_llm_provider,
+            include_accessible_deployments=True,
+        )
 
     assert credentials is not None
-    assert (credentials["custom_llm_provider"], credentials["api_key"]) == ("anthropic", "anthropic-deployment-key")
+    assert (credentials["custom_llm_provider"], credentials["api_key"]) == (custom_llm_provider, api_key)
+    assert catalog_requests.call_count == 0

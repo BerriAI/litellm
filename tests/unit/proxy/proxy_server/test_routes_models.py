@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Final
 from unittest.mock import MagicMock
@@ -543,7 +544,7 @@ class _CatalogHeldUntilTheLoopRuns:
 
 
 @pytest.mark.parametrize("scope", [None, "expand"])
-async def test_v1_models_fetches_a_live_openrouter_catalog_without_blocking_the_event_loop(
+def test_v1_models_fetches_a_live_openrouter_catalog_without_holding_the_event_loop_or_its_default_thread_pool(
     monkeypatch: pytest.MonkeyPatch, scope: str | None
 ):
     monkeypatch.setattr(litellm, "check_provider_endpoint", True)
@@ -568,8 +569,8 @@ async def test_v1_models_fetches_a_live_openrouter_catalog_without_blocking_the_
     )
     catalog: Final = _CatalogHeldUntilTheLoopRuns()
 
-    with respx.mock() as respx_mock:
-        catalog_route: Final = respx_mock.get(f"{OPENROUTER_BASE}/models/user").mock(side_effect=catalog.answer)
+    async def list_models_on_a_one_thread_default_pool() -> dict:
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
         listing: Final = asyncio.ensure_future(
             proxy_server.model_list(
                 user_api_key_dict=UserAPIKeyAuth(
@@ -579,7 +580,11 @@ async def test_v1_models_fetches_a_live_openrouter_catalog_without_blocking_the_
             )
         )
         await catalog.release_from_the_loop()
-        response: Final = await listing
+        return await listing
+
+    with respx.mock() as respx_mock:
+        catalog_route: Final = respx_mock.get(f"{OPENROUTER_BASE}/models/user").mock(side_effect=catalog.answer)
+        response: Final = asyncio.run(list_models_on_a_one_thread_default_pool())
 
     assert catalog_route.calls.last.response.status_code == 200
     assert [model["id"] for model in response["data"]] == ["openrouter/openai/gpt-5.4-mini"]

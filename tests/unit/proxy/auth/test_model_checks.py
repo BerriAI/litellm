@@ -1160,6 +1160,7 @@ def test_partial_bedrock_wildcard_lists_nothing_when_no_discovered_id_carries_it
         ),
         ("or-team/*", "openrouter/*", ["or-team/openai/gpt-5.4-mini", "or-team/anthropic/claude-haiku-5-5"]),
         ("openrouter/openai/*", "openrouter/openai/*", ["openrouter/openai/gpt-5.4-mini"]),
+        ("*", "openrouter/*", ["openai/gpt-5.4-mini", "anthropic/claude-haiku-5-5"]),
     ],
 )
 @respx.mock
