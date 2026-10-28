@@ -8,9 +8,10 @@ import { Check, Copy, CornerDownLeft, Loader2, type LucideIcon, Search } from "l
 import { Schema } from "prosemirror-model";
 import { EditorState, Plugin, TextSelection, type Transaction } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
-import { type ComponentProps, createContext, type ReactNode, useContext, useId, useMemo, useState } from "react";
+import { type ComponentProps, createContext, useContext, useId, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/cva.config";
 
 import { type FilterOp, languageOps, parseQuery, type QueryClause, type QueryLanguage } from "./language";
@@ -326,7 +327,7 @@ function Suggestions({ className, children, ...props }: SearchBoxSuggestionsProp
         </span>
         <span className="flex items-center gap-1">
           <Kbd>
-            <CornerDownLeft className="size-3" />
+            <CornerDownLeft />
           </Kbd>
           Select
         </span>
@@ -389,14 +390,6 @@ function OperatorHints({ ops }: { ops: readonly FilterOp[] }) {
         </div>
       ))}
     </div>
-  );
-}
-
-function Kbd({ children }: { children: ReactNode }) {
-  return (
-    <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border px-1 font-sans">
-      {children}
-    </kbd>
   );
 }
 
