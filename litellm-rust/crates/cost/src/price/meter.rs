@@ -110,6 +110,8 @@ impl Meter {
                     kind: TokenKind::Text,
                     ..
                 }
+                | Self::Input(InputUnit::Character)
+                | Self::Output(OutputUnit::Character)
         )
     }
 

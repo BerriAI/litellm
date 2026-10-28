@@ -1,14 +1,15 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use litellm_cost::call::CallContext as CostCallContext;
 use litellm_cost::price::{
     Adjustments, CacheReadMode, CacheTtl, Channel, InputUnit, Meter, OutputUnit,
-    Prices as CostPrices, Residency, ServiceTier, TokenKind,
+    Prices as CostPrices, Residency, Resolution, ServiceTier, TextUnit, TokenKind,
 };
 use litellm_cost::priced::{Outcome, Quantity, Side};
-use litellm_cost::usage::Usage as CostUsage;
+use litellm_cost::usage::{Characters, DurationMeter, Usage as CostUsage};
 use litellm_host_python::from_py;
 use litellm_model_catalog::rejects_row;
 use litellm_model_catalog::wire::{EntryWire, Fields, FlatKey};
@@ -52,8 +53,7 @@ pub(crate) struct Priced {
 pub(crate) struct Line {
     #[pyo3(get)]
     meter: String,
-    #[pyo3(get)]
-    quantity: u64,
+    quantity: Quantity,
     #[pyo3(get)]
     unit_price: f64,
     #[pyo3(get)]
@@ -116,6 +116,15 @@ impl PricesHandle {
         }
     }
 
+    /// `"character"` when the row bills text by the character and not by the token (decision 32)
+    #[getter]
+    fn text_unit(&self) -> &'static str {
+        match self.prices.billing().text_unit {
+            TextUnit::Token => "token",
+            TextUnit::Character => "character",
+        }
+    }
+
     /// Pure arithmetic over owned values, it calls no Python and never reads `litellm.model_cost`
     fn price(&self, py: Python<'_>, usage: &Usage, call: &CallContext) -> PyResult<Py<PyAny>> {
         if let Some((errors, fields)) = &call.invalid_overlay {
@@ -150,10 +159,7 @@ impl PricesHandle {
                             py,
                             Line {
                                 meter: meter_name(&line.meter),
-                                quantity: match line.quantity {
-                                    Quantity::Count(count) => count,
-                                    Quantity::Duration(duration) => duration.as_secs(),
-                                },
+                                quantity: line.quantity,
                                 unit_price: line.unit_price.get(),
                                 amount: line.amount.get(),
                                 fallback_from: line.fallback_from.as_ref().map(meter_name),
@@ -182,7 +188,9 @@ impl Usage {
     #[pyo3(signature = (
         *, prompt_tokens, text, output_text, audio = 0, image = 0, video = 0, cache_read = 0, cache_read_audio = 0,
         cache_read_explicit = 0, cache_write_5m = 0, cache_write_1h = 0, cache_write_12h = 0, output_audio = 0,
-        output_image = 0, output_video = 0, reasoning = 0,
+        output_image = 0, output_video = 0, reasoning = 0, prompt_characters = 0, completion_characters = 0,
+        wall_clock = None, input_audio = None, live_voice = None, output_video_duration = None,
+        video_resolution = None, text_messages = 0,
     ))]
     #[expect(
         clippy::too_many_arguments,
@@ -205,6 +213,14 @@ impl Usage {
         output_image: u64,
         output_video: u64,
         reasoning: u64,
+        prompt_characters: u64,
+        completion_characters: u64,
+        wall_clock: Option<Duration>,
+        input_audio: Option<Duration>,
+        live_voice: Option<Duration>,
+        output_video_duration: Option<Duration>,
+        video_resolution: Option<&str>,
+        text_messages: u64,
     ) -> Self {
         let mut usage = CostUsage {
             prompt_tokens,
@@ -239,7 +255,34 @@ impl Usage {
             (TokenKind::Video, output_video),
         ]);
         usage.tokens.reasoning = reasoning;
+        usage.characters = Characters {
+            prompt: prompt_characters,
+            completion: completion_characters,
+        };
+        usage.durations = [
+            (DurationMeter::WallClock, wall_clock),
+            (DurationMeter::InputAudio, input_audio),
+            (DurationMeter::LiveVoice, live_voice),
+            (
+                DurationMeter::OutputVideo {
+                    resolution: video_resolution
+                        .map(|resolution| resolution.trim().to_lowercase())
+                        .and_then(|resolution| Resolution::new(&resolution)),
+                },
+                output_video_duration,
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(meter, duration)| Some((meter, duration?)))
+        .collect();
+        usage.text_messages = text_messages;
         Self(usage)
+    }
+
+    /// The provider-reported prompt size, which picks the band
+    #[getter]
+    fn prompt_tokens(&self) -> u64 {
+        self.0.prompt_tokens
     }
 }
 
@@ -305,6 +348,18 @@ impl Priced {
     #[getter]
     fn missing<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         PyTuple::new(py, &self.missing)
+    }
+}
+
+#[pymethods]
+impl Line {
+    /// A count, or a `timedelta` for a second meter
+    #[getter]
+    fn quantity<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        match self.quantity {
+            Quantity::Count(count) => Ok(count.into_pyobject(py)?.into_any()),
+            Quantity::Duration(duration) => Ok(duration.into_pyobject(py)?.into_any()),
+        }
     }
 }
 
@@ -452,6 +507,17 @@ fn meter_name(meter: &Meter) -> String {
             };
             format!("cache_creation_input_{}token_cost{ttl}", token(kind))
         }
+        Meter::Input(InputUnit::Character) => "input_cost_per_character".to_owned(),
+        Meter::Output(OutputUnit::Character) => "output_cost_per_character".to_owned(),
+        Meter::WallClockSecond => "cost_per_second".to_owned(),
+        Meter::Input(InputUnit::Second) => "input_cost_per_second".to_owned(),
+        Meter::Output(OutputUnit::Second(None)) => "output_cost_per_second".to_owned(),
+        Meter::Output(OutputUnit::Second(Some(resolution))) => {
+            format!("output_cost_per_second_{}", resolution.as_str())
+        }
+        Meter::Input(InputUnit::AudioSecond) => "input_cost_per_audio_per_second".to_owned(),
+        Meter::Output(OutputUnit::VideoSecond) => "output_cost_per_video_per_second".to_owned(),
+        Meter::Input(InputUnit::TextMessage) => "input_cost_per_text_message".to_owned(),
         other => format!("{other:?}"),
     }
 }

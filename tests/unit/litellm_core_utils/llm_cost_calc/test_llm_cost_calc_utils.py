@@ -100,10 +100,15 @@ def test_generic_cost_per_token_bills_cache_reads_at_input_rate_when_no_cache_re
 @pytest.mark.parametrize(
     ("model_info", "expected_prompt_cost"),
     [
-        ({"input_cost_per_token": 1e-7, "input_cost_per_character": 2.5e-8, "output_cost_per_token": 0.0}, 35 * 2.5e-8),
+        ({"input_cost_per_character": 2.5e-8}, 35 * 2.5e-8),
+        ({"input_cost_per_token": 1e-7, "input_cost_per_character": 2.5e-8, "output_cost_per_token": 0.0}, 11 * 1e-7),
         ({"input_cost_per_token": 1.5e-7, "output_cost_per_token": 0.0}, 11 * 1.5e-7),
     ],
-    ids=["character_priced_model_bills_characters_instead_of_tokens", "token_priced_model_ignores_the_character_count"],
+    ids=[
+        "character_priced_model_bills_characters_instead_of_tokens",
+        "a_model_priced_both_ways_bills_tokens",
+        "token_priced_model_ignores_the_character_count",
+    ],
 )
 def test_generic_cost_per_token_bills_a_character_counted_prompt_under_one_unit(
     model_info: ModelInfo, expected_prompt_cost: float

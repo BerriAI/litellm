@@ -4,7 +4,7 @@ import math
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from functools import lru_cache, partial
 from pathlib import Path
@@ -18,6 +18,8 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm._cost import Priced
+from litellm._cost import Usage as TokenUsage
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     TRANSCRIBE_JOB_MAX_POLLING_ATTEMPTS,
@@ -34,6 +36,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
 )
+from litellm.litellm_core_utils.llm_cost_calc.utils import price_usage
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     PassThroughEndpointLoggingResultValues,
@@ -106,11 +109,6 @@ StartedJob: TypeAlias = TranscriptionJobRecord | None
 JobPricer: TypeAlias = Callable[[str, str, float, StartedJob], Awaitable[float]]
 
 
-class _PricedCostMapEntry(LiteLLMBaseModel):
-    model_config = ConfigDict(frozen=True, strict=True)
-    input_cost_per_second: float
-
-
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _BUCKET_NAMES: Final = TypeAdapter(frozenset[str])
@@ -148,10 +146,18 @@ def transcribe_supported_operations() -> frozenset[str]:
 
 
 def transcribe_cost_per_second() -> float | None:
-    try:
-        return _PricedCostMapEntry.model_validate(litellm.model_cost.get(TRANSCRIBE_PRICED_MODEL)).input_cost_per_second
-    except ValidationError:
+    """The per-second rate the catalog bills a Transcribe job at, None when the row prices no audio second"""
+    row: Final = litellm.model_cost.get(TRANSCRIBE_PRICED_MODEL)
+    if not isinstance(row, Mapping):
         return None
+    priced: Final = price_usage(
+        row,
+        TokenUsage(prompt_tokens=0, text=0, output_text=0, input_audio=timedelta(seconds=1)),
+        key=TRANSCRIBE_PRICED_MODEL,
+    )
+    if not isinstance(priced, Priced):
+        return None
+    return next((line.unit_price for line in priced.lines if line.meter == "input_cost_per_second"), None)
 
 
 def transcribe_unpriceable_request_reason(

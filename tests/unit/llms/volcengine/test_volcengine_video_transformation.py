@@ -13,7 +13,7 @@ import litellm
 from litellm import Router
 from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.llms.openai.cost_calculation import video_generation_cost
+from litellm.cost_calculator import default_video_cost_calculator
 from litellm.llms.volcengine.videos.transformation import VolcEngineVideoConfig, VolcEngineVideoError
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.utils import decode_video_id_with_provider, encode_video_id_with_provider
@@ -456,7 +456,7 @@ def test_the_create_usage_bills_its_duration_at_its_tier_rate(usage: dict[str, o
     }
     video = _created({"duration": int(usage["duration_seconds"]), "resolution": usage.get("video_resolution")})
 
-    cost = video_generation_cost(
+    cost = default_video_cost_calculator(
         model=SEEDANCE_2_5,
         duration_seconds=video.usage["duration_seconds"],
         model_info=model_info,  # pyright: ignore[reportArgumentType]  # a hand-written rate card stands in for ModelInfo

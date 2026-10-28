@@ -1,7 +1,7 @@
 import os
 from asyncio import Future
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import ModuleType
 from typing import Literal, Never, final
 
@@ -121,12 +121,14 @@ class Invalid:
 
 @final
 class Prices:
+    text_unit: Literal["token", "character"]
     @staticmethod
     def from_row(row: Mapping[str, object], key: str = "model_info") -> Prices | Invalid: ...
     def price(self, usage: Usage, call: CallContext) -> Priced | Unpriced | Invalid: ...
 
 @final
 class Usage:
+    prompt_tokens: int
     def __init__(
         self,
         *,
@@ -146,6 +148,14 @@ class Usage:
         output_image: int = 0,
         output_video: int = 0,
         reasoning: int = 0,
+        prompt_characters: int = 0,
+        completion_characters: int = 0,
+        wall_clock: timedelta | None = None,
+        input_audio: timedelta | None = None,
+        live_voice: timedelta | None = None,
+        output_video_duration: timedelta | None = None,
+        video_resolution: str | None = None,
+        text_messages: int = 0,
     ) -> None: ...
 
 
@@ -165,7 +175,7 @@ class CallContext:
 @final
 class Line:
     meter: str
-    quantity: int
+    quantity: int | timedelta
     unit_price: float
     amount: float
     fallback_from: str | None

@@ -8719,7 +8719,6 @@ def test_completion_cost_params_2():
 
 
 def test_completion_cost_params_gemini_3():
-    from litellm.llms.vertex_ai.cost_calculator import cost_per_character
     from litellm.utils import Choices, Message, ModelResponse, Usage
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -8770,20 +8769,19 @@ def test_completion_cost_params_gemini_3():
         vertex_ai_citation_metadata=[],
     )
 
-    pc, cc = cost_per_character(
-        **{
-            "model": "gemini-3.8-flash",
-            "custom_llm_provider": "vertex_ai",
-            "prompt_characters": None,
-            "completion_characters": 3,
-            "usage": usage,
-        }
+    pc, cc = cost_per_token(
+        model="gemini-3.8-flash",
+        custom_llm_provider="vertex_ai",
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        prompt_characters=None,
+        completion_characters=3,
+        usage_object=usage,
     )
 
     model_info = litellm.get_model_info("gemini-3.8-flash")
 
-    # gemini-3.8-flash has no per-character pricing, so cost_per_character
-    # falls back to per-token pricing using usage.prompt_tokens / usage.completion_tokens
+    # gemini-3.8-flash has no per-character pricing, so it bills tokens
     assert round(pc, 10) == round(3771 * model_info["input_cost_per_token"], 10)
     assert round(cc, 10) == round(
         2 * model_info["output_cost_per_token"],
@@ -10633,3 +10631,31 @@ def test_a_directly_written_null_price_is_unpriced_like_a_missing_one(monkeypatc
     )
 
     assert cost_per_token(model=key, prompt_tokens=1000, completion_tokens=0, custom_llm_provider="openai") == (0.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        pytest.param(
+            {"input_cost_per_character": 1.5e-5, "input_cost_per_token": 2e-6}, (10 * 2e-6, 0.0), id="both-bills-tokens"
+        ),
+        pytest.param({}, (0.0, 0.0), id="neither-is-unpriced"),
+    ],
+)
+def test_a_speech_call_bills_what_the_row_prices(
+    row: Mapping[str, float], expected: tuple[float, float], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Decision 32 and decision 14. On main a row with both prices billed characters and one with neither raised"""
+    key: Final = "litellm-test-speech-row"
+    monkeypatch.setitem(litellm.model_cost, key, {"litellm_provider": "openai", "mode": "audio_speech", **row})
+
+    costs: Final = cost_per_token(
+        model=key,
+        custom_llm_provider="openai",
+        prompt_tokens=10,
+        completion_tokens=0,
+        prompt_characters=1000,
+        call_type="speech",
+    )
+
+    assert costs == (pytest.approx(expected[0]), pytest.approx(expected[1]))

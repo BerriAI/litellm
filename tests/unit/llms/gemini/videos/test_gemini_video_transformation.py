@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
-from litellm.llms.openai.cost_calculation import video_generation_cost
+from litellm.cost_calculator import default_video_cost_calculator
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoObject
 
@@ -724,7 +724,7 @@ class TestGeminiVideoCostTracking:
     def test_cost_calculation_with_duration(self):
         """Test that cost is calculated correctly using duration from usage."""
         # Test VEO 2.0 ($0.35/second)
-        cost_veo2 = video_generation_cost(
+        cost_veo2 = default_video_cost_calculator(
             model="gemini/veo-2.0-generate-001",
             duration_seconds=5.0,
             custom_llm_provider="gemini",
@@ -736,7 +736,7 @@ class TestGeminiVideoCostTracking:
         ), f"Expected ${expected_veo2}, got ${cost_veo2}"
 
         # Test VEO 3.0 ($0.75/second)
-        cost_veo3 = video_generation_cost(
+        cost_veo3 = default_video_cost_calculator(
             model="gemini/veo-3.0-generate-preview",
             duration_seconds=8.0,
             custom_llm_provider="gemini",
@@ -748,7 +748,7 @@ class TestGeminiVideoCostTracking:
         ), f"Expected ${expected_veo3}, got ${cost_veo3}"
 
         # Test VEO 3.1 Standard ($0.40/second)
-        cost_veo31 = video_generation_cost(
+        cost_veo31 = default_video_cost_calculator(
             model="gemini/veo-3.1-generate-preview",
             duration_seconds=10.0,
             custom_llm_provider="gemini",
@@ -760,7 +760,7 @@ class TestGeminiVideoCostTracking:
         ), f"Expected ${expected_veo31}, got ${cost_veo31}"
 
         # Test VEO 3.1 Fast ($0.15/second)
-        cost_veo31_fast = video_generation_cost(
+        cost_veo31_fast = default_video_cost_calculator(
             model="gemini/veo-3.1-fast-generate-preview",
             duration_seconds=6.0,
             custom_llm_provider="gemini",
@@ -777,14 +777,14 @@ class TestGeminiVideoCostTracking:
             "output_cost_per_second": 0.05,
             "output_cost_per_second_1080p": 0.08,
         }
-        cost_720 = video_generation_cost(
+        cost_720 = default_video_cost_calculator(
             model="gemini/veo-3.1-lite-generate-preview",
             duration_seconds=10.0,
             custom_llm_provider="gemini",
             model_info=model_info,
             video_resolution="720p",
         )
-        cost_1080 = video_generation_cost(
+        cost_1080 = default_video_cost_calculator(
             model="gemini/veo-3.1-lite-generate-preview",
             duration_seconds=10.0,
             custom_llm_provider="gemini",
@@ -826,7 +826,7 @@ class TestGeminiVideoCostTracking:
         duration = video_obj.usage["duration_seconds"]
 
         # Calculate cost using the duration from usage
-        cost = video_generation_cost(
+        cost = default_video_cost_calculator(
             model="gemini/veo-3.0-generate-preview",
             duration_seconds=duration,
             custom_llm_provider="gemini",

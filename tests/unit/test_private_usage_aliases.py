@@ -1465,13 +1465,6 @@ ALIAS_CASES: Final = (
         "call_type_has_image_response",
         False,
     ),
-    (
-        "litellm.litellm_core_utils.llm_cost_calc.utils",
-        "",
-        "_generic_cost_per_character",
-        "generic_cost_per_character",
-        False,
-    ),
     ("litellm.litellm_core_utils.llm_cost_calc.utils", "", "_get_cost_per_unit", "get_cost_per_unit", False),
     (
         "litellm.litellm_core_utils.llm_cost_calc.utils",
@@ -2228,13 +2221,6 @@ LLMS_ALIAS_CASES: Final = (
     ("litellm.llms.ollama.common_utils", "", "_convert_image", "convert_image", False),
     ("litellm.llms.openai.chat.gpt_reasoning_transformation", "", "_get_effort_level", "get_effort_level", False),
     ("litellm.llms.openai.completion.utils", "", "_transform_prompt", "transform_prompt", False),
-    (
-        "litellm.llms.openai.cost_calculation",
-        "",
-        "_video_output_cost_per_second",
-        "video_output_cost_per_second",
-        False,
-    ),
     (
         "litellm.llms.openai.fine_tuning.handler",
         "",

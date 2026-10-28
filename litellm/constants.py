@@ -685,9 +685,7 @@ STREAM_SSE_DATA_PREFIX: Final[str] = "data: "
 STREAM_SSE_KEEPALIVE_PING_CHUNK: Final[str] = 'event: ping\ndata: {"type": "ping"}\n\n'
 STREAM_SSE_KEEPALIVE_PING_BYTES: Final[bytes] = STREAM_SSE_KEEPALIVE_PING_CHUNK.encode("utf-8")
 ### SPEND TRACKING ###
-DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = get_env_float(
-    "DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400
-)  # price per second for a100 80GB
+DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = get_env_float_or_none("DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND")
 FIREWORKS_AI_56_B_MOE: Final = get_env_int("FIREWORKS_AI_56_B_MOE", 56)
 FIREWORKS_AI_176_B_MOE: Final = get_env_int("FIREWORKS_AI_176_B_MOE", 176)
 FIREWORKS_AI_4_B: Final = get_env_int("FIREWORKS_AI_4_B", 4)

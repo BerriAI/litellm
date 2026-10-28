@@ -1129,14 +1129,14 @@ class TestMinimaxVideoPricing:
         """A tier with no rate of its own falls back to the base rate, so a 2K
         video would silently bill at the 768P price."""
         from litellm import get_model_info
-        from litellm.llms.openai.cost_calculation import video_generation_cost
+        from litellm.cost_calculator import default_video_cost_calculator
 
         info = get_model_info(model=model, custom_llm_provider="minimax")
 
         for resolution in resolutions:
             tier_rate = info[f"output_cost_per_second_{resolution}"]
             assert tier_rate > 0
-            cost = video_generation_cost(
+            cost = default_video_cost_calculator(
                 model=model, duration_seconds=5.0, custom_llm_provider="minimax", video_resolution=resolution
             )
             assert cost == pytest.approx(tier_rate * 5.0)

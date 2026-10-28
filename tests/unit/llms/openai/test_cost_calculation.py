@@ -3,7 +3,7 @@
 import pytest
 
 import litellm
-from litellm.llms.openai.cost_calculation import cost_per_second
+from litellm.cost_calculator import transcription_cost
 
 
 def _register_stt(name: str, **pricing: float) -> None:
@@ -27,7 +27,7 @@ def test_input_rate_bills_when_output_rate_is_zero():
         output_cost_per_second=0.0,
     )
 
-    prompt_cost, completion_cost = cost_per_second(
+    prompt_cost, completion_cost = transcription_cost(
         model="test-stt-zero-output", custom_llm_provider="openai", duration=300.0
     )
 
@@ -43,7 +43,7 @@ def test_output_rate_takes_precedence_when_both_are_billable():
         output_cost_per_second=1e-04,
     )
 
-    prompt_cost, completion_cost = cost_per_second(
+    prompt_cost, completion_cost = transcription_cost(
         model="test-stt-both-rates", custom_llm_provider="openai", duration=10.0
     )
 
@@ -53,7 +53,7 @@ def test_output_rate_takes_precedence_when_both_are_billable():
 def test_output_rate_alone_still_bills():
     _register_stt("test-stt-output-only", output_cost_per_second=3e-05)
 
-    prompt_cost, completion_cost = cost_per_second(
+    prompt_cost, completion_cost = transcription_cost(
         model="test-stt-output-only", custom_llm_provider="openai", duration=60.0
     )
 
@@ -72,6 +72,6 @@ def test_output_rate_alone_still_bills():
     ],
 )
 def test_shipped_per_second_models_bill_a_non_zero_cost(model, provider):
-    prompt_cost, completion_cost = cost_per_second(model=model, custom_llm_provider=provider, duration=60.0)
+    prompt_cost, completion_cost = transcription_cost(model=model, custom_llm_provider=provider, duration=60.0)
 
     assert prompt_cost + completion_cost > 0.0

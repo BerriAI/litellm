@@ -5,6 +5,7 @@ use crate::price::{
     Meter, OffPeakRates, OutputUnit, Price, Prices, ServiceTier, TierScope, TokenKind, Uplift,
     When,
 };
+use crate::price::{Resolution, TextUnit, WallClock};
 use crate::priced::{Line, Outcome, Priced, Quantity, Side};
 use crate::usage::{DurationMeter, Usage};
 
@@ -21,7 +22,7 @@ const CACHE_WRITE: Meter = Meter::CacheWrite {
     ttl: CacheTtl::Default,
 };
 
-/// Prices one call's token usage (decisions 21 and 30). Every meter with usage is a `Line`, one that borrowed another
+/// Prices one call's usage (decisions 21 and 30). Every meter with usage is a `Line`, one that borrowed another
 /// meter's rate names it in `fallback_from`, and one with no price and no fallback is listed in `missing`
 pub fn calculate(
     prices: &Prices,
@@ -31,48 +32,24 @@ pub fn calculate(
 ) -> Outcome {
     let rates = Rates::new(prices, usage, call);
     let uplifts = uplifts(adjustments, call);
-    let tokens = &usage.tokens;
-    let billed: Vec<(Meter, Option<Rate>, u64, Side)> = tokens
-        .input
-        .iter()
-        .map(|(kind, count)| {
-            (
-                Meter::Input(InputUnit::Token(*kind)),
-                rates.input(*kind),
-                *count,
-                Side::Prompt,
-            )
-        })
-        .chain(tokens.cache_read.iter().map(|((kind, mode), count)| {
-            let meter = Meter::CacheRead {
-                kind: *kind,
-                mode: *mode,
-            };
-            (meter, rates.cache_read(*kind, *mode), *count, Side::Prompt)
-        }))
-        .chain(tokens.cache_write.iter().map(|((kind, ttl), count)| {
-            let meter = Meter::CacheWrite {
-                kind: *kind,
-                ttl: *ttl,
-            };
-            (meter, rates.cache_write(*ttl), *count, Side::Prompt)
-        }))
-        .chain(tokens.output.iter().map(|(kind, count)| {
-            let meter = Meter::Output(OutputUnit::Token(*kind));
-            (meter, rates.output(*kind), *count, Side::Completion)
-        }))
+    let billed: Vec<Billed> = token_meters(&rates, usage)
+        .chain(character_meters(&rates, usage))
+        .chain(second_meters(&rates, usage))
         .chain([(
-            REASONING,
-            rates.reasoning(),
-            tokens.reasoning,
-            Side::Completion,
+            Meter::Input(InputUnit::TextMessage),
+            rates.banded(&Meter::Input(InputUnit::TextMessage)),
+            Quantity::Count(usage.text_messages),
+            Side::Prompt,
         )])
-        .filter(|(.., count, _)| *count > 0)
+        .filter(|(_, _, quantity, _)| !is_zero(*quantity))
         .collect();
     let lines: Vec<Line> = billed
         .iter()
-        .filter_map(|(meter, rate, count, side)| {
-            Some(rate.clone()?.line(meter.clone(), *count, *side, &uplifts))
+        .filter_map(|(meter, rate, quantity, side)| {
+            Some(
+                rate.clone()?
+                    .line(meter.clone(), *quantity, *side, &uplifts),
+            )
         })
         .collect();
     let missing: Vec<Meter> = billed
@@ -89,6 +66,142 @@ pub fn calculate(
         missing,
         total,
     })
+}
+
+type Billed = (Meter, Option<Rate>, Quantity, Side);
+
+fn is_zero(quantity: Quantity) -> bool {
+    match quantity {
+        Quantity::Count(count) => count == 0,
+        Quantity::Duration(duration) => duration.is_zero(),
+    }
+}
+
+/// A row that bills text by the character bills no text tokens (decision 32)
+fn token_meters<'a>(rates: &'a Rates<'_>, usage: &'a Usage) -> impl Iterator<Item = Billed> + 'a {
+    let tokens = &usage.tokens;
+    let by_characters = rates.prices.billing().text_unit == TextUnit::Character;
+    let billed_text = move |kind: &TokenKind| !(by_characters && *kind == TokenKind::Text);
+    let count = Quantity::Count;
+    tokens
+        .input
+        .iter()
+        .filter(move |(kind, _)| billed_text(kind))
+        .map(move |(kind, tokens)| {
+            (
+                Meter::Input(InputUnit::Token(*kind)),
+                rates.input(*kind),
+                count(*tokens),
+                Side::Prompt,
+            )
+        })
+        .chain(tokens.cache_read.iter().map(move |((kind, mode), tokens)| {
+            let meter = Meter::CacheRead {
+                kind: *kind,
+                mode: *mode,
+            };
+            (
+                meter,
+                rates.cache_read(*kind, *mode),
+                count(*tokens),
+                Side::Prompt,
+            )
+        }))
+        .chain(tokens.cache_write.iter().map(move |((kind, ttl), tokens)| {
+            let meter = Meter::CacheWrite {
+                kind: *kind,
+                ttl: *ttl,
+            };
+            (meter, rates.cache_write(*ttl), count(*tokens), Side::Prompt)
+        }))
+        .chain(
+            tokens
+                .output
+                .iter()
+                .filter(move |(kind, _)| billed_text(kind))
+                .map(move |(kind, tokens)| {
+                    let meter = Meter::Output(OutputUnit::Token(*kind));
+                    (meter, rates.output(*kind), count(*tokens), Side::Completion)
+                }),
+        )
+        .chain([(
+            REASONING,
+            rates.reasoning(),
+            count(tokens.reasoning),
+            Side::Completion,
+        )])
+}
+
+/// `generic_cost_per_character` and Vertex's `cost_per_character`. The band is the prompt's (decision 31)
+fn character_meters(rates: &Rates<'_>, usage: &Usage) -> Vec<Billed> {
+    if rates.prices.billing().text_unit != TextUnit::Character {
+        return Vec::new();
+    }
+    let input = Meter::Input(InputUnit::Character);
+    let output = Meter::Output(OutputUnit::Character);
+    vec![
+        (
+            input.clone(),
+            rates.banded(&input),
+            Quantity::Count(usage.characters.prompt),
+            Side::Prompt,
+        ),
+        (
+            output.clone(),
+            rates.banded(&output),
+            Quantity::Count(usage.characters.completion),
+            Side::Completion,
+        ),
+    ]
+}
+
+/// The per-second rules of main's `_per_second_pricing_cost`, OpenAI's `cost_per_second`, its video pricing and the
+/// realtime live voice rate
+fn second_meters(rates: &Rates<'_>, usage: &Usage) -> Vec<Billed> {
+    let duration = |meter: &DurationMeter| usage.durations.get(meter).copied();
+    let input_audio = duration(&DurationMeter::InputAudio);
+    let wall_clock = duration(&DurationMeter::WallClock).map(|response_time| {
+        match rates.prices.billing().wall_clock {
+            WallClock::AudioFile => input_audio.unwrap_or(response_time),
+            WallClock::Never | WallClock::ResponseTime => response_time,
+        }
+    });
+    let wall_clock_line = wall_clock
+        .filter(|_| rates.bills_wall_clock())
+        .map(|seconds| {
+            let (meter, rate) = rates.wall_clock_rate();
+            (meter, rate, Quantity::Duration(seconds), Side::Prompt)
+        });
+    let audio_line = input_audio.filter(|_| wall_clock.is_none()).map(|seconds| {
+        let (meter, rate, side) = rates.audio_second_rate();
+        (meter, rate, Quantity::Duration(seconds), side)
+    });
+    let live_voice_line = duration(&DurationMeter::LiveVoice).map(|seconds| {
+        let meter = Meter::Input(InputUnit::Second);
+        (
+            meter.clone(),
+            rates.banded(&meter),
+            Quantity::Duration(seconds),
+            Side::Prompt,
+        )
+    });
+    let video_lines = usage
+        .durations
+        .iter()
+        .filter_map(|(meter, seconds)| match meter {
+            DurationMeter::OutputVideo { resolution } => Some((resolution, *seconds)),
+            _ => None,
+        })
+        .map(|(resolution, seconds)| {
+            let (meter, rate) = rates.video_second_rate(resolution.as_ref());
+            (meter, rate, Quantity::Duration(seconds), Side::Completion)
+        });
+    wall_clock_line
+        .into_iter()
+        .chain(audio_line)
+        .chain(live_voice_line)
+        .chain(video_lines)
+        .collect()
 }
 
 /// One resolved rate, and the meter it came from when that is not the billed meter's own
@@ -120,8 +233,7 @@ impl Rate {
         })
     }
 
-    fn line(self, meter: Meter, count: u64, side: Side, uplifts: &[Multiplier]) -> Line {
-        let quantity = Quantity::Count(count);
+    fn line(self, meter: Meter, quantity: Quantity, side: Side, uplifts: &[Multiplier]) -> Line {
         Line {
             quantity,
             unit_price: self.price,
@@ -270,6 +382,70 @@ impl<'a> Rates<'a> {
             .or_else(|| self.borrowed_output())
     }
 
+    /// main prices a row by the second only when it has no token or tier price and its mode bills response time
+    fn bills_wall_clock(&self) -> bool {
+        let token_priced = |prices: &Prices| {
+            prices.iter().any(|(price, rate)| {
+                (price.meter == TEXT_INPUT || price.meter == TEXT_OUTPUT)
+                    && price.channel == Channel::Online
+                    && price.when == When::default()
+                    && rate.get() > 0.0
+            }) || prices.billing().tier_scope == TierScope::WholeCall
+        };
+        self.prices.billing().wall_clock != WallClock::Never
+            && !token_priced(self.prices)
+            && !self.overlay.is_some_and(token_priced)
+    }
+
+    /// `cost_per_second`, else `input_cost_per_second`, else `output_cost_per_second`
+    fn wall_clock_rate(&self) -> (Meter, Option<Rate>) {
+        let rate = self.first_of(&[
+            Meter::WallClockSecond,
+            Meter::Input(InputUnit::Second),
+            Meter::Output(OutputUnit::Second(None)),
+        ]);
+        (Meter::WallClockSecond, rate)
+    }
+
+    /// OpenAI's `cost_per_second`. A positive output rate bills the completion side, else the input rate the prompt
+    fn audio_second_rate(&self) -> (Meter, Option<Rate>, Side) {
+        let output = Meter::Output(OutputUnit::Second(None));
+        let input = Meter::Input(InputUnit::Second);
+        match self.banded(&output) {
+            Some(rate) if rate.price.get() > 0.0 => (output, Some(rate), Side::Completion),
+            _ => {
+                let rate = self.banded(&input);
+                (input, rate, Side::Prompt)
+            }
+        }
+    }
+
+    /// `output_cost_per_video_per_second`, else the resolution's `output_cost_per_second_<resolution>`, else
+    /// `output_cost_per_second`
+    fn video_second_rate(&self, resolution: Option<&Resolution>) -> (Meter, Option<Rate>) {
+        let candidates: Vec<Meter> = [Meter::Output(OutputUnit::VideoSecond)]
+            .into_iter()
+            .chain(
+                resolution
+                    .map(|resolution| Meter::Output(OutputUnit::Second(Some(resolution.clone())))),
+            )
+            .chain([Meter::Output(OutputUnit::Second(None))])
+            .collect();
+        (
+            Meter::Output(OutputUnit::VideoSecond),
+            self.first_of(&candidates),
+        )
+    }
+
+    /// The first of `meters` with a price, borrowed when it is not the first
+    fn first_of(&self, meters: &[Meter]) -> Option<Rate> {
+        let (own, rest) = meters.split_first()?;
+        self.banded(own).or_else(|| {
+            rest.iter()
+                .find_map(|meter| Some(self.banded(meter)?.borrowed_from(meter)))
+        })
+    }
+
     fn borrowed_input(&self) -> Option<Rate> {
         self.text_input
             .clone()
@@ -380,14 +556,9 @@ impl<'a> Rates<'a> {
     }
 }
 
-/// Meters with usage that no arm prices yet. Characters and seconds land in 09, the per-unit meters in 10
+/// Meters with usage that no arm prices yet, the per-unit meters 10 adds
 fn without_an_arm(usage: &Usage) -> impl Iterator<Item = Meter> + '_ {
     let counted = [
-        (usage.characters.prompt, Meter::Input(InputUnit::Character)),
-        (
-            usage.characters.completion,
-            Meter::Output(OutputUnit::Character),
-        ),
         (usage.images.input, Meter::Input(InputUnit::Image)),
         (usage.images.input_pixels, Meter::Input(InputUnit::Pixel)),
         (
@@ -410,7 +581,6 @@ fn without_an_arm(usage: &Usage) -> impl Iterator<Item = Meter> + '_ {
             usage.search.additional_results,
             Meter::Feature(Feature::AdditionalResult),
         ),
-        (usage.text_messages, Meter::Input(InputUnit::TextMessage)),
         (
             usage.tokens.citation,
             Meter::Feature(Feature::CitationToken),
@@ -421,23 +591,10 @@ fn without_an_arm(usage: &Usage) -> impl Iterator<Item = Meter> + '_ {
         .web_search
         .filter(|search| search.requests > 0)
         .map(|search| Meter::WebSearch(search.context));
-    let durations = usage
-        .durations
-        .iter()
-        .filter(|(_, duration)| !duration.is_zero())
-        .map(|(meter, _)| match meter {
-            DurationMeter::WallClock => Meter::WallClockSecond,
-            DurationMeter::InputAudio => Meter::Input(InputUnit::AudioSecond),
-            DurationMeter::LiveVoice => Meter::Input(InputUnit::Second),
-            DurationMeter::OutputVideo { resolution } => {
-                Meter::Output(OutputUnit::Second(resolution.clone()))
-            }
-        });
     counted
         .into_iter()
         .filter_map(|(count, meter)| (count > 0).then_some(meter))
         .chain(web_search)
-        .chain(durations)
 }
 
 fn uplifts(adjustments: &Adjustments, call: &CallContext) -> Vec<Multiplier> {
@@ -572,14 +729,216 @@ mod tests {
     fn a_meter_no_arm_prices_yet_is_missing() {
         let prices = row([standard(&TEXT_INPUT, 1e-6)]);
         let usage = Usage {
-            characters: crate::usage::Characters {
-                prompt: 40,
-                completion: 0,
+            images: crate::usage::Images {
+                input: 2,
+                ..crate::usage::Images::default()
             },
             ..usage(100, 0, 0)
         };
         let outcome = priced(calculate(&prices, &Adjustments::default(), &usage, &call()));
-        assert_eq!(outcome.missing, [Meter::Input(InputUnit::Character)]);
+        assert_eq!(outcome.missing, [Meter::Input(InputUnit::Image)]);
+    }
+
+    fn by_characters(rates: impl IntoIterator<Item = (Price, UnitPrice)>) -> Prices {
+        Prices::new(
+            rates.into_iter().collect(),
+            None,
+            Billing {
+                text_unit: TextUnit::Character,
+                ..Billing::default()
+            },
+        )
+    }
+
+    fn with_characters(
+        prompt_tokens: u64,
+        prompt: u64,
+        completion: u64,
+        completion_tokens: u64,
+    ) -> Usage {
+        Usage {
+            prompt_tokens,
+            characters: crate::usage::Characters { prompt, completion },
+            ..usage(prompt_tokens, 0, completion_tokens)
+        }
+    }
+
+    #[rstest]
+    fn a_character_row_bills_characters_and_no_text_tokens() {
+        let prices = by_characters([
+            standard(&Meter::Input(InputUnit::Character), 1e-6),
+            standard(&Meter::Output(OutputUnit::Character), 2e-6),
+        ]);
+        let outcome = priced(calculate(
+            &prices,
+            &Adjustments::default(),
+            &with_characters(50, 400, 100, 30),
+            &call(),
+        ));
+        assert!(outcome.missing.is_empty());
+        close(outcome.total.get(), 400.0 * 1e-6 + 100.0 * 2e-6);
+    }
+
+    #[rstest]
+    fn a_token_row_ignores_characters() {
+        let prices = row([standard(&TEXT_INPUT, 1e-6), standard(&TEXT_OUTPUT, 2e-6)]);
+        close(
+            total(&prices, &with_characters(50, 400, 100, 30), &call()),
+            50.0 * 1e-6 + 30.0 * 2e-6,
+        );
+    }
+
+    #[rstest]
+    #[case::small_prompt_many_characters(10_000, 40_000, 1e-6)]
+    #[case::large_prompt(200_000, 40_000, 3e-6)]
+    fn the_character_band_is_picked_by_prompt_tokens(
+        #[case] prompt_tokens: u64,
+        #[case] characters: u64,
+        #[case] rate: f64,
+    ) {
+        let over = Band::over_prompt_tokens(128_000);
+        let input = Meter::Input(InputUnit::Character);
+        let prices = by_characters([
+            standard(&input, 1e-6),
+            price(&input, Channel::Online, ServiceTier::Standard, over, 3e-6),
+        ]);
+        close(
+            total(
+                &prices,
+                &with_characters(prompt_tokens, characters, 0, 0),
+                &call(),
+            ),
+            characters as f64 * rate,
+        );
+    }
+
+    #[rstest]
+    fn completion_characters_bill_at_the_output_character_band() {
+        let output = Meter::Output(OutputUnit::Character);
+        let over = Band::over_prompt_tokens(128_000);
+        let prices = by_characters([
+            standard(&output, 5e-7),
+            price(&output, Channel::Online, ServiceTier::Standard, over, 1e-6),
+        ]);
+        let outcome = priced(calculate(
+            &prices,
+            &Adjustments::default(),
+            &with_characters(200_000, 0, 200_000, 50_000),
+            &call(),
+        ));
+        close(outcome.total.get(), 0.2);
+    }
+
+    fn timed(meter: DurationMeter, seconds: f64) -> Usage {
+        Usage {
+            durations: BTreeMap::from([(meter, std::time::Duration::from_secs_f64(seconds))]),
+            ..Usage::default()
+        }
+    }
+
+    #[rstest]
+    #[case::cost_per_second(Meter::WallClockSecond, None)]
+    #[case::input_second(Meter::Input(InputUnit::Second), Some(Meter::Input(InputUnit::Second)))]
+    #[case::output_second(
+        Meter::Output(OutputUnit::Second(None)),
+        Some(Meter::Output(OutputUnit::Second(None)))
+    )]
+    fn a_wall_clock_row_bills_the_response_time_on_the_prompt_side(
+        #[case] priced_meter: Meter,
+        #[case] fallback: Option<Meter>,
+    ) {
+        let prices = row([standard(&priced_meter, 0.01)]);
+        let outcome = priced(calculate(
+            &prices,
+            &Adjustments::default(),
+            &timed(DurationMeter::WallClock, 2.0),
+            &call(),
+        ));
+        assert_eq!(outcome.lines[0].side, Side::Prompt);
+        assert_eq!(outcome.lines[0].fallback_from, fallback);
+        close(outcome.total.get(), 0.02);
+    }
+
+    #[rstest]
+    fn a_token_priced_row_is_never_billed_by_the_response_time() {
+        let prices = row([
+            standard(&TEXT_INPUT, 1e-6),
+            standard(&Meter::WallClockSecond, 0.01),
+        ]);
+        let outcome = calculate(
+            &prices,
+            &Adjustments::default(),
+            &timed(DurationMeter::WallClock, 2.0),
+            &call(),
+        );
+        assert_eq!(
+            outcome,
+            Outcome::Priced(Priced {
+                lines: vec![],
+                missing: vec![],
+                total: crate::money::Usd::ZERO
+            })
+        );
+    }
+
+    #[rstest]
+    #[case::output_rate(Some(0.006), Some(0.001), 0.06, Side::Completion)]
+    #[case::free_output_bills_input(Some(0.0), Some(0.001), 0.01, Side::Prompt)]
+    #[case::input_only(None, Some(0.001), 0.01, Side::Prompt)]
+    fn transcription_seconds_bill_the_output_rate_then_the_input_rate(
+        #[case] output: Option<f64>,
+        #[case] input: Option<f64>,
+        #[case] expected: f64,
+        #[case] side: Side,
+    ) {
+        let prices = row(output
+            .map(|rate| standard(&Meter::Output(OutputUnit::Second(None)), rate))
+            .into_iter()
+            .chain(input.map(|rate| standard(&Meter::Input(InputUnit::Second), rate))));
+        let outcome = priced(calculate(
+            &prices,
+            &Adjustments::default(),
+            &timed(DurationMeter::InputAudio, 10.0),
+            &call(),
+        ));
+        assert_eq!(outcome.lines[0].side, side);
+        close(outcome.total.get(), expected);
+    }
+
+    #[rstest]
+    #[case::video_rate(true, true, 0.5)]
+    #[case::resolution_rate(false, true, 0.3)]
+    #[case::plain_output_second(false, false, 0.1)]
+    fn video_seconds_bill_the_video_rate_then_the_resolution_rate(
+        #[case] video_rate: bool,
+        #[case] resolution_rate: bool,
+        #[case] rate: f64,
+    ) {
+        let p1080 = crate::price::Resolution::new("1080p").unwrap();
+        let prices =
+            row([standard(&Meter::Output(OutputUnit::Second(None)), 0.1)]
+                .into_iter()
+                .chain(video_rate.then(|| standard(&Meter::Output(OutputUnit::VideoSecond), 0.5)))
+                .chain(resolution_rate.then(|| {
+                    standard(&Meter::Output(OutputUnit::Second(Some(p1080.clone()))), 0.3)
+                })));
+        let usage = timed(
+            DurationMeter::OutputVideo {
+                resolution: Some(p1080.clone()),
+            },
+            8.0,
+        );
+        close(total(&prices, &usage, &call()), 8.0 * rate);
+    }
+
+    #[rstest]
+    fn text_messages_bill_per_message() {
+        let prices = row([standard(&Meter::Input(InputUnit::TextMessage), 0.002)]);
+        let usage = Usage {
+            text_messages: 3,
+            ..Usage::default()
+        };
+        close(total(&prices, &usage, &call()), 0.006);
     }
 
     #[rstest]

@@ -13,7 +13,7 @@ from litellm.llms.fal_ai.videos.transformation import (
     FalAIVideoError,
     _queue_request_base_path,
 )
-from litellm.llms.openai.cost_calculation import video_generation_cost
+from litellm.cost_calculator import default_video_cost_calculator
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.types.videos.utils import decode_video_id_with_provider
@@ -676,7 +676,7 @@ class TestFalAIVideoTransformation:
         model_info = litellm.get_model_info(model=H3_TEXT_MODEL, custom_llm_provider="fal_ai")
 
         assert (
-            video_generation_cost(
+            default_video_cost_calculator(
                 model=H3_TEXT_MODEL,
                 duration_seconds=5,
                 custom_llm_provider="fal_ai",
@@ -686,7 +686,7 @@ class TestFalAIVideoTransformation:
             == 5 * row["output_cost_per_second_2k"]
         )
         assert (
-            video_generation_cost(
+            default_video_cost_calculator(
                 model=H3_TEXT_MODEL,
                 duration_seconds=5,
                 custom_llm_provider="fal_ai",

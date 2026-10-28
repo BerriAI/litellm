@@ -6,14 +6,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone, tzinfo
 from types import MappingProxyType
-from typing import Final, Literal, TypedDict, cast
+from typing import Final, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from typing_extensions import ReadOnly
 
 import litellm
 from litellm._catalog import Invalid
-from litellm._cost import CallContext, Prices, as_main_cost, call_custom_pricing
+from litellm._cost import CallContext, Channel, Priced, Prices, Unpriced, as_main_cost, call_custom_pricing
 from litellm._cost import Usage as TokenUsage
 from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
@@ -189,91 +189,6 @@ def get_billable_input_tokens(usage: Usage) -> int:
     """
     details: Final = parse_prompt_tokens_details(usage)
     return usage.prompt_tokens - details["cache_hit_tokens"]
-
-
-def select_cost_metric_for_model(
-    model_info: ModelInfo,
-) -> Literal["cost_per_character", "cost_per_token"]:
-    """
-    Select 'cost_per_character' if model_info has 'input_cost_per_character'
-    Select 'cost_per_token' if model_info has 'input_cost_per_token'
-    """
-    if model_info.get("input_cost_per_character"):
-        return "cost_per_character"
-    elif model_info.get("input_cost_per_token"):
-        return "cost_per_token"
-    else:
-        raise ValueError(
-            f"Model {model_info['key']} does not have 'input_cost_per_character' or 'input_cost_per_token'"
-        )
-
-
-def generic_cost_per_character(
-    model: str,
-    custom_llm_provider: str,
-    prompt_characters: float,
-    completion_characters: float,
-    custom_prompt_cost: float | None,
-    custom_completion_cost: float | None,
-) -> tuple[float | None, float | None]:
-    """
-    Calculates cost per character for aspeech/speech calls.
-
-    Calculates the cost per character for a given model, input messages, and response object.
-
-    Input:
-        - model: str, the model name without provider prefix
-        - custom_llm_provider: str, "vertex_ai-*"
-        - prompt_characters: float, the number of input characters
-        - completion_characters: float, the number of output characters
-
-    Returns:
-        Tuple[Optional[float], Optional[float]] - prompt_cost_in_usd, completion_cost_in_usd.
-        - returns None if not able to calculate cost.
-
-    Raises:
-        Exception if 'input_cost_per_character' or 'output_cost_per_character' is missing from model_info
-    """
-    ## GET MODEL INFO
-    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-
-    ## CALCULATE INPUT COST
-    try:
-        if custom_prompt_cost is None:
-            assert "input_cost_per_character" in model_info and model_info["input_cost_per_character"] is not None, (
-                f"model info for model={model} does not have 'input_cost_per_character'-pricing\nmodel_info={model_info}"
-            )
-            custom_prompt_cost = model_info["input_cost_per_character"]
-
-        prompt_cost = prompt_characters * custom_prompt_cost
-    except Exception as e:
-        verbose_logger.exception(
-            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - %s\nDefaulting to None",
-            e,
-        )
-
-        prompt_cost = None
-
-    ## CALCULATE OUTPUT COST
-    try:
-        if custom_completion_cost is None:
-            assert "output_cost_per_character" in model_info and model_info["output_cost_per_character"] is not None, (
-                f"model info for model={model} does not have 'output_cost_per_character'-pricing\nmodel_info={model_info}"
-            )
-            custom_completion_cost = model_info["output_cost_per_character"]
-        completion_cost = completion_characters * custom_completion_cost
-    except Exception as e:
-        verbose_logger.exception(
-            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - %s\nDefaulting to None",
-            e,
-        )
-
-        completion_cost = None
-
-    return prompt_cost, completion_cost
-
-
-_generic_cost_per_character = generic_cost_per_character
 
 
 def get_service_tier_cost_key(base_key: str, service_tier: str | None) -> str:
@@ -1342,32 +1257,83 @@ def generic_cost_per_token(
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
 
-    custom_pricing: Final = call_custom_pricing()
-    row: Final = _pricing_row(model, custom_llm_provider, model_info, has_overlay=custom_pricing is not None)
-    prices: Final = Prices.from_row(
-        dict(row) if usage.prompt_tokens > 0 else _without_tiers(row), key=str(row.get("key") or model)
-    )
-    if isinstance(prices, Invalid):
-        return as_main_cost(prices)
-    details: Final = _billable_prompt_details(usage)
-    call: Final = CallContext(
+    return cost_per_text(
+        model,
+        usage,
+        custom_llm_provider,
         service_tier=service_tier,
-        channel="online",
         data_residency=data_residency,
+        model_info=model_info,
         vertex_location=vertex_location,
-        at=current_time if current_time is not None else current_billing_time(),
-        custom_pricing=None if custom_pricing is None else dict(custom_pricing),
+        current_time=current_time,
     )
-    prompt_cost, completion_cost = as_main_cost(prices.price(_token_usage(usage, details, row), call))
+
+
+def cost_per_text(
+    model: str,
+    usage: Usage,
+    custom_llm_provider: str,
+    *,
+    service_tier: str | None = None,
+    data_residency: str | None = None,
+    model_info: ModelInfo | None = None,
+    vertex_location: str | None = None,
+    current_time: datetime | None = None,
+    characters: tuple[int, int] | None = None,
+) -> tuple[float, float]:
+    """``(prompt, completion)`` for a call's tokens and characters. ``characters`` is ``(prompt, completion)``, and
+    without it the prompt characters come from ``prompt_tokens_details``. The row says which of the two it bills"""
+    row: Final = pricing_row(model, custom_llm_provider, model_info)
+    details: Final = _billable_prompt_details(usage)
+    prompt_cost, completion_cost = as_main_cost(
+        price_usage(
+            row,
+            _token_usage(usage, details, row, characters or (details["character_count"], 0)),
+            service_tier=service_tier,
+            data_residency=data_residency,
+            vertex_location=vertex_location,
+            current_time=current_time,
+            key=model,
+        )
+    )
     uplift: Final = get_regional_uplift_multiplier(row, data_residency) * get_vertex_regional_endpoint_uplift(
         row, vertex_location
     )
     return prompt_cost + _unmetered_prompt_cost(details, row) * uplift, completion_cost
 
 
-def _pricing_row(
-    model: str, custom_llm_provider: str, model_info: ModelInfo | None, *, has_overlay: bool
-) -> Mapping[str, object]:
+def price_usage(
+    row: Mapping[str, object],
+    usage: TokenUsage,
+    *,
+    service_tier: str | None = None,
+    data_residency: str | None = None,
+    vertex_location: str | None = None,
+    current_time: datetime | None = None,
+    channel: Channel = "online",
+    key: str = "model_info",
+) -> Priced | Unpriced | Invalid:
+    """Prices ``usage`` over ``row`` with the call's custom pricing over it, the one place a cost is computed"""
+    custom_pricing: Final = call_custom_pricing()
+    prices: Final = Prices.from_row(
+        dict(row) if usage.prompt_tokens > 0 else _without_tiers(row), key=str(row.get("key") or key)
+    )
+    if isinstance(prices, Invalid):
+        return prices
+    return prices.price(
+        usage,
+        CallContext(
+            service_tier=service_tier,
+            channel=channel,
+            data_residency=data_residency,
+            vertex_location=vertex_location,
+            at=current_time if current_time is not None else current_billing_time(),
+            custom_pricing=None if custom_pricing is None else dict(custom_pricing),
+        ),
+    )
+
+
+def pricing_row(model: str, custom_llm_provider: str | None, model_info: ModelInfo | None) -> Mapping[str, object]:
     """The row main priced, as written rather than `get_model_info`'s copy, which writes `0` for a missing token
     price. A call with custom pricing prices an unmapped model from its overlay alone"""
     if model_info is not None:
@@ -1375,12 +1341,18 @@ def _pricing_row(
     try:
         resolved: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model
-        if has_overlay:
+        if call_custom_pricing() is not None:
             return MappingProxyType({})
         raise
     key: Final = resolved.get("key")
     row: Final = litellm.model_cost.get(key)
     return {**row, "key": key} if isinstance(row, Mapping) else resolved
+
+
+def bills_characters(row: Mapping[str, object]) -> bool:
+    """Whether the row bills text by the character and not by the token (decision 32)"""
+    prices: Final = Prices.from_row(dict(row))
+    return not isinstance(prices, Invalid) and prices.text_unit == "character"
 
 
 def _without_tiers(row: Mapping[str, object]) -> dict[str, object]:
@@ -1449,9 +1421,11 @@ def _cache_write_tokens(details: PromptTokensDetailsResult) -> tuple[int, int, i
     return short + max(written - short - one_hour - twelve_hours, 0), one_hour, twelve_hours
 
 
-def _token_usage(usage: Usage, details: PromptTokensDetailsResult, row: Mapping[str, object]) -> TokenUsage:
-    """The token meters main billed. A prompt billed per character, image or second of media does not bill the
-    same tokens again"""
+def _token_usage(
+    usage: Usage, details: PromptTokensDetailsResult, row: Mapping[str, object], characters: tuple[int, int]
+) -> TokenUsage:
+    """The meters main billed. A prompt billed per image or second of media does not bill the same tokens again, and
+    a row that bills characters bills no text tokens (decision 32)"""
     cache_type: Final = getattr(usage.prompt_tokens_details, "cache_type", None)
     cached_text: Final = details["cache_hit_tokens"] - details["cache_hit_audio_tokens"]
     explicit_cache: Final = cache_type == "ephemeral"
@@ -1459,9 +1433,9 @@ def _token_usage(usage: Usage, details: PromptTokensDetailsResult, row: Mapping[
     completion: Final = _completion_token_counts(usage)
     return TokenUsage(
         prompt_tokens=usage.prompt_tokens,
-        text=0
-        if details["character_count"] > 0 and row.get("input_cost_per_character") is not None
-        else details["text_tokens"],
+        text=details["text_tokens"],
+        prompt_characters=characters[0],
+        completion_characters=characters[1],
         audio=0
         if details["audio_length_seconds"] and row.get("input_cost_per_audio_per_second") is not None
         else details["audio_tokens"],
@@ -1505,10 +1479,9 @@ def _completion_token_counts(usage: Usage) -> CompletionTokensDetailsResult:
 
 
 def _unmetered_prompt_cost(details: PromptTokensDetailsResult, row: Mapping[str, object]) -> float:
-    """Prompt meters the Rust cost core does not price yet, characters, image counts, media seconds and queries"""
+    """Prompt meters the Rust cost core does not price yet, image counts, media seconds and queries"""
     return (
-        calculate_cost_component(row, "input_cost_per_character", details["character_count"])
-        + calculate_cost_component(row, "input_cost_per_image", details["image_count"])
+        calculate_cost_component(row, "input_cost_per_image", details["image_count"])
         + calculate_cost_component(row, "input_cost_per_video_per_second", details["video_length_seconds"])
         + calculate_cost_component(row, "input_cost_per_audio_per_second", details["audio_length_seconds"])
         + calculate_cost_component(row, "input_cost_per_query", details["query_count"])

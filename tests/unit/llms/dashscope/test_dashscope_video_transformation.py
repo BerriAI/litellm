@@ -1249,7 +1249,7 @@ class TestDashScopeVideoPricing:
         ],
     )
     def test_delivered_tier_and_duration_bill_at_that_tier_rate(self, usage, expected_cost):
-        from litellm.llms.openai.cost_calculation import video_generation_cost
+        from litellm.cost_calculator import default_video_cost_calculator
 
         model_info = {
             "output_cost_per_second": 0.3,
@@ -1265,7 +1265,7 @@ class TestDashScopeVideoPricing:
             raw_response=_mock_response(payload), logging_obj=None, custom_llm_provider="dashscope"
         )
 
-        cost = video_generation_cost(
+        cost = default_video_cost_calculator(
             model="wan3.0-video",
             duration_seconds=video_obj.usage["duration_seconds"],
             model_info=model_info,
