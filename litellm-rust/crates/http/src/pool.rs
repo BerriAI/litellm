@@ -6,7 +6,12 @@ use std::{
 
 use reqwest::dns::Resolve;
 
-use crate::{client::Client, config::HttpClientConfig, error::Error, proxy::EnvironmentProxies};
+use crate::{
+    client::Client,
+    config::{HttpClientConfig, Verify},
+    error::Error,
+    proxy::EnvironmentProxies,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ClientVariant {
@@ -14,6 +19,7 @@ pub enum ClientVariant {
     NoRedirect,
     Media,
     UnpinnedMedia,
+    WebSocket,
 }
 
 const CLIENT_TTL: Duration = Duration::from_secs(3600);
@@ -29,8 +35,6 @@ pub struct HttpClientPool {
     media_resolver: Arc<dyn Resolve>,
     ttl: Duration,
     clients: Mutex<Clients>,
-    #[cfg(feature = "mcp")]
-    mcp: crate::mcp::Pool,
 }
 
 impl HttpClientPool {
@@ -43,17 +47,7 @@ impl HttpClientPool {
             media_resolver,
             ttl,
             clients: Mutex::default(),
-            #[cfg(feature = "mcp")]
-            mcp: crate::mcp::Pool::default(),
         }
-    }
-
-    #[cfg(feature = "mcp")]
-    pub fn mcp_client(
-        &self,
-        config: &HttpClientConfig,
-    ) -> Result<impl rmcp::transport::streamable_http_client::StreamableHttpClient, Error> {
-        self.mcp.client(config, self.ttl)
     }
 
     pub fn client(
@@ -69,6 +63,14 @@ impl HttpClientPool {
             },
             ClientVariant::UnpinnedMedia => HttpClientConfig {
                 client_certificate: None,
+                ..config.clone()
+            },
+            ClientVariant::WebSocket => HttpClientConfig {
+                http2: false,
+                verify: match &config.verify {
+                    Verify::BuiltInRoots => Verify::NativeRoots,
+                    verify => verify.clone(),
+                },
                 ..config.clone()
             },
             ClientVariant::Provider | ClientVariant::NoRedirect => config.clone(),
@@ -103,12 +105,12 @@ impl HttpClientPool {
     ) -> reqwest::ClientBuilder {
         match variant {
             ClientVariant::Provider => builder,
-            ClientVariant::NoRedirect | ClientVariant::UnpinnedMedia => {
+            ClientVariant::NoRedirect | ClientVariant::UnpinnedMedia | ClientVariant::WebSocket => {
                 builder.redirect(reqwest::redirect::Policy::none())
             }
             ClientVariant::Media => builder
                 .redirect(reqwest::redirect::Policy::none())
-                .dns_resolver2(Arc::clone(&self.media_resolver)),
+                .dns_resolver(Arc::clone(&self.media_resolver)),
         }
     }
 }
@@ -389,57 +391,5 @@ mod tests {
                 .await
                 .is_err()
         );
-    }
-    #[cfg(feature = "mcp")]
-    #[rstest::rstest]
-    #[tokio::test]
-    async fn mcp_clients_reuse_connections_and_apply_proxy_headers_without_redirects() {
-        let (address, connections, requests) = serve("HTTP/1.1 302 Found").await;
-        let pool = pool();
-        let config = HttpClientConfig {
-            proxies: proxied_through(&format!("http://{address}")),
-            ..config("mcp-pool-test")
-        };
-        for _ in 0..2 {
-            let response = pool
-                .mcp
-                .client(&config, pool.ttl)
-                .unwrap()
-                .get("http://upstream.invalid/mcp")
-                .timeout(Duration::from_secs(2))
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(response.status(), 302);
-            response.bytes().await.unwrap();
-        }
-        assert_eq!(connections.load(Ordering::SeqCst), 1);
-        let requests = requests.lock().unwrap();
-        assert_eq!(requests.len(), 2);
-        assert!(
-            requests
-                .iter()
-                .all(|request| request.starts_with("GET http://upstream.invalid/mcp HTTP/1.1"))
-        );
-        assert!(
-            requests
-                .iter()
-                .all(|request| request.contains("user-agent: mcp-pool-test"))
-        );
-    }
-
-    #[cfg(feature = "mcp")]
-    #[rstest::rstest]
-    #[tokio::test]
-    async fn mcp_client_uses_host_tls_configuration() {
-        let directory = tempfile::tempdir().unwrap();
-        let config = HttpClientConfig {
-            verify: Verify::CaBundle(directory.path().join("missing.pem")),
-            ..config("mcp-test")
-        };
-        assert!(matches!(
-            pool().mcp_client(&config),
-            Err(Error::Read { .. })
-        ));
     }
 }

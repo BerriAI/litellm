@@ -3,21 +3,28 @@
 Some pass-through targets invoke several models internally, so LiteLLM cannot
 price the request from the response body. Those targets report the totals for
 the whole HTTP request in ``x-litellm-*`` response headers instead; LiteLLM
-records the reported values without recomputing them.
+records the reported values without recomputing them. A target may also name
+the request in ``x-litellm-upstream-model`` so its spend can be told apart from
+other requests that carry no ``model`` in the body.
 """
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
 import httpx
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import MAX_SPEND_LOG_MODEL_NAME_LENGTH
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.utils import Usage
 
 UPSTREAM_RESPONSE_COST_HEADER: Final = "x-litellm-response-cost"
 UPSTREAM_TOTAL_TOKENS_HEADER: Final = "x-litellm-total-tokens"
+# Deliberately not x-litellm-model-name/-id/-group: the gateway already sends
+# those to clients, and pass-through relays upstream headers back to the client.
+UPSTREAM_MODEL_HEADER: Final = "x-litellm-upstream-model"
 
 # model_call_details key holding what the upstream reported, so later stages of
 # the success path can tell an upstream-reported cost apart from one LiteLLM
@@ -89,15 +96,15 @@ def _parse_total_tokens(raw_value: str | None) -> int | None:
     return total_tokens
 
 
-def parse_upstream_reported_usage(headers: httpx.Headers) -> UpstreamReportedUsage | None:
+def parse_upstream_reported_usage(headers: Mapping[str, str]) -> UpstreamReportedUsage | None:
     """Read the reported totals off an upstream pass-through response.
 
     Returns ``None`` when neither header is present, which is the normal case
     for a target that does not speak this contract (e.g. Anthropic or Vertex,
     whose cost LiteLLM derives from the response body instead).
     """
-    raw_response_cost: Final = headers.get(UPSTREAM_RESPONSE_COST_HEADER)
-    raw_total_tokens: Final = headers.get(UPSTREAM_TOTAL_TOKENS_HEADER)
+    raw_response_cost: Final[str | None] = headers.get(UPSTREAM_RESPONSE_COST_HEADER)
+    raw_total_tokens: Final[str | None] = headers.get(UPSTREAM_TOTAL_TOKENS_HEADER)
     if raw_response_cost is None and raw_total_tokens is None:
         return None
     return UpstreamReportedUsage(
@@ -125,6 +132,39 @@ def apply_upstream_reported_usage(
     if reported.total_tokens is not None:
         logging_obj.model_call_details["combined_usage_object"] = Usage(total_tokens=reported.total_tokens)
     return reported
+
+
+def parse_upstream_reported_model(headers: httpx.Headers) -> str | None:
+    """Read the model name an upstream reported, or ``None`` when it sent none.
+
+    An empty or whitespace-only value counts as absent. A repeated header reads
+    as one comma-separated list (RFC 9110 field combining, which is how httpx
+    joins it), so only its first element is used. The name is cut to the spend
+    log's model-name limit, since it becomes a spend row, rollup key and metric
+    label.
+    """
+    raw_model: Final[str | None] = headers.get(UPSTREAM_MODEL_HEADER)
+    model: Final = raw_model.split(",", 1)[0].strip() if raw_model is not None else ""
+    return model[:MAX_SPEND_LOG_MODEL_NAME_LENGTH].rstrip() or None
+
+
+def apply_upstream_reported_model(
+    logging_obj: LiteLLMLoggingObj,
+    headers: httpx.Headers,
+) -> str | None:
+    """Record the upstream's model name as the request's model.
+
+    The name wins over a ``model`` in the request body. It is a label only:
+    it never marks the request as upstream-priced (see
+    ``has_upstream_reported_usage``) and nothing prices the request from it,
+    so a name outside the price map leaves the recorded cost alone.
+    """
+    reported_model: Final = parse_upstream_reported_model(headers)
+    if reported_model is None:
+        return None
+    logging_obj.model = reported_model  # rebind-ok: the request's logging object is where the recorded model lives
+    logging_obj.model_call_details["model"] = reported_model  # rebind-ok: read by the standard logging payload
+    return reported_model
 
 
 def has_upstream_reported_usage(logging_obj: LiteLLMLoggingObj) -> bool:

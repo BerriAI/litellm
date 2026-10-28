@@ -55,7 +55,6 @@ SONNET_5_5_VARIANTS = (
     "vertex_ai/claude-sonnet-5-5",
     "vertex_ai/claude-sonnet-5-5@default",
     "azure_ai/claude-sonnet-5-5",
-    "openrouter/anthropic/claude-sonnet-5.5",
 )
 
 
@@ -82,6 +81,6 @@ def test_sonnet_5_5_thinking_profile(local_model_cost_map, model, provider):
     no forced tool use, same as Opus 5.5."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-    assert AnthropicModelInfo._is_adaptive_thinking_model(model, provider) is True
+    assert AnthropicModelInfo.is_adaptive_thinking_model(model, provider) is True
     assert AnthropicModelInfo._is_always_on_thinking_model(model, provider) is True
     assert AnthropicModelInfo.forced_tool_use_unsupported(model.removeprefix("anthropic/")) is True

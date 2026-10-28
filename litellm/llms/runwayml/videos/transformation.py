@@ -9,14 +9,14 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import RUNWAYML_DEFAULT_API_VERSION
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -119,7 +119,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
 
     @staticmethod
     def _parse_task_response(raw_response: httpx.Response) -> _RunwayTaskResponse:
-        return raw_response.json()
+        return _parse_runway_task_response(raw_response)
 
     def get_supported_openai_params(self, model: str) -> list:
         """
@@ -274,7 +274,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
 
         files_list: Final[RequestFiles] = []
 
-        return request_data, files_list, f"{api_base}/{endpoint}"
+        return request_data, files_list, join_api_base(api_base, endpoint)
 
     def _select_generation_endpoint(self, request_data: Mapping[str, object]) -> str:
         if request_data.get("promptVideo") is not None or request_data.get("videoUri") is not None:
@@ -413,7 +413,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
 
         # Get task status to retrieve video URL
-        url: Final = f"{api_base}/tasks/{encoded_video_id}"
+        url: Final = join_api_base(api_base, f"tasks/{encoded_video_id}")
 
         return url, dict[str, str]()
 
@@ -445,6 +445,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        client: "HTTPHandler | None" = None,
     ) -> bytes:
         """
         Transform the RunwayML video content download response (synchronous).
@@ -464,7 +465,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         video_url: Final = self._extract_video_url_from_response(response_data)
 
         # Download the video from the CloudFront URL synchronously
-        httpx_client: Final[HTTPHandler] = _get_httpx_client()
+        httpx_client: Final[HTTPHandler] = get_httpx_client()
         video_response: Final = httpx_client.get(video_url)
         video_response.raise_for_status()
 
@@ -474,6 +475,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        client: "AsyncHTTPHandler | None" = None,
     ) -> bytes:
         """
         Transform the RunwayML video content download response (asynchronous).
@@ -569,7 +571,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
 
         # Construct the URL for task cancellation
-        url: Final = f"{api_base}/tasks/{encoded_video_id}/cancel"
+        url: Final = join_api_base(api_base, f"tasks/{encoded_video_id}/cancel")
 
         return url, dict[str, str]()
 
@@ -606,7 +608,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
 
         # Construct the full URL for task status retrieval
-        url: Final = f"{api_base}/tasks/{encoded_video_id}"
+        url: Final = join_api_base(api_base, f"tasks/{encoded_video_id}")
 
         # Empty dict for GET request (no body)
         return url, dict[str, str]()

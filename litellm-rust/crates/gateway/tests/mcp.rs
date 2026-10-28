@@ -78,7 +78,9 @@ async fn upstream() -> Fixture {
     let transport = StreamableHttpService::new(
         || Ok(Upstream),
         Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default().with_cancellation_token(shutdown.clone()),
+        StreamableHttpServerConfig::default()
+            .with_allowed_hosts(["127.0.0.1", "upstream.invalid"])
+            .with_cancellation_token(shutdown.clone()),
     );
     let app = Router::new().route_service("/mcp", transport);
     let stop = shutdown.clone();
@@ -220,6 +222,88 @@ mcp_servers:
         .await
         .unwrap()
         .unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn mcp_tools_are_discovered_through_the_configured_proxy(#[future] upstream: Fixture) {
+    let upstream = upstream.await;
+    let config = Config::from_yaml(
+        "general_settings: {master_key: gateway-key}\nmcp_servers: {docs: {url: 'http://upstream.invalid/mcp', timeout: 2}}",
+    )
+    .unwrap();
+    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let proxy = upstream.url.trim_end_matches("/mcp");
+    let http = litellm_http::HttpClientConfig {
+        proxies: litellm_http::EnvironmentProxies::from_environment(&|name: &str| {
+            (name == "HTTP_PROXY").then(|| proxy.to_owned())
+        }),
+        ..inference.http.clone()
+    };
+    let shutdown = CancellationToken::new();
+    let mcp = litellm_gateway::build_mcp(
+        &config,
+        inference.secrets.clone(),
+        shutdown.clone(),
+        &inference.resources.pool,
+        &http,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let app = litellm_gateway_mcp::router(mcp.operations.clone(), HttpConfig::default());
+    let response = app
+        .oneshot(
+            Request::get("/mcp-rest/tools/list?server_id=docs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+    assert_eq!(body["tools"][0]["name"], "echo");
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(5), mcp.close())
+        .await
+        .unwrap();
+    upstream.shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(5), upstream.task)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn mcp_uses_the_configured_ca_bundle() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("missing-ca.pem");
+    let config = Config::from_yaml(
+        "general_settings: {master_key: gateway-key}\nmcp_servers: {docs: {url: 'http://127.0.0.1:1/mcp'}}",
+    )
+    .unwrap();
+    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let http = litellm_http::HttpClientConfig {
+        verify: litellm_http::Verify::CaBundle(missing.clone()),
+        ..inference.http.clone()
+    };
+    let error = litellm_gateway::build_mcp(
+        &config,
+        inference.secrets.clone(),
+        CancellationToken::new(),
+        &inference.resources.pool,
+        &http,
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(matches!(
+        error,
+        litellm_gateway::Error::Http(litellm_http::Error::Read { path, .. })
+            if path == missing
+    ));
 }
 
 #[rstest]

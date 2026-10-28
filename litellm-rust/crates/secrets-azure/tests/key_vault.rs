@@ -11,7 +11,7 @@ use wiremock::{
 
 fn manager(server: &MockServer) -> AzureKeyVault {
     AzureKeyVault::with_client(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         server.uri().parse().unwrap(),
         Arc::new(|name: &str| (name == "AZURE_AD_TOKEN").then(|| "fake".to_owned())),
     )
@@ -131,7 +131,7 @@ fn new_validates_vault_environment(
     #[case] missing_environment: bool,
 ) {
     let result = AzureKeyVault::new(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         Arc::new(move |name: &str| {
             (name == "AZURE_KEY_VAULT_URI")
                 .then(|| uri.map(str::to_owned))
@@ -158,7 +158,7 @@ fn new_validates_vault_environment(
 #[case::local("http://localhost:8080", "https://localhost/.default")]
 fn derives_scope_from_vault_host(#[case] uri: &str, #[case] expected: &str) {
     let manager = AzureKeyVault::with_client(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         uri.parse().unwrap(),
         Arc::new(|_: &str| None),
     )
@@ -187,7 +187,7 @@ async fn missing_credentials_do_not_request_vault() {
 
 fn manager_without_credentials(server: &MockServer) -> AzureKeyVault {
     AzureKeyVault::with_client(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         server.uri().parse().unwrap(),
         Arc::new(|name: &str| {
             (name == "AZURE_CREDENTIAL").then(|| "ClientSecretCredential".to_owned())

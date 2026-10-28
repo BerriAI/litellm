@@ -69,7 +69,7 @@ litellm --config config.yaml
 ```bash
 curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -d '{
     "model": "gpt-3.5-turbo",
     "prompt_id": "hello-world-prompt",
@@ -290,4 +290,3 @@ Before deploying to production:
 ## Questions?
 
 This is a reference implementation for the LiteLLM Generic Prompt Management API. For questions or issues, please open an issue on the [LiteLLM GitHub repository](https://github.com/BerriAI/litellm).
-

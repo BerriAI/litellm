@@ -1,4 +1,4 @@
-import { parseQuery, type QueryLanguage, valueMatcher } from "./language";
+import { exactMatcher, isGlobOp, isNegatedOp, parseQuery, type QueryLanguage, valueMatcher } from "./language";
 import { type SearchFilter, type SearchQuery, toSearchQuery } from "./searchQuery";
 
 /** How to read a language's fields off items already in memory. */
@@ -9,8 +9,9 @@ export interface ClientIndex<T, F extends string> {
 }
 
 function matchesFilter<T, F extends string>(index: ClientIndex<T, F>, item: T, filter: SearchFilter<F>): boolean {
-  const matches = index.read[filter.field](item).some(valueMatcher(filter.value));
-  return filter.op === "neq" || filter.op === "nglob" ? !matches : matches;
+  const matcher = isGlobOp(filter.op) ? valueMatcher(filter.value) : exactMatcher(filter.value);
+  const matches = index.read[filter.field](item).some(matcher);
+  return isNegatedOp(filter.op) ? !matches : matches;
 }
 
 function matchesText<T, F extends string>(index: ClientIndex<T, F>, item: T, term: string): boolean {

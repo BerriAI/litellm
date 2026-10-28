@@ -77,7 +77,7 @@ def get_assistants(
     api_base: str | None = None,
     api_version: str | None = None,
     **kwargs,
-) -> SyncCursorPage[Assistant]:
+) -> SyncCursorPage[Assistant] | Coroutine[None, None, AsyncCursorPage[Assistant]]:
     aget_assistants: Final[bool | None] = kwargs.pop("aget_assistants", None)
     if aget_assistants is not None and not isinstance(aget_assistants, bool):
         raise Exception("Invalid value passed in for aget_assistants. Only bool or None allowed")
@@ -100,7 +100,7 @@ def get_assistants(
     elif timeout is None:
         timeout = 600.0
 
-    response: SyncCursorPage[Assistant] | None = None
+    response: SyncCursorPage[Assistant] | Coroutine[None, None, AsyncCursorPage[Assistant]] | None = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -129,6 +129,7 @@ def get_assistants(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             aget_assistants=aget_assistants,
         )
@@ -239,7 +240,7 @@ def create_assistants(
     temperature: float | None = None,
     top_p: float | None = None,
     response_format: str | dict[str, str] | None = None,
-    client: Any | None = None,
+    client: object | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     api_version: str | None = None,
@@ -312,6 +313,7 @@ def create_assistants(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             create_assistant_data=create_assistant_data,
             client=client,
             async_create_assistants=async_create_assistants,
@@ -410,7 +412,7 @@ async def adelete_assistant(
 def delete_assistant(
     custom_llm_provider: Literal["openai", "azure"],
     assistant_id: str,
-    client: Any | None = None,
+    client: object | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     api_version: str | None = None,
@@ -461,6 +463,7 @@ def delete_assistant(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             assistant_id=assistant_id,
             client=client,
             async_delete_assistants=async_delete_assistants,
@@ -561,7 +564,7 @@ def create_thread(
     tool_resources: OpenAICreateThreadParamsToolResources | None = None,
     client: OpenAI | None = None,
     **kwargs,
-) -> Thread:
+) -> Thread | Coroutine[None, None, Thread]:
     """
     - get the llm provider
     - if openai - route it there
@@ -607,7 +610,7 @@ def create_thread(
     api_base: str | None = None
     api_key: str | None = None
 
-    response: Thread | None = None
+    response: Thread | Coroutine[None, None, Thread] | None = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -637,6 +640,7 @@ def create_thread(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             acreate_thread=acreate_thread,
         )
@@ -731,7 +735,7 @@ def get_thread(
     thread_id: str,
     client=None,
     **kwargs,
-) -> Thread:
+) -> Thread | Coroutine[None, None, Thread]:
     """Get the thread object, given a thread_id"""
     aget_thread: Final = kwargs.pop("aget_thread", None)
     optional_params: Final = GenericLiteLLMParams(**kwargs)
@@ -753,7 +757,7 @@ def get_thread(
         timeout = 600.0
     api_base: str | None = None
     api_key: str | None = None
-    response: Thread | None = None
+    response: Thread | Coroutine[None, None, Thread] | None = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -783,6 +787,7 @@ def get_thread(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             aget_thread=aget_thread,
         )
@@ -898,7 +903,7 @@ def add_message(
     metadata: dict | None = None,
     client=None,
     **kwargs,
-) -> OpenAIMessage:
+) -> OpenAIMessage | Coroutine[None, None, OpenAIMessage]:
     ### COMMON OBJECTS ###
     a_add_message: Final = kwargs.pop("a_add_message", None)
     _message_data: Final = MessageData(role=role, content=content, attachments=attachments, metadata=metadata)
@@ -930,7 +935,7 @@ def add_message(
         timeout = 600.0
     api_key: str | None = None
     api_base: str | None = None
-    response: OpenAIMessage | None = None
+    response: OpenAIMessage | Coroutine[None, None, OpenAIMessage] | None = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -960,6 +965,7 @@ def add_message(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             a_add_message=a_add_message,
         )
@@ -1059,7 +1065,7 @@ def get_messages(
     thread_id: str,
     client: Any | None = None,
     **kwargs,
-) -> SyncCursorPage[OpenAIMessage]:
+) -> SyncCursorPage[OpenAIMessage] | Coroutine[None, None, AsyncCursorPage[OpenAIMessage]]:
     aget_messages: Final = kwargs.pop("aget_messages", None)
     optional_params: Final = GenericLiteLLMParams(**kwargs)
     litellm_params_dict: Final = get_litellm_params(**kwargs)
@@ -1080,7 +1086,7 @@ def get_messages(
     elif timeout is None:
         timeout = 600.0
 
-    response: SyncCursorPage[OpenAIMessage] | None = None
+    response: SyncCursorPage[OpenAIMessage] | Coroutine[None, None, AsyncCursorPage[OpenAIMessage]] | None = None
     api_key: str | None = None
     api_base: str | None = None
     if custom_llm_provider == "openai":
@@ -1111,6 +1117,7 @@ def get_messages(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             aget_messages=aget_messages,
         )
@@ -1181,7 +1188,7 @@ async def arun_thread(
     model: str | None = None,
     stream: bool | None = None,
     tools: Iterable[AssistantToolParam] | None = None,
-    client: Any | None = None,
+    client: object | None = None,
     **kwargs,
 ) -> Run:
     loop: Final = asyncio.get_event_loop()
@@ -1246,10 +1253,10 @@ def run_thread(
     model: str | None = None,
     stream: bool | None = None,
     tools: Iterable[AssistantToolParam] | None = None,
-    client: Any | None = None,
+    client: object | None = None,
     event_handler: AssistantEventHandler | None = None,  # for stream=True calls
     **kwargs,
-) -> Run:
+) -> Run | Coroutine[None, None, Run]:
     """Run a given thread + assistant."""
     arun_thread: Final = kwargs.pop("arun_thread", None)
     optional_params: Final = GenericLiteLLMParams(**kwargs)
@@ -1271,7 +1278,7 @@ def run_thread(
     elif timeout is None:
         timeout = 600.0
 
-    response: Run | None = None
+    response: Run | Coroutine[None, None, Run] | None = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -1308,6 +1315,7 @@ def run_thread(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             arun_thread=arun_thread,
             event_handler=event_handler,
