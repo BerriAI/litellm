@@ -54,10 +54,13 @@ def constrains_continuation(params: Mapping[str, object]) -> bool:
     sent: Final = {**params, **_str_keyed(params.get("extra_body"))}
     choice_count: Final = sent.get("n")
     response_format: Final = sent.get("response_format")
+    text_format: Final = _str_keyed(sent.get("text")).get("format")
     tool_choice: Final = sent.get("tool_choice")
     return (
         (isinstance(choice_count, int) and choice_count > 1)
         or (response_format is not None and response_format != _UNCONSTRAINED_RESPONSE_FORMAT)
+        or (text_format is not None and text_format != _UNCONSTRAINED_RESPONSE_FORMAT)
+        or sent.get("text_format") is not None
         or tool_choice == "required"
         or isinstance(tool_choice, Mapping)
         or sent.get("merge_reasoning_content_in_choices") is True

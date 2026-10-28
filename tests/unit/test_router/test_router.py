@@ -7083,6 +7083,75 @@ async def test_aresponses_streaming_iterator_partial_content_injects_continuatio
     assert new_input[2]["content"][0]["text"] == "The capital of France is"
 
 
+class _NumbersOutput(BaseModel):
+    numbers: list[int]
+
+
+_NUMBERS_TEXT_FORMAT: Final = {
+    "type": "json_schema",
+    "name": "numbers",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {"numbers": {"type": "array", "items": {"type": "integer"}}},
+        "required": ["numbers"],
+        "additionalProperties": False,
+    },
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_params", "cut_after_output", "continues"),
+    [
+        pytest.param({"text": {"format": _NUMBERS_TEXT_FORMAT}}, True, False, id="json_schema"),
+        pytest.param({"text": {"format": {"type": "json_object"}}}, True, False, id="json_object"),
+        pytest.param({"text_format": _NumbersOutput}, True, False, id="sdk_text_format"),
+        pytest.param({"tool_choice": {"type": "function", "name": "lookup"}}, True, False, id="forced_tool"),
+        pytest.param({"text": {"format": {"type": "text"}}}, True, True, id="plain_text"),
+        pytest.param({"text": {"format": _NUMBERS_TEXT_FORMAT}}, False, True, id="json_schema_cut_before_output"),
+    ],
+)
+async def test_aresponses_streaming_iterator_does_not_continue_constrained_output(
+    request_params: Mapping[str, object], cut_after_output: bool, continues: bool
+):
+    """A Responses stream cut after it emitted part of a constrained output surfaces the primary's error, since a
+    fallback continuing a JSON document or forced tool call completes with output that breaks the request's
+    contract. Plain text still continues, and a cut before any output still falls back with the request as sent."""
+    primary_delta: Final = MagicMock(type="response.output_text.delta", delta='{"numbers": [1, 2, ')
+    primary_error: Final = litellm.InternalServerError(
+        message="The server had an error while processing your request.", model="gpt-4", llm_provider="openai"
+    )
+    fallback_completed: Final = MagicMock(type="response.completed")
+    router: Final = _InjectedFallbackRouter(_AsyncList([fallback_completed]))
+    src: Final = _make_responses_iterator(
+        chunks=[primary_delta] if cut_after_output else [],
+        error=MidStreamFallbackError(
+            message="server_error",
+            model="gpt-4",
+            llm_provider="openai",
+            original_exception=primary_error,
+            generated_content=primary_delta.delta if cut_after_output else "",
+            is_pre_first_chunk=not cut_after_output,
+        ),
+    )
+
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=src,
+        initial_kwargs={
+            "model": "primary",
+            "stream": True,
+            "input": "Return the integers 1 through 12 in order.",
+            "original_generic_function": litellm.aresponses,
+            **request_params,
+        },
+    )
+    outcome: Final = [item async for item in _events_until_error(wrapped)]
+
+    primary_output: Final = [primary_delta] if cut_after_output else []
+    assert outcome == [*primary_output, fallback_completed if continues else primary_error]
+
+
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_combines_partial_usage():
     """Partial usage from the bridge path is normalized to ResponseAPIUsage

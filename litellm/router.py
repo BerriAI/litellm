@@ -4029,7 +4029,9 @@ class Router:
           - Pre-first-chunk: retry with the original input unchanged.
           - Partial content: inject a developer instruction + prior
             assistant message carrying the generated text so the fallback
-            model continues rather than restarts.
+            model continues rather than restarts. A request whose output is
+            constrained (a JSON schema, a forced tool) is not continued, and
+            the primary's error surfaces instead.
           - Usage combining: merge partial-stream usage onto the fallback's
             response.completed event so accounting reflects both attempts.
           - Stream cleanup: shielded aclose() on both source and fallback
@@ -4218,6 +4220,15 @@ class Router:
         wrapper: Final = FallbackResponsesStreamWrapper(stream_with_fallbacks())
         return wrapper
 
+    def _responses_output_constrained(
+        self, request_kwargs: Mapping[str, object], source_iterator: "BaseResponsesAPIStreamingIterator"
+    ) -> bool:
+        cut_deployment_id: Final = (get_hidden_params(source_iterator) or {}).get("model_id")
+        cut_deployment: Final = (
+            self.get_deployment(model_id=cut_deployment_id) if isinstance(cut_deployment_id, str) else None
+        )
+        return constrains_continuation(self._params_sent_to_deployment(request_kwargs, cut_deployment))
+
     async def _aresponses_fallback_attempt(
         self,
         e: "MidStreamFallbackError",
@@ -4236,6 +4247,9 @@ class Router:
         """
         from litellm.exceptions import MidStreamFallbackError
 
+        continues_output: Final = bool(e.generated_content) and not e.is_pre_first_chunk
+        if continues_output and self._responses_output_constrained(initial_kwargs, source_iterator):
+            Router._raise_original_mid_stream_error(e)
         partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
         fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted
         fallback_yielded = False  # rebind-ok: flipped on the first fallback item so a fallback that dies before its first event still replays the primary's held announcement
@@ -4253,7 +4267,7 @@ class Router:
             initial_kwargs["original_function"] = (  # rebind-ok: the fallback chain re-enters on the same kwargs
                 self._ageneric_api_call_with_fallbacks_responses_attempt
             )
-            if e.generated_content and not e.is_pre_first_chunk:
+            if continues_output:
                 initial_kwargs["input"] = Router._build_responses_continuation_input(  # rebind-ok: fallback hop input
                     initial_kwargs.get("input"),
                     e.generated_content,
