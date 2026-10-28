@@ -26,6 +26,7 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 _STRS: Final = TypeAdapter(Iterable[str], config=ConfigDict(hide_input_in_errors=True))
 _RESULT_EXTRAS: Final = (("highlights", "highlights"), ("highlightScores", "highlight_scores"), ("score", "score"))
+_RENAMED_RESULT_FIELDS: Final = frozenset({"text", "publishedDate", "highlightScores"})
 
 
 class ExaAISearchConfig(BaseSearchConfig):
@@ -133,7 +134,8 @@ class ExaAISearchConfig(BaseSearchConfig):
         - No last_updated field in Exa AI response (set to None)
         - results[].highlights / highlightScores / score → SearchResult.highlights / highlight_scores / score,
           each set only when Exa returned it
-        - every top-level key except results (requestId, costDollars, ...) → SearchResponse.provider_metadata
+        - every other results[] field Exa returned (id, author, image, summary, ...) → the SearchResult as is
+        - every top-level key except results (requestId, costDollars, output, ...) → SearchResponse.provider_metadata
 
         Args:
             raw_response: Raw httpx response from Exa AI API
@@ -146,7 +148,6 @@ class ExaAISearchConfig(BaseSearchConfig):
 
         return SearchResponse.model_validate(
             {
-                **response_json,
                 "results": [
                     self._transform_result(value)
                     for value in _JSON_VALUES.validate_python(response_json.get("results") or [])
@@ -161,7 +162,7 @@ class ExaAISearchConfig(BaseSearchConfig):
         result: Final = _JSON_OBJECT.validate_python(value)
         return SearchResult.model_validate(
             {
-                **result,
+                **{key: value for key, value in result.items() if key not in _RENAMED_RESULT_FIELDS},
                 "title": result.get("title", ""),
                 "url": result.get("url", ""),
                 "snippet": result.get("text")

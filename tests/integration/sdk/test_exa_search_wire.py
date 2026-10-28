@@ -42,13 +42,21 @@ async def test_exa_search_request_and_full_response_cross_real_http(asynchronous
             **PARAMS,
         }
         response: Final = await litellm.asearch(**params) if asynchronous else litellm.search(**params)
-        result: Final = json.loads(response.model_dump_json())
-        assert result["output"] == PAYLOAD["output"]
-        assert result["requestId"] == PAYLOAD["requestId"]
-        assert result["costDollars"] == PAYLOAD["costDollars"]
-        assert result["results"][0]["highlights"] == ["evidence"]
-        assert result["results"][0]["author"] is None
-        assert result["results"][0]["snippet"] == "evidence"
+        assert json.loads(response.model_dump_json()) == {
+            "object": "search",
+            "results": [
+                {
+                    "title": "Source",
+                    "url": "https://example.com",
+                    "snippet": "evidence",
+                    "date": None,
+                    "last_updated": None,
+                    "highlights": ["evidence"],
+                    "author": None,
+                }
+            ],
+            "provider_metadata": {key: value for key, value in PAYLOAD.items() if key != "results"},
+        }
 
 
 @pytest.mark.asyncio
@@ -60,19 +68,25 @@ async def test_search_logs_one_completed_response_and_cost(
 ) -> None:
     import asyncio
     from collections.abc import Mapping
+    from datetime import datetime
 
     from litellm.integrations.custom_logger import CustomLogger
+    from litellm.llms.base_llm.search.transformation import SearchResponse
 
     class Recorder(CustomLogger):
         def __init__(self) -> None:
             self.finished = threading.Event()
-            self.records = ()
+            self.records: tuple[tuple[Mapping[str, object], SearchResponse], ...] = ()
 
-        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        def log_success_event(
+            self, kwargs: Mapping[str, object], response_obj: SearchResponse, start_time: datetime, end_time: datetime
+        ) -> None:
             self.records = (*self.records, (kwargs, response_obj))
             self.finished.set()
 
-        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        async def async_log_success_event(
+            self, kwargs: Mapping[str, object], response_obj: SearchResponse, start_time: datetime, end_time: datetime
+        ) -> None:
             self.log_success_event(kwargs, response_obj, start_time, end_time)
 
     recorder: Final = Recorder()
@@ -95,7 +109,7 @@ async def test_search_logs_one_completed_response_and_cost(
         assert await asyncio.to_thread(recorder.finished.wait, 5)
         assert len(recorder.records) == 1
         details, logged = recorder.records[0]
-        assert logged.model_dump()["output"] == response.model_dump()["output"]
+        assert logged.model_dump() == response.model_dump()
         assert isinstance(details["standard_logging_object"], Mapping)
         expected_cost: Final = PAYLOAD["costDollars"]["total"] if price_override is None else price_override
         assert details["response_cost"] == expected_cost

@@ -189,6 +189,9 @@ MODEL_COST_MAP_MIN_MODEL_COUNT: Final = get_env_int(
 MODEL_COST_MAP_MAX_SHRINK_RATIO: Final = get_env_float(
     "MODEL_COST_MAP_MAX_SHRINK_RATIO", 0.5
 )  # Maximum allowed shrinkage ratio vs local backup (0.5 = reject if fetched map is <50% of backup)
+DEFAULT_MODEL_COST_MAP_URL: Final = (
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+)
 DEFAULT_IMAGE_WIDTH: Final = get_env_int("DEFAULT_IMAGE_WIDTH", 300)
 DEFAULT_IMAGE_HEIGHT: Final = get_env_int("DEFAULT_IMAGE_HEIGHT", 300)
 # Maximum size for image URL downloads in MB (default 50MB, set to 0 to disable limit)

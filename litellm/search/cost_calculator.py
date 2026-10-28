@@ -10,7 +10,8 @@ from typing import Final
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.constants import DEFAULT_MODEL_COST_MAP_URL
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap, get_model_cost_map_source_info
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.utils import get_model_info
 
@@ -36,10 +37,40 @@ def _provider_usage(
         return None
 
 
+def _field(value: object, key: str) -> object:
+    return PROVIDER_COST_ADAPTER.validate_python(value).get(key) if isinstance(value, Mapping) else None
+
+
+def _live_entry(entry: str) -> object:
+    return litellm.model_cost.get(entry)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # registry is dynamically typed
+
+
 def _registered_at_runtime(entry: str) -> bool:
     """Whether `entry`'s live price differs from the catalog as loaded, i.e. `register_model` changed it."""
-    live: Final[object] = litellm.model_cost.get(entry)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # registry is dynamically typed
-    return live != GetModelCostMap.loaded_model_cost_map().get(entry)  # pyright: ignore[reportUnknownVariableType]  # `live` comes from the untyped registry
+    return _live_entry(entry) != GetModelCostMap.loaded_model_cost_map().get(entry)
+
+
+def _operator_priced(entry: str) -> bool:
+    """Whether an operator set `entry`'s price, with `register_model` or a cost map served from their own URL."""
+    source: Final = get_model_cost_map_source_info()
+    own_cost_map: Final = source["source"] == "remote" and source["url"] != DEFAULT_MODEL_COST_MAP_URL
+    return own_cost_map or _registered_at_runtime(entry)
+
+
+def _registered_flat_price_replaces_tiers(entry: str) -> bool:
+    """Whether `register_model` changed `entry`'s flat price but left the catalog's tiers it merged into in place."""
+    live: Final = _live_entry(entry)
+    catalog: Final = GetModelCostMap.loaded_model_cost_map().get(entry, EMPTY_OPTIONAL_PARAMS)
+    same_tiers: Final = _field(live, "tiered_pricing") == catalog.get("tiered_pricing")
+    return same_tiers and _field(live, "input_cost_per_query") != catalog.get("input_cost_per_query")
+
+
+def _exa_reported_total(response: object) -> float | None:
+    payload: Final = response.model_extra if isinstance(response, SearchResponse) else response
+    total: Final = _field(_field(_field(payload, "provider_metadata"), "costDollars"), "total")
+    if isinstance(total, (int, float)) and not isinstance(total, bool) and math.isfinite(total) and total >= 0:
+        return float(total)
+    return None
 
 
 def _pricing_model(
@@ -75,14 +106,15 @@ def search_provider_cost_per_query(
     Returns (input_cost, output_cost) where input_cost = queries * cost_per_query
     Supports tiered pricing based on max_results parameter, and per-mode price entries selected by the
     provider's mode parameter (Tavily `search_depth`, Linkup `depth`, Exa `type`). Exa bills one request at the
-    `costDollars.total` it reports, else at its list price, unless the price entry was registered at runtime.
+    `costDollars.total` it reports, else at its list price, unless an operator priced the entry. A flat price
+    registered over an entry's catalog tiers replaces them.
 
     Args:
         model: Model name (e.g., "exa_ai/search", "tavily/search")
         custom_llm_provider: Provider name (e.g., "exa_ai", "tavily")
         number_of_queries: Number of search queries performed (default: 1)
         optional_params: Optional parameters including max_results for tiered pricing
-        response: Provider response with reported Exa costDollars.total, when available
+        response: Provider response with Exa's reported provider_metadata.costDollars.total, when available
 
     Returns:
         Tuple of (input_cost, output_cost) where output_cost is always 0.0
@@ -103,16 +135,10 @@ def search_provider_cost_per_query(
         model=_pricing_model(model, custom_llm_provider, optional_params),
         custom_llm_provider=custom_llm_provider,
     )
-    if custom_llm_provider == "exa_ai" and not _registered_at_runtime(model_info["key"]):
-        payload: Final = response.model_extra if isinstance(response, SearchResponse) else response
-        reported: Final = (
-            PROVIDER_COST_ADAPTER.validate_python(payload).get("costDollars") if isinstance(payload, Mapping) else None
-        )
-        total: Final = (
-            PROVIDER_COST_ADAPTER.validate_python(reported).get("total") if isinstance(reported, Mapping) else None
-        )
-        if isinstance(total, (int, float)) and not isinstance(total, bool) and math.isfinite(total) and total >= 0:
-            return (float(total), 0.0)
+    if custom_llm_provider == "exa_ai" and not _operator_priced(model_info["key"]):
+        reported_total: Final = _exa_reported_total(response)
+        if reported_total is not None:
+            return (reported_total, 0.0)
 
         from litellm.llms.exa_ai.search.cost_calculator import exa_ai_list_price
 
@@ -126,7 +152,11 @@ def search_provider_cost_per_query(
 
     # Check for tiered pricing based on max_results
     tiered_pricing: Final = model_info.get("tiered_pricing")
-    if tiered_pricing and isinstance(tiered_pricing, list):
+    if (
+        tiered_pricing
+        and isinstance(tiered_pricing, list)
+        and not _registered_flat_price_replaces_tiers(model_info["key"])
+    ):
         max_results: Final = (optional_params or {}).get("max_results", 10)  # default 10 results
         cost_per_query = 0.0
 
