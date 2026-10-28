@@ -28,7 +28,7 @@ from typing import (
 
 import httpx
 from openai._streaming import SSEDecoder
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypeIs
 
 import litellm
@@ -166,6 +166,7 @@ def _typed_gets_litellm_params(fn: _GetsLitellmParams) -> _GetsLitellmParams:
 
 _SHOULD_STORE_RESULT_IN_CACHE_ATTR: Final = "_should_store_result_in_cache"
 _UNMASK_PII_TEXT_ATTR: Final = "_unmask_pii_text"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _load_json_object(payload: str | bytes) -> dict[str, object]:
@@ -175,7 +176,7 @@ def _load_json_object(payload: str | bytes) -> dict[str, object]:
 
 def _load_json_value(payload: str | bytes) -> object:
     """Parse a JSON payload whose top-level shape the caller narrows itself."""
-    return json.loads(payload)
+    return _DECODED_JSON.validate_python(json.loads(payload))
 
 
 def _model_id_from_metadata(litellm_metadata: Mapping[str, object] | None) -> str | None:
@@ -1707,6 +1708,7 @@ def _estimate_usage_from_text(
     messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
         input=request_input,  # pyright: ignore[reportArgumentType]  # the raw Responses API input is a str or ResponseInputParam list, matching the helper's declared union
         responses_api_request=dict(responses_api_request),
+        only_since_compaction=True,
     )
     input_tokens: Final = litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is untyped
         model=model, messages=messages
