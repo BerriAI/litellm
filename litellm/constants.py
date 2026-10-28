@@ -1084,7 +1084,6 @@ openai_compatible_providers: Final[list[str]] = [
     "xinference",
     "xai",
     "zai",
-    "bigmodel",
     "together_ai",
     "fireworks_ai",
     "empower",

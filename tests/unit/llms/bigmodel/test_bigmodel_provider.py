@@ -1,6 +1,8 @@
+import contextlib
 import gzip
+import io
 import json
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from functools import partial
 from itertools import chain
 from typing import Final, Literal
@@ -100,7 +102,6 @@ def test_provider_resolution_and_all_native_endpoints() -> None:
         ProviderConfigManager.get_provider_anthropic_messages_config(MODEL, LlmProviders.BIGMODEL),
         BigModelMessagesConfig,
     )
-    assert "bigmodel" in litellm.openai_compatible_providers
     assert "bigmodel" in litellm.provider_list
     assert litellm.get_llm_provider(f"zai/{MODEL}")[3] == "https://api.z.ai/api/paas/v4"
 
@@ -108,6 +109,15 @@ def test_provider_resolution_and_all_native_endpoints() -> None:
 @pytest.mark.parametrize("path", BASE_PATHS)
 def test_one_base_selects_each_api_without_duplicate_segments(path: str) -> None:
     assert get_bigmodel_url(f"{BASE}{path}", "chat") == f"{BASE}/api/paas/v4"
+    assert get_bigmodel_url(f"{BASE}{path}", "responses") == f"{BASE}/api/v1/responses"
+    assert get_bigmodel_url(f"{BASE}{path}", "messages") == f"{BASE}/api/anthropic/v1/messages"
+
+
+@pytest.mark.parametrize(
+    "path", ("/api/coding/paas/v4", "/api/coding/paas/v4/", "/api/coding/paas/v4/chat/completions")
+)
+def test_coding_plan_base_keeps_its_chat_path_and_shares_the_other_apis(path: str) -> None:
+    assert get_bigmodel_url(f"{BASE}{path}", "chat") == f"{BASE}/api/coding/paas/v4"
     assert get_bigmodel_url(f"{BASE}{path}", "responses") == f"{BASE}/api/v1/responses"
     assert get_bigmodel_url(f"{BASE}{path}", "messages") == f"{BASE}/api/anthropic/v1/messages"
 
@@ -295,10 +305,11 @@ async def test_messages_forward_native_tools_thinking_and_usage(web_fetch_reques
     (("response.completed", "completed"), ("response.incomplete", "incomplete")),
 )
 @pytest.mark.parametrize("include_logprobs", (False, True))
+@pytest.mark.parametrize("content_type", ("text/event-stream", "application/json"))
 @pytest.mark.asyncio
 @respx.mock
 async def test_responses_sse_without_done_preserves_terminal_usage(
-    terminal_type: str, status: str, include_logprobs: bool
+    terminal_type: str, status: str, include_logprobs: bool, content_type: str
 ) -> None:
     logprobs: Final = [{"token": "Hello", "bytes": [72, 101, 108, 108, 111], "logprob": -0.1, "top_logprobs": []}]
     events: Final = (
@@ -348,7 +359,7 @@ async def test_responses_sse_without_done_preserves_terminal_usage(
         {"type": terminal_type, "sequence_number": 5, "response": {**response_payload(), "status": status}},
     )
     sse: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
-    respx.post(f"{BASE}/api/v1/responses").respond(content=sse, headers={"content-type": "text/event-stream"})
+    respx.post(f"{BASE}/api/v1/responses").respond(content=sse, headers={"content-type": content_type})
     stream: Final = await litellm.aresponses(model=f"bigmodel/{MODEL}", input="Hello", stream=True)
     chunks: Final = tuple([chunk async for chunk in stream])
     assert chunks[-1].type == terminal_type
@@ -390,6 +401,72 @@ def test_missing_bigmodel_key_does_not_use_other_provider_credentials(
     }[provider_api]
     with pytest.raises(litellm.AuthenticationError, match="BIGMODEL_API_KEY"):
         call()
+
+
+def _audio_file() -> io.BytesIO:
+    audio: Final = io.BytesIO(b"RIFF0000WAVEfmt ")
+    audio.name = "audio.wav"
+    return audio
+
+
+@pytest.mark.parametrize(
+    "call",
+    (
+        partial(litellm.speech, model=f"bigmodel/{MODEL}", input="Hello", voice="tongtong"),
+        partial(litellm.image_generation, model=f"bigmodel/{MODEL}", prompt="Hello"),
+        lambda: litellm.transcription(model=f"bigmodel/{MODEL}", file=_audio_file()),
+    ),
+    ids=("speech", "image_generation", "transcription"),
+)
+@respx.mock
+def test_openai_routes_bigmodel_does_not_serve_send_no_request(
+    call: Callable[[], object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    upstream: Final = respx.route().mock(return_value=httpx.Response(200, json={}))
+    with contextlib.suppress(Exception):
+        call()
+    assert not upstream.called
+
+
+@pytest.mark.parametrize(
+    ("code", "error_class", "status_code"),
+    ((401, litellm.AuthenticationError, 401), (1113, litellm.InternalServerError, 500)),
+)
+@respx.mock
+def test_responses_failure_envelope_raises_its_status_instead_of_a_parse_error(
+    code: int, error_class: type[Exception], status_code: int
+) -> None:
+    respx.post(f"{BASE}/api/v1/responses").respond(json={"code": code, "msg": "Token expired", "success": False})
+    with pytest.raises(error_class, match="Token expired") as raised:
+        litellm.responses(model=f"bigmodel/{MODEL}", input="Hello")
+    assert getattr(raised.value, "status_code", None) == status_code
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_responses_stream_answered_with_a_failure_envelope_raises_its_status() -> None:
+    respx.post(f"{BASE}/api/v1/responses").respond(json={"code": 401, "msg": "Token expired", "success": False})
+    with pytest.raises(litellm.AuthenticationError, match="Token expired"):
+        await litellm.aresponses(model=f"bigmodel/{MODEL}", input="Hello", stream=True)
+    with pytest.raises(litellm.AuthenticationError, match="Token expired"):
+        litellm.responses(model=f"bigmodel/{MODEL}", input="Hello", stream=True)
+
+
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.asyncio
+@respx.mock
+async def test_responses_stream_answered_with_one_json_response_replays_it_as_events(is_async: bool) -> None:
+    respx.post(f"{BASE}/api/v1/responses").respond(json=response_payload())
+    request: Final = {"model": f"bigmodel/{MODEL}", "input": "Hello", "stream": True}
+    chunks: Final = (
+        tuple([chunk async for chunk in await litellm.aresponses(**request)])
+        if is_async
+        else tuple(litellm.responses(**request))
+    )
+    assert chunks[-1].type == "response.completed"
+    assert chunks[-1].response.output_text == "Hello"
+    assert chunks[-1].response.usage.total_tokens == 30
 
 
 @pytest.mark.parametrize("event_type", ("response.failed", "error"))
@@ -633,9 +710,15 @@ async def test_messages_stream_preserves_native_events() -> None:
         },
         {"type": "message_stop"},
     )
+    native_events: Final = tuple(
+        f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n" for event in events
+    )
     content: Final = (
         "id: bigmodel-event\nretry: 1000\n"
-        + "".join(f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n" for event in events)
+        + native_events[0]
+        + "event: ping\n\n"
+        + "".join(native_events[1:])
+        + "data: [DONE]\n\n"
     ).encode()
     upstream: Final = _ByteChunks(tuple(content[index : index + 7] for index in range(0, len(content), 7)))
     respx.post(f"{BASE}/api/anthropic/v1/messages").mock(
@@ -652,11 +735,8 @@ async def test_messages_stream_preserves_native_events() -> None:
         stream=True,
     )
     output: Final = tuple([chunk async for chunk in stream])
-    parsed: Final = tuple(
-        json.loads(line.removeprefix("data: "))
-        for line in chain.from_iterable(chunk.decode().splitlines() for chunk in output)
-        if line.startswith("data: ")
-    )
+    lines: Final = tuple(chain.from_iterable(chunk.decode().splitlines() for chunk in output))
+    parsed: Final = tuple(json.loads(line.removeprefix("data: ")) for line in lines if line.startswith("data: {"))
     assert tuple(chunk["type"] for chunk in parsed) == tuple(event["type"] for event in events)
     assert tuple(event["delta"] for event in parsed if event["type"] == "content_block_delta") == (
         {"type": "thinking_delta", "thinking": "先思考"},
@@ -668,6 +748,8 @@ async def test_messages_stream_preserves_native_events() -> None:
         "web_search_requests": 0,
         "web_fetch_requests": 0,
     }
+    assert "event: ping" in lines
+    assert "data: [DONE]" in lines
     assert b"id: bigmodel-event\n" in output[0]
     assert b"retry: 1000\n" in output[0]
     assert upstream.is_closed

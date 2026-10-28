@@ -7,6 +7,7 @@ from typing_extensions import Never
 
 from litellm.exceptions import AuthenticationError, UnsupportedParamsError
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -40,6 +41,10 @@ _SUPPORTED_PARAMS: Final = (
     "extra_body",
     "timeout",
 )
+
+
+def _envelope_status_code(code: JsonValue) -> int:
+    return code if isinstance(code, int) and not isinstance(code, bool) and 400 <= code <= 599 else 500
 
 
 def _normalize_output_item(item: JsonValue) -> JsonValue:
@@ -141,7 +146,14 @@ class BigModelResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def transform_response_api_response(
         self, model: str, raw_response: httpx.Response, logging_obj: Logging
     ) -> ResponsesAPIResponse:
-        normalized: Final = _normalize_response(_JSON_OBJECT.validate_json(raw_response.content))
+        body: Final = _JSON_OBJECT.validate_json(raw_response.content)
+        if body.get("success") is False:
+            raise BaseLLMException(
+                message=str(body.get("msg") or raw_response.text),
+                status_code=_envelope_status_code(body.get("code")),
+                headers=raw_response.headers,
+            )
+        normalized: Final = _normalize_response(body)
         normalized_response: Final = httpx.Response(
             status_code=raw_response.status_code,
             headers={

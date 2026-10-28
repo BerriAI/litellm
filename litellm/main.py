@@ -6280,6 +6280,7 @@ def completion(
             or custom_llm_provider == "nebius"
             or custom_llm_provider == "wandb"
             or custom_llm_provider == "clarifai"
+            or custom_llm_provider == "bigmodel"
             or custom_llm_provider in litellm.openai_compatible_providers
             or JSONProviderRegistry.exists(custom_llm_provider)  # JSON-configured providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo

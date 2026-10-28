@@ -4,7 +4,7 @@ from typing import Final
 
 import httpx
 from openai._streaming import ServerSentEvent, SSEDecoder
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -45,20 +45,34 @@ class _BigModelMessagesStream(httpx.AsyncByteStream):
         await self._response.aclose()
 
 
-def _normalize_event(event: ServerSentEvent) -> bytes:
-    body: Final = _JSON_OBJECT.validate_json(event.data)
+def _json_object(data: str) -> Mapping[str, JsonValue] | None:
+    try:
+        return _JSON_OBJECT.validate_json(data)
+    except ValidationError:
+        return None
+
+
+def _normalized_data(data: str) -> str:
+    body: Final = _json_object(data)
+    if body is None:
+        return data
     message: Final = body.get("message")
     normalized: Final[JsonValue] = (
         {**body, "message": _normalize_message(message)}
         if body.get("type") == "message_start" and isinstance(message, dict)
         else _normalize_message(body)
     )
+    return json.dumps(normalized)
+
+
+def _normalize_event(event: ServerSentEvent) -> bytes:
     metadata: Final = "".join(
         f"{name}: {value}\n"
         for name, value in (("event", event.event), ("id", event.id), ("retry", event.retry))
         if value is not None
     )
-    return f"{metadata}data: {json.dumps(normalized)}\n\n".encode()
+    data_lines: Final = "".join(f"data: {line}\n" for line in _normalized_data(event.data).split("\n"))
+    return f"{metadata}{data_lines}\n".encode()
 
 
 class BigModelMessagesConfig(OpenAILikeAnthropicMessagesConfig):

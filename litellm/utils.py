@@ -5641,6 +5641,7 @@ def add_provider_specific_params_to_optional_params(
         "openai",
         "azure",
         "text-completion-openai",
+        "bigmodel",
         *litellm.openai_compatible_providers,
     ] or JSONProviderRegistry.exists(custom_llm_provider)
     if calls_through_openai_sdk:

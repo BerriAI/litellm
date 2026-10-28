@@ -365,6 +365,19 @@ class _SignedBodyKwargs(TypedDict, total=False):
     json: ReadOnly[dict[str, object]]
 
 
+def _is_json_content(response: httpx.Response) -> bool:
+    content_types: Final = httpx.Headers(response.headers).get_list("content-type")
+    media_types: Final = (value.split(";")[0].strip().lower() for value in content_types)
+    return "application/json" in media_types
+
+
+def _is_json_document(content: bytes) -> bool:
+    try:
+        return isinstance(json.loads(content), dict)
+    except ValueError:
+        return False
+
+
 def _signed_body_kwargs(*, signed_body: bytes | None, data: dict[str, object]) -> _SignedBodyKwargs:
     if signed_body is not None:
         return {"data": signed_body}
@@ -3022,7 +3035,7 @@ class BaseLLMHTTPHandler:
                     **body_kwargs,
                 )
                 if caller_requested_stream:
-                    if fake_stream is True:
+                    if fake_stream is True or (_is_json_content(response) and _is_json_document(response.read())):
                         return MockResponsesAPIStreamingIterator(
                             response=response,
                             model=model,
@@ -3225,7 +3238,9 @@ class BaseLLMHTTPHandler:
                 )
 
                 if caller_requested_stream:
-                    if fake_stream is True:
+                    if fake_stream is True or (
+                        _is_json_content(response) and _is_json_document(await response.aread())
+                    ):
                         return MockResponsesAPIStreamingIterator(
                             response=response,
                             model=model,
