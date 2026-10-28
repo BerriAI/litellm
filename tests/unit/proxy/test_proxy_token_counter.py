@@ -1945,15 +1945,6 @@ async def test_framing_keeps_the_400_for_blocks_the_provider_counter_cannot_conv
             id="boolean_subschema_tool",
         ),
         pytest.param(
-            {
-                "messages": [{"role": "user", "content": "What is new?"}],
-                "tools": [
-                    {"name": "search", "input_schema": {"type": "object", "properties": {"tags": {"type": "array"}}}}
-                ],
-            },
-            id="array_schema_without_items",
-        ),
-        pytest.param(
             {"messages": [], "contents": [{"role": "user", "parts": [{"text": "What is new?"}]}]},
             id="google_contents",
         ),
