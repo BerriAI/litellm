@@ -3,13 +3,15 @@ import os
 import stat
 import time
 from pathlib import Path
+from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
+import requests
 import responses
 from click.testing import CliRunner
+from responses import matchers
 
-from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.litellm_core_utils.cli_keyring import (
     DISABLE_KEYRING_ENV_VAR,
     KeyringDisabled,
@@ -54,6 +56,20 @@ def _write_token_file(home: Path, *, key: str | None) -> None:
     """A stored login: `key=None` is the metadata half of a keychain-backed pair, a key is a file-backed one."""
     payload: dict[str, object] = {"base_url": "https://test.example.com", "user_id": "u-1", "timestamp": time.time()}
     _write_home_json(home, "token.json", payload if key is None else {**payload, "key": key})
+
+
+STALE_TOKEN_BASE_URL: Final = "https://stale-token.example.com"
+STALE_TOKEN_TIMESTAMP: Final = 1_700_000_000.0
+
+
+def _register_models_answer(key: str, answer: int | Exception) -> None:
+    models_url: Final = f"{STALE_TOKEN_BASE_URL}/v1/models"
+    authorized: Final = [matchers.header_matcher({"Authorization": f"Bearer {key}"})]
+    if isinstance(answer, Exception):
+        responses.get(models_url, body=answer, match=authorized)
+    else:
+        responses.get(models_url, json={"data": []}, status=answer, match=authorized)
+    responses.get(models_url, status=401)
 
 
 def _secret_blob(base_url: str, key: str) -> str:
@@ -696,22 +712,32 @@ class TestWhoamiCommand:
             assert "Not authenticated" in result.output
             assert "Run 'lite login'" in result.output
 
-    def test_whoami_old_token(self):
-        """Test whoami with old token showing warning"""
-        token_data = CliTokenRecord(
+    @pytest.mark.parametrize(
+        ("proxy_status", "expected_last_line_start"),
+        [
+            (200, "Token age: "),
+            (401, "Token expired. Run 'lite login' again."),
+        ],
+    )
+    @responses.activate
+    def test_whoami_lets_the_proxy_judge_a_token_older_than_the_client_window(
+        self, proxy_status: int, expected_last_line_start: str
+    ):
+        _register_models_answer("sk-live", proxy_status)
+        token_data: Final = CliTokenRecord(
+            base_url=STALE_TOKEN_BASE_URL,
             user_email="test@example.com",
-            user_id="test-user-123",
-            user_role="admin",
             key="sk-live",
-            timestamp=time.time() - (25 * 3600),
+            timestamp=STALE_TOKEN_TIMESTAMP,
         )
 
         with patch("litellm.proxy.client.cli.commands.auth.load_cli_token", return_value=token_data):
-            result = self.runner.invoke(whoami)
+            result: Final = self.runner.invoke(whoami)
 
-            assert result.exit_code == 0
-            assert "Authenticated" in result.output
-            assert "Warning: Token is more than 24 hours old" in result.output
+        assert result.exit_code == 0
+        assert result.output.splitlines()[-1].startswith(expected_last_line_start)
+        assert "Warning" not in result.output
+        assert len(responses.calls) == 1
 
     def test_whoami_missing_fields(self):
         """Test whoami with token missing some fields"""
@@ -1024,51 +1050,93 @@ class TestPrintTokenCommand:
         assert result.exit_code == 0
         assert result.output.strip() == "sk-matches"
 
+    @responses.activate
     def test_fresh_cached_key_printed_without_network_call(self):
         """A recently-issued key should be printed straight from cache -- no
         refresh call on every single invocation (apiKeyHelper gets called
         frequently)."""
-        with (
-            patch(
-                "litellm.proxy.client.cli.commands.auth.load_cli_token",
-                return_value=CliTokenRecord(
-                    base_url="http://localhost:4000",
-                    key="sk-cached-fresh",
-                    timestamp=time.time(),
-                ),
+        with patch(
+            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            return_value=CliTokenRecord(
+                base_url="http://localhost:4000",
+                key="sk-cached-fresh",
+                timestamp=time.time(),
             ),
-            patch("requests.post") as mock_post,
         ):
-            result = self.runner.invoke(print_token, obj={})
+            result: Final = self.runner.invoke(print_token, obj={})
 
         assert result.exit_code == 0
         assert result.output.strip() == "sk-cached-fresh"
-        mock_post.assert_not_called()
+        assert len(responses.calls) == 0
 
-    def test_stale_key_fails_fast_without_network_call(self):
-        """There is no silent refresh: an expired cached key must fail
-        loudly (stderr, nonzero exit) telling the user to `lite login`
-        again, rather than making a network call or printing a dead key
-        that will just 401 Claude Code."""
-        old_timestamp = time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600
+    @pytest.mark.parametrize(
+        ("proxy_answer", "expected_exit_code", "expected_stdout", "expected_stderr"),
+        [
+            (200, 0, "sk-stale-key\n", ""),
+            (401, 1, "", "Token expired. Run 'lite login' again.\n"),
+            (403, 1, "", "Token expired. Run 'lite login' again.\n"),
+            (404, 0, "sk-stale-key\n", ""),
+            (500, 0, "sk-stale-key\n", ""),
+            (requests.ConnectionError("proxy unreachable"), 0, "sk-stale-key\n", ""),
+        ],
+    )
+    @responses.activate
+    def test_key_older_than_the_client_window_is_judged_by_the_proxy(
+        self,
+        proxy_answer: int | Exception,
+        expected_exit_code: int,
+        expected_stdout: str,
+        expected_stderr: str,
+    ):
+        _register_models_answer("sk-stale-key", proxy_answer)
 
-        with (
-            patch(
-                "litellm.proxy.client.cli.commands.auth.load_cli_token",
-                return_value=CliTokenRecord(
-                    base_url="http://localhost:4000",
-                    key="sk-stale-key",
-                    timestamp=old_timestamp,
-                ),
+        with patch(
+            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            return_value=CliTokenRecord(
+                base_url=STALE_TOKEN_BASE_URL,
+                key="sk-stale-key",
+                timestamp=STALE_TOKEN_TIMESTAMP,
             ),
-            patch("requests.post") as mock_post,
         ):
-            result = self.runner.invoke(print_token, obj={})
+            result: Final = self.runner.invoke(print_token, obj={})
 
-        assert result.exit_code != 0
-        assert "sk-stale-key" not in result.output
-        assert "lite login" in result.output
-        mock_post.assert_not_called()
+        assert result.exit_code == expected_exit_code
+        assert result.stdout == expected_stdout
+        assert result.stderr == expected_stderr
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_proxy_check_waits_only_a_few_seconds_for_a_silent_proxy(self):
+        _register_models_answer("sk-stale-key", requests.ReadTimeout("proxy sent nothing"))
+
+        with patch(
+            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            return_value=CliTokenRecord(
+                base_url=STALE_TOKEN_BASE_URL,
+                key="sk-stale-key",
+                timestamp=STALE_TOKEN_TIMESTAMP,
+            ),
+        ):
+            result: Final = self.runner.invoke(print_token, obj={})
+
+        timeout: Final = responses.calls[0].request.req_kwargs["timeout"]
+        assert result.exit_code == 0
+        assert result.stdout == "sk-stale-key\n"
+        assert isinstance(timeout, int | float)
+        assert 0 < timeout <= 5
+
+    @responses.activate
+    def test_key_without_a_recorded_proxy_still_expires_after_the_client_window(self):
+        with patch(
+            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            return_value=CliTokenRecord(key="sk-old-format", timestamp=STALE_TOKEN_TIMESTAMP),
+        ):
+            result: Final = self.runner.invoke(print_token, obj={})
+
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert result.stderr == "Token expired. Run 'lite login' again.\n"
+        assert len(responses.calls) == 0
 
 
 class TestPrintTokenWithConfigFile:
@@ -2019,18 +2087,27 @@ class TestPkcePrintToken:
         assert sum(len(session.posts) for session in _FakeSession.instances) == 1
         assert save.call_count == 1
 
-    def test_print_token_for_an_expired_classic_token_makes_no_request(self):
+    @responses.activate
+    def test_print_token_trusts_a_recorded_expiry_without_asking_the_proxy(self):
+        _register_models_answer("sk-classic", 200)
         with (
             patch(
                 "litellm.proxy.client.cli.commands.auth.load_token",
-                return_value={"key": "sk-classic", "timestamp": time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600},
+                return_value={
+                    "key": "sk-classic",
+                    "base_url": STALE_TOKEN_BASE_URL,
+                    "timestamp": STALE_TOKEN_TIMESTAMP,
+                    "expires_at": STALE_TOKEN_TIMESTAMP + 3600,
+                },
             ),
             patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
         ):
-            result = self.runner.invoke(print_token, obj={})
+            result: Final = self.runner.invoke(print_token, obj={})
 
         assert result.exit_code == 1
-        assert "Token expired" in result.output
+        assert result.stdout == ""
+        assert result.stderr == "Token expired. Run 'lite login' again.\n"
+        assert len(responses.calls) == 0
         assert _FakeSession.instances == []
 
 
