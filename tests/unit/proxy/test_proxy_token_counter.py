@@ -1903,7 +1903,11 @@ async def test_framing_standing_in_for_a_pinned_token_count_model_warns_with_the
     stand_in_warnings: Final = [
         r.getMessage() for r in caplog.records if "framed local estimate stands in" in r.getMessage()
     ]
-    assert {"us.anthropic.claude-opus-5-5 in us-east-1" in message for message in stand_in_warnings} == region_hints
+    assert {
+        "for us.anthropic.claude-sonnet-5-5 answered 404" in message
+        and "us.anthropic.claude-opus-5-5 in us-east-1" in message
+        for message in stand_in_warnings
+    } == region_hints
 
 
 @pytest.mark.asyncio

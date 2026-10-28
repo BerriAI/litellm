@@ -14875,7 +14875,10 @@ async def _provider_token_count(
         raise failure.to_proxy_exception()
     if region_hint is not None:
         verbose_proxy_logger.warning(
-            "Token count answered %s, so the framed local estimate stands in. %s", failure.status_code, region_hint
+            "Token count for %s answered %s, so the framed local estimate stands in. %s",
+            model_to_use,
+            failure.status_code,
+            region_hint,
         )
     return failure
 
