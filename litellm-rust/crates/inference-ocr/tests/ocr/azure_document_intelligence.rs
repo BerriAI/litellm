@@ -12,6 +12,7 @@ use rstest::rstest;
 use super::*;
 
 const MODEL: &str = "azure_ai/doc-intelligence/prebuilt-read";
+const LAYOUT_MODEL: &str = "azure_ai/doc-intelligence/prebuilt-layout";
 
 fn read_request(base: &str, options: Value) -> LiteLLMOcrRequest {
     ocr_request(MODEL, base, options)
@@ -152,7 +153,8 @@ async fn markdown_output_is_requested_on_the_analyze_call_and_split_into_pages(
     }))])
     .await;
 
-    let response = perform(read_request(
+    let response = perform(ocr_request(
+        LAYOUT_MODEL,
         &upstream.uri(),
         json!({"outputContentFormat": output_content_format, "pages": [0, 1]}),
     ))
@@ -191,11 +193,13 @@ async fn markdown_output_is_requested_on_the_analyze_call_and_split_into_pages(
 }
 
 #[rstest]
-#[case::native_markdown(json!({"outputContentFormat": "markdown", "req_format": "native"}), Some("markdown"))]
-#[case::text(json!({"outputContentFormat": "text"}), Some("text"))]
-#[case::omitted(json!({}), None)]
+#[case::native_markdown(LAYOUT_MODEL, json!({"outputContentFormat": "markdown", "req_format": "native"}), Some("markdown"))]
+#[case::markdown_on_read(MODEL, json!({"outputContentFormat": "markdown"}), Some("markdown"))]
+#[case::text(LAYOUT_MODEL, json!({"outputContentFormat": "text"}), Some("text"))]
+#[case::omitted(LAYOUT_MODEL, json!({}), None)]
 #[tokio::test]
-async fn only_litellm_format_markdown_asks_for_code_point_offsets(
+async fn only_layout_markdown_in_litellm_format_asks_for_code_point_offsets(
+    #[case] model: &str,
     #[case] options: Value,
     #[case] output_content_format: Option<&str>,
 ) {
@@ -209,7 +213,7 @@ async fn only_litellm_format_markdown_asks_for_code_point_offsets(
     }))])
     .await;
 
-    let response = perform(read_request(&upstream.uri(), options))
+    let response = perform(ocr_request(model, &upstream.uri(), options))
         .await
         .unwrap();
 

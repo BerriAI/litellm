@@ -11,7 +11,7 @@ use litellm_llms_types::serde_compat::{FiniteF64, LaxI64};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use serde_with::serde_as;
+use serde_with::{DefaultOnError, serde_as};
 use tokio::time::Instant;
 
 use crate::base_llm::ocr::{
@@ -38,6 +38,7 @@ const AZURE_DI_ENDPOINT_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT";
 const OUTPUT_CONTENT_FORMAT_PARAM: &str = "outputContentFormat";
 const CODE_POINT_STRING_INDEX: &str = "unicodeCodePoint";
 const STRING_INDEX_TYPE_FIELD: &str = "stringIndexType";
+const MARKDOWN_MODEL_ID: &str = "prebuilt-layout";
 
 #[derive(
     Clone,
@@ -137,7 +138,8 @@ struct AzureDocumentIntelligencePage {
     #[serde(default)]
     pub lines: Vec<AzureDocumentIntelligenceLine>,
     #[serde(default)]
-    pub spans: Vec<AzureDocumentIntelligenceSpan>,
+    #[serde_as(deserialize_as = "DefaultOnError")]
+    pub spans: Option<Vec<AzureDocumentIntelligenceSpan>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -209,12 +211,13 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     fn map_ocr_params(
         &self,
         non_default_params: &CallArguments,
-        _model: &str,
+        model: &str,
     ) -> Result<DocumentIntelligenceParams, Error> {
         let output_content_format =
             parse_output_content_format(non_default_params.get(OUTPUT_CONTENT_FORMAT_PARAM))?;
         let slices_markdown_pages = output_content_format == Some(OutputContentFormat::Markdown)
-            && response_format(non_default_params)? != OcrResponseFormat::Native;
+            && response_format(non_default_params)? != OcrResponseFormat::Native
+            && model_id(model).is_ok_and(|id| id == MARKDOWN_MODEL_ID);
         Ok(DocumentIntelligenceParams {
             pages: normalize_pages_param(non_default_params.get("pages"))?,
             features: normalize_features_param(non_default_params.get("features"))?,
@@ -447,9 +450,16 @@ fn transform_completed_response(
         .filter(|_| {
             result.content_format.as_deref() == Some(<&str>::from(OutputContentFormat::Markdown))
                 && result.string_index_type.as_deref() == Some(CODE_POINT_STRING_INDEX)
+                && result.pages.iter().all(|page| page.spans.is_some())
         })
         .map(|content| {
-            CodePointText::new(content, result.pages.iter().flat_map(|page| &page.spans))
+            CodePointText::new(
+                content,
+                result
+                    .pages
+                    .iter()
+                    .flat_map(|page| page.spans.iter().flatten()),
+            )
         });
     let pages = result
         .pages
@@ -494,6 +504,7 @@ fn transform_azure_page(
         Some(content) => page
             .spans
             .iter()
+            .flatten()
             .map(|span| content.slice(span))
             .collect::<String>(),
         None => page
@@ -844,8 +855,12 @@ mod tests {
     }
 
     fn map(value: Value) -> Result<DocumentIntelligenceParams, Error> {
+        map_for_model(value, "azure_ai/doc-intelligence/prebuilt-layout")
+    }
+
+    fn map_for_model(value: Value, model: &str) -> Result<DocumentIntelligenceParams, Error> {
         let arguments = serde_json::from_value(value).unwrap();
-        AzureDocumentIntelligenceOcrConfig.map_ocr_params(&arguments, "model")
+        AzureDocumentIntelligenceOcrConfig.map_ocr_params(&arguments, model)
     }
 
     #[test]
@@ -1012,6 +1027,25 @@ mod tests {
     }
 
     #[rstest]
+    #[case::layout("azure_ai/doc-intelligence/prebuilt-layout", Some("unicodeCodePoint"))]
+    #[case::bare_layout("prebuilt-layout", Some("unicodeCodePoint"))]
+    #[case::read("azure_ai/doc-intelligence/prebuilt-read", None)]
+    #[case::invoice("azure_ai/doc-intelligence/prebuilt-invoice", None)]
+    #[case::custom("azure_ai/doc-intelligence/my-extraction-model", None)]
+    fn only_the_layout_model_asks_for_code_point_offsets(
+        #[case] model: &str,
+        #[case] string_index_type: Option<&str>,
+    ) {
+        let mapped = map_for_model(json!({"outputContentFormat": "markdown"}), model).unwrap();
+
+        assert_eq!(
+            mapped.output_content_format,
+            Some(OutputContentFormat::Markdown)
+        );
+        assert_eq!(mapped.string_index_type, string_index_type);
+    }
+
+    #[rstest]
     #[case::unknown(json!("html"))]
     #[case::empty(json!(""))]
     #[case::number(json!(1))]
@@ -1091,6 +1125,29 @@ mod tests {
         }));
 
         assert_eq!(pages, ["A\nB"]);
+    }
+
+    #[rstest]
+    #[case::null_spans(json!("markdown"), json!(null))]
+    #[case::fractional_offset(json!("markdown"), json!([{"offset": 0.5, "length": 1}]))]
+    #[case::missing_length(json!("markdown"), json!([{"offset": 0}]))]
+    #[case::negative_offset(json!("markdown"), json!([{"offset": -1, "length": 1}]))]
+    #[case::text_content(json!("text"), json!([{"offset": "0", "length": 1}]))]
+    fn unusable_page_spans_keep_line_joined_pages(
+        #[case] content_format: Value,
+        #[case] broken_spans: Value,
+    ) {
+        let pages = markdown_pages(json!({
+            "content": "# A\n\nB",
+            "contentFormat": content_format,
+            "stringIndexType": "unicodeCodePoint",
+            "pages": [
+                {"spans": [{"offset": 0, "length": 5}], "lines": [{"content": "A"}]},
+                {"spans": broken_spans, "lines": [{"content": "B"}]}
+            ]
+        }));
+
+        assert_eq!(pages, ["A", "B"]);
     }
 
     #[tokio::test]
