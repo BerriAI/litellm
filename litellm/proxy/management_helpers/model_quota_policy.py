@@ -169,7 +169,7 @@ def _called_model(litellm_params: Mapping[str, object]) -> str | None:
     if not isinstance(model, str):
         return None
     prefix, _, rest = model.partition("/")
-    return rest if rest and prefix in litellm.provider_list else model
+    return rest if rest and _is_known_provider(prefix) else model
 
 
 def team_deployment(litellm_params: object) -> TeamDeployment:

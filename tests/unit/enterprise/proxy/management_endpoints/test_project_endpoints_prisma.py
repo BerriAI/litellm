@@ -1924,6 +1924,16 @@ def _team_deployment(public_name: str, model_id: str, litellm_params: Mapping[st
         ),
         pytest.param(
             _TEAM_WRITE_POLICY,
+            "jev-latest",
+            {"model": "openai/jev-latest"},
+            (),
+            None,
+            {"model": "aihubmix/jev-latest"},
+            set(),
+            id="team-add-through-a-json-provider-matches-the-model-it-calls",
+        ),
+        pytest.param(
+            _TEAM_WRITE_POLICY,
             "media-latest",
             _VERTEX_PARAMS,
             (("t1", _RUNWAY_PARAMS),),
