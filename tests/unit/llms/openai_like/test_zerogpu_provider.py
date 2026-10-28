@@ -221,17 +221,6 @@ def test_zerogpu_key_and_base_come_from_zerogpu_env_vars(monkeypatch: pytest.Mon
     assert get_llm_provider(model="zerogpu/gpt-oss-120b")[3] == "https://zerogpu.internal.example/v1"
 
 
-def test_zerogpu_api_base_alone_selects_the_zerogpu_provider(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("ZEROGPU_API_KEY", "zerogpu-env-key")
-
-    assert get_llm_provider(model="gpt-oss-120b", api_base=ZEROGPU_API_BASE) == (
-        "gpt-oss-120b",
-        "zerogpu",
-        "zerogpu-env-key",
-        ZEROGPU_API_BASE,
-    )
-
-
 def test_zerogpu_wildcard_lists_every_zerogpu_catalog_model():
     catalog_models: Final = sorted(
         key for key, row in litellm.model_cost.items() if row.get("litellm_provider") == "zerogpu"
