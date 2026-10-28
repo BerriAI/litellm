@@ -6,7 +6,7 @@ use std::sync::{Arc, LazyLock};
 
 use litellm_host_python::{release_gil, to_py};
 use litellm_model_catalog::wire::Fields;
-use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog, IntegrityLimits, Layers};
+use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog, Installs, IntegrityLimits};
 use parking_lot::Mutex;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
@@ -16,7 +16,7 @@ use pyo3::types::{PyBytes, PyDict, PyModule};
 use serde::Serialize;
 use sha1::{Digest, Sha1};
 
-use install::{Record, write_into};
+use install::BoundDict;
 pub(crate) use row_error::{RowError, RowErrorKind, row_error};
 
 static BUNDLED: LazyLock<Arc<Contents>> = LazyLock::new(|| {
@@ -72,16 +72,11 @@ pub(crate) struct Unavailable {
     reason: String,
 }
 
-struct State {
-    layers: Layers,
-    record: Option<Record>,
-}
-
 #[pyclass(frozen, name = "Catalog", module = "litellm.rust_bridge._native")]
 pub(crate) struct CatalogHandle {
     module: Py<PyModule>,
     attr: String,
-    state: Mutex<State>,
+    installs: Mutex<Installs>,
 }
 
 #[pymethods]
@@ -126,10 +121,7 @@ impl CatalogHandle {
         Self {
             module: module.unbind(),
             attr,
-            state: Mutex::new(State {
-                layers: Layers::new(Arc::clone(&BUNDLED.catalog)),
-                record: None,
-            }),
+            installs: Mutex::new(Installs::new(Arc::clone(&BUNDLED.catalog))),
         }
     }
 
@@ -177,20 +169,13 @@ impl CatalogHandle {
             .cast::<PyDict>()
             .map_err(|_| PyTypeError::new_err(format!("{} must be a dict", self.attr)))?;
         let dict_id = dict.as_ptr() as usize;
-        let (layers, record) = {
-            let mut state = self.state.lock();
-            state
-                .layers
-                .replace_fetched(Arc::clone(&parsed.contents.catalog));
-            let record = state
-                .record
-                .clone()
-                .filter(|record| record.dict_id == dict_id);
-            (state.layers.clone(), record)
-        };
-        let composed = release_gil(py, || layers.compose());
-        let outcome = write_into(py, dict, &composed, &layers, record)?;
-        self.state.lock().record = Some(outcome.record);
+        let pending = self
+            .installs
+            .lock()
+            .begin(Arc::clone(&parsed.contents.catalog), dict_id);
+        let composed = release_gil(py, || pending.compose());
+        let outcome = pending.write(&mut BoundDict::new(dict), &composed)?;
+        self.installs.lock().finish(outcome.record);
         Ok(Installed {
             count: composed.len(),
             written: outcome.written,
