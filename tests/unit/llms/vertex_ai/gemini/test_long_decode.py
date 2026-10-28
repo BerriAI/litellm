@@ -516,9 +516,16 @@ async def test_unary_answer_cut_at_the_callers_cap_is_returned_with_its_token_in
     assert response.choices[0].message.provider_specific_fields["continuation_token"] == "dG9rLTE="
 
 
+@pytest.mark.parametrize(
+    "choice_count_request",
+    [{"max_tokens": 100_000, "n": 2}, {"extra_body": {"generationConfig": {"candidateCount": 2}}}],
+)
 @pytest.mark.parametrize("is_async", [True, False])
 @pytest.mark.asyncio
-async def test_unary_request_for_more_than_one_choice_is_never_continued(is_async: bool):
+async def test_unary_request_for_more_than_one_choice_is_never_continued(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, choice_count_request: Mapping[str, object]
+):
+    monkeypatch.setenv(BUDGET_ENV, "100000")
     sent: Final[list[dict[str, object]]] = []
     # Vertex AI answered 400 "Candidate count greater than 1 is not supported when continuation_token is set"
     # on 2026-10-13
@@ -526,9 +533,8 @@ async def test_unary_request_for_more_than_one_choice_is_never_continued(is_asyn
     kwargs: Final = {
         "model": MODEL,
         "messages": list(MESSAGES),
-        "max_tokens": 100_000,
-        "n": 2,
         "api_key": "fake-gemini-key",
+        **choice_count_request,
     }
 
     response: Final = (
@@ -546,6 +552,42 @@ async def test_unary_request_for_more_than_one_choice_is_never_continued(is_asyn
         "dG9rLTE=",
         "dG9rLTI=",
     ]
+
+
+@pytest.mark.parametrize(
+    "one_choice_request",
+    [
+        {"max_tokens": 100_000, "n": 0},
+        {"extra_body": {"generationConfig": {"candidateCount": None}}},
+        {"extra_body": {"generationConfig": {"candidateCount": 0}}},
+    ],
+)
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_unary_request_whose_candidate_count_google_reads_as_one_is_continued(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, one_choice_request: Mapping[str, object]
+):
+    monkeypatch.setenv(BUDGET_ENV, "100000")
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = (httpx.Response(200, json=HOP_1), httpx.Response(200, json=HOP_2))
+    kwargs: Final = {
+        "model": MODEL,
+        "messages": list(MESSAGES),
+        "api_key": "fake-gemini-key",
+        **one_choice_request,
+    }
+
+    response: Final = (
+        await litellm.acompletion(**kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay(hops, sent))))
+        if is_async
+        else litellm.completion(
+            **kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_replay(hops, sent))))
+        )
+    )
+
+    assert sent[1] == {**sent[0], "continuationToken": "dG9rLTE="}
+    assert response.choices[0].message.content == "hello world"
+    assert response.choices[0].finish_reason == "stop"
 
 
 @pytest.mark.asyncio
@@ -1293,6 +1335,468 @@ async def test_vertex_long_decode_keeps_the_callers_own_authorization_header_on_
 
     assert answer == ("hello world", ["stop"], [])
     assert seen == ["Bearer mine", "Bearer mine"]
+
+
+BUDGET_ENV: Final = "LITELLM_GEMINI_DEFAULT_MAX_OUTPUT_TOKENS"
+ARGON: Final = "gemini/gemini-4-argon"
+UNMAPPED_GEMINI: Final = "gemini/gemini-99-unreleased"
+OUTPUT_LIMIT_KEYS: Final = ("max_output_tokens", "maxOutputTokens")
+
+
+def _output_limits(request: Mapping[str, object]) -> dict[str, object]:
+    generation_config: Final = request.get("generationConfig", {})
+    assert isinstance(generation_config, dict)
+    return {key: value for key, value in generation_config.items() if key in OUTPUT_LIMIT_KEYS}
+
+
+def _cost_map_max_output_tokens(model: str) -> int:
+    provider, name = model.split("/", 1)
+    max_output_tokens: Final = litellm.get_model_info(model=name, custom_llm_provider=provider)["max_output_tokens"]
+    assert isinstance(max_output_tokens, int)
+    return max_output_tokens
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_request_with_no_output_limit_keeps_continuing_until_the_env_budget_is_spent(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, stream: bool
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = (
+        (_sse(STREAM_FIRST_CHUNK, STREAM_HOP_1_END), _sse(HOP_2_TRUNCATED), _sse(HOP_2))
+        if stream
+        else (
+            httpx.Response(200, json=HOP_1),
+            httpx.Response(200, json=HOP_2_TRUNCATED),
+            httpx.Response(200, json=HOP_2),
+        )
+    )
+    kwargs: Final = {"model": ARGON, "messages": list(MESSAGES), "stream": stream, "api_key": "fake-gemini-key"}
+    transport: Final = httpx.MockTransport(_replay(hops, sent))
+
+    response: Final = (
+        await litellm.acompletion(**kwargs, client=AsyncHTTPHandler(transport=transport))
+        if is_async
+        else litellm.completion(**kwargs, client=HTTPHandler(client=httpx.Client(transport=transport)))
+    )
+    chunks: Final = ([chunk async for chunk in response] if is_async else list(response)) if stream else []
+
+    assert len(sent) == 2
+    assert _output_limits(sent[0]) == {"max_output_tokens": 50}
+    if stream:
+        assert _stream_text(chunks) == "hello world"
+        assert _stream_finish_reasons(chunks) == ["length"]
+        assert {"continuation_token": "dG9rLTI="} in _delta_fields(chunks)
+    else:
+        assert response.choices[0].message.content == "hello world"
+        assert response.choices[0].finish_reason == "length"
+        assert response.choices[0].message.provider_specific_fields["continuation_token"] == "dG9rLTI="
+
+
+@pytest.mark.parametrize(
+    "budget, model, request_params, expected_limits",
+    [
+        ("50", ARGON, {"max_tokens": 30}, {"max_output_tokens": 30}),
+        ("50", ARGON, {"max_completion_tokens": 30}, {"max_output_tokens": 30}),
+        (
+            "50",
+            ARGON,
+            {"extra_body": {"generationConfig": {"maxOutputTokens": 30}}},
+            {"maxOutputTokens": 30},
+        ),
+        (None, ARGON, {}, {}),
+        ("", ARGON, {}, {}),
+        ("a lot", ARGON, {}, {}),
+        ("0", ARGON, {}, {}),
+        ("-5", ARGON, {}, {}),
+        ("50", UNMAPPED_GEMINI, {}, {}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_env_budget_applies_only_to_a_request_that_sets_no_output_limit_of_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+    budget: str | None,
+    model: str,
+    request_params: Mapping[str, object],
+    expected_limits: Mapping[str, object],
+):
+    if budget is None:
+        monkeypatch.delenv(BUDGET_ENV, raising=False)
+    else:
+        monkeypatch.setenv(BUDGET_ENV, budget)
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=model,
+        messages=list(MESSAGES),
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+        **request_params,
+    )
+
+    assert _output_limits(sent[0]) == expected_limits
+
+
+@pytest.mark.parametrize(
+    "modalities, expected_limits",
+    [
+        (["audio"], {}),
+        (["text", "audio"], {}),
+        (["text", "image"], {}),
+        (["text"], {"max_output_tokens": 50}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_env_budget_applies_only_to_a_request_asking_for_text_output(
+    monkeypatch: pytest.MonkeyPatch, modalities: list[str], expected_limits: Mapping[str, object]
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=ARGON,
+        messages=list(MESSAGES),
+        modalities=modalities,
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert _output_limits(sent[0]) == expected_limits
+
+
+def _ai_studio_model_in_mode(mode: str) -> str:
+    return next(
+        name
+        for name, row in litellm.model_cost.items()
+        if name.startswith("gemini/") and row.get("mode") == mode and row.get("max_output_tokens")
+    )
+
+
+@pytest.mark.parametrize("mode", ["audio_speech", "image_generation"])
+@pytest.mark.asyncio
+async def test_env_budget_skips_a_model_the_cost_map_does_not_list_as_a_chat_model(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=_ai_studio_model_in_mode(mode),
+        messages=list(MESSAGES),
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert _output_limits(sent[0]) == {}
+
+
+@pytest.mark.parametrize(
+    "output_modalities, expected_limits",
+    [
+        ({}, {"max_output_tokens": 50}),
+        ({"supported_output_modalities": ["text"]}, {"max_output_tokens": 50}),
+        ({"supported_output_modalities": ["text", "audio"]}, {"max_output_tokens": 50}),
+        ({"supported_output_modalities": ["audio"]}, {}),
+        ({"supported_output_modalities": "audio"}, {}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_env_budget_applies_only_to_a_chat_model_the_cost_map_lists_as_answering_text(
+    monkeypatch: pytest.MonkeyPatch, output_modalities: Mapping[str, object], expected_limits: Mapping[str, object]
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    litellm.register_model(
+        {
+            UNMAPPED_GEMINI: {
+                "litellm_provider": "gemini",
+                "mode": "chat",
+                "max_output_tokens": 1000,
+                **output_modalities,
+            }
+        }
+    )
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=UNMAPPED_GEMINI,
+        messages=list(MESSAGES),
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert _output_limits(sent[0]) == expected_limits
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        {"generation_config": {"temperature": 0.1}},
+        {"generation_config": {"max_output_tokens": 30}},
+        {"generationConfig": {"response_modalities": ["AUDIO"]}},
+    ],
+)
+@pytest.mark.asyncio
+async def test_env_budget_leaves_a_snake_case_generation_config_from_extra_body_alone(
+    monkeypatch: pytest.MonkeyPatch, extra_body: Mapping[str, object]
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=ARGON,
+        messages=list(MESSAGES),
+        extra_body=dict(extra_body),
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert _output_limits(sent[0]) == {}
+
+
+def _gemini_chat_models_answering_no_text() -> tuple[str, ...]:
+    rows: Final = (
+        (name, row)
+        for name, row in litellm.model_cost.items()
+        if row.get("mode") == "chat" and "text" not in row.get("supported_output_modalities", ("text",))
+    )
+    return tuple(
+        name if name.startswith("gemini/") else f"vertex_ai/{name}"
+        for name, row in rows
+        if row.get("litellm_provider") in ("gemini", "vertex_ai-language-models")
+    )
+
+
+@pytest.mark.asyncio
+async def test_env_budget_skips_every_chat_model_the_cost_map_lists_as_answering_no_text(
+    monkeypatch: pytest.MonkeyPatch, token_endpoint: _TokenEndpoint
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    models: Final = _gemini_chat_models_answering_no_text()
+    sent: Final[list[dict[str, object]]] = []
+    replies: Final = tuple(httpx.Response(200, json=HOP_2) for _ in models)
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_replay(replies, sent)))
+
+    for model in models:
+        await litellm.acompletion(
+            model=model,
+            messages=list(MESSAGES),
+            api_key="fake-gemini-key",
+            vertex_project="p",
+            vertex_location="us-central1",
+            vertex_credentials=token_endpoint.credentials,
+            client=client,
+        )
+
+    assert models
+    assert {model: _output_limits(request) for model, request in zip(models, sent, strict=True)} == dict.fromkeys(
+        models, {}
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_env_budget_leaves_a_continuation_token_resume_with_no_limit_alone(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    sent: Final[list[dict[str, object]]] = []
+    reply: Final = _sse(HOP_2) if stream else httpx.Response(200, json=HOP_2)
+
+    response: Final = await litellm.acompletion(
+        model=ARGON,
+        messages=list(MESSAGES),
+        continuation_token="dG9rLTE=",
+        stream=stream,
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((reply,), sent))),
+    )
+    if stream:
+        _ = [chunk async for chunk in response]
+
+    assert sent[0]["continuationToken"] == "dG9rLTE="
+    assert _output_limits(sent[0]) == {}
+
+
+@pytest.mark.parametrize("model", ["gemini/gemini-2.5-flash", "vertex_ai/gemini-2.5-flash", ARGON])
+@pytest.mark.asyncio
+async def test_env_budget_above_a_models_output_limit_sends_that_limit_instead(
+    monkeypatch: pytest.MonkeyPatch, token_endpoint: _TokenEndpoint, model: str
+):
+    budget: Final = 2 * _cost_map_max_output_tokens(model)
+    monkeypatch.setenv(BUDGET_ENV, str(budget))
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=model,
+        messages=list(MESSAGES),
+        api_key="fake-gemini-key",
+        vertex_project="p",
+        vertex_location="us-central1",
+        vertex_credentials=token_endpoint.credentials,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert _output_limits(sent[0]) == {"max_output_tokens": _cost_map_max_output_tokens(model)}
+
+
+@pytest.mark.asyncio
+async def test_env_budget_never_goes_above_the_cost_map_limit_when_a_deployment_overrides_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    model: Final = "gemini/gemini-2.5-flash"
+    model_limit: Final = _cost_map_max_output_tokens(model)
+    monkeypatch.setenv(BUDGET_ENV, str(2 * model_limit))
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "plain", "litellm_params": {"model": model, "api_key": "fake-gemini-key"}},
+            {
+                "model_name": "raised",
+                "litellm_params": {"model": model, "api_key": "fake-gemini-key"},
+                "model_info": {"max_output_tokens": 4 * model_limit},
+            },
+        ]
+    )
+    sent: Final[list[dict[str, object]]] = []
+    replies: Final = (httpx.Response(200, json=HOP_2), httpx.Response(200, json=HOP_2))
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_replay(replies, sent)))
+
+    for model_name in ("plain", "raised"):
+        await router.acompletion(model=model_name, messages=list(MESSAGES), client=client)
+
+    sent_limits: Final = [_output_limits(request).get("max_output_tokens", 0) for request in sent]
+    assert len(sent_limits) == 2
+    assert all(isinstance(limit, int) and limit <= model_limit for limit in sent_limits)
+
+
+@pytest.mark.asyncio
+async def test_env_budget_caps_each_deployment_at_its_own_model_info_limit_and_never_at_a_siblings(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    model: Final = "gemini/gemini-2.5-flash"
+    budget: Final = _cost_map_max_output_tokens(model) // 2
+    low_limit: Final = budget // 4
+    monkeypatch.setenv(BUDGET_ENV, str(budget))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "low",
+                "litellm_params": {"model": model, "api_key": "fake-gemini-key"},
+                "model_info": {"max_output_tokens": low_limit},
+            },
+            {"model_name": "plain", "litellm_params": {"model": model, "api_key": "fake-gemini-key"}},
+        ]
+    )
+    sent: Final[list[dict[str, object]]] = []
+    replies: Final = (httpx.Response(200, json=HOP_2), httpx.Response(200, json=HOP_2))
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_replay(replies, sent)))
+
+    for model_name in ("plain", "low"):
+        await router.acompletion(model=model_name, messages=list(MESSAGES), client=client)
+
+    assert [_output_limits(request) for request in sent] == [
+        {"max_output_tokens": budget},
+        {"max_output_tokens": low_limit},
+    ]
+
+
+@pytest.mark.parametrize("deployment_limit", [0, -1])
+@pytest.mark.asyncio
+async def test_env_budget_ignores_a_deployment_model_info_limit_that_is_not_positive(
+    monkeypatch: pytest.MonkeyPatch, deployment_limit: int
+):
+    model: Final = "gemini/gemini-2.5-flash"
+    budget: Final = _cost_map_max_output_tokens(model) // 2
+    monkeypatch.setenv(BUDGET_ENV, str(budget))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "odd",
+                "litellm_params": {"model": model, "api_key": "fake-gemini-key"},
+                "model_info": {"max_output_tokens": deployment_limit},
+            }
+        ]
+    )
+    sent: Final[list[dict[str, object]]] = []
+
+    await router.acompletion(
+        model="odd",
+        messages=list(MESSAGES),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert _output_limits(sent[0]) == {"max_output_tokens": budget}
+
+
+@pytest.mark.asyncio
+async def test_env_budget_on_a_direct_call_never_goes_above_the_cost_map_limit_after_a_router_raised_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    model: Final = "gemini/gemini-2.5-flash"
+    model_limit: Final = _cost_map_max_output_tokens(model)
+    monkeypatch.setenv(BUDGET_ENV, str(2 * model_limit))
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "raised",
+                "litellm_params": {"model": model, "api_key": "fake-gemini-key"},
+                "model_info": {"max_output_tokens": 4 * model_limit},
+            }
+        ]
+    )
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=model,
+        messages=list(MESSAGES),
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert _output_limits(sent[0]) == {"max_output_tokens": model_limit}
+
+
+@pytest.mark.asyncio
+async def test_env_budget_on_a_direct_call_follows_a_lower_limit_set_with_register_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    model: Final = "gemini/gemini-2.5-flash"
+    lowered_limit: Final = _cost_map_max_output_tokens(model) // 4
+    monkeypatch.setenv(BUDGET_ENV, str(2 * lowered_limit))
+    litellm.register_model({model: {"litellm_provider": "gemini", "max_output_tokens": lowered_limit}})
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=model,
+        messages=list(MESSAGES),
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert _output_limits(sent[0]) == {"max_output_tokens": lowered_limit}
+
+
+@pytest.mark.parametrize(
+    "generation_config",
+    [None, {"responseModalities": None}, {"responseModalities": {"TEXT": 1}}],
+)
+@pytest.mark.asyncio
+async def test_env_budget_sends_a_generation_config_of_an_unexpected_shape_as_it_came(
+    monkeypatch: pytest.MonkeyPatch, generation_config: object
+):
+    monkeypatch.setenv(BUDGET_ENV, "50")
+    sent: Final[list[dict[str, object]]] = []
+
+    await litellm.acompletion(
+        model=ARGON,
+        messages=list(MESSAGES),
+        extra_body={"generationConfig": generation_config},
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay((httpx.Response(200, json=HOP_2),), sent))),
+    )
+
+    assert sent[0]["generationConfig"] == generation_config
 
 
 def test_initial_prompt_tokens_is_absent_on_a_single_hop_and_the_first_hops_count_otherwise():

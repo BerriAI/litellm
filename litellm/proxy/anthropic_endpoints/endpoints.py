@@ -18,8 +18,9 @@ from litellm.anthropic_interface.exceptions import (
     AnthropicExceptionMapping,
 )
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError
 from litellm.litellm_core_utils.tool_fields import first_validation_error
-from litellm.llms.anthropic.pass_through.context_management import (
+from litellm.llms.anthropic.messages.context_management import (
     AnthropicContextManagementError,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
@@ -48,6 +49,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
     with_litellm_call_id,
 )
+from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
 from litellm.router import Router
 
@@ -412,6 +414,10 @@ async def count_tokens(
             messages_format="anthropic",
             **_count_tokens_body_options(data, auto_drop_params),
         )
+    except UnsupportedContentTypeError as e:
+        return _anthropic_error_json_response(
+            ProxyException(message=str(e), type="invalid_request_error", param="messages", code=400), request
+        )
     except HTTPException as e:
         return _anthropic_error_json_response(proxy_exception_from_http_exception(e, {}), request)
     except ProxyException as e:
@@ -420,7 +426,7 @@ async def count_tokens(
         log_llm_api_exception(e, litellm_call_id)
         return _anthropic_error_json_response(proxy_exception_from_route_error(e), request)
     else:
-        return {"input_tokens": token_response.total_tokens}
+        return {"input_tokens": token_response.total_tokens, **count_source_fields(token_response)}
 
 
 @router.post(

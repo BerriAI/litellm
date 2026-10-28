@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.interactions.litellm_responses_transformation.transformation import (
     LiteLLMResponsesInteractionsConfig,
@@ -142,3 +143,9 @@ class TestBridgeResponseTransformation:
         assert interaction.created is not None
         assert datetime.fromisoformat(interaction.created).timestamp() == 1700000000
         assert interaction.updated == interaction.created
+
+    def test_responses_response_with_a_status_that_is_not_text_is_refused(self):
+        reply: Final = _responses_api_response("completed", None).model_copy(update={"status": 7})
+
+        with pytest.raises(ValidationError):
+            LiteLLMResponsesInteractionsConfig.transform_responses_response_to_interactions_response(reply, None)

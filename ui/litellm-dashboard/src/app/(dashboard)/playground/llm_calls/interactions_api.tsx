@@ -1,6 +1,7 @@
 import type { ResponseHeadersListener } from "@/lib/http/observeResponseHeaders";
 import { toast } from "@/lib/toast";
 import { getGatewayBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import { streamErrorMessage } from "@/utils/streamErrorMessage";
 import {
   buildPlaygroundHeaders,
   type CustomHeaders,
@@ -93,6 +94,11 @@ export async function makeInteractionsRequest(
           event = JSON.parse(jsonStr);
         } catch {
           continue;
+        }
+
+        const errorMessage = streamErrorMessage(event);
+        if (errorMessage !== null) {
+          throw new Error(errorMessage);
         }
 
         const eventType = event.event_type as string | undefined;

@@ -23,7 +23,7 @@ from integration._support.wire import Reply, Request, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
-pytestmark: Final = pytest.mark.timeout(240)
+pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]
 
 _MODEL: Final = "chatgpt/gpt-5.5"
 _CONFIG_MODEL: Final = "chatgpt-caller-stream-chaos"

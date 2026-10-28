@@ -58,12 +58,15 @@ env    = "stage"
 # s3_force_destroy    = false
 # skip_final_snapshot = false
 
-# Component images and per-task sizing/autoscaling are NOT exposed as
-# variables in this example (it keeps the curated surface small). They
-# default to working public GHCR images. To pin images or tune
-# CPU/memory/workers/autoscaling, set those inputs directly on the
-# `module "litellm"` block in main.tf — the full list is in
-# ../../variables.tf — or call the module from your own root config.
+# Images. image_tag is applied to all four litellm-* images. A published
+# module version ships with it stamped to its own release tag, a checkout of
+# the monorepo has no default and needs it set. image_registry can point at
+# an ECR pull-through mirror. Per-component *_image overrides and per-task
+# sizing/autoscaling are NOT exposed here. Set them directly on the
+# `module "litellm"` block in main.tf (full list in ../../variables.tf) or
+# call the module from your own root config.
+# image_registry = "ghcr.io/berriai"
+# image_tag      = "<litellm release tag>"
 
 # ---------- proxy_config (mirrors helm gateway.config.proxy_config) ----------
 # proxy_config = {
