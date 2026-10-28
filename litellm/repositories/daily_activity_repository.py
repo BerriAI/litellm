@@ -19,6 +19,7 @@ from litellm.repositories.daily_activity_sql import (
     build_cache_leakage_keys_sql,
     build_entity_rollup_sql,
     build_export_sql,
+    build_guardrail_spend_sql,
     build_key_page_sql,
     build_key_search_sql,
     build_model_top_keys_sql,
@@ -36,6 +37,7 @@ from litellm.types.repositories.daily_activity import (
     ExportRow,
     ExportType,
     GroupingSetsRow,
+    GuardrailSpendRow,
     KeyMetadataRow,
     KeyPage,
     KeySpendRow,
@@ -100,6 +102,7 @@ class DailyActivityDatabase(Protocol):
 
 _GROUPING_ADAPTER: Final = TypeAdapter(tuple[GroupingSetsRow, ...])
 _ENTITY_ADAPTER: Final = TypeAdapter(tuple[EntityRollupRow, ...])
+_GUARDRAIL_SPEND_ADAPTER: Final = TypeAdapter(tuple[GuardrailSpendRow, ...])
 _KEY_SPEND_ADAPTER: Final = TypeAdapter(tuple[KeySpendRow, ...])
 _KEY_PAGE_TOTAL_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(int)
 _USER_SPEND_ADAPTER: Final = TypeAdapter(tuple[UserSpendRow, ...])
@@ -190,6 +193,9 @@ class DailyActivityRepository:
             entity_rows=entity_rows,
             distinct_api_keys=distinct_api_keys,
         )
+
+    async def guardrail_spend(self, scope: DailyActivityScope) -> tuple[GuardrailSpendRow, ...]:
+        return _GUARDRAIL_SPEND_ADAPTER.validate_python(await self._query(build_guardrail_spend_sql(scope)))
 
     async def search_keys(self, scope: DailyActivityScope, *, search: str, limit: int) -> tuple[str, ...]:
         if not 1 <= limit <= constants.USAGE_KEY_SEARCH_MAX:

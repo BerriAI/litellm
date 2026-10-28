@@ -261,6 +261,25 @@ def build_entity_rollup_sql(scope: DailyActivityScope, *, api_key_limit: int) ->
     return SqlQuery(sql=sql, params=(*where_params, PTU_SENTINEL_API_KEY, api_key_limit))
 
 
+def build_guardrail_spend_sql(scope: DailyActivityScope) -> SqlQuery:
+    pg_table: Final = PRISMA_TO_PG_TABLE[scope.table]
+    where_clause, where_params = build_where_clause(scope)
+    sql: Final = f"""
+        SELECT g.date, g.guardrail_id, COALESCE(t.guardrail_name, g.guardrail_id) AS guardrail_name, g.api_key,
+               COALESCE(SUM(g.cost), 0)::float AS spend,
+               COALESCE(SUM(CASE WHEN g.cost IS NULL THEN g.units ELSE g.untracked_units END), 0)::bigint AS untracked_units
+        FROM "LiteLLM_DailyGuardrailUsageUnits" g
+        LEFT JOIN "LiteLLM_GuardrailsTable" t ON t.guardrail_id = g.guardrail_id
+        WHERE g.date >= $1 AND g.date <= $2
+          AND EXISTS (
+              SELECT 1 FROM "{pg_table}"
+              WHERE {where_clause} AND "{pg_table}".date = g.date AND "{pg_table}".api_key = g.api_key
+          )
+        GROUP BY g.date, g.guardrail_id, t.guardrail_name, g.api_key
+    """
+    return SqlQuery(sql=sql, params=where_params)
+
+
 def _key_spend_select() -> str:
     return """
             COALESCE(SUM(spend), 0)::float AS spend,

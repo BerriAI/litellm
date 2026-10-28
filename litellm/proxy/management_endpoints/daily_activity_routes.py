@@ -300,6 +300,7 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
                 resolved.scope,
                 entity_metadata_field=resolved.entity_metadata,
                 include_entity_breakdown=resolver.include_entity_breakdown,
+                include_guardrail_breakdown=resolver.include_guardrail_breakdown,
                 api_key_limit=api_key_limit,
             )
             if resolver.entity != "team":
