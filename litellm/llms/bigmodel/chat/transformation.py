@@ -3,7 +3,7 @@ from typing import Final
 
 from litellm.llms.zai.chat.transformation import ZAIChatConfig
 
-from ..common_utils import get_bigmodel_api_key, get_bigmodel_url
+from ..common_utils import get_bigmodel_api_key, get_bigmodel_url, is_unsupported_disabled_thinking
 
 _SUPPORTED_PARAMS: Final = (
     "max_tokens",
@@ -49,7 +49,11 @@ class BigModelChatConfig(ZAIChatConfig):
         }
         if "thinking" not in non_default_params:
             return mapped
-        return {
-            **mapped,
-            "extra_body": {"thinking": non_default_params["thinking"]},
-        }
+        thinking: Final = non_default_params["thinking"]
+        if is_unsupported_disabled_thinking(model, thinking):
+            return {
+                **mapped,
+                "reasoning_effort": mapped.get("reasoning_effort", "low"),
+                "extra_body": {"thinking": {"type": "enabled"}},
+            }
+        return {**mapped, "extra_body": {"thinking": thinking}}

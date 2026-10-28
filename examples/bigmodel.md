@@ -21,6 +21,8 @@ One model configuration supports all three native APIs. The provider selects the
 
 `api_base` is optional and defaults to `https://open.bigmodel.cn`. Set `BIGMODEL_API_BASE` to override the default, or pass an explicit `api_base` to override the environment value. Existing API-specific base URLs and complete endpoint URLs are normalized, preserving a custom proxy's path prefix
 
+A GLM Coding Plan key uses `https://open.bigmodel.cn/api/coding/paas/v4` as its `api_base`, since Coding Plan and standard keys do not work on each other's endpoints. Chat Completions then calls the Coding Plan endpoint, and Responses and Messages keep the endpoints in the table above
+
 The Admin UI lists BigModel (Zhipu AI), displays its official logo, and provides a required password API Key field and an optional API Base field with the default URL. Authentication uses an explicit `api_key` or `BIGMODEL_API_KEY`
 
 ```python

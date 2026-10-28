@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.bug_report import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
+from litellm.llms.bigmodel.common_utils import raise_bigmodel_business_error
 from litellm.types.utils import LlmProviders
 
 from ..exceptions import (
@@ -2758,6 +2759,8 @@ def exception_type(
                     exception_provider=exception_provider,
                     extra_information=extra_information,
                 )
+            if custom_llm_provider == "bigmodel":
+                raise_bigmodel_business_error(model, f"{exception_provider} - {error_str}", original_exception)  # pyright: ignore[reportUnknownArgumentType]  # exception_type takes untyped parameters
             if custom_llm_provider == "openrouter":
                 _map_openrouter_exception(
                     model=model,

@@ -266,6 +266,81 @@ def test_messages_preserves_native_reasoning_params(reasoning_params: Mapping[st
     assert {key: payload.get(key) for key in reasoning_params} == reasoning_params
 
 
+@pytest.mark.parametrize(
+    ("model", "extra", "expected"),
+    (
+        (MODEL, {}, {"thinking": {"type": "enabled"}, "reasoning_effort": "low"}),
+        (MODEL, {"reasoning_effort": "high"}, {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}),
+        ("glm-4.7", {}, {"thinking": {"type": "disabled"}, "reasoning_effort": None}),
+    ),
+)
+@respx.mock
+def test_chat_asks_an_always_thinking_model_for_its_lowest_effort_when_thinking_is_disabled(
+    model: str, extra: Mapping[str, JsonValue], expected: Mapping[str, JsonValue]
+) -> None:
+    route: Final = respx.post(f"{BASE}/api/paas/v4/chat/completions").respond(
+        json={
+            "id": "chat_test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+        }
+    )
+    litellm.completion(
+        model=f"bigmodel/{model}",
+        messages=[{"role": "user", "content": "Hello"}],
+        thinking={"type": "disabled"},
+        **extra,
+    )
+    body: Final = json.loads(route.calls.last.request.content)
+    assert {key: body.get(key) for key in expected} == expected
+
+
+@pytest.mark.parametrize(
+    ("model", "extra", "expected"),
+    (
+        (MODEL, {}, {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}}),
+        (
+            MODEL,
+            {"output_config": {"effort": "high"}},
+            {"thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}},
+        ),
+        ("glm-4.7", {}, {"thinking": {"type": "disabled"}, "output_config": None}),
+    ),
+)
+def test_messages_asks_an_always_thinking_model_for_its_lowest_effort_when_thinking_is_disabled(
+    model: str, extra: Mapping[str, JsonValue], expected: Mapping[str, JsonValue]
+) -> None:
+    payload: Final = BigModelMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "thinking": {"type": "disabled"}, **extra},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert {key: payload.get(key) for key in expected} == expected
+
+
+@pytest.mark.parametrize(
+    "reasoning_params",
+    ({"thinking": {"type": "enabled", "budget_tokens": 1024}}, {"output_config": {"effort": "low"}}),
+)
+@pytest.mark.parametrize("temperature", (0, 0.2))
+def test_messages_keeps_the_callers_temperature_next_to_thinking(
+    reasoning_params: Mapping[str, JsonValue], temperature: float
+) -> None:
+    payload: Final = BigModelMessagesConfig().transform_anthropic_messages_request(
+        model=MODEL,
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params={"max_tokens": 2048, "temperature": temperature, **reasoning_params},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert payload.get("temperature") == temperature
+
+
 @pytest.mark.asyncio
 @respx.mock
 @pytest.mark.parametrize("web_fetch_requests", (None, 2))
@@ -385,7 +460,7 @@ async def test_responses_sse_without_done_preserves_terminal_usage(
     assert chunks[-1].response.usage.total_tokens == 30
     assert chunks[-1].response.output_text == "Hello"
     OpenAIResponse.model_validate(chunks[-1].response.model_dump())
-    assert chunks[0].response.parallel_tool_calls is False
+    assert chunks[0].response.parallel_tool_calls is True
     assert chunks[-2].logprobs == (logprobs if include_logprobs else [])
     assert tuple(chunk.delta for chunk in chunks if chunk.type == "response.output_text.delta") == ("Hello",)
     assert tuple(chunk.part.text for chunk in chunks if chunk.type == "response.content_part.done") == (
@@ -464,6 +539,55 @@ def test_responses_failure_envelope_raises_its_status_instead_of_a_parse_error(
     with pytest.raises(error_class, match="Token expired") as raised:
         litellm.responses(model=f"bigmodel/{MODEL}", input="Hello")
     assert getattr(raised.value, "status_code", None) == status_code
+
+
+@pytest.mark.parametrize(
+    ("code", "error_class"),
+    ((1261, litellm.ContextWindowExceededError), (1301, litellm.ContentPolicyViolationError)),
+)
+@pytest.mark.parametrize("route", ("chat", "responses"))
+@respx.mock
+def test_prompt_too_long_and_unsafe_content_raise_the_errors_fallbacks_catch(
+    code: int, error_class: type[Exception], route: Literal["chat", "responses"]
+) -> None:
+    if route == "chat":
+        respx.post(f"{BASE}/api/paas/v4/chat/completions").respond(
+            status_code=400, json={"error": {"code": str(code), "message": "rejected by BigModel"}}
+        )
+    else:
+        respx.post(f"{BASE}/api/v1/responses").respond(
+            json={"code": code, "msg": "rejected by BigModel", "success": False}
+        )
+    call: Final = (
+        (lambda: litellm.completion(model=f"bigmodel/{MODEL}", messages=[{"role": "user", "content": "Hello"}]))
+        if route == "chat"
+        else (lambda: litellm.responses(model=f"bigmodel/{MODEL}", input="Hello"))
+    )
+    with pytest.raises(error_class, match="rejected by BigModel") as raised:
+        call()
+    assert raised.value.status_code == 400
+
+
+@pytest.mark.parametrize("route", ("responses", "messages"))
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_non_json_answer_surfaces_its_body_text(route: Literal["responses", "messages"]) -> None:
+    path: Final = "/api/v1/responses" if route == "responses" else "/api/anthropic/v1/messages"
+    respx.post(f"{BASE}{path}").respond(
+        content=b"<html>gateway maintenance</html>", headers={"content-type": "text/html"}
+    )
+    call: Final = (
+        (lambda: litellm.aresponses(model=f"bigmodel/{MODEL}", input="Hello"))
+        if route == "responses"
+        else (
+            lambda: litellm.anthropic.messages.acreate(
+                model=f"bigmodel/{MODEL}", max_tokens=16, messages=[{"role": "user", "content": "Hello"}]
+            )
+        )
+    )
+    with pytest.raises(Exception, match="gateway maintenance") as raised:
+        await call()
+    assert "validation error" not in str(raised.value)
 
 
 @pytest.mark.parametrize("stream", (False, True))

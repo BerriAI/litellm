@@ -19,7 +19,7 @@ from litellm.types.llms.openai import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
-from ..common_utils import get_bigmodel_api_key, get_bigmodel_url
+from ..common_utils import bigmodel_business_error, bigmodel_json_body, get_bigmodel_api_key, get_bigmodel_url
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _SUPPORTED_PARAMS: Final = (
@@ -114,7 +114,7 @@ def _normalize_response(
     normalized: Final[JsonValue] = {
         **body,
         "parallel_tool_calls": (
-            requested.parallel_tool_calls is True if parallel_tool_calls is None else parallel_tool_calls
+            requested.parallel_tool_calls is not False if parallel_tool_calls is None else parallel_tool_calls
         ),
         "tools": (requested.tools or []) if tools is None else tools,
         "tool_choice": (requested.tool_choice or "auto") if tool_choice is None else tool_choice,
@@ -188,10 +188,11 @@ class BigModelResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def transform_response_api_response(
         self, model: str, raw_response: httpx.Response, logging_obj: Logging
     ) -> ResponsesAPIResponse:
-        body: Final = _JSON_OBJECT.validate_json(raw_response.content)
+        body: Final = bigmodel_json_body(raw_response)
         if body.get("success") is False:
-            raise BaseLLMException(
-                message=str(body.get("msg") or raw_response.text),
+            message: Final = str(body.get("msg") or raw_response.text)
+            raise bigmodel_business_error(body.get("code"), message, model, None) or BaseLLMException(
+                message=message,
                 status_code=_envelope_status_code(body.get("code")),
                 headers=raw_response.headers,
             )

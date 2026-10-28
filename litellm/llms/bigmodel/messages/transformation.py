@@ -13,10 +13,27 @@ from litellm.llms.openai_like.messages.transformation import (
     OpenAILikeAnthropicMessagesConfig,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from litellm.types.router import GenericLiteLLMParams
 
-from ..common_utils import get_bigmodel_api_key, get_bigmodel_url
+from ..common_utils import (
+    bigmodel_json_body,
+    get_bigmodel_api_key,
+    get_bigmodel_url,
+    is_unsupported_disabled_thinking,
+)
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_OUTPUT_CONFIG: Final = TypeAdapter(dict[str, object])
+
+
+def _with_lowest_effort_thinking(
+    params: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: the parent transform takes a request dict
+    requested_output_config: Final = params.get("output_config")
+    output_config: Final = (
+        _OUTPUT_CONFIG.validate_python(requested_output_config) if isinstance(requested_output_config, dict) else {}
+    )
+    return {**params, "thinking": {"type": "adaptive"}, "output_config": {"effort": "low", **output_config}}
 
 
 def _normalize_message(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:  # mutable-ok: native JSON response
@@ -86,12 +103,29 @@ class BigModelMessagesConfig(OpenAILikeAnthropicMessagesConfig):
     def should_strip_billing_metadata(self) -> bool:
         return True
 
+    def transform_anthropic_messages_request(
+        self,
+        model: str,
+        messages: list[dict[str, object]],  # mutable-ok: matches dict-typed base signature
+        anthropic_messages_optional_request_params: dict[str, object],  # mutable-ok: matches dict-typed base signature
+        litellm_params: GenericLiteLLMParams,
+        headers: dict[str, str],  # mutable-ok: matches dict-typed base signature
+    ) -> dict[str, object]:  # mutable-ok: matches dict-typed base signature
+        request_params: Final = (
+            _with_lowest_effort_thinking(anthropic_messages_optional_request_params)
+            if is_unsupported_disabled_thinking(model, anthropic_messages_optional_request_params.get("thinking"))
+            else anthropic_messages_optional_request_params
+        )
+        return super().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the parent transform returns a bare dict
+            model, messages, request_params, litellm_params, headers
+        )
+
     def transform_anthropic_messages_response(
         self, model: str, raw_response: httpx.Response, logging_obj: Logging
     ) -> AnthropicMessagesResponse:
         normalized: Final = httpx.Response(
             raw_response.status_code,
-            json=_normalize_message(_JSON_OBJECT.validate_json(raw_response.content)),
+            json=_normalize_message(bigmodel_json_body(raw_response)),
             request=raw_response.request,
         )
         return super().transform_anthropic_messages_response(model, normalized, logging_obj)
@@ -126,6 +160,12 @@ class BigModelMessagesConfig(OpenAILikeAnthropicMessagesConfig):
     @staticmethod
     def _translate_adaptive_effort_for_non_adaptive_model(
         model: str, optional_params: Mapping[str, object], max_tokens: int | None, custom_llm_provider: str
+    ) -> None:
+        return None
+
+    @staticmethod
+    def _drop_incompatible_temperature_for_thinking(
+        model: str, optional_params: Mapping[str, object], custom_llm_provider: str
     ) -> None:
         return None
 
