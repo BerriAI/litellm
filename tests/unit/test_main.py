@@ -5223,6 +5223,24 @@ def test_groq_speech_honors_base_url_alias(respx_mock: respx.MockRouter):
     assert response.content == b"mp3-bytes"
 
 
+def test_paxa_speech_uses_the_paxa_key_from_the_environment(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PAXA_API_KEY", "fake-paxa-key")
+    monkeypatch.delenv("PAXA_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    route: Final = respx_mock.post("https://api.paxalabs.com/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"mp3-bytes")
+    )
+
+    response: Final = litellm.speech(model="paxa/paxa-tts-flash-v2", input="hello", voice="foithong")
+
+    request: Final = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer fake-paxa-key"
+    assert json.loads(request.content) == {"model": "paxa-tts-flash-v2", "input": "hello", "voice": "foithong"}
+    assert response.content == b"mp3-bytes"
+
+
 FORWARDED_CLIENT_HEADERS: Final = {"x-forwarded-for": "10.0.0.1", "x-amzn-trace-id": "Root=1-lit7694"}
 
 

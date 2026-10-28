@@ -678,6 +678,10 @@ def _get_openai_compatible_provider_info(
     elif custom_llm_provider == "soniox":
         api_base = api_base or get_secret_str("SONIOX_API_BASE") or "https://api.soniox.com"
         dynamic_api_key = api_key or get_secret_str("SONIOX_API_KEY")
+    elif custom_llm_provider == "paxa":
+        default_paxa_base: Final = get_secret_str("PAXA_API_BASE") or "https://api.paxalabs.com/v1"
+        api_base = api_base or default_paxa_base  # rebind-ok: mirrors sibling provider branches
+        dynamic_api_key = api_key or get_secret_str("PAXA_API_KEY")  # rebind-ok: mirrors sibling provider branches
     elif custom_llm_provider == "cerebras":
         api_base = api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"
         dynamic_api_key = api_key or get_secret_str("CEREBRAS_API_KEY")
