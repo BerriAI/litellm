@@ -6118,7 +6118,9 @@ class ProxyConfig:
             if "team_id" not in team:
                 raise Exception(f"team_id missing from team: {SENSITIVE_DATA_MASKER.mask_dict(team)}")
             if team_id == team["team_id"]:
-                team_config = copy.deepcopy(team)
+                team_config = copy.deepcopy(
+                    cast("dict[str, object]", team)  # cast-ok: a config team entry is a YAML mapping with str keys
+                )
                 break
         for k, v in team_config.items():
             if isinstance(v, str) and v.startswith("os.environ/"):
