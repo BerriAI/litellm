@@ -26,7 +26,6 @@ pub struct Layers {
     /// 2, `register(persist=False)`, cleared by every install and refilled by the router replay
     transient: IndexMap<String, Fields>,
     /// 3, `register(persist=True)`, applied over every install
-    #[expect(dead_code, reason = "07 applies registrations over the fetched layer")]
     persisted: Registrations,
 }
 
@@ -53,6 +52,7 @@ impl Layers {
     pub fn replace_fetched(&mut self, fetched: Arc<Catalog>) {
         self.fetched = Some(fetched);
         self.transient.clear();
+        self.persisted.forget_fields();
     }
 
     /// What install writes. A fetched row patches the bundled row field by field, a fetched `null` row removes it
@@ -82,6 +82,43 @@ impl Layers {
             }
         }
         rows
+    }
+
+    /// Layer 2, a `register(persist=False)`, cleared by the next install
+    pub fn record_transient(&mut self, key: &str, fields: &Fields) {
+        let merged = crate::register::update_dictionary(
+            self.transient.get(key).unwrap_or(&Fields::new()),
+            fields,
+        );
+        self.transient.insert(key.to_owned(), merged);
+    }
+
+    pub fn registrations(&self) -> &Registrations {
+        &self.persisted
+    }
+
+    pub fn registrations_mut(&mut self) -> &mut Registrations {
+        &mut self.persisted
+    }
+
+    /// Every name one alias group is served under, the canonical key first
+    pub fn alias_group(&self, key: &str) -> Vec<String> {
+        let owner = self.alias_owner(key).unwrap_or(key).to_owned();
+        let aliases: Vec<String> = self
+            .fetched
+            .iter()
+            .chain([&self.bundled])
+            .flat_map(|catalog| catalog.aliases().iter())
+            .filter(|(_, alias_owner)| **alias_owner == owner)
+            .map(|(alias, _)| alias.clone())
+            .collect();
+        let mut group = vec![owner];
+        for alias in aliases {
+            if !group.contains(&alias) {
+                group.push(alias);
+            }
+        }
+        group
     }
 
     /// The canonical key an alias is served under, from the fetched layer first

@@ -9,9 +9,9 @@ from typing import Final, Literal
 import pytest
 
 import litellm
+from litellm._catalog import CATALOG
 from litellm import Router
 from litellm import router as litellm_router_module
-from litellm import utils as litellm_utils_module
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -82,11 +82,11 @@ class _CanaryRouterHolder:
 
 def test_register_model_ledger_entry_is_scoped_to_this_test():
     litellm.register_model({CANARY_MODEL: {"litellm_provider": "openai", "input_cost_per_token": 0.001}})
-    assert CANARY_MODEL in litellm_utils_module._runtime_registered_model_cost
+    assert CANARY_MODEL in CATALOG.registrations()
 
 
 def test_register_model_ledger_entry_was_rolled_back():
-    assert CANARY_MODEL not in litellm_utils_module._runtime_registered_model_cost
+    assert CANARY_MODEL not in CATALOG.registrations()
 
 
 def test_register_model_catalog_writes_are_scoped_to_this_test():
@@ -160,7 +160,7 @@ def test_aws_cache_reset_sees_a_replaced_module(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.fixture(scope="module", autouse=True)
 def registered_collection_models() -> Iterator[None]:
-    original_registrations: Final = dict(litellm_utils_module._runtime_registered_model_cost)
+    original_registrations: Final = CATALOG.registrations()
     original_routers: Final = frozenset(litellm_router_module._live_routers)
     litellm.register_model(
         {"collection-isolation-ledger": {"litellm_provider": "openai", "input_cost_per_token": 0.001}}
@@ -174,8 +174,7 @@ def registered_collection_models() -> Iterator[None]:
         ]
     )
     yield
-    litellm_utils_module._runtime_registered_model_cost.clear()
-    litellm_utils_module._runtime_registered_model_cost.update(original_registrations)
+    CATALOG.restore_registrations(original_registrations)
     litellm_router_module._live_routers.discard(collection_router)
     litellm_router_module._live_routers.update(original_routers)
 

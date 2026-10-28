@@ -24,6 +24,7 @@ import respx
 from jsonschema import Draft7Validator, validate
 
 import litellm
+from litellm._catalog import CATALOG, Fetched
 from litellm.exceptions import MidStreamFallbackError
 from litellm._internal_context import is_internal_call
 from litellm._logging import (
@@ -90,7 +91,6 @@ from litellm.utils import (
     get_llm_provider,
     get_optional_params_embeddings,
     ProviderConfigManager,
-    _check_provider_match,
     get_potential_model_names,
     _is_litellm_router_call,
     _is_streaming_request,
@@ -380,51 +380,6 @@ def test_get_model_info_internal_failure_is_not_reported_as_unmapped() -> None:
         with pytest.raises(Exception, match="This model isn't mapped yet") as exc_info:
             litellm.utils.get_model_info_helper(model="gpt-4o", custom_llm_provider="openai")
     assert not isinstance(exc_info.value, litellm.ModelNotMappedError)
-
-
-def test_check_provider_match_azure_ai_allows_openai_and_azure():
-    """
-    Test that azure_ai provider can match openai and azure models.
-    This is needed for Azure Model Router which can route to OpenAI models.
-    """
-    # azure_ai should match openai models
-    assert _check_provider_match(model_info={"litellm_provider": "openai"}, custom_llm_provider="azure_ai") is True
-
-    # azure_ai should match azure models
-    assert _check_provider_match(model_info={"litellm_provider": "azure"}, custom_llm_provider="azure_ai") is True
-
-    # azure_ai should NOT match other providers
-    assert _check_provider_match(model_info={"litellm_provider": "anthropic"}, custom_llm_provider="azure_ai") is False
-
-
-def test_check_provider_match_github_allows_upstream_provider_metadata():
-    """
-    Test that github provider can match upstream provider metadata.
-    GitHub Models can provide models from multiple providers.
-    """
-    assert (
-        _check_provider_match(
-            model_info={"litellm_provider": "openai"},
-            custom_llm_provider="github",
-        )
-        is True
-    )
-
-    assert (
-        _check_provider_match(
-            model_info={"litellm_provider": "github"},
-            custom_llm_provider="github",
-        )
-        is True
-    )
-
-    assert (
-        _check_provider_match(
-            model_info={"litellm_provider": "anthropic"},
-            custom_llm_provider="github",
-        )
-        is True
-    )
 
 
 def test_supports_function_calling_unknown_github_alias_returns_false():
@@ -1580,45 +1535,6 @@ def test_openai_models_in_model_info(monkeypatch):
     assert len(violated_models) == 0, f"The following models should support pdf input: {violated_models}"
 
 
-def test_check_provider_match():
-    """
-    Test the _check_provider_match function for various provider scenarios
-    """
-    # Test bedrock and bedrock_converse cases
-    model_info = {"litellm_provider": "bedrock"}
-    assert litellm.utils._check_provider_match(model_info, "bedrock") is True
-    assert litellm.utils._check_provider_match(model_info, "bedrock_converse") is True
-
-    # Test bedrock_converse provider
-    model_info = {"litellm_provider": "bedrock_converse"}
-    assert litellm.utils._check_provider_match(model_info, "bedrock") is True
-    assert litellm.utils._check_provider_match(model_info, "bedrock_converse") is True
-
-    # Test non-matching provider
-    model_info = {"litellm_provider": "bedrock"}
-    assert litellm.utils._check_provider_match(model_info, "openai") is False
-
-
-def test_check_provider_match_none_value_matches_any_provider():
-    """
-    A ``litellm_provider`` of None must be treated the same as a missing
-    key: both mean "no provider constraint" and should match any
-    ``custom_llm_provider``.
-
-    Regression test for https://github.com/BerriAI/litellm/issues/28336.
-    Before the fix, ``register_model`` persisted ``litellm_provider: None``
-    via ``get_model_info`` for deployments registered without a provider
-    (e.g. ``Router.add_deployment``), which caused ``_check_provider_match``
-    to drop custom pricing intermittently.
-    """
-    # Missing key already returned True; None must behave identically.
-    assert litellm.utils._check_provider_match({}, "openai") is True
-    assert litellm.utils._check_provider_match({"litellm_provider": None}, "openai") is True
-    assert litellm.utils._check_provider_match({"litellm_provider": None}, "anthropic") is True
-    # When custom_llm_provider is also None nothing constrains the match.
-    assert litellm.utils._check_provider_match({"litellm_provider": None}, None) is True
-
-
 def test_get_provider_rerank_config():
     """
     Test the get_provider_rerank_config function for various providers
@@ -2370,8 +2286,9 @@ def test_completion_registers_test_owned_model_prices() -> None:
     )
 
     assert json.loads(route.calls[0].request.content) == {"model": model, "messages": messages}
-    assert litellm.model_cost[model]["input_cost_per_token"] == 0.001
-    assert litellm.model_cost[model]["output_cost_per_token"] == 0.002
+    assert litellm.model_cost[f"openai/{model}"]["input_cost_per_token"] == 0.001
+    assert litellm.model_cost[f"openai/{model}"]["output_cost_per_token"] == 0.002
+    assert litellm.model_cost[model]["input_cost_per_token"] == 0.0001
     assert response._hidden_params["response_cost"] == pytest.approx(0.018)
 
 
@@ -5001,13 +4918,6 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
     from litellm import utils as litellm_utils
     from litellm.utils import (
         _invalidate_model_cost_lowercase_map,
-        reapply_runtime_model_cost_registrations,
-    )
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
     )
     # Only the recorded half is under test here; the live-router rebuild is covered
     # in test_router_model_cost_isolation.py. Routers built by earlier tests in this
@@ -5043,7 +4953,7 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
             }
         }
         _invalidate_model_cost_lowercase_map()
-        reapply_runtime_model_cost_registrations()
+        CATALOG.replay_registrations()
 
         expected_rate: Final = rate if updated_rate is None else updated_rate
         assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == expected_rate
@@ -5062,16 +4972,8 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
     the catalog generation it was applied to and silently beat fresh upstream
     pricing forever, while a durable override registered alongside it survives.
     """
-    from litellm import utils as litellm_utils
     from litellm.utils import (
         _invalidate_model_cost_lowercase_map,
-        reapply_runtime_model_cost_registrations,
-    )
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
     )
 
     saved_model_cost = litellm.model_cost
@@ -5090,7 +4992,7 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
             "openai/gpt-4o-mini": {"litellm_provider": "openai", "input_cost_per_token": 0.000888},
         }
         _invalidate_model_cost_lowercase_map()
-        reapply_runtime_model_cost_registrations()
+        CATALOG.replay_registrations()
 
         assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.000111
         assert litellm.model_cost["openai/gpt-4o-mini"]["input_cost_per_token"] == 0.000888
@@ -10850,14 +10752,27 @@ def test_vertex_llama3_model_info_resolves_without_the_meta_prefix():
 @pytest.mark.parametrize(
     "key", ("openai.test-converse", "bedrock/openai.test-converse", "bedrock/converse/openai.test-converse")
 )
-def test_runtime_model_cost_registrations_resolve_bedrock_routing(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+def test_runtime_model_cost_registrations_resolve_bedrock_routing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, key: str
+) -> None:
     from litellm import utils as model_utils
-    from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+    from litellm._catalog import File
 
     rates: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
     alias: Final = "openai.test-converse-alias"
-    entry: Final = AliasedCostEntry({"litellm_provider": "bedrock_converse", "mode": "chat"}, (key, alias))
-    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, key: entry, alias: entry})
+    path: Final = tmp_path / "aliased_cost_map.json"
+    path.write_text(
+        json.dumps(
+            {
+                **CATALOG.bundled().document(),
+                key: {"litellm_provider": "bedrock_converse", "mode": "chat", "aliases": [alias]},
+            }
+        )
+    )
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    fetched: Final = CATALOG.fetch(File(path), timeout=5, attempts=1)
+    assert isinstance(fetched, Fetched)
+    CATALOG.install(fetched)
     litellm.register_model({key: rates}, persist_across_reloads=False)
 
     registrations: Final = dict(
@@ -10945,7 +10860,10 @@ def test_a_key_added_by_a_direct_write_is_found_case_insensitively(monkeypatch):
     assert get_model_cost_key("mixed-case-direct") == "Mixed-Case-Direct"
 
 
-def test_resolution_matches_mains_for_every_bundled_key_and_variant():
+def test_resolution_matches_mains_for_every_bundled_key_and_variant(monkeypatch):
+    from litellm._catalog import CATALOG
+
+    monkeypatch.setattr(litellm, "model_cost", CATALOG.bundled().served())
     reference = json.loads((Path(__file__).parent / "resolution_reference.json").read_text())
 
     def resolved(model, provider):
@@ -10960,3 +10878,57 @@ def test_resolution_matches_mains_for_every_bundled_key_and_variant():
         if (actual := resolved(model, provider)) != expected
     ]
     assert mismatches == []
+
+
+@pytest.mark.parametrize(
+    ("key", "registration", "sibling"),
+    [
+        pytest.param(
+            "databricks/databricks-claude-opus-4-99",
+            {"max_output_tokens": 123456},
+            "databricks/databricks-claude-opus-4",
+            id="databricks",
+        ),
+        pytest.param("openai/o3-pro", {"litellm_provider": "openai", "input_cost_per_token": 9e-06}, "o3-pro", id="o3-pro"),
+        pytest.param(
+            "bedrock/anthropic.claude-sonnet-4-6-20260101",
+            {"litellm_provider": "bedrock", "input_cost_per_token": 9e-06},
+            "anthropic.claude-sonnet-4-6",
+            id="dated-bedrock",
+        ),
+    ],
+)
+def test_register_model_writes_the_callers_key_and_leaves_the_sibling_row_alone(monkeypatch, key, registration, sibling):
+    monkeypatch.setattr(litellm, "model_cost", CATALOG.bundled().served())
+    assert key not in litellm.model_cost
+    sibling_before = json.dumps(litellm.model_cost[sibling], sort_keys=True)
+
+    litellm.register_model({key: registration}, persist_across_reloads=False)
+
+    try:
+        written = litellm.model_cost[key]
+        assert {name: written[name] for name in registration} == registration
+        assert written.get("mode") == litellm.model_cost[sibling].get("mode")
+        assert json.dumps(litellm.model_cost[sibling], sort_keys=True) == sibling_before
+    finally:
+        litellm.model_cost.pop(key, None)
+
+
+def test_register_model_keeps_case_variants_as_separate_rows(monkeypatch):
+    monkeypatch.setattr(litellm, "model_cost", CATALOG.bundled().served())
+    litellm.register_model(
+        {"hosted_vllm/Acme-Model": {"litellm_provider": "hosted_vllm", "max_input_tokens": 8000, "supports_vision": True}},
+        persist_across_reloads=False,
+    )
+    litellm.register_model(
+        {"hosted_vllm/acme-model": {"litellm_provider": "hosted_vllm", "max_input_tokens": 32000}},
+        persist_across_reloads=False,
+    )
+
+    try:
+        assert litellm.model_cost["hosted_vllm/Acme-Model"]["max_input_tokens"] == 8000
+        assert litellm.model_cost["hosted_vllm/acme-model"]["max_input_tokens"] == 32000
+        assert "supports_vision" not in litellm.model_cost["hosted_vllm/acme-model"]
+    finally:
+        litellm.model_cost.pop("hosted_vllm/Acme-Model", None)
+        litellm.model_cost.pop("hosted_vllm/acme-model", None)

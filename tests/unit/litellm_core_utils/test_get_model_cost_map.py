@@ -494,19 +494,13 @@ def test_boot_load_success_does_not_start_background_retry():
 
 
 def test_boot_load_transient_failure_installs_local_then_background_retry_installs_remote(monkeypatch):
-    from litellm import utils as litellm_utils
 
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     for name, provider_models in tuple(vars(litellm).items()):
         if name.endswith("_models") and isinstance(provider_models, set):
             monkeypatch.setattr(litellm, name, set(provider_models))
     monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
-    catalog = Catalog.bound_to(litellm, "model_cost")
+    catalog = CATALOG
     held = litellm.model_cost
     remote = _with(
         lambda document: (
@@ -786,13 +780,9 @@ def test_a_side_read_changes_no_global_state(status):
 
 
 def test_url_registration_fetches_the_requested_map_when_local_flag_is_set(monkeypatch):
-    from litellm import utils as litellm_utils
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
-    monkeypatch.setattr(
-        litellm_utils, "_runtime_registered_model_cost", dict(litellm_utils._runtime_registered_model_cost)
-    )
     remote = _with(
         lambda document: document.update(
             {"side-url-registration-model": {"litellm_provider": "openai", "input_cost_per_token": 1e-6}}
@@ -807,13 +797,8 @@ def test_url_registration_fetches_the_requested_map_when_local_flag_is_set(monke
 
 
 def test_url_registration_404_does_not_change_model_cost_state(monkeypatch, caplog):
-    from litellm import utils as litellm_utils
-
-    monkeypatch.setattr(
-        litellm_utils, "_runtime_registered_model_cost", dict(litellm_utils._runtime_registered_model_cost)
-    )
     live_entries = json.dumps(litellm.model_cost, sort_keys=True, default=str)
-    registrations = dict(litellm_utils._runtime_registered_model_cost)
+    registrations = CATALOG.registrations()
 
     with _serving([(404, {}, b"missing")]) as server, caplog.at_level(logging.WARNING, logger="LiteLLM"):
         returned = litellm.register_model(server.url)
@@ -823,7 +808,7 @@ def test_url_registration_404_does_not_change_model_cost_state(monkeypatch, capl
     assert "404" in warnings[0].getMessage()
     assert returned == server.url
     assert json.dumps(litellm.model_cost, sort_keys=True, default=str) == live_entries
-    assert litellm_utils._runtime_registered_model_cost == registrations
+    assert CATALOG.registrations() == registrations
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")

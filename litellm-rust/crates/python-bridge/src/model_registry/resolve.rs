@@ -93,6 +93,11 @@ impl LiveKeys<'_, '_> {
         self.indexed(|index| index.provider_keys(provider).to_vec())
     }
 
+    /// The row's fields that convert to JSON
+    pub(crate) fn fields_of(&self, key: &str) -> Option<Fields> {
+        self.fields(key).map(|(fields, _)| fields)
+    }
+
     /// Every field that converts to JSON. A value only Python can hold is left out, and reported by `full_row`
     fn fields(&self, key: &str) -> Option<(Fields, bool)> {
         let row = self.dict.get_item(key).ok().flatten()?;

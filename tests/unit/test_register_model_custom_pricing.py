@@ -10,7 +10,6 @@ calculations for DB-sourced models with prompt caching pricing.
 """
 
 import copy
-import itertools
 import json
 import os
 from collections.abc import Callable, Mapping
@@ -20,8 +19,8 @@ from typing import Final, NoReturn
 import pytest
 
 import litellm
-from litellm._catalog import File
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry, reload_model_cost_map
+from litellm._catalog import Fetched, File
+from litellm.litellm_core_utils.get_model_cost_map import reload_model_cost_map
 from litellm.main import _build_custom_pricing_entry
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
@@ -226,8 +225,6 @@ def test_register_model_strips_none_litellm_provider():
 
     Regression test for https://github.com/BerriAI/litellm/issues/28336.
     """
-    from litellm.utils import _check_provider_match
-
     model_key = "test-custom-pricing-no-provider-28336"
     litellm.model_cost.pop(model_key, None)
 
@@ -250,78 +247,8 @@ def test_register_model_strips_none_litellm_provider():
         )
         # Downstream consumers must accept this entry for any provider,
         # mirroring what the cost calculator does.
-        assert _check_provider_match(registered, "openai") is True
-        assert _check_provider_match(registered, "anthropic") is True
-    finally:
-        litellm.model_cost.pop(model_key, None)
-
-
-def test_register_model_strips_none_litellm_provider_from_get_model_info(monkeypatch):
-    """Directly exercise the strip in ``register_model``.
-
-    The companion test above hits the ``except Exception`` branch where
-    ``existing_model`` is an empty dict, so the ``pop`` is a no-op. This
-    test patches ``get_model_info`` to return the failure mode the strip
-    was added to handle, namely a populated dict whose ``litellm_provider``
-    is ``None``. Without the strip, the merged entry in
-    ``litellm.model_cost`` would carry ``litellm_provider: None`` and
-    ``_check_provider_match`` would drop custom pricing.
-
-    Regression test for https://github.com/BerriAI/litellm/issues/28336.
-    """
-    from litellm import utils as litellm_utils
-    from litellm.utils import _check_provider_match
-
-    model_key = "test-strip-none-provider-from-get-model-info-28336"
-    litellm.model_cost.pop(model_key, None)
-
-    def _fake_get_model_info(model, *args, **kwargs):
-        assert model == model_key
-        return {
-            "key": model_key,
-            "litellm_provider": None,
-            "mode": "chat",
-            "max_tokens": 4096,
-        }
-
-    # ``register_model`` calls ``get_model_info.cache_clear`` via
-    # ``_invalidate_model_cost_lowercase_map``, so the replacement must
-    # expose a no-op ``cache_clear`` attribute.
-    _fake_get_model_info.cache_clear = lambda: None
-    monkeypatch.setattr(litellm_utils, "get_model_info", _fake_get_model_info)
-
-    try:
-        litellm.register_model(
-            {
-                model_key: {
-                    "input_cost_per_token": 0.001,
-                    "output_cost_per_token": 0.002,
-                }
-            }
-        )
-
-        registered = litellm.model_cost.get(model_key)
-        assert registered is not None, f"{model_key} should be in model_cost"
-        # The strip must have removed the None-valued provider that
-        # ``get_model_info`` returned. The key may be absent entirely, but
-        # it must never be present with value ``None``.
-        assert "litellm_provider" not in registered or (
-            registered["litellm_provider"] is not None
-        ), (
-            "register_model failed to strip litellm_provider=None returned "
-            f"by get_model_info, got {registered.get('litellm_provider')!r}"
-        )
-        # Metadata from the patched ``get_model_info`` must still flow
-        # through, so we know the strip did not nuke the rest of the entry.
-        assert registered.get("mode") == "chat"
-        assert registered.get("max_tokens") == 4096
-        # And custom pricing from the registration call must be preserved.
-        assert registered.get("input_cost_per_token") == 0.001
-        assert registered.get("output_cost_per_token") == 0.002
-        # Downstream _check_provider_match must accept any provider for
-        # this entry, mirroring the cost calculator path.
-        assert _check_provider_match(registered, "openai") is True
-        assert _check_provider_match(registered, "anthropic") is True
+        for provider in ("openai", "anthropic"):
+            assert litellm.get_model_info(model=model_key, custom_llm_provider=provider)["input_cost_per_token"] == 0.001
     finally:
         litellm.model_cost.pop(model_key, None)
 
@@ -623,10 +550,8 @@ def test_register_model_router_add_deployment_custom_pricing_applies():
 
     try:
         # ``add_deployment`` runs as part of ``Router.__init__``; the
-        # registered entry must not block ``_check_provider_match`` for
-        # the deployment's provider.
-        from litellm.utils import _check_provider_match
-
+        # registered entry must not block the provider match for the
+        # deployment's provider.
         registered_keys = [
             k for k in (deployment_model, model_key) if k in litellm.model_cost
         ]
@@ -636,8 +561,8 @@ def test_register_model_router_add_deployment_custom_pricing_applies():
         )
         for k in registered_keys:
             assert (
-                _check_provider_match(litellm.model_cost[k], "openai") is True
-            ), f"custom pricing for {k} was dropped by _check_provider_match"
+                litellm.get_model_info(model=k, custom_llm_provider="openai")["key"] == k
+            ), f"the entry for {k} was dropped by the provider match"
     finally:
         litellm.model_cost.pop(model_key, None)
         litellm.model_cost.pop(deployment_model, None)
@@ -891,48 +816,6 @@ def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(mo
         _invalidate_model_cost_lowercase_map()
 
 
-@pytest.mark.parametrize("route", ["", "converse/", "invoke/"])
-def test_register_model_leaves_no_shadow_key_when_the_lookup_trips_once(
-    monkeypatch: pytest.MonkeyPatch, route: str
-) -> None:
-    catalog_key: Final = "au.anthropic.lit-5853-geo-model"
-    alias: Final = f"bedrock/{route}{catalog_key}"
-    repriced_input_cost: Final = 9e-06
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(
-        litellm,
-        "model_cost",
-        {
-            **litellm.get_model_cost_map(url=""),
-            catalog_key: {
-                "litellm_provider": "bedrock_converse",
-                "mode": "chat",
-                "input_cost_per_token": 3.3e-06,
-                "output_cost_per_token": 1.65e-05,
-            },
-        },
-    )
-    _invalidate_model_cost_lowercase_map()
-    real_lookup: Final = litellm.utils.get_model_info
-    lookups: Final = itertools.count()
-
-    def lookup_tripped_once_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> object:
-        if next(lookups) == 0:
-            raise RuntimeError("dictionary changed size during iteration")
-        return real_lookup(model=model, custom_llm_provider=custom_llm_provider)
-
-    with pytest.MonkeyPatch.context() as lookup_patch:
-        lookup_patch.setattr(litellm.utils, "get_model_info", lookup_tripped_once_by_a_concurrent_registration)
-        litellm.register_model({alias: {"litellm_provider": "bedrock", "mode": "chat"}}, persist_across_reloads=False)
-    litellm.register_model({catalog_key: {"input_cost_per_token": repriced_input_cost}}, persist_across_reloads=False)
-
-    try:
-        assert litellm.get_model_info(alias)["key"] == catalog_key
-        assert litellm.get_model_info(alias)["input_cost_per_token"] == repriced_input_cost
-    finally:
-        _invalidate_model_cost_lowercase_map()
-
-
 @pytest.mark.parametrize("key_prefix", ["", "bedrock/", "bedrock/converse/"])
 def test_register_model_bills_a_catalog_rows_tier_rates_the_same_when_the_lookup_fails(
     monkeypatch: pytest.MonkeyPatch, key_prefix: str
@@ -1047,20 +930,25 @@ def test_register_model_keeps_the_prices_a_reload_adopts_while_it_registers(
         **builtin_cost_map,
         catalog_key: {**catalog_row, "input_cost_per_token": reloaded_input_cost},
     }
-    real_lookup: Final = litellm.utils.get_model_info
+    from litellm.rust_bridge.host import model_names
+
+    real_candidates: Final = model_names.registration_candidates
     reloads: Final[list[object]] = []  # mutable-ok: counts reloads the racing lookup triggered
 
-    def lookup_racing_a_price_data_reload(model: str, custom_llm_provider: str | None = None) -> object:
-        info: Final = real_lookup(model=model, custom_llm_provider=custom_llm_provider)
+    def candidates_racing_a_price_data_reload(
+        key: str, row_provider: str | None, custom_llm_provider: str | None
+    ) -> object:
+        names: Final = real_candidates(key, row_provider, custom_llm_provider)
         if not reloads:
             reloads.append(_reload_from(reloaded_cost_map, tmp_path))
-        return info
+        return names
 
     with pytest.MonkeyPatch.context() as lookup_patch:
-        lookup_patch.setattr(litellm.utils, "get_model_info", lookup_racing_a_price_data_reload)
+        lookup_patch.setattr(model_names, "registration_candidates", candidates_racing_a_price_data_reload)
         litellm.register_model({deployment_key: {"litellm_provider": "bedrock"}}, persist_across_reloads=False)
 
     try:
+        assert reloads
         assert litellm.model_cost[catalog_key]["input_cost_per_token"] == reloaded_input_cost
         assert litellm.get_model_info(deployment_key)["input_cost_per_token"] == reloaded_input_cost
     finally:
@@ -1102,18 +990,29 @@ _CANONICAL_KEY: Final = "lit-5853-canonical-model"
 _ALIAS_KEY: Final = "lit-5853-alias-model"
 
 
-def _install_aliased_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
+def _install_aliased_cost_map(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from litellm._catalog import CATALOG
+
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    aliased: Final = AliasedCostEntry(
-        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 2e-06, "output_cost_per_token": 8e-06},
-        (_CANONICAL_KEY, _ALIAS_KEY),
+    path: Final = tmp_path / "aliased_cost_map.json"
+    path.write_text(
+        json.dumps(
+            {
+                **CATALOG.bundled().document(),
+                _CANONICAL_KEY: {
+                    "aliases": [_ALIAS_KEY],
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token": 2e-06,
+                    "output_cost_per_token": 8e-06,
+                },
+            }
+        )
     )
-    monkeypatch.setattr(
-        litellm,
-        "model_cost",
-        {**litellm.get_model_cost_map(url=""), _CANONICAL_KEY: aliased, _ALIAS_KEY: aliased},
-    )
-    _invalidate_model_cost_lowercase_map()
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    fetched: Final = CATALOG.fetch(File(path), timeout=5, attempts=1)
+    assert isinstance(fetched, Fetched)
+    CATALOG.install(fetched)
 
 
 def _token_prices(name: str) -> tuple[float | None, float | None]:
@@ -1123,9 +1022,9 @@ def _token_prices(name: str) -> tuple[float | None, float | None]:
 
 @pytest.mark.parametrize("registered_key", [_CANONICAL_KEY, _ALIAS_KEY])
 def test_register_model_prices_every_alias_of_the_registered_entry(
-    monkeypatch: pytest.MonkeyPatch, registered_key: str
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, registered_key: str
 ) -> None:
-    _install_aliased_cost_map(monkeypatch)
+    _install_aliased_cost_map(monkeypatch, tmp_path)
 
     try:
         litellm.register_model(
@@ -1144,8 +1043,10 @@ def test_register_model_prices_every_alias_of_the_registered_entry(
         _invalidate_model_cost_lowercase_map()
 
 
-def test_register_model_leaves_an_alias_repointed_at_its_own_entry(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_aliased_cost_map(monkeypatch)
+def test_register_model_leaves_an_alias_repointed_at_its_own_entry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install_aliased_cost_map(monkeypatch, tmp_path)
     litellm.model_cost[_ALIAS_KEY] = {
         "litellm_provider": "openai",
         "mode": "chat",

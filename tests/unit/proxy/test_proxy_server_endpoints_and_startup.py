@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm._catalog import CATALOG
 import litellm.proxy.proxy_server as proxy_server_module
 from litellm._internal_context import current_service_target
 from litellm._logging import turn_on_json, verbose_proxy_logger
@@ -5219,7 +5220,6 @@ class TestPriceDataReloadIntegration:
         The swap happens early in the handler, so a failure in the bookkeeping
         after it is swallowed by the surrounding except and would otherwise
         leave the metadata correct while the path is quietly broken"""
-        from litellm import utils as litellm_utils
         from litellm.proxy.proxy_server import ProxyConfig
 
         proxy_config = ProxyConfig()
@@ -5232,7 +5232,7 @@ class TestPriceDataReloadIntegration:
         mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
 
         original_model_cost = litellm.model_cost
-        original_registry = dict(litellm_utils._runtime_registered_model_cost)
+        original_registry = CATALOG.registrations()
         try:
             litellm.register_model(
                 model_cost={"custom/deployment-model": {"litellm_provider": "custom", "max_input_tokens": 4321}}
@@ -5257,8 +5257,7 @@ class TestPriceDataReloadIntegration:
             assert proxy_config.model_cost_map_applied_revision == 7
         finally:
             litellm.model_cost = original_model_cost
-            litellm_utils._runtime_registered_model_cost.clear()
-            litellm_utils._runtime_registered_model_cost.update(original_registry)
+            CATALOG.restore_registrations(original_registry)
             _invalidate_model_cost_lowercase_map()
 
     def test_a_reload_counts_the_fetched_catalog_only(self):
@@ -5266,10 +5265,9 @@ class TestPriceDataReloadIntegration:
         is taken before the runtime registrations are written back into the same
         dict. Counting after would inflate it by however many deployments and
         overrides this pod happens to be carrying"""
-        from litellm import utils as litellm_utils
 
         original_model_cost = litellm.model_cost
-        original_registry = dict(litellm_utils._runtime_registered_model_cost)
+        original_registry = CATALOG.registrations()
         try:
             litellm.register_model(
                 model_cost={"custom/deployment-model": {"litellm_provider": "custom", "max_input_tokens": 4321}}
@@ -5281,8 +5279,7 @@ class TestPriceDataReloadIntegration:
             assert litellm.model_cost["custom/deployment-model"]["max_input_tokens"] == 4321
         finally:
             litellm.model_cost = original_model_cost
-            litellm_utils._runtime_registered_model_cost.clear()
-            litellm_utils._runtime_registered_model_cost.update(original_registry)
+            CATALOG.restore_registrations(original_registry)
             _invalidate_model_cost_lowercase_map()
 
     def test_manual_reload_preserves_interval_hours(self, monkeypatch):

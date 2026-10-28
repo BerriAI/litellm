@@ -13,6 +13,7 @@ from openai.types.completion_usage import CompletionUsage
 from pydantic import BaseModel
 
 import litellm
+from litellm._catalog import CATALOG
 from litellm import TranscriptionResponse, model_cost
 from litellm.constants import REALTIME_METERED_USAGE_KEY
 from litellm.cost_calculator import BaseTokenUsageProcessor, RealtimeAPITokenUsageProcessor, ResponsesWebSocketTokenUsageProcessor, batch_cost_calculator, completion_cost, cost_per_token, handle_realtime_stream_cost_calculation, response_cost_calculator
@@ -4826,7 +4827,9 @@ def test_completion_cost_legacy_mantle_route_prices_after_router_registration(lo
             }
         ]
     )
-    assert "bedrock/mantle/anthropic.claude-sonnet-5" not in litellm.model_cost
+    row = litellm.model_cost["anthropic.claude-sonnet-5"]
+    registered = litellm.model_cost.get("bedrock/mantle/anthropic.claude-sonnet-5")
+    assert registered is None or registered.get("input_cost_per_token") == row["input_cost_per_token"]
 
     response = litellm.ModelResponse(
         id="msg_x",
@@ -4834,7 +4837,6 @@ def test_completion_cost_legacy_mantle_route_prices_after_router_registration(lo
         model="claude-sonnet-5",
         usage={"prompt_tokens": 16, "completion_tokens": 4, "total_tokens": 20},
     )
-    row = litellm.model_cost["anthropic.claude-sonnet-5"]
     expected = 16 * row["input_cost_per_token"] + 4 * row["output_cost_per_token"]
     assert expected > 0
 
@@ -10194,7 +10196,7 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
     import litellm.utils as model_utils
     from litellm.cost_calculator import pricing_entry_for_cost_calc
 
-    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
+    CATALOG.restore_registrations({})
     catalog: Final = dict(litellm.model_cost)
     model: Final = "openai.gpt-5.6-sol"
     litellm.register_model(
@@ -10260,7 +10262,7 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
 
     monkeypatch.setattr(litellm, "model_cost", catalog)
     model_utils._invalidate_model_cost_lowercase_map()
-    model_utils.reapply_runtime_model_cost_registrations()
+    CATALOG.replay_registrations()
     profile_prices: Final = litellm.get_model_info(f"us.{model}", custom_llm_provider="bedrock")
     expected_after_reload: Final = (
         10 * updated_rate + 5 * rate
@@ -10278,9 +10280,8 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
 def test_bedrock_converse_profile_ignores_registered_capabilities_without_prices(
     _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import litellm.utils as model_utils
 
-    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
+    CATALOG.restore_registrations({})
     model: Final = "openai.gpt-6-sol"
     litellm.register_model({model: {"supports_function_calling": True}})
     response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
@@ -10313,7 +10314,7 @@ def test_bedrock_converse_profile_preserves_cache_only_registered_prices(
     import litellm.utils as model_utils
     from litellm.cost_calculator import pricing_entry_for_cost_calc
 
-    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
+    CATALOG.restore_registrations({})
     model: Final = "openai.cache-overlay-test"
     profile: Final = f"{profile_prefix}.{model}"
     catalog: Final = {
@@ -10386,7 +10387,7 @@ def test_bedrock_converse_profile_preserves_cache_only_registered_prices(
 
     monkeypatch.setattr(litellm, "model_cost", dict(catalog))
     model_utils._invalidate_model_cost_lowercase_map()
-    model_utils.reapply_runtime_model_cost_registrations()
+    CATALOG.replay_registrations()
     expected_after_reload: Final = (
         10 * 0.02 + 3 * 0.04 + 5 * (rate if persist_across_reloads else catalog[profile][cache_field])
     )

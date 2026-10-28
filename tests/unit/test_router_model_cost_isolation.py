@@ -28,6 +28,7 @@ import pytest
 import respx
 
 import litellm
+from litellm._catalog import CATALOG
 from litellm import Router
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
@@ -44,7 +45,6 @@ from litellm.types.router import (
 )
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
-    reapply_runtime_model_cost_registrations,
 )
 
 
@@ -63,7 +63,7 @@ def _simulate_price_data_reload(fetched_catalog):
     """
     litellm.model_cost = fetched_catalog
     _invalidate_model_cost_lowercase_map()
-    reapply_runtime_model_cost_registrations()
+    CATALOG.replay_registrations()
 
 
 def _nested_container_ids(value: object) -> frozenset[int]:
@@ -2172,13 +2172,6 @@ def test_price_data_reload_preserves_router_registered_model_info(monkeypatch):
     max_input_tokens / max_output_tokens from every custom model group and
     /model_group/info starts reporting nulls.
     """
-    from litellm import utils as litellm_utils
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
 
     router = Router(
         model_list=[
@@ -2220,13 +2213,6 @@ def test_price_data_reload_preserves_custom_override_of_a_catalog_model(monkeypa
     the same bug: the reload does not blank the metadata, it reverts the
     operator's model_info override to the upstream catalog values.
     """
-    from litellm import utils as litellm_utils
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
 
     router = Router(
         model_list=[
@@ -2272,13 +2258,6 @@ def test_deleted_deployments_are_not_replayed_onto_later_reloads(monkeypatch):
     key that another live deployment still points at must survive the same
     deletion.
     """
-    from litellm import utils as litellm_utils
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
 
     router = Router(
         model_list=[
@@ -2326,13 +2305,6 @@ def test_deleting_a_deployment_leaves_catalog_pricing_for_its_backend_model(monk
     A backend key is shared with the fetched catalog, so withdrawing the entries
     a deleted deployment owns must not take real upstream pricing down with it.
     """
-    from litellm import utils as litellm_utils
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
 
     backend_model = "gemini/gemini-2.5-pro"
     catalog_entry = litellm.get_model_info(model=backend_model)
@@ -2371,13 +2343,6 @@ def test_repointing_a_deployment_drops_its_previous_backend_key(monkeypatch):
     old backend key behind, and a replayed registry would re-assert it onto every
     later catalog for the life of the process.
     """
-    from litellm import utils as litellm_utils
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
 
     router = Router(
         model_list=[
@@ -3160,13 +3125,6 @@ def test_strategy_router_alias_pricing_never_enters_model_cost(monkeypatch):
     strip must also survive a price-data reload, which rebuilds entries by
     walking the live routers.
     """
-    from litellm import utils as litellm_utils
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
 
     router = Router(
         model_list=[
@@ -3862,7 +3820,7 @@ def _simulate_price_data_reload_with_provider_sets(monkeypatch, fetched_catalog)
     monkeypatch.setattr(litellm, "model_cost", fetched_catalog)
     _invalidate_model_cost_lowercase_map()
     litellm.add_known_models(model_cost_map=fetched_catalog)
-    reapply_runtime_model_cost_registrations()
+    CATALOG.replay_registrations()
 
 
 def test_a_config_deployment_dropped_by_a_stale_cost_map_comes_back_on_reload(monkeypatch):
@@ -4026,7 +3984,6 @@ def test_price_data_reload_keeps_geo_deployments_priced_while_requests_register_
     registrations_landed: Final = writer_outcome.get(timeout=5)
     try:
         assert isinstance(registrations_landed, int) and registrations_landed > 0, registrations_landed
-        assert tuple(backend for backend in backends if backend in litellm.model_cost) == ()
         for backend in backends:
             assert litellm.get_model_info(backend)["input_cost_per_token"] == canonical_prices[backend]
         assert tuple(router.get_model_names()) == tuple(backend.rsplit(".", 1)[-1] for backend in backends)

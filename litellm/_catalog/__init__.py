@@ -14,10 +14,12 @@ from litellm.rust_bridge._native import (
     Invalid,
     Missing,
     Provenance,
+    Registered,
     Remote,
     Resolved,
     RowError,
     Unavailable,
+    overlay,
 )
 
 Source = Remote | File | Bundled
@@ -44,10 +46,12 @@ __all__ = [
     "Invalid",
     "Missing",
     "Provenance",
+    "Registered",
     "Remote",
     "Resolved",
     "RowError",
     "Source",
     "Unavailable",
     "default_source",
+    "overlay",
 ]

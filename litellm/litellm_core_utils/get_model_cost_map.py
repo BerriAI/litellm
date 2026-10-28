@@ -138,33 +138,12 @@ def get_model_cost_map_loaded_at() -> "datetime | None":
     return provenance.loaded_at if provenance is not None else None
 
 
-class AliasedCostEntry(dict[str, object]):
-    __slots__ = ("names", "registered_fields")
-
-    def __init__(
-        self, entry: Mapping[str, object], names: tuple[str, ...], registered_fields: frozenset[str] = frozenset()
-    ) -> None:
-        super().__init__(entry)
-        self.names: tuple[str, ...] = names
-        self.registered_fields: frozenset[str] = registered_fields
-
-
 def _note_loaded(fetched: Fetched) -> Fetched:
     set_fallback_generalizations(fetched.fallback_rules())
     GetModelCostMap._snapshot_loaded_catalog(  # pyright: ignore[reportPrivateUsage]  # same module
         fetched.served()
     )
     return fetched
-
-
-class _InstallGeneration:
-    """Bumped by every install, so a registration racing a reload into the same dict can rebuild its entry"""
-
-    value: int = 0
-
-
-def model_cost_install_generation() -> int:
-    return _InstallGeneration.value
 
 
 def _install(
@@ -176,7 +155,6 @@ def _install(
     url: str | None = None,
 ) -> Installed:
     installed: Final = catalog.install(fetched, env_forced=env_forced, fallback_reason=fallback_reason, url=url)
-    _InstallGeneration.value += 1
     if installed.rejected:
         verbose_logger.warning(
             "LiteLLM: model cost map rows failed validation and are served from the bundled map or left out: %s",
@@ -191,7 +169,6 @@ def _refresh_derived_state() -> None:
 
     utils._invalidate_model_cost_lowercase_map()  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
     litellm.add_known_models(model_cost_map=litellm.model_cost)
-    utils.reapply_runtime_model_cost_registrations()
 
 
 def reload_model_cost_map(source: Source, catalog: Catalog = CATALOG) -> Installed | Unavailable:

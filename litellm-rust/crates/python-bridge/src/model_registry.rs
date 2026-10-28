@@ -1,10 +1,13 @@
 mod fetch;
 mod install;
 mod name_index;
+mod py_values;
+mod register;
 mod resolve;
 mod row_error;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::SystemTime;
 
@@ -19,6 +22,7 @@ use serde::Serialize;
 
 pub(crate) use fetch::{Bundled, File, Provenance, Remote};
 use install::{Record, write_into};
+pub(crate) use register::Registered;
 pub(crate) use resolve::{Invalid, Missing, Resolved};
 pub(crate) use row_error::{RowError, RowErrorKind, row_error};
 
@@ -94,6 +98,8 @@ pub(crate) struct CatalogHandle {
     attr: String,
     state: Mutex<State>,
     index: Mutex<Option<name_index::NameIndex>>,
+    /// Bumped by every install, so a registration that raced one recomputes its base
+    generation: AtomicU64,
 }
 
 #[pymethods]
@@ -131,6 +137,29 @@ impl Fetched {
     }
 }
 
+/// The merge rule for `register_model`, and with `replace_variants` the one for `model_info_with_pricing_overrides`,
+/// where a flat price also replaces the tier, batch, off-peak and reasoning rates it stands in for
+#[pyfunction]
+#[pyo3(signature = (base, registration, *, replace_variants = false))]
+pub(crate) fn overlay(
+    py: Python<'_>,
+    base: &Bound<'_, PyDict>,
+    registration: &Bound<'_, PyDict>,
+    replace_variants: bool,
+) -> PyResult<Py<PyAny>> {
+    let base: Fields = litellm_host_python::from_py(base)?;
+    let registration: Fields = litellm_host_python::from_py(registration)?;
+    let merged = if replace_variants {
+        litellm_model_catalog::update_dictionary(
+            &litellm_model_catalog::without_overridden_price_variants(&base, &registration),
+            &registration,
+        )
+    } else {
+        litellm_model_catalog::overlay(&base, &registration)
+    };
+    to_py(py, &merged)
+}
+
 #[pymethods]
 impl Unavailable {
     #[new]
@@ -156,6 +185,7 @@ impl CatalogHandle {
                 provenance: None,
             }),
             index: Mutex::new(None),
+            generation: AtomicU64::new(0),
         }
     }
 
@@ -249,6 +279,57 @@ impl CatalogHandle {
         )
     }
 
+    /// Writes each row under its caller's key on top of the row it inherits from, into layer 3 when `persist`
+    #[pyo3(signature = (rows, *, persist, provider = None))]
+    fn register(
+        &self,
+        py: Python<'_>,
+        rows: &Bound<'_, PyDict>,
+        persist: bool,
+        provider: Option<&str>,
+    ) -> PyResult<Registered> {
+        self.register_rows(py, rows, persist, provider)
+    }
+
+    /// The row a registration of `key` inherits from, or the capability seed
+    #[pyo3(signature = (key, provider = None))]
+    fn registration_base(
+        &self,
+        py: Python<'_>,
+        key: &str,
+        provider: Option<&str>,
+    ) -> PyResult<Py<PyAny>> {
+        to_py(py, &self.base_for(py, key, provider)?)
+    }
+
+    /// main's replay after an install, for a caller that swapped the dict itself
+    fn replay_registrations(&self, py: Python<'_>) -> PyResult<()> {
+        self.replay_after_install(py)
+    }
+
+    /// The fields any registration set on `key` since the last install
+    fn registered_fields(&self, key: &str) -> std::collections::BTreeSet<String> {
+        self.lock()
+            .layers
+            .registrations()
+            .registered_fields(key)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The persisted registrations, a snapshot
+    fn registrations(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let persisted = self.lock().layers.registrations().persisted().clone();
+        to_py(py, &persisted)
+    }
+
+    /// Test isolation only, puts back a `registrations()` snapshot
+    fn restore_registrations(&self, snapshot: &Bound<'_, PyDict>) -> PyResult<()> {
+        let persisted: indexmap::IndexMap<String, Fields> = litellm_host_python::from_py(snapshot)?;
+        self.lock().layers.registrations_mut().restore(persisted);
+        Ok(())
+    }
+
     /// Rebuild the index on the next lookup, for a caller that knows keys changed with the length unchanged
     fn mark_index_stale(&self) {
         *self.index.lock().unwrap_or_else(PoisonError::into_inner) = None;
@@ -294,6 +375,8 @@ impl CatalogHandle {
             state.record = Some(outcome.record);
             state.provenance = Some(provenance);
         }
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        self.replay_after_install(py)?;
         Ok(Installed {
             count: composed.len(),
             written: outcome.written,
@@ -304,6 +387,10 @@ impl CatalogHandle {
 }
 
 impl CatalogHandle {
+    pub(crate) fn install_generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
     fn bound_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let bound = self.module.bind(py).getattr(self.attr.as_str())?;
         bound

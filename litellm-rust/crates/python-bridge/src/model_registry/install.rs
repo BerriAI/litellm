@@ -15,6 +15,13 @@ pub(crate) struct Record {
     rows: HashMap<String, Fields>,
 }
 
+impl Record {
+    /// A registration writes a whole row, so every field of it is litellm's again (decision 25)
+    pub(crate) fn note_written(&mut self, key: &str, fields: &Fields) {
+        self.rows.insert(key.to_owned(), fields.clone());
+    }
+}
+
 pub(crate) struct Outcome {
     pub(crate) record: Record,
     pub(crate) written: usize,
@@ -179,6 +186,7 @@ fn write_owned_fields(
         let litellm_owns = match (&held, last.get(field)) {
             (Held::Absent, None) => true,
             (Held::Json(value), Some(last)) => value == last,
+            (Held::Foreign, Some(last)) => super::py_values::is_opaque(last),
             _ => false,
         };
         if !litellm_owns {
