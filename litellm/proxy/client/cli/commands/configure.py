@@ -7,7 +7,7 @@ from typing import Final
 import click
 from InquirerPy import inquirer
 
-from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from .auth import CliContextObj
 from .claude_settings import (

@@ -120,6 +120,7 @@ class AzureContainerConfig(BaseContainerConfig):
         self,
         headers: dict,
         api_key: Optional[str] = None,
+        litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> dict:
         """Azure uses api-key header instead of Bearer token."""
         import litellm
