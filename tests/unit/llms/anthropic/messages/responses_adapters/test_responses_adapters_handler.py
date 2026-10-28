@@ -946,27 +946,27 @@ def test_the_sync_path_clears_old_results_too(respx_mock: respx.MockRouter, monk
 
 
 @pytest.mark.asyncio
-async def test_a_polyfill_crash_is_a_500_before_the_responses_api_call(
+async def test_an_openai_style_context_management_list_is_still_not_sent_to_the_responses_api(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
-    from litellm.llms.anthropic.messages.responses_adapters import handler
-
     upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
         status_code=200, json=TEXT_RESPONSE
     )
     monkeypatch.setenv("OPENAI_API_KEY", "sk-clear-test")
-    monkeypatch.setattr(handler, "apply_context_management", AsyncMock(side_effect=RuntimeError("editor bug")))
-    with pytest.raises(AnthropicContextManagementError) as raised:
-        await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
-            max_tokens=1024,
-            messages=_three_reads(),
-            model="openai/gpt-5.6-luna",
-            custom_llm_provider="openai",
-            context_management={"edits": [dict(CLEAR_EDIT)]},
-        )
-    assert raised.value.status_code == 500
-    assert not upstream.called
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    served: Final = await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=1024,
+        messages=_three_reads(),
+        model="openai/gpt-5.6-luna",
+        custom_llm_provider="openai",
+        context_management=[{"type": "compaction", "compact_threshold": 500}],
+    )
+
+    assert "context_management" not in json.loads(upstream.calls.last.request.content)
+    assert isinstance(served, dict)
+    assert "context_management" not in served
 
 
 @pytest.mark.asyncio

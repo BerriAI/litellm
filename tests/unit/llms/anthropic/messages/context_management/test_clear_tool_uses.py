@@ -231,15 +231,10 @@ SERVER_TOOL_TURN: Final = {
 COMPACTION_TURN: Final = {"role": "assistant", "content": [{"type": "compaction", "content": "summary " * 300}]}
 
 
-@pytest.mark.parametrize(
-    "turn", [pytest.param(SERVER_TOOL_TURN, id="server_tool"), pytest.param(COMPACTION_TURN, id="compaction")]
-)
-def test_an_input_tokens_trigger_counts_blocks_the_token_counter_cannot_read(turn: dict[str, object]) -> None:
-    history: Final = _make_history(n_pairs=3)
-    threshold: Final = litellm.token_counter(model=MODEL, messages=history) + 100
-    messages: Final = [history[0], turn, *history[1:]]
-
-    new_messages, applied = apply_clear_tool_uses_20250919(
+def _clear_above(
+    messages: list[dict[str, object]], threshold: int
+) -> tuple[list[dict[str, object]], AppliedEdit | None]:
+    return apply_clear_tool_uses_20250919(
         model=MODEL,
         messages=messages,
         tools=None,
@@ -251,11 +246,24 @@ def test_an_input_tokens_trigger_counts_blocks_the_token_counter_cannot_read(tur
         },
     )
 
+
+@pytest.mark.parametrize(
+    "turn", [pytest.param(SERVER_TOOL_TURN, id="server_tool"), pytest.param(COMPACTION_TURN, id="compaction")]
+)
+def test_an_input_tokens_trigger_skips_blocks_no_adapter_sends(turn: dict[str, object]) -> None:
+    history: Final = _make_history(n_pairs=3)
+    sent_tokens: Final = litellm.token_counter(model=MODEL, messages=history)
+    messages: Final = [history[0], turn, *history[1:]]
+
+    untouched, not_applied = _clear_above(messages, sent_tokens + 100)
+    cleared, applied = _clear_above(messages, sent_tokens - 100)
+
+    assert not_applied is None
+    assert untouched == messages
     assert applied is not None
     assert applied["cleared_tool_uses"] == 2
-    assert applied["cleared_input_tokens"] > 0
-    assert _cleared_ids(new_messages) == {"toolu_00", "toolu_01"}
-    assert new_messages[1] == turn
+    assert _cleared_ids(cleared) == {"toolu_00", "toolu_01"}
+    assert cleared[1] == turn
 
 
 def _blocks_of(messages: list[dict[str, object]], block_type: str) -> tuple[dict[str, object], ...]:

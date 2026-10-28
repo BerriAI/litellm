@@ -137,7 +137,7 @@ def _find_latest_compaction_index(
     return None, None
 
 
-def _slice_around_compaction_block(
+def slice_around_compaction_block(
     messages: Sequence[_MsgT],
 ) -> tuple[Sequence[_MsgT | dict[str, object]], dict[str, object] | None]:
     """Apply Anthropic's "drop everything before the compaction block" rule.
@@ -598,7 +598,7 @@ def apply_client_compaction_block_history(
     tail is forwarded unchanged (with compaction blocks stripped) so recent
     turns the summary does not cover are preserved.
     """
-    effective_messages, prior_compaction_block = _slice_around_compaction_block(messages)
+    effective_messages, prior_compaction_block = slice_around_compaction_block(messages)
     if prior_compaction_block is None:
         return None
 
@@ -669,7 +669,7 @@ async def apply_compact_20260112(
     # opt-in gate below so that even when summarization is disabled we still
     # strip Anthropic-only ``compaction`` blocks from messages going to
     # non-Anthropic backends (which would reject them).
-    effective_messages, prior_compaction_block = _slice_around_compaction_block(messages)
+    effective_messages, prior_compaction_block = slice_around_compaction_block(messages)
     prior_summary_text: Final = prior_compaction_block.get("content") if prior_compaction_block else None
     augmented_system: str | list[dict[str, object]] | None = system
     if isinstance(prior_summary_text, str) and prior_summary_text:

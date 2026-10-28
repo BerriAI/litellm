@@ -10,7 +10,6 @@ the way the API's 400 does, so the dispatcher can reject the edit, or drop only 
 runs.
 """
 
-import json
 from collections.abc import Mapping, Sequence, Set
 from dataclasses import dataclass
 from functools import reduce
@@ -214,17 +213,11 @@ def _select_in_batches(candidates: Sequence[str], tokens: Mapping[str, int], cle
     return tuple(candidates[:batch_end])
 
 
-def _countable_block(block: Mapping[str, object]) -> Mapping[str, object]:
-    if block.get("type") in _TOKEN_COUNTER_BLOCK_TYPES:
-        return block
-    return {"type": "text", "text": json.dumps(block, default=str)}
-
-
 def _countable_message(message: Mapping[str, object]) -> Mapping[str, object]:
     blocks: Final = _parse(_BLOCKS, message.get("content"))
     if blocks is None:
         return message
-    return {**message, "content": [_countable_block(block) for block in blocks]}
+    return {**message, "content": [block for block in blocks if block.get("type") in _TOKEN_COUNTER_BLOCK_TYPES]}
 
 
 def _count_tokens(

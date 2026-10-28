@@ -50,20 +50,24 @@ AnthropicRequestMessages: TypeAlias = list[AllAnthropicMessageValues] | list[dic
 BlockRewrite: TypeAlias = Callable[[Mapping[str, object]], Mapping[str, object]]
 _BLOCK_LIST: Final = TypeAdapter(list[dict[str, object]])
 _SplitEdits: TypeAlias = tuple[dict[str, object] | None, Sequence[Mapping[str, object]]]
+AnthropicContextManagementSpec: TypeAlias = dict[str, object] | list[dict[str, object]] | None
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
 
 
 def _split_context_management(
-    spec: dict[str, object] | None,  # mutable-ok: the request's spec, handed to normalize_spec
+    spec: AnthropicContextManagementSpec,
     kwargs: Mapping[str, object],
 ) -> _SplitEdits:
     """Return (the edits the Responses API runs natively, the edits the gateway polyfill runs).
 
     The Responses API compacts natively (``compact_20260112`` becomes its ``compaction``); any other
     edit, such as ``clear_tool_uses_20250919``, has no Responses API form and runs in the polyfill, as
-    it does on the chat completions path.
+    it does on the chat completions path. An OpenAI-style list spec is not Anthropic's shape and stays
+    unsent, as it was before the polyfill ran here.
     """
+    if not isinstance(spec, dict):
+        return None, ()
     if not spec or context_management_explicitly_dropped(kwargs.get("additional_drop_params")):
         return spec, ()
     edits: Final = normalize_spec(spec) or []
@@ -332,7 +336,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
         max_tokens: int,
         messages: AnthropicRequestMessages,
         model: str,
-        context_management: dict[str, object] | None = None,
+        context_management: AnthropicContextManagementSpec = None,
         metadata: dict[str, object] | None = None,
         output_config: AnthropicOutputConfig | None = None,
         stop_sequences: list[str] | None = None,
@@ -398,7 +402,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
         max_tokens: int,
         messages: AnthropicRequestMessages,
         model: str,
-        context_management: dict[str, object] | None = None,
+        context_management: AnthropicContextManagementSpec = None,
         metadata: dict[str, object] | None = None,
         output_config: AnthropicOutputConfig | None = None,
         stop_sequences: list[str] | None = None,
