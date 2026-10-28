@@ -693,6 +693,7 @@ def test_tool_uses_trigger_does_not_count_excluded_tools(trigger_value: int, tri
 @pytest.mark.parametrize(
     "system",
     ["Reference notes. " * 400, [{"type": "text", "text": "Reference notes. " * 400}]],
+    ids=["string", "blocks"],
 )
 def test_input_tokens_trigger_counts_the_system_prompt(system: str | list[dict[str, object]]) -> None:
     """Like the API, the trigger compares the whole prompt: a system prompt can push it over."""

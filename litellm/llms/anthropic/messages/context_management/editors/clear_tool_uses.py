@@ -338,12 +338,12 @@ def apply_clear_tool_uses_20250919(
         for tool_use_id, name in _tool_uses_in_order(blocks)
         if name not in exclude_tools and (tool_use_id not in tiny or _clears_input(name, input_tools))
     )
-    met, counted_tokens = _trigger_met(trigger, model, messages, tools, system, len(clearable))
-    if not met:
-        return messages, None
-
     keep_count: Final = _resolve_keep_count(keep)
     if len(clearable) <= keep_count:
+        return messages, None
+
+    met, counted_tokens = _trigger_met(trigger, model, messages, tools, system, len(clearable))
+    if not met:
         return messages, None
 
     last_completed_id: Final = _last_completed_tool_use_id(messages)

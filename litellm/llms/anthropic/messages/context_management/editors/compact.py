@@ -340,7 +340,7 @@ def _system_to_text(
     return "\n".join(
         text
         for block in system
-        if isinstance(block, dict)
+        if isinstance(block, Mapping)
         and block.get("type") == "text"
         and isinstance(text := block.get("text"), str)
         and text
