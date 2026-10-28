@@ -182,7 +182,9 @@ class TestToolParamsFollowTheModelMap:
                 {"litellm_provider": "tools_map", "mode": "chat", "supports_function_calling": model_supports_fc},
             )
         provider_overrides: Final = (
-            {} if provider_supports_fc is None else {"provider_info": {"supports_function_calling": provider_supports_fc}}
+            {}
+            if provider_supports_fc is None
+            else {"provider_info": {"supports_function_calling": provider_supports_fc}}
         )
         config: Final = create_config_class(_provider("tools_map", **provider_overrides))()
 
