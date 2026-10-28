@@ -18,6 +18,7 @@ import re
 import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
+from functools import partial
 from html import escape
 from types import MappingProxyType, TracebackType
 from typing import (
@@ -87,7 +88,7 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_team_object, get_user_object
 from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module exports
     _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_ip_address,
@@ -1238,14 +1239,15 @@ def generic_response_convertor(
         generic_user_email_attribute_name,
     )
 
+    token: Final = cast(dict[str, object], response)  # cast-ok: the IdP userinfo JSON object fastapi-sso hands back
     all_teams: Final = []
     if sso_jwt_handler is not None:
-        team_ids = sso_jwt_handler.get_all_jwt_team_ids(cast(dict, response))
+        team_ids = sso_jwt_handler.get_all_jwt_team_ids(token)
         all_teams.extend(team_ids)
 
     if team_mappings is not None and team_mappings.team_ids_jwt_field is not None:
         team_ids_from_db_mapping: Final[list[str] | None] = get_nested_value(
-            data=cast(dict, response),
+            data=token,
             key_path=team_mappings.team_ids_jwt_field,
             default=[],
         )
@@ -1257,8 +1259,14 @@ def generic_response_convertor(
                 team_ids_from_db_mapping,
             )
     else:
-        team_ids = jwt_handler.get_all_jwt_team_ids(cast(dict, response))
+        team_ids = jwt_handler.get_all_jwt_team_ids(token)
         all_teams.extend(team_ids)
+    team_id_jwt_field: Final = jwt_handler.litellm_jwtauth.team_id_jwt_field
+    upsert_candidate: Final[object] = (
+        get_nested_value(data=token, key_path=team_id_jwt_field)
+        if jwt_handler.litellm_jwtauth.team_id_upsert and team_id_jwt_field is not None
+        else None
+    )
 
     # Determine user role based on role_mappings if available
     # Only apply role_mappings for GENERIC SSO provider
@@ -1327,6 +1335,9 @@ def generic_response_convertor(
         last_name=get_nested_value(response, generic_user_last_name_attribute_name),
         provider=get_nested_value(response, generic_provider_attribute_name),
         team_ids=all_teams,
+        team_id_to_upsert=upsert_candidate
+        if isinstance(upsert_candidate, str) and upsert_candidate in all_teams
+        else None,
         user_role=user_role,
         extra_fields=extra_fields,
     )
@@ -1807,9 +1818,15 @@ async def warn_if_id_jag_capture_gap(*, retention_enabled: RetentionCheck | None
     verbose_proxy_logger.warning("SSO debug callback ran with an oauth2_id_jag capture gap: %s", gap)
 
 
-async def create_team_member_add_task(team_id, user_info):
+async def create_team_member_add_task(
+    team_id: str,
+    user_info: NewUserResponse | LiteLLM_UserTable,
+    upsert_team: Callable[[str], Awaitable[object]] | None = None,
+):
     """Create a task for adding a member to a team."""
     try:
+        if upsert_team is not None:
+            await upsert_team(team_id)
         member: Final = Member(user_id=user_info.user_id, role="user")
         team_member_add_request: Final = TeamMemberAddRequest(
             member=member,
@@ -1820,10 +1837,25 @@ async def create_team_member_add_task(team_id, user_info):
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
         )
     except Exception as e:
-        verbose_proxy_logger.debug("[Non-Blocking] Error trying to add sso user to db: %s", e)
+        verbose_proxy_logger.warning("SSO login could not add user %s to team %s: %s", user_info.user_id, team_id, e)
 
 
-async def add_missing_team_member(user_info: NewUserResponse | LiteLLM_UserTable, sso_teams: list[str]):
+async def _upsert_sso_team(team_id: str, prisma_client: PrismaClient, user_api_key_cache: UserApiKeyCache) -> object:
+    return await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        check_db_only=True,
+        team_id_upsert=True,
+    )
+
+
+async def add_missing_team_member(
+    user_info: NewUserResponse | LiteLLM_UserTable,
+    sso_teams: list[str],
+    team_id_to_upsert: str | None = None,
+    upsert_team: Callable[[str], Awaitable[object]] | None = None,
+):
     """
     - Get missing teams (diff b/w user_info.team_ids and sso_teams)
     - Add missing user to missing teams
@@ -1833,7 +1865,10 @@ async def add_missing_team_member(user_info: NewUserResponse | LiteLLM_UserTable
     missing_teams: Final = set(sso_teams) - set(user_teams)
     missing_teams_list: Final = list(missing_teams)
     tasks = []
-    tasks = [create_team_member_add_task(team_id, user_info) for team_id in missing_teams_list]
+    tasks = [
+        create_team_member_add_task(team_id, user_info, upsert_team if team_id == team_id_to_upsert else None)
+        for team_id in missing_teams_list
+    ]
 
     try:
         await asyncio.gather(*tasks)
@@ -1941,6 +1976,8 @@ async def get_user_info_from_db(
         await SSOAuthenticationHandler.add_user_to_teams_from_sso_response(
             result=result,
             user_info=user_info,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
         )
 
         return user_info
@@ -3567,6 +3604,8 @@ class SSOAuthenticationHandler:
     async def add_user_to_teams_from_sso_response(
         result: CustomOpenID | OpenID | dict | None,
         user_info: NewUserResponse | LiteLLM_UserTable | None,
+        prisma_client: PrismaClient,
+        user_api_key_cache: UserApiKeyCache,
     ):
         """
         Adds the user as a team member to the teams specified in the SSO responses `team_ids` field
@@ -3578,7 +3617,12 @@ class SSOAuthenticationHandler:
             verbose_proxy_logger.debug("User not found in LiteLLM DB, skipping team member addition")
             return
         sso_teams: Final = result.team_ids if isinstance(result, CustomOpenID) else []
-        await add_missing_team_member(user_info=user_info, sso_teams=sso_teams)
+        await add_missing_team_member(
+            user_info=user_info,
+            sso_teams=sso_teams,
+            team_id_to_upsert=result.team_id_to_upsert if isinstance(result, CustomOpenID) else None,
+            upsert_team=partial(_upsert_sso_team, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache),
+        )
 
     @staticmethod
     def verify_user_in_restricted_sso_group(

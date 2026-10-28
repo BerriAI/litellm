@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import ExitStack, asynccontextmanager
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -17,7 +17,7 @@ from pydantic import SecretStr
 import litellm
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse, ProxyException
+from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_UserTable, NewUserResponse, ProxyException
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
@@ -285,6 +285,13 @@ def test_get_microsoft_callback_response(stubbed_graph_api):
     assert sso_assertion.refresh_token is not None
     assert sso_assertion.refresh_token.get_secret_value() == "msft-refresh-token"
     assert sso_assertion.issuer == "https://idp.example.com"
+
+
+
+def _jwt_handler_double() -> MagicMock:
+    handler: Final = MagicMock(spec=JWTHandler)
+    handler.litellm_jwtauth = LiteLLM_JWTAuth()
+    return handler
 
 
 GRAPH_ERROR_BODIES: Final = (
@@ -1158,7 +1165,7 @@ def test_generic_response_convertor_normalizes_email():
     }
 
     # Mock JWT handler
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     result = generic_response_convertor(
@@ -2226,7 +2233,7 @@ async def test_get_generic_sso_response_with_additional_headers():
 
     # Arrange
     mock_request = MagicMock(spec=Request)
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     generic_client_id = "test_client_id"
@@ -2299,7 +2306,7 @@ async def test_get_generic_sso_response_with_empty_headers():
 
     # Arrange
     mock_request = MagicMock(spec=Request)
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     generic_client_id = "test_client_id"
@@ -2359,8 +2366,8 @@ async def test_get_generic_sso_response_includes_token_claims_when_enabled(monke
     from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
 
     mock_request = MagicMock(spec=Request)
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
-    mock_sso_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
+    mock_sso_jwt_handler = _jwt_handler_double()
     mock_sso_jwt_handler.get_all_jwt_team_ids.return_value = ["team-from-userinfo"]
     mock_sso_jwt_handler.get_team_ids_from_jwt.return_value = []
 
@@ -2435,8 +2442,8 @@ async def test_get_generic_sso_response_does_not_include_token_claims_when_disab
     from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
 
     mock_request = MagicMock(spec=Request)
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
-    mock_sso_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
+    mock_sso_jwt_handler = _jwt_handler_double()
     mock_sso_jwt_handler.get_all_jwt_team_ids.return_value = ["team-from-userinfo"]
     mock_sso_jwt_handler.get_team_ids_from_jwt.return_value = []
     access_token = pyjwt.encode({"upn": "token-user@example.com"}, "test-secret", algorithm="HS256")
@@ -2578,7 +2585,7 @@ async def test_get_generic_sso_response_pkce_merges_token_claims_and_excludes_cr
     ):
         result, received_response, _, _ = await get_generic_sso_response(
             request=request,
-            jwt_handler=MagicMock(spec=JWTHandler),
+            jwt_handler=_jwt_handler_double(),
             generic_client_id="test-client",
             redirect_url="http://test.com/callback",
             sso_jwt_handler=None,
@@ -2600,7 +2607,7 @@ async def test_get_generic_sso_response_ignores_opaque_and_empty_token_claims(mo
     from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
 
     mock_request = MagicMock(spec=Request)
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     userinfo = {
         "preferred_username": "userinfo-user",
         "email": "userinfo@example.com",
@@ -4796,7 +4803,7 @@ class TestProcessSSOJWTAccessToken:
     @pytest.fixture
     def mock_jwt_handler(self):
         """Create a mock JWT handler for testing"""
-        mock_handler = MagicMock(spec=JWTHandler)
+        mock_handler = _jwt_handler_double()
         mock_handler.get_team_ids_from_jwt.return_value = ["team1", "team2", "team3"]
         return mock_handler
 
@@ -5183,7 +5190,7 @@ class TestGenericResponseConvertorNestedAttributes:
         from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
 
         # Mock JWT handler
-        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler = _jwt_handler_double()
         mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
         # Payload with nested attributes structure
@@ -5254,7 +5261,7 @@ class TestGenericResponseConvertorUserRole:
         from litellm.proxy._types import LitellmUserRoles
         from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
 
-        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler = _jwt_handler_double()
         mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
         sso_response = {
@@ -5284,7 +5291,7 @@ class TestGenericResponseConvertorUserRole:
         """
         from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
 
-        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler = _jwt_handler_double()
         mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
         sso_response = {
@@ -6659,11 +6666,16 @@ class TestAddMissingTeamMember:
             await SSOAuthenticationHandler.add_user_to_teams_from_sso_response(
                 result=sso_result,
                 user_info=new_user_info,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
             )
 
             # Verify add_missing_team_member was called with correct args
             mock_add_member.assert_called_once_with(
-                user_info=new_user_info, sso_teams=["entra-group-1", "entra-group-2"]
+                user_info=new_user_info,
+                sso_teams=["entra-group-1", "entra-group-2"],
+                team_id_to_upsert=None,
+                upsert_team=ANY,
             )
 
     @pytest.mark.asyncio
@@ -6677,7 +6689,7 @@ class TestAddMissingTeamMember:
 
         team_member_calls = []
 
-        async def track_team_member_add(team_id, user_info):
+        async def track_team_member_add(team_id, user_info, upsert_team=None):
             team_member_calls.append({"team_id": team_id, "user_id": user_info.user_id})
 
         # New SSO user with Entra groups
@@ -6746,7 +6758,7 @@ class TestAddMissingTeamMember:
 
         added_teams = []
 
-        async def mock_create_task(team_id, user):
+        async def mock_create_task(team_id, user, upsert_team=None):
             added_teams.append(team_id)
 
         with patch(
@@ -7683,7 +7695,7 @@ def test_generic_response_convertor_with_extra_attributes(monkeypatch):
         "custom_field3": {"nested": "data"},
     }
 
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     result = generic_response_convertor(
@@ -7717,7 +7729,7 @@ def test_generic_response_convertor_without_extra_attributes(monkeypatch):
         "custom_field2": "value2",
     }
 
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     result = generic_response_convertor(
@@ -7745,7 +7757,7 @@ def test_generic_response_convertor_extra_attributes_with_nested_paths(monkeypat
         "org_info": {"department": "Engineering", "manager": "Jane Smith"},
     }
 
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     result = generic_response_convertor(
@@ -7772,7 +7784,7 @@ def test_generic_response_convertor_extra_attributes_missing_field(monkeypatch):
         "email": "user@example.com",
     }
 
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     result = generic_response_convertor(
@@ -8651,7 +8663,7 @@ class TestPKCEStateCookieBinding:
         ):
             await get_generic_sso_response(
                 request=mock_request,
-                jwt_handler=MagicMock(spec=JWTHandler),
+                jwt_handler=_jwt_handler_double(),
                 generic_client_id="cid",
                 redirect_url="https://proxy.example.com/sso/callback",
                 sso_jwt_handler=None,
@@ -8703,7 +8715,7 @@ class TestPKCEStateCookieBinding:
         ):
             await get_generic_sso_response(
                 request=mock_request,
-                jwt_handler=MagicMock(spec=JWTHandler),
+                jwt_handler=_jwt_handler_double(),
                 generic_client_id="cid",
                 redirect_url="https://proxy.example.com/sso/callback",
                 sso_jwt_handler=None,
@@ -8766,7 +8778,7 @@ class TestPKCEStateCookieBinding:
                 },
             ),
         ):
-            jwt_handler = MagicMock(spec=JWTHandler)
+            jwt_handler = _jwt_handler_double()
             jwt_handler.get_team_ids_from_jwt.return_value = []
             result, _, _, _ = await get_generic_sso_response(
                 request=mock_request,
@@ -8873,7 +8885,7 @@ async def test_debug_sso_callback_renders_full_jwt_claims():
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        patch("litellm.proxy.proxy_server.jwt_handler", MagicMock(spec=JWTHandler)),
+        patch("litellm.proxy.proxy_server.jwt_handler", _jwt_handler_double()),
     ):
         # Microsoft / Google envs may leak in from other tests — ensure only
         # the generic path runs.
@@ -8959,7 +8971,7 @@ async def test_debug_sso_callback_handles_missing_raw_response():
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        patch("litellm.proxy.proxy_server.jwt_handler", MagicMock(spec=JWTHandler)),
+        patch("litellm.proxy.proxy_server.jwt_handler", _jwt_handler_double()),
     ):
         for var in ("GENERIC_CLIENT_ID", "GOOGLE_CLIENT_ID"):
             os.environ.pop(var, None)
@@ -9010,7 +9022,7 @@ async def _render_debug_page(provider_env, id_jag_registered, force_inert=False)
         patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: debug endpoint reads proxy globals
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: debug endpoint reads proxy DB
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),  # test-quality-ok: debug endpoint reads proxy globals
-        patch("litellm.proxy.proxy_server.jwt_handler", MagicMock(spec=JWTHandler)),  # test-quality-ok: debug endpoint reads proxy globals
+        patch("litellm.proxy.proxy_server.jwt_handler", _jwt_handler_double()),  # test-quality-ok: debug endpoint reads proxy globals
     ]
     if force_inert:
         stack.append(
@@ -9375,7 +9387,7 @@ async def test_pkce_arm_captures_sso_assertion():
             },
         ),
     ):
-        jwt_handler = MagicMock(spec=JWTHandler)
+        jwt_handler = _jwt_handler_double()
         jwt_handler.get_team_ids_from_jwt.return_value = []
         result, received_response, _, sso_assertion = await get_generic_sso_response(
             request=mock_request,
@@ -9401,7 +9413,7 @@ async def test_verify_and_process_arm_captures_sso_assertion():
 
     id_token = _ema_id_token()
     mock_request = MagicMock(spec=Request)
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     mock_sso_instance = MagicMock()
@@ -9466,7 +9478,7 @@ def _generic_sso_callback_request() -> Request:
 
 
 def _generic_sso_jwt_handler() -> MagicMock:
-    jwt_handler = MagicMock(spec=JWTHandler)
+    jwt_handler = _jwt_handler_double()
     jwt_handler.get_team_ids_from_jwt.return_value = []
     return jwt_handler
 
@@ -10930,3 +10942,66 @@ async def test_cli_sso_login_never_serves_the_admin_login_form_on_a_ui_disabled_
     body = response.body.decode()
     assert "Admin UI is Disabled" in body
     assert 'name="username"' not in body
+
+
+def _upsert_jwt_handler(**jwtauth: object) -> JWTHandler:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        prisma_client=None, user_api_key_cache=DualCache(), litellm_jwtauth=LiteLLM_JWTAuth(**jwtauth)
+    )
+    return handler
+
+
+@pytest.mark.parametrize(
+    ("jwtauth", "userinfo", "expected_team_ids", "expected_upsert"),
+    [
+        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": "finance"}, ["finance"], "finance"),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": False}, {"dept": "finance"}, ["finance"], None),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {}, [], None),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": ["a", "b"]}, ["a", "b"], None),
+        (
+            {"team_id_jwt_field": "dept", "team_id_upsert": True, "team_id_default": "everyone"},
+            {},
+            [],
+            None,
+        ),
+        (
+            {"team_ids_jwt_field": "groups", "team_id_upsert": True},
+            {"groups": ["g1", "g2"]},
+            ["g1", "g2"],
+            None,
+        ),
+        (
+            {"team_ids_jwt_field": "groups", "team_id_jwt_field": "dept", "team_id_upsert": True},
+            {"groups": ["g1"], "dept": "finance"},
+            ["g1", "finance"],
+            "finance",
+        ),
+    ],
+    ids=[
+        "upsert-on",
+        "upsert-off",
+        "claim-missing",
+        "list-valued-claim-join-only",
+        "default-team-not-upserted",
+        "plural-claim-join-only",
+        "mixed",
+    ],
+)
+def test_generic_sso_login_upserts_only_the_team_id_jwt_field_claim(
+    jwtauth: dict[str, object],
+    userinfo: dict[str, object],
+    expected_team_ids: list[str],
+    expected_upsert: str | None,
+) -> None:
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    result: Final = generic_response_convertor(
+        response={"preferred_username": "alice", "email": "alice@example.com", **userinfo},
+        jwt_handler=_upsert_jwt_handler(**jwtauth),
+    )
+
+    assert (result.team_ids, result.team_id_to_upsert) == (expected_team_ids, expected_upsert)
