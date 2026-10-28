@@ -15,11 +15,11 @@ import os
 import posixpath
 import re
 import sys
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast
 
 import httpx
 import openai
@@ -50,6 +50,7 @@ from litellm.constants import (
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
 from litellm.llms.azure.passthrough.transformation import (
     foreign_azure_deployment,
@@ -72,7 +73,7 @@ from litellm.llms.oss_decision import OssDecisionProvider, oss_connection, valid
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, is_provider_error
 from litellm.proxy._types import *
-from litellm.proxy.auth.auth_checks import enforced_model_allowlists
+from litellm.proxy.auth.auth_checks import can_agent_call_model, can_key_call_resolved_model
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
@@ -80,6 +81,7 @@ from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy modul
     get_bearer_token,
     is_no_auth_dev_mode,
     user_api_key_auth,
+    user_api_key_auth_accepted_websocket_for_model,
     user_api_key_auth_websocket,
     user_api_key_auth_websocket_for_model,
 )
@@ -115,8 +117,16 @@ from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
     stream_usage_relay,
     without_injected_usage_frames,
 )
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_websocket_passthrough_logging_handler import (
+    openai_websocket_frame_kind,
+)
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
+    WebsocketFrameModelAllowed,
+    WebsocketFrameModelGate,
+    WebsocketFrameModelRefused,
+    WebsocketFrameModelVerdict,
+    WebsocketUpstreamFrameClassifier,
     create_pass_through_route,
     create_websocket_passthrough_route,
     websocket_passthrough_request,
@@ -180,7 +190,7 @@ def is_passthrough_request_using_router_model(request_body: dict, llm_router: li
     """
     try:
         model: Final = request_body.get("model")
-        return is_known_model(model, llm_router)
+        return isinstance(model, str) and is_known_model(model, llm_router)
     except Exception:
         return False
 
@@ -210,9 +220,8 @@ def is_passthrough_request_streaming(request_body: object) -> bool:
     A JSON body need not be an object, so a list or scalar can reach here; it
     carries no streaming flag.
     """
-    if not isinstance(request_body, dict):
-        return False
-    return bool(request_body.get("stream", False))
+    body: Final = as_str_mapping(request_body)
+    return body is not None and bool(body.get("stream", False))
 
 
 def _optional_str(value: object) -> str | None:
@@ -3274,19 +3283,6 @@ def _join_url_paths(base_url: httpx.URL, path: str, custom_llm_provider: litellm
     return joined_path_str
 
 
-_OPENAI_WS_ALL_MODEL_ACCESS: Final = frozenset(
-    {
-        SpecialModelNames.all_proxy_models.value,
-        SpecialModelNames.all_team_models.value,
-        "*",
-    }
-)
-
-
-def _has_model_restrictions(model_allowlists: tuple[Sequence[str], ...]) -> bool:
-    return any(str(model) not in _OPENAI_WS_ALL_MODEL_ACCESS for allowlist in model_allowlists for model in allowlist)
-
-
 @dataclass(frozen=True, slots=True)
 class _OpenAIWebsocketRefusal:
     close_reason: str
@@ -3303,19 +3299,16 @@ class _OpenAIWebsocketErrorFrame(TypedDict):
     error: ReadOnly[_OpenAIWebsocketErrorDetail]
 
 
+_OPENAI_WS_UNAVAILABLE_AUTH_REFUSAL: Final = (
+    "This gateway could not authorize the model named in this frame, so the session was closed. Try again, "
+    "and ask a proxy admin to check the gateway logs if it keeps happening."
+)
+
 _OPENAI_WS_DISABLED_REFUSAL: Final = _OpenAIWebsocketRefusal(
     close_reason="OpenAI websocket passthrough is disabled",
     message=(
         "OpenAI websocket passthrough is disabled on this gateway. A proxy admin can turn it on by "
         "setting general_settings.enable_openai_websocket_passthrough to true."
-    ),
-)
-
-_OPENAI_WS_MODEL_RESTRICTED_REFUSAL: Final = _OpenAIWebsocketRefusal(
-    close_reason="Keys with model restrictions cannot use OpenAI websocket passthrough",
-    message=(
-        "Keys with model restrictions cannot use OpenAI websocket passthrough, because this route "
-        "relays frames to the provider without reading which model they ask for."
     ),
 )
 
@@ -3327,19 +3320,9 @@ def _is_openai_websocket_passthrough_enabled(general_settings: Mapping[str, obje
     return setting is True
 
 
-class _OpenAIWebsocketModelAllowlists(Protocol):
-    async def __call__(self, valid_token: UserAPIKeyAuth, /) -> tuple[Sequence[str], ...]: ...
-
-
-async def _openai_websocket_refusal(
-    user_api_key_dict: UserAPIKeyAuth,
-    general_settings: Mapping[str, object],
-    model_allowlists: _OpenAIWebsocketModelAllowlists,
-) -> _OpenAIWebsocketRefusal | None:
+def _openai_websocket_refusal(general_settings: Mapping[str, object]) -> _OpenAIWebsocketRefusal | None:
     if not _is_openai_websocket_passthrough_enabled(general_settings):
         return _OPENAI_WS_DISABLED_REFUSAL
-    if _has_model_restrictions(await model_allowlists(user_api_key_dict)):
-        return _OPENAI_WS_MODEL_RESTRICTED_REFUSAL
     return None
 
 
@@ -3354,6 +3337,8 @@ class _WebsocketRelay(Protocol):
         forward_headers: bool,
         endpoint: str,
         accept_websocket: bool,
+        client_frame_model_gate: WebsocketFrameModelGate | None = None,
+        upstream_frame_kind: WebsocketUpstreamFrameClassifier | None = None,
     ) -> None: ...
 
 
@@ -3361,18 +3346,62 @@ def _websocket_relay() -> _WebsocketRelay:
     return websocket_passthrough_request
 
 
-def _proxy_model_allowlists() -> _OpenAIWebsocketModelAllowlists:
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+def _proxy_error_type(denial: ProxyException) -> str:
+    return denial.type.value if isinstance(denial.type, ProxyErrorTypes) else denial.type
 
-    async def resolve(valid_token: UserAPIKeyAuth, /) -> tuple[Sequence[str], ...]:
-        return await enforced_model_allowlists(
-            valid_token=valid_token,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
 
-    return resolve
+FrameModelAuthorizer: TypeAlias = Callable[[WebSocket, str], Awaitable[UserAPIKeyAuth]]
+
+
+def _frame_model_authorizer() -> FrameModelAuthorizer:
+    return user_api_key_auth_accepted_websocket_for_model
+
+
+def _proxy_frame_model_gate(
+    authorize_frame_model: Annotated[FrameModelAuthorizer, Depends(_frame_model_authorizer)],
+) -> WebsocketFrameModelGate:
+    from litellm.proxy.proxy_server import (
+        llm_model_list,
+        llm_router,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+    from litellm.proxy.spend_tracking.budget_reservation import release_or_invalidate_budget_reservation
+
+    async def authorize(websocket: WebSocket, model: str) -> WebsocketFrameModelAllowed:
+        frame_auth: Final = await authorize_frame_model(websocket, model)
+        access_groups: Final = tuple(frame_auth.matched_model_access_groups or ())
+        try:
+            await can_key_call_resolved_model(
+                model=model, llm_model_list=llm_model_list, valid_token=frame_auth, llm_router=llm_router
+            )
+            await can_agent_call_model(
+                model=model,
+                valid_token=frame_auth,
+                llm_router=llm_router,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        finally:
+            await release_or_invalidate_budget_reservation(budget_reservation=frame_auth.budget_reservation)
+        return WebsocketFrameModelAllowed(access_groups=access_groups)
+
+    async def gate(websocket: WebSocket, model: str, /) -> WebsocketFrameModelVerdict:
+        try:
+            return await authorize(websocket, model)
+        except ProxyException as denial:
+            return WebsocketFrameModelRefused(message=denial.message, error_type=_proxy_error_type(denial))
+        except HTTPException as denial:
+            return WebsocketFrameModelRefused(message=str(denial.detail), error_type="invalid_request_error")
+        except litellm.BudgetExceededError as exhausted:
+            return WebsocketFrameModelRefused(message=exhausted.message, error_type="budget_exceeded")
+        except Exception:  # noqa: BLE001  # fail closed: a gate that cannot answer refuses, and says so in band
+            verbose_proxy_logger.exception("OpenAI websocket passthrough: the frame model gate failed on %s", model)
+            return WebsocketFrameModelRefused(message=_OPENAI_WS_UNAVAILABLE_AUTH_REFUSAL, error_type="server_error")
+
+    return gate
 
 
 def _negotiated_websocket_subprotocol(websocket: WebSocket) -> str | None:
@@ -3392,12 +3421,12 @@ async def openai_websocket_proxy_route(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
     general_settings: Annotated[Mapping[str, object], Depends(_proxy_general_settings)],
     relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
-    model_allowlists: Annotated[_OpenAIWebsocketModelAllowlists, Depends(_proxy_model_allowlists)],
+    frame_model_gate: Annotated[WebsocketFrameModelGate, Depends(_proxy_frame_model_gate)],
 ) -> None:
     """WebSocket passthrough for OpenAI prefixes (realtime / responses.connect)."""
     negotiated_subprotocol: Final = _negotiated_websocket_subprotocol(websocket)
 
-    refusal: Final = await _openai_websocket_refusal(user_api_key_dict, general_settings, model_allowlists)
+    refusal: Final = _openai_websocket_refusal(general_settings)
     if refusal is not None:
         await websocket.accept(subprotocol=negotiated_subprotocol)
         error_frame: Final[_OpenAIWebsocketErrorFrame] = {
@@ -3451,6 +3480,8 @@ async def openai_websocket_proxy_route(
         forward_headers=False,
         endpoint=websocket.url.path,
         accept_websocket=False,
+        client_frame_model_gate=frame_model_gate,
+        upstream_frame_kind=openai_websocket_frame_kind,
     )
 
 
@@ -3696,7 +3727,8 @@ async def _tinyfish_json_object_field_names(request: Request) -> frozenset[str] 
         parsed: Final = _DECODED_JSON.validate_python(json.loads(raw_body))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
-    return frozenset(parsed) if isinstance(parsed, dict) else None
+    fields: Final = as_str_mapping(parsed)
+    return None if fields is None else frozenset(fields)
 
 
 def _tinyfish_route_timeout() -> float | None:
