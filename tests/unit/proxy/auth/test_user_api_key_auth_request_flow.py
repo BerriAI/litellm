@@ -5290,11 +5290,12 @@ async def _run_centralized_checks_for_end_user(
             value=end_user,
             model_type=LiteLLM_EndUserTable,
         )
-    await user_api_key_cache.async_set_cache(
-        key="default_end_user_budget:eu-default",
-        value=LiteLLM_BudgetTable(budget_id="eu-default", model_max_budget=_END_USER_MODEL_CAPS),
-        model_type=LiteLLM_BudgetTable,
-    )
+    for budget_id in ("eu-default", "eu-key-budget"):
+        await user_api_key_cache.async_set_cache(
+            key=f"default_end_user_budget:{budget_id}",
+            value=LiteLLM_BudgetTable(budget_id=budget_id, model_max_budget=_END_USER_MODEL_CAPS),
+            model_type=LiteLLM_BudgetTable,
+        )
     await user_api_key_cache.async_set_cache(
         key="admin",
         value=LiteLLM_UserTable(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
@@ -5455,6 +5456,53 @@ async def test_centralized_common_checks_enforces_the_end_users_model_max_budget
             model=model,
             route=route,
             default_budget_id="eu-default",
+            user_custom_auth=None,
+        )
+    assert token.end_user_model_max_budget == _END_USER_MODEL_CAPS
+
+
+def _virtual_key_token_assigning_end_users_a_budget() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="sk-test", token="hashed", end_user_id="eu-1", metadata={"end_user_budget_id": "eu-key-budget"}
+    )
+
+
+@pytest.mark.parametrize(
+    ("make_token", "make_end_user"),
+    [
+        pytest.param(
+            _virtual_key_token_for_end_user,
+            _end_user_linked_to_the_capped_budget,
+            id="end-users-own-budget",
+        ),
+        pytest.param(
+            _virtual_key_token_assigning_end_users_a_budget,
+            _end_user_on_the_proxy_default_budget,
+            id="keys-end-user-budget",
+        ),
+        pytest.param(
+            _virtual_key_token_assigning_end_users_a_budget,
+            _no_end_user_row_yet,
+            id="keys-end-user-budget-for-a-new-end-user",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_centralized_common_checks_enforces_the_end_users_model_max_budget_without_a_proxy_default(
+    monkeypatch: pytest.MonkeyPatch,
+    make_token: Callable[[], UserAPIKeyAuth],
+    make_end_user: Callable[[], LiteLLM_EndUserTable | None],
+) -> None:
+    token: Final = make_token()
+    with pytest.raises(litellm.BudgetExceededError):
+        await _run_centralized_checks_for_end_user(
+            monkeypatch=monkeypatch,
+            token=token,
+            end_user=make_end_user(),
+            gpt_4o_spend=0.0001,
+            model="gpt-4o",
+            route="/v1/chat/completions",
+            default_budget_id=None,
             user_custom_auth=None,
         )
     assert token.end_user_model_max_budget == _END_USER_MODEL_CAPS
