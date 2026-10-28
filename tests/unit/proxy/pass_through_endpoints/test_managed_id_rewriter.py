@@ -3,7 +3,9 @@ import json
 from collections.abc import AsyncIterator, Iterable
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from prisma.errors import PrismaError
 
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.managed_id_codec import(
@@ -17,6 +19,7 @@ from litellm.proxy.pass_through_endpoints.managed_id_rewriter import(
     _MAX_RAW_ID_GUARD_LOOKUPS,
     _passthrough_provider_marker,
     _resolve_one,
+    addressed_response_id_issuance,
     is_passthrough_list_route,
     list_passthrough_ids_from_db,
     rewrite_body_ids,
@@ -1708,6 +1711,127 @@ class TestRawProviderIdGuardBudget:
             await rewrite_query_ids(params, "openai", _user_passthrough_managed("attacker", "attacker-team"), pc, None)
         assert exc_info.value.status_code == 400
         assert pc.db.litellm_managedfiletable.find_many.call_count == _MAX_RAW_ID_GUARD_LOOKUPS
+
+
+UNISSUED_RESPONSE_ID = "resp_0000000000000000unissued"
+
+
+def _issued_count(issued: int) -> MagicMock:
+    pc = _prisma_client_passthrough_managed()
+    pc.db.litellm_managedobjecttable.count = AsyncMock(return_value=issued)
+    return pc
+
+
+class TestAddressedResponseIdIssuance:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("path", "body"),
+        [
+            (f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}),
+            (f"/v1/responses/{UNISSUED_RESPONSE_ID}/input_items", {}),
+            (f"/v1/responses/{UNISSUED_RESPONSE_ID}/cancel", {}),
+            (f"/openai/responses/{UNISSUED_RESPONSE_ID}", {}),
+            ("/v1/responses/compact", {"model": "gpt-5.6", "previous_response_id": UNISSUED_RESPONSE_ID}),
+            ("/v1/responses", {"model": "gpt-5.6", "previous_response_id": UNISSUED_RESPONSE_ID}),
+        ],
+    )
+    async def test_response_id_without_a_passthrough_row_is_unissued(self, path, body):
+        pc = _issued_count(0)
+
+        assert await addressed_response_id_issuance(path, body, "openai", pc) == "unissued"
+        pc.db.litellm_managedobjecttable.count.assert_awaited_once_with(
+            where={"model_object_id": {"in": [f"passthrough:openai:{UNISSUED_RESPONSE_ID}"]}}
+        )
+
+    @pytest.mark.asyncio
+    async def test_response_id_with_a_passthrough_row_is_issued(self):
+        pc = _issued_count(1)
+
+        assert (
+            await addressed_response_id_issuance(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "azure", pc)
+            == "issued"
+        )
+        pc.db.litellm_managedobjecttable.count.assert_awaited_once_with(
+            where={"model_object_id": {"in": [f"passthrough:azure:{UNISSUED_RESPONSE_ID}"]}}
+        )
+
+    @pytest.mark.asyncio
+    async def test_any_unissued_id_among_several_is_unissued(self):
+        issued_id = "resp_1111111111111111issued"
+        pc = _prisma_client_passthrough_managed()
+        pc.db.litellm_managedobjecttable.count = AsyncMock(
+            side_effect=lambda where: sum(key.endswith(issued_id) for key in where["model_object_id"]["in"])
+        )
+
+        assert (
+            await addressed_response_id_issuance(
+                f"/v1/responses/{issued_id}", {"previous_response_id": UNISSUED_RESPONSE_ID}, "openai", pc
+            )
+            == "unissued"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("path", "body"),
+        [
+            ("/v1/responses", {"model": "gpt-5.6", "input": f"what does {UNISSUED_RESPONSE_ID} mean?"}),
+            ("/v1/responses", {"input": [{"role": "user", "content": UNISSUED_RESPONSE_ID}]}),
+            (f"/v1/files/{UNISSUED_RESPONSE_ID}", {}),
+            ("/v1/responses", {"previous_response_id": "msg_not_a_response"}),
+            ("/v1/responses", {}),
+        ],
+    )
+    async def test_requests_that_address_no_response_id_skip_the_lookup(self, path, body):
+        pc = _issued_count(0)
+
+        assert await addressed_response_id_issuance(path, body, "openai", pc) == "issued"
+        pc.db.litellm_managedobjecttable.count.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_managed_ids_are_left_to_the_managed_id_resolver(self):
+        managed_id = new_managed_id("openai", UNISSUED_RESPONSE_ID)
+        pc = _issued_count(0)
+
+        assert (
+            await addressed_response_id_issuance(
+                f"/v1/responses/{managed_id}", {"previous_response_id": managed_id}, "openai", pc
+            )
+            == "issued"
+        )
+        pc.db.litellm_managedobjecttable.count.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("lookup_error", [httpx.ConnectError("db down"), PrismaError("query failed")])
+    async def test_failed_lookup_is_unverified_rather_than_issued_or_unissued(self, lookup_error):
+        pc = _prisma_client_passthrough_managed()
+        pc.db.litellm_managedobjecttable.count = AsyncMock(side_effect=lookup_error)
+
+        assert (
+            await addressed_response_id_issuance(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "openai", pc)
+            == "unverified"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_path_naming_many_response_ids_costs_one_lookup(self):
+        path = "/v1" + "".join(f"/responses/resp_{n:040d}" for n in range(500))
+        pc = _issued_count(0)
+
+        assert await addressed_response_id_issuance(path, {}, "openai", pc) == "unissued"
+        pc.db.litellm_managedobjecttable.count.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_without_a_database_the_pass_through_issues_only_raw_ids_so_none_is_refused(self):
+        assert (
+            await addressed_response_id_issuance(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "openai", None)
+            == "issued"
+        )
+        assert (
+            await addressed_response_id_issuance(
+                "/v1/responses", {"previous_response_id": UNISSUED_RESPONSE_ID}, "openai", None
+            )
+            == "issued"
+        )
+
 
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 class TestFlagOff:
