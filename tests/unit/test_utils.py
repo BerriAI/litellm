@@ -61,6 +61,7 @@ from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams, 
 from litellm.types.utils import (
     CredentialItem,
     ADDRESSED_RESPONSE_ID_FIELD,
+    COMPARISON_RESPONSE_ID_FIELD,
     CallTypes,
     Choices,
     Delta,
@@ -6030,16 +6031,17 @@ def test_get_litellm_params_keys_never_reach_the_provider():
     )
 
 
-def test_addressed_response_id_never_reaches_the_provider():
+@pytest.mark.parametrize("retained_field", [ADDRESSED_RESPONSE_ID_FIELD, COMPARISON_RESPONSE_ID_FIELD])
+def test_retained_response_id_never_reaches_the_provider(retained_field):
     kwargs = {
         "a_real_provider_specific_param": 1,
-        ADDRESSED_RESPONSE_ID_FIELD: "resp_addressed-by-the-client",
+        retained_field: "resp_addressed-by-the-client",
     }
 
     non_default = get_non_default_completion_params(kwargs)
 
     assert non_default == {"a_real_provider_specific_param": 1}, (
-        "the addressed response id leaked into the provider params: "
+        "the retained response id leaked into the provider params: "
         f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
     )
 

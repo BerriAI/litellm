@@ -54,6 +54,7 @@ RoutingStrategyName: TypeAlias = Literal[
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
+COMPARISON_RESPONSE_ID_FIELD: Final = "_litellm_comparison_response_id"
 STREAM_USAGE_INJECTED_FIELD: Final = "_litellm_stream_usage_injected"
 
 WIRE_NAME: Final = "wire_name"
@@ -401,6 +402,7 @@ class ProxyRequestState:
     secret_fields: "SecretFields | None" = None
     trusted_callback_vars: Mapping[str, str] | None = field(default=None, metadata=wire(TRUSTED_CALLBACK_VARS_FIELD))
     addressed_response_id: str | None = field(default=None, metadata=wire(ADDRESSED_RESPONSE_ID_FIELD))
+    comparison_response_id: str | None = field(default=None, metadata=wire(COMPARISON_RESPONSE_ID_FIELD))
     strip_stream_usage: bool | None = field(default=None, metadata=wire("_litellm_strip_stream_usage"))
     stream_usage_injected: bool | None = field(default=None, metadata=wire(STREAM_USAGE_INJECTED_FIELD))
     client_side_timeout: bool | None = None

@@ -14,6 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -23,7 +24,13 @@ from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ResponsesAPIResponse,
 )
-from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, CallTypesLiteral, LLMResponseTypes, SpecialEnums
+from litellm.types.utils import (
+    ADDRESSED_RESPONSE_ID_FIELD,
+    COMPARISON_RESPONSE_ID_FIELD,
+    CallTypesLiteral,
+    LLMResponseTypes,
+    SpecialEnums,
+)
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -42,6 +49,10 @@ _ADDRESSED_RESPONSE_ID_FIELD_BY_CALL_TYPE: Final[Mapping[str, str]] = MappingPro
         "alist_input_items": "response_id",
     }
 )
+
+_PROMPT_CACHE_OPTIONS: Final = "prompt_cache_options"
+_COMPARISON_RESPONSE_ID: Final = "comparison_response_id"
+_NOTHING_AUTHORIZED: Final[Mapping[str, object]] = MappingProxyType({})
 
 _UNMANAGED_RESPONSE_ID_DETAIL: Final = (
     "Forbidden. This response id was not issued by this proxy, so the proxy cannot tell who owns it. "
@@ -104,6 +115,19 @@ def _rewrite_advertised_id(
     return event
 
 
+def _non_empty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _extra_body_with_cache_options(request: Mapping[str, object]) -> Mapping[str, object] | None:
+    extra_body: Final = as_str_mapping(request.get("extra_body"))
+    return extra_body if extra_body is not None and _PROMPT_CACHE_OPTIONS in extra_body else None
+
+
+def _with_comparison_response_id(options: object, comparison_response_id: str) -> Mapping[str, object]:
+    return {**(as_str_mapping(options) or _NOTHING_AUTHORIZED), _COMPARISON_RESPONSE_ID: comparison_response_id}
+
+
 def _is_responses_api_create_route(request_route: str | None) -> bool:
     if request_route is None:
         return False
@@ -128,22 +152,60 @@ class ResponsesIDSecurity(CustomLogger):
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: "DualCache",
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         addressed_id_field: Final = _ADDRESSED_RESPONSE_ID_FIELD_BY_CALL_TYPE.get(call_type)
         if addressed_id_field is None:
             return None
-        retained_id: Final = data.get(ADDRESSED_RESPONSE_ID_FIELD)
-        addressed_id: Final = (
-            retained_id if isinstance(retained_id, str) and retained_id else data.get(addressed_id_field)
-        )
-        if not isinstance(addressed_id, str) or not addressed_id:
-            return data
-        authorized_id: Final = self.authorize_response_id(addressed_id, user_api_key_dict)
-        data[addressed_id_field] = authorized_id
-        data[ADDRESSED_RESPONSE_ID_FIELD] = addressed_id
+        authorized_fields: Final = {
+            **self._authorized_addressed_id(data, addressed_id_field, user_api_key_dict),
+            **(
+                self._authorized_comparison_reference(data, user_api_key_dict)
+                if call_type == "aresponses"
+                else _NOTHING_AUTHORIZED
+            ),
+        }
+        data.update(authorized_fields)
         return data
+
+    def _authorized_addressed_id(
+        self,
+        request: Mapping[str, object],
+        addressed_id_field: str,
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> Mapping[str, object]:
+        addressed_id: Final = _non_empty_str(request.get(ADDRESSED_RESPONSE_ID_FIELD)) or _non_empty_str(
+            request.get(addressed_id_field)
+        )
+        if addressed_id is None:
+            return _NOTHING_AUTHORIZED
+        return {
+            addressed_id_field: self.authorize_response_id(addressed_id, user_api_key_dict),
+            ADDRESSED_RESPONSE_ID_FIELD: addressed_id,
+        }
+
+    def _authorized_comparison_reference(
+        self,
+        request: Mapping[str, object],
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> Mapping[str, object]:
+        extra_body: Final = _extra_body_with_cache_options(request)
+        options: Final = (request if extra_body is None else extra_body).get(_PROMPT_CACHE_OPTIONS)
+        comparison_id: Final = _non_empty_str(request.get(COMPARISON_RESPONSE_ID_FIELD)) or _non_empty_str(
+            (as_str_mapping(options) or _NOTHING_AUTHORIZED).get(_COMPARISON_RESPONSE_ID)
+        )
+        if comparison_id is None:
+            return _NOTHING_AUTHORIZED
+        authorized_options: Final = _with_comparison_response_id(
+            options, self.authorize_response_id(comparison_id, user_api_key_dict)
+        )
+        placed_options: Final = (
+            {_PROMPT_CACHE_OPTIONS: authorized_options}
+            if extra_body is None
+            else {"extra_body": {**extra_body, _PROMPT_CACHE_OPTIONS: authorized_options}}
+        )
+        return {**placed_options, COMPARISON_RESPONSE_ID_FIELD: comparison_id}
 
     def authorize_response_id(
         self,

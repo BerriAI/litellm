@@ -13,8 +13,10 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     ImageGenerationPartialImageEvent,
     IncompleteDetails,
@@ -2242,6 +2244,168 @@ class TestPromptCacheOptionsOnResponsesPath:
             "text": "hi",
             "prompt_cache_breakpoint": {"mode": "explicit"},
         }
+
+
+_COMPARED_RESPONSE_ID: Final = "resp_0123456789abcdef0123456789abcdef"
+
+
+def _litellm_response_id(provider: str, response_id: str, model_id: str | None = None) -> str:
+    return ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider=provider, model_id=model_id, response_id=response_id
+    )
+
+
+_WRAPPED_OPENAI_ID: Final = _litellm_response_id("openai", _COMPARED_RESPONSE_ID)
+
+
+def _sent_comparison_options(config: OpenAIResponsesAPIConfig, options: Mapping[str, object]) -> tuple[object, object]:
+    request: Final = config.transform_responses_api_request(
+        model="gpt-6.1-terra",
+        input="hi",
+        response_api_optional_request_params={"prompt_cache_options": options},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    extra_body: Final = config.transform_extra_body(
+        extra_body={"prompt_cache_options": options},
+        request={},
+        model="gpt-6.1-terra",
+        litellm_params=GenericLiteLLMParams(),
+    )
+    return request["prompt_cache_options"], extra_body["prompt_cache_options"]
+
+
+class TestComparisonResponseIdReachesTheProviderAsItsOwnId:
+    def test_wrapped_id_in_top_level_options_is_sent_as_the_provider_id(self):
+        options: Final = {"mode": "explicit", "ttl": "30m", "comparison_response_id": _WRAPPED_OPENAI_ID}
+        as_sent: Final = dict(options)
+
+        request: Final = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-6.1-terra",
+            input="hi",
+            response_api_optional_request_params={"prompt_cache_options": options, "temperature": 0.2},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["prompt_cache_options"] == {
+            "mode": "explicit",
+            "ttl": "30m",
+            "comparison_response_id": _COMPARED_RESPONSE_ID,
+        }
+        assert request["temperature"] == 0.2
+        assert options == as_sent
+
+    def test_wrapped_id_in_extra_body_options_is_sent_as_the_provider_id(self):
+        extra_body: Final = {
+            "prompt_cache_options": {"mode": "explicit", "ttl": "12h", "comparison_response_id": _WRAPPED_OPENAI_ID},
+            "custom_param": "kept",
+        }
+        as_sent: Final = json.loads(json.dumps(extra_body))
+
+        sent: Final = OpenAIResponsesAPIConfig().transform_extra_body(
+            extra_body=extra_body, request={}, model="gpt-6.1-terra", litellm_params=GenericLiteLLMParams()
+        )
+
+        assert sent == {
+            "prompt_cache_options": {"mode": "explicit", "ttl": "12h", "comparison_response_id": _COMPARED_RESPONSE_ID},
+            "custom_param": "kept",
+        }
+        assert extra_body == as_sent
+
+    @pytest.mark.parametrize(
+        "comparison_response_id",
+        [
+            pytest.param(_COMPARED_RESPONSE_ID, id="provider-id"),
+            pytest.param(42, id="not-a-string"),
+            pytest.param(None, id="null"),
+            pytest.param({"id": _WRAPPED_OPENAI_ID}, id="object"),
+            pytest.param("", id="empty"),
+            pytest.param("resp_!!!not-base64!!!", id="not-base64"),
+            pytest.param(_WRAPPED_OPENAI_ID[:-6], id="truncated-wrapper"),
+            pytest.param(_litellm_response_id("azure", _COMPARED_RESPONSE_ID), id="other-provider"),
+            pytest.param("resp_" + _WRAPPED_OPENAI_ID, id="doubled-prefix"),
+            pytest.param(_WRAPPED_OPENAI_ID + "!", id="trailing-junk"),
+            pytest.param(_litellm_response_id("openai", "resp_split;tail"), id="inner-id-does-not-round-trip"),
+        ],
+    )
+    def test_reference_that_does_not_round_trip_as_this_providers_wrapper_is_sent_as_given(
+        self, comparison_response_id: object
+    ):
+        options: Final = {"mode": "explicit", "comparison_response_id": comparison_response_id}
+
+        assert _sent_comparison_options(OpenAIResponsesAPIConfig(), options) == (options, options)
+
+    def test_two_layer_wrapper_loses_only_its_outer_layer(self):
+        inner: Final = _litellm_response_id("openai", _COMPARED_RESPONSE_ID, model_id="deployment-1")
+        options: Final = {"comparison_response_id": _litellm_response_id("openai", inner)}
+
+        assert _sent_comparison_options(OpenAIResponsesAPIConfig(), options) == (
+            {"comparison_response_id": inner},
+            {"comparison_response_id": inner},
+        )
+
+    def test_sdk_pointed_at_a_litellm_proxy_sends_the_proxys_own_id(self):
+        proxy_issued_id: Final = "resp_proxyissuedopaqueencryptedid"
+        options: Final = {"comparison_response_id": _litellm_response_id("litellm_proxy", proxy_issued_id)}
+
+        assert _sent_comparison_options(LiteLLMProxyResponsesAPIConfig(), options) == (
+            {"comparison_response_id": proxy_issued_id},
+            {"comparison_response_id": proxy_issued_id},
+        )
+        assert _sent_comparison_options(OpenAIResponsesAPIConfig(), options) == (options, options)
+
+
+def _completed_response_payload(response_id: str) -> Mapping[str, object]:
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": 1734366691,
+        "status": "completed",
+        "model": "gpt-6.1-terra",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_" + response_id,
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.parametrize("placement", ["top_level", "extra_body"])
+async def test_aresponses_sends_openai_the_original_comparison_response_id(placement: str) -> None:
+    with respx.mock() as router:
+        route: Final = router.post("https://api.openai.com/v1/responses").mock(
+            side_effect=[
+                httpx.Response(status_code=200, json=_completed_response_payload(_COMPARED_RESPONSE_ID)),
+                httpx.Response(status_code=200, json=_completed_response_payload("resp_follow_up")),
+            ]
+        )
+        first: Final = await litellm.aresponses(model="openai/gpt-6.1-terra", api_key="sk-test", input="one")
+        assert isinstance(first, ResponsesAPIResponse)
+        options: Final = {"mode": "explicit", "comparison_response_id": first.id}
+        await litellm.aresponses(
+            model="openai/gpt-6.1-terra",
+            api_key="sk-test",
+            input="two",
+            **(
+                {"prompt_cache_options": options}
+                if placement == "top_level"
+                else {"extra_body": {"prompt_cache_options": options}}
+            ),
+        )
+        calls: Final = route.calls
+
+    sent: Final = TypeAdapter(dict[str, JsonValue]).validate_json(calls[1].request.content)
+    assert first.id != _COMPARED_RESPONSE_ID
+    assert sent["prompt_cache_options"] == {"mode": "explicit", "comparison_response_id": _COMPARED_RESPONSE_ID}
+    assert "previous_response_id" not in sent
 
 
 class TestResponsesSurfaceSharesTheEffortRule:

@@ -686,6 +686,7 @@ class PromptCacheBreakpoint(TypedDict):
 class PromptCacheOptions(TypedDict, total=False):
     mode: ReadOnly[Literal["implicit", "explicit"]]
     ttl: ReadOnly[Literal["30m", "12h"]]
+    comparison_response_id: ReadOnly[str]
 
 
 class ChatCompletionThinkingBlock(TypedDict, total=False):

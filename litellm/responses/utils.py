@@ -773,6 +773,16 @@ class ResponsesAPIRequestUtils:
     _decode_responses_api_response_id = decode_responses_api_response_id
 
     @staticmethod
+    def decode_exact_responses_api_response_id(response_id: str) -> DecodedResponseId | None:
+        decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id)
+        rebuilt: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider=decoded.get("custom_llm_provider"),
+            model_id=decoded.get("model_id"),
+            response_id=decoded.get("response_id", response_id),
+        )
+        return decoded if rebuilt == response_id else None
+
+    @staticmethod
     def _is_litellm_encoded_response_id(response_id: str) -> bool:
         decoded_response_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id)
         return (

@@ -11,7 +11,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook, targets_openai_api
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params, process_response_headers
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params, process_response_headers
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
@@ -38,6 +38,7 @@ from litellm.responses.litellm_completion_transformation.tool_search import (
     tools_with_anthropic_tool_search_mapped,
     tools_without_anthropic_tool_search,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import *
@@ -503,7 +504,37 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             ResponsesAPIRequestParams(model=model, input=replay_safe_input, **response_api_optional_request_params)
         )
 
-        return final_request_params
+        return dict(self._with_original_comparison_response_id(final_request_params))
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        return self._with_original_comparison_response_id(
+            super().transform_extra_body(
+                extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
+            )
+        )
+
+    def _with_original_comparison_response_id(self, body: Mapping[str, object]) -> Mapping[str, object]:
+        options: Final = as_str_mapping(body.get("prompt_cache_options"))
+        original_id: Final = (
+            None if options is None else self._original_response_id(options.get("comparison_response_id"))
+        )
+        if options is None or original_id is None:
+            return body
+        return {**body, "prompt_cache_options": {**options, "comparison_response_id": original_id}}
+
+    def _original_response_id(self, response_id: object) -> str | None:
+        if not isinstance(response_id, str):
+            return None
+        decoded: Final = ResponsesAPIRequestUtils.decode_exact_responses_api_response_id(response_id)
+        if decoded is None or decoded.get("custom_llm_provider") != _provider_name(self.custom_llm_provider):
+            return None
+        return decoded.get("response_id")
 
     def _prepared_input_and_tools(
         self,

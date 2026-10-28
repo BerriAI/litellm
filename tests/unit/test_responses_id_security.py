@@ -4,6 +4,8 @@ Tests for ResponsesIDSecurity hook.
 Tests the security hook that prevents user B from seeing response from user A.
 """
 
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1089,3 +1091,268 @@ class TestClientSuppliedRetainedIdCannotBypassAuthorization:
 
         assert result["response_id"] == "resp_strangerownprovideridcccccccc"
         assert result["response_id"] != victim_provider_id
+
+
+
+_OTHER_PROVIDER_RESPONSE_ID: Final = "resp_fabricatedotherprovideridcccccccccc"
+
+
+def _comparison_request(
+    comparison_response_id: object,
+    previous_response_id: str | None = None,
+    extra_body: Mapping[str, object] | None = None,
+    retained_comparison_response_id: str | None = None,
+) -> dict[str, object]:  # mutable-ok: the hook's contract rewrites the request dict it is handed
+    optional_fields: Final = {
+        "previous_response_id": previous_response_id,
+        "extra_body": extra_body,
+        "_litellm_comparison_response_id": retained_comparison_response_id,
+    }
+    return {
+        "model": "gpt-fake",
+        "prompt_cache_options": {"mode": "explicit", "ttl": "30m", "comparison_response_id": comparison_response_id},
+        **{name: value for name, value in optional_fields.items() if value is not None},
+    }
+
+
+async def _run_create_hook(hook, caller, data, mock_cache):
+    return await hook.async_pre_call_hook(user_api_key_dict=caller, cache=mock_cache, data=data, call_type="aresponses")
+
+
+class TestComparisonResponseIdIsAuthorized:
+    """`prompt_cache_options.comparison_response_id` addresses a stored response the same way `previous_response_id` does."""
+
+    @pytest.mark.asyncio
+    async def test_owner_reference_is_sent_as_the_provider_id(self, mock_cache, salt_key_env):
+        hook: Final = _hook()
+        owner: Final = _auth()
+
+        result: Final = await _run_create_hook(
+            hook, owner, _comparison_request(_issue_managed_id(hook, owner)), mock_cache
+        )
+
+        assert result["prompt_cache_options"] == {
+            "mode": "explicit",
+            "ttl": "30m",
+            "comparison_response_id": _FABRICATED_PROVIDER_RESPONSE_ID,
+        }
+        assert "previous_response_id" not in result
+
+    @pytest.mark.asyncio
+    async def test_owner_reference_does_not_mutate_the_callers_options(self, mock_cache, salt_key_env):
+        hook: Final = _hook()
+        owner: Final = _auth()
+        issued_id: Final = _issue_managed_id(hook, owner)
+        callers_options: Final = {"mode": "explicit", "comparison_response_id": issued_id}
+        callers_extra_body: Final = {"prompt_cache_options": {"comparison_response_id": issued_id}, "custom": 1}
+
+        await _run_create_hook(
+            hook, owner, {"prompt_cache_options": callers_options, "extra_body": callers_extra_body}, mock_cache
+        )
+
+        assert callers_options == {"mode": "explicit", "comparison_response_id": issued_id}
+        assert callers_extra_body == {"prompt_cache_options": {"comparison_response_id": issued_id}, "custom": 1}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("caller", "general_settings"),
+        [
+            pytest.param(_auth(user_id="stranger-user"), {}, id="other-user"),
+            pytest.param(_auth(team_id="stranger-team"), {}, id="other-team"),
+            pytest.param(
+                _auth(user_id="stranger-user"),
+                {"allow_unmanaged_response_ids": True},
+                id="other-user-unmanaged-allowed",
+            ),
+        ],
+    )
+    async def test_someone_elses_reference_is_refused_on_the_first_and_a_repeated_call(
+        self, mock_cache, salt_key_env, caller, general_settings
+    ):
+        hook: Final = _hook(general_settings=general_settings)
+        owner: Final = _auth()
+        issued_id: Final = _issue_managed_id(hook, owner)
+        refused_first: Final = _comparison_request(issued_id)
+        rewritten_for_owner: Final = await _run_create_hook(hook, owner, _comparison_request(issued_id), mock_cache)
+
+        with pytest.raises(HTTPException) as first_call:
+            await _run_create_hook(hook, caller, refused_first, mock_cache)
+        with pytest.raises(HTTPException) as repeated_call:
+            await _run_create_hook(hook, caller, rewritten_for_owner, mock_cache)
+
+        assert (first_call.value.status_code, repeated_call.value.status_code) == (403, 403)
+        assert refused_first == _comparison_request(issued_id)
+
+    @pytest.mark.asyncio
+    async def test_unmanaged_reference_is_refused(self, mock_cache, salt_key_env):
+        data: Final = _comparison_request(_FABRICATED_UNMANAGED_ID)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _run_create_hook(_hook(), _auth(), data, mock_cache)
+
+        assert exc_info.value.status_code == 403
+        assert data == _comparison_request(_FABRICATED_UNMANAGED_ID)
+
+    @pytest.mark.asyncio
+    async def test_owner_repeating_the_hook_still_gets_the_provider_id(self, mock_cache, salt_key_env):
+        hook: Final = _hook()
+        owner: Final = _auth()
+
+        first: Final = await _run_create_hook(
+            hook, owner, _comparison_request(_issue_managed_id(hook, owner)), mock_cache
+        )
+        second: Final = await _run_create_hook(hook, owner, first, mock_cache)
+
+        assert second["prompt_cache_options"]["comparison_response_id"] == _FABRICATED_PROVIDER_RESPONSE_ID
+
+    @pytest.mark.asyncio
+    async def test_extra_body_reference_wins_and_is_the_only_one_rewritten(self, mock_cache, salt_key_env):
+        hook: Final = _hook()
+        owner: Final = _auth()
+        top_level_options: Final = {"mode": "implicit", "comparison_response_id": _FABRICATED_UNMANAGED_ID}
+        data: Final = {
+            "model": "gpt-fake",
+            "prompt_cache_options": top_level_options,
+            "extra_body": {
+                "prompt_cache_options": {"ttl": "12h", "comparison_response_id": _issue_managed_id(hook, owner)},
+                "custom": 1,
+            },
+        }
+
+        result: Final = await _run_create_hook(hook, owner, data, mock_cache)
+
+        assert result["prompt_cache_options"] is top_level_options
+        assert result["prompt_cache_options"] == {
+            "mode": "implicit",
+            "comparison_response_id": _FABRICATED_UNMANAGED_ID,
+        }
+        assert result["extra_body"] == {
+            "prompt_cache_options": {"ttl": "12h", "comparison_response_id": _FABRICATED_PROVIDER_RESPONSE_ID},
+            "custom": 1,
+        }
+
+    @pytest.mark.asyncio
+    async def test_extra_body_without_cache_options_leaves_the_top_level_reference_in_charge(
+        self, mock_cache, salt_key_env
+    ):
+        hook: Final = _hook()
+        owner: Final = _auth()
+        extra_body: Final = {"custom": 1}
+
+        result: Final = await _run_create_hook(
+            hook, owner, _comparison_request(_issue_managed_id(hook, owner), extra_body=extra_body), mock_cache
+        )
+
+        assert result["prompt_cache_options"]["comparison_response_id"] == _FABRICATED_PROVIDER_RESPONSE_ID
+        assert result["extra_body"] is extra_body
+
+    @pytest.mark.asyncio
+    async def test_forged_retained_reference_is_still_authorized(self, mock_cache, salt_key_env):
+        data: Final = _comparison_request(
+            _FABRICATED_UNMANAGED_ID, retained_comparison_response_id=_FABRICATED_UNMANAGED_ID
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _run_create_hook(_hook(), _auth(), data, mock_cache)
+
+        assert exc_info.value.status_code == 403
+        assert data["prompt_cache_options"]["comparison_response_id"] == _FABRICATED_UNMANAGED_ID
+
+    @pytest.mark.asyncio
+    async def test_stranger_forging_their_own_retained_reference_never_compares_against_someone_elses(
+        self, mock_cache, salt_key_env
+    ):
+        hook: Final = _hook()
+        stranger: Final = _auth(user_id="stranger-user", team_id="stranger-team")
+        stranger_id: Final = _issue_managed_id(hook, stranger, provider_response_id=_OTHER_PROVIDER_RESPONSE_ID)
+
+        result: Final = await _run_create_hook(
+            hook,
+            stranger,
+            _comparison_request(_FABRICATED_PROVIDER_RESPONSE_ID, retained_comparison_response_id=stranger_id),
+            mock_cache,
+        )
+
+        assert result["prompt_cache_options"]["comparison_response_id"] == _OTHER_PROVIDER_RESPONSE_ID
+
+    @pytest.mark.asyncio
+    async def test_previous_and_comparison_references_are_authorized_independently(self, mock_cache, salt_key_env):
+        hook: Final = _hook()
+        owner: Final = _auth()
+        data: Final = _comparison_request(
+            _issue_managed_id(hook, owner, provider_response_id=_OTHER_PROVIDER_RESPONSE_ID),
+            previous_response_id=_issue_managed_id(hook, owner),
+        )
+
+        first: Final = await _run_create_hook(hook, owner, data, mock_cache)
+        second: Final = await _run_create_hook(hook, owner, first, mock_cache)
+
+        assert (second["previous_response_id"], second["prompt_cache_options"]["comparison_response_id"]) == (
+            _FABRICATED_PROVIDER_RESPONSE_ID,
+            _OTHER_PROVIDER_RESPONSE_ID,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("comparison_owned", "previous_owned"),
+        [
+            pytest.param(False, True, id="owned-previous-unmanaged-comparison"),
+            pytest.param(True, False, id="unmanaged-previous-owned-comparison"),
+        ],
+    )
+    async def test_either_reference_refused_leaves_the_request_as_sent(
+        self, mock_cache, salt_key_env, comparison_owned, previous_owned
+    ):
+        hook: Final = _hook()
+        owner: Final = _auth()
+        issued_id: Final = _issue_managed_id(hook, owner)
+        as_sent: Final = _comparison_request(
+            issued_id if comparison_owned else _FABRICATED_UNMANAGED_ID,
+            previous_response_id=issued_id if previous_owned else _FABRICATED_UNMANAGED_ID,
+        )
+        data: Final = dict(as_sent)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _run_create_hook(hook, owner, data, mock_cache)
+
+        assert exc_info.value.status_code == 403
+        assert data == as_sent
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "call_type", sorted({*_ADDRESSED_ID_FIELD_BY_CALL_TYPE} - {"aresponses"} | {"acompletion"})
+    )
+    async def test_other_call_types_leave_the_reference_alone(self, mock_cache, salt_key_env, call_type):
+        data: Final = _comparison_request(_FABRICATED_UNMANAGED_ID)
+
+        await _hook().async_pre_call_hook(user_api_key_dict=_auth(), cache=mock_cache, data=data, call_type=call_type)
+
+        assert data == _comparison_request(_FABRICATED_UNMANAGED_ID)
+
+    @pytest.mark.asyncio
+    async def test_proxy_issued_reference_reaches_openai_as_the_raw_response_id(self, mock_cache, salt_key_env):
+        from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+        from litellm.types.router import GenericLiteLLMParams
+
+        hook: Final = _hook()
+        owner: Final = _auth()
+        sdk_wrapped_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id="deployment-1", response_id=_FABRICATED_PROVIDER_RESPONSE_ID
+        )
+
+        authorized: Final = await _run_create_hook(
+            hook,
+            owner,
+            _comparison_request(_issue_managed_id(hook, owner, provider_response_id=sdk_wrapped_id)),
+            mock_cache,
+        )
+        request: Final = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-6.1-terra",
+            input="hi",
+            response_api_optional_request_params={"prompt_cache_options": authorized["prompt_cache_options"]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["prompt_cache_options"]["comparison_response_id"] == _FABRICATED_PROVIDER_RESPONSE_ID

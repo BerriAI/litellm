@@ -25,6 +25,7 @@ from litellm.types import utils as types_utils
 from litellm.types.caching import DynamicCacheControl
 from litellm.types.litellm_params import (
     ADDRESSED_RESPONSE_ID_FIELD,
+    COMPARISON_RESPONSE_ID_FIELD,
     LITELLM_OWNED_ROOTS,
     TRUSTED_CALLBACK_VARS_FIELD,
     CachingOptions,
@@ -264,6 +265,7 @@ INTERNAL_STATE_NAMES: Final = (
     "github_copilot_user_session",
     "litellm_trusted_callback_vars",
     "_litellm_addressed_response_id",
+    "_litellm_comparison_response_id",
     "_litellm_strip_stream_usage",
     "_litellm_stream_usage_injected",
     "client_side_timeout",
@@ -393,6 +395,11 @@ def test_every_owned_name_has_exactly_one_owner() -> None:
             litellm_params.ADDRESSED_RESPONSE_ID_FIELD,
             id="ADDRESSED_RESPONSE_ID_FIELD",
         ),
+        pytest.param(
+            types_utils.COMPARISON_RESPONSE_ID_FIELD,
+            litellm_params.COMPARISON_RESPONSE_ID_FIELD,
+            id="COMPARISON_RESPONSE_ID_FIELD",
+        ),
     ),
 )
 def test_types_utils_still_exports_the_field_constant(exported: str, declared: str) -> None:
@@ -453,9 +460,10 @@ def test_bedrock_batch_names_concatenate_as_a_tuple() -> None:
 
 
 def test_proxy_stamped_fields_keep_their_wire_names() -> None:
-    assert (TRUSTED_CALLBACK_VARS_FIELD, ADDRESSED_RESPONSE_ID_FIELD) == (
+    assert (TRUSTED_CALLBACK_VARS_FIELD, ADDRESSED_RESPONSE_ID_FIELD, COMPARISON_RESPONSE_ID_FIELD) == (
         "litellm_trusted_callback_vars",
         "_litellm_addressed_response_id",
+        "_litellm_comparison_response_id",
     )
 
 
