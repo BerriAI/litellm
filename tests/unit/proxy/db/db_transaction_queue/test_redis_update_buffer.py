@@ -1,10 +1,12 @@
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import DailyTagSpendTransaction
@@ -449,16 +451,18 @@ async def test_a_nan_spend_parked_by_an_older_version_drains_from_the_pipeline_a
 
 @pytest.mark.asyncio
 async def test_a_nan_spend_parked_by_an_older_version_drains_from_a_daily_key_as_zero(
-    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock
+    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock, caplog: pytest.LogCaptureFixture
 ):
     mock_redis_cache.async_lpop = AsyncMock(
         return_value=[_parked_daily_batch(float("inf")), _parked_daily_batch(0.0042)]
     )
 
-    daily_tag: Final = await redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+    with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+        daily_tag: Final = await redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
 
     assert daily_tag is not None
     assert daily_tag[PARKED_DAILY_KEY]["spend"] == 0.0042
+    assert [record.getMessage() for record in caplog.records if "Infinity" in record.getMessage()] != []
 
 
 @pytest.mark.asyncio

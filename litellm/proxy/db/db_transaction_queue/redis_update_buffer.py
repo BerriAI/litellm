@@ -109,7 +109,10 @@ _ValueT = TypeVar("_ValueT")
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-def _zero_for_non_finite_constant(_constant: str) -> float:
+def _zero_for_non_finite_constant(constant: str) -> float:
+    verbose_proxy_logger.warning(
+        "Redis spend buffer - draining a %s spend an older version parked as 0, its summed spend is lost", constant
+    )
     return 0.0
 
 
