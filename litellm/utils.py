@@ -10418,9 +10418,10 @@ class ProviderConfigManager:
         elif LlmProviders.TENCENT == provider:
             from litellm.llms.tencent.image_generation.transformation import (
                 TencentImageGenerationConfig,
+                is_tokenhub_image_model,
             )
 
-            return TencentImageGenerationConfig()
+            return TencentImageGenerationConfig() if is_tokenhub_image_model(model) else None
         return None
 
     @staticmethod
@@ -10613,8 +10614,11 @@ class ProviderConfigManager:
             from litellm.llms.tencent.image_edit.transformation import (
                 TencentImageEditConfig,
             )
+            from litellm.llms.tencent.image_generation.transformation import (
+                is_tokenhub_image_model,
+            )
 
-            return TencentImageEditConfig()
+            return TencentImageEditConfig() if is_tokenhub_image_model(model) else None
         return None
 
     @staticmethod

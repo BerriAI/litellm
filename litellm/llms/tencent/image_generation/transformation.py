@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
 TOKENHUB_API_BASE: Final = "https://tokenhub-intl.tencentcloudmaas.com/v1"
 TOKENHUB_IMAGE_PATH: Final = "/wand/si-image/generation"
+TOKENHUB_IMAGE_MODEL_PREFIX: Final = "seedream-"
 TOKENHUB_IMAGE_PARAMS: Final[tuple[OpenAIImageGenerationOptionalParams, ...]] = (
     "n",
     "size",
@@ -43,6 +44,8 @@ class _TokenHubImage(BaseModel):
 
     url: str | None = None
     b64_json: str | None = None
+    size: str | None = None
+    output_format: str | None = None
 
 
 class _TokenHubUsage(BaseModel):
@@ -57,6 +60,10 @@ class _TokenHubImageResponse(BaseModel):
     created: int
     data: tuple[_TokenHubImage, ...]
     tokenhub_usage: _TokenHubUsage | None = None
+
+
+def is_tokenhub_image_model(model: str) -> bool:
+    return model.startswith(TOKENHUB_IMAGE_MODEL_PREFIX)
 
 
 def tokenhub_image_url(api_base: str | None) -> str:
@@ -97,9 +104,12 @@ def tokenhub_image_response(raw_response: httpx.Response) -> ImageResponse | Non
     except ValidationError:
         return None
     total_tokens: Final = parsed.tokenhub_usage.total_tokens if parsed.tokenhub_usage is not None else 0
+    first_image: Final = parsed.data[0] if parsed.data else _TokenHubImage()
     return ImageResponse(
         created=parsed.created,
         data=[ImageObject(url=image.url, b64_json=image.b64_json) for image in parsed.data],
+        size=first_image.size,
+        output_format=first_image.output_format,
         usage=ImageUsage(
             input_tokens=0,
             input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=0),

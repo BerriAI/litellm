@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+from typing import Final
 
 import httpx
 import pytest
@@ -8,8 +9,8 @@ import pytest
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
-TOKENHUB_RESPONSE = {
+PNG_BYTES: Final = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+TOKENHUB_RESPONSE: Final[dict[str, object]] = {
     "created": 1792551838,
     "data": [{"output_format": "jpeg", "size": "2048x2048", "url": "https://cos.example/edited.jpg"}],
     "model": "doubao-seedream-5-0-lite",
@@ -18,7 +19,7 @@ TOKENHUB_RESPONSE = {
 }
 
 
-def _client(captured: dict) -> HTTPHandler:
+def _client(captured: dict[str, object]) -> HTTPHandler:
     def respond(request: httpx.Request) -> httpx.Response:
         captured["url"] = str(request.url)
         captured["content_type"] = request.headers.get("content-type")
@@ -29,11 +30,11 @@ def _client(captured: dict) -> HTTPHandler:
     return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
 
 
-def test_edit_sends_uploaded_images_as_data_urls_in_a_json_body():
-    captured = {}
-    png_data_url = f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"
+def test_edit_sends_uploaded_images_as_data_urls_in_a_json_body() -> None:
+    captured: Final[dict[str, object]] = {}
+    png_data_url: Final = f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"
 
-    response = litellm.image_edit(
+    response: Final = litellm.image_edit(
         model="tencent/seedream-image-v5.0-lite",
         image=[PNG_BYTES, io.BytesIO(PNG_BYTES), "https://ref.example/style.png"],
         prompt="turn the square into a paper lantern",
@@ -55,8 +56,8 @@ def test_edit_sends_uploaded_images_as_data_urls_in_a_json_body():
     assert response.usage.total_tokens == 21875
 
 
-def test_edit_rejects_a_mask_without_drop_params():
-    captured = {}
+def test_edit_rejects_a_mask_without_drop_params() -> None:
+    captured: Final[dict[str, object]] = {}
 
     with pytest.raises(litellm.UnsupportedParamsError):
         litellm.image_edit(
@@ -71,8 +72,8 @@ def test_edit_rejects_a_mask_without_drop_params():
     assert captured == {}
 
 
-def test_edit_drops_a_mask_under_drop_params():
-    captured = {}
+def test_edit_drops_a_mask_under_drop_params() -> None:
+    captured: Final[dict[str, object]] = {}
 
     litellm.image_edit(
         model="tencent/seedream-image-v5.0-pro",
@@ -89,3 +90,18 @@ def test_edit_drops_a_mask_under_drop_params():
         "prompt": "turn the square into a paper lantern",
         "images": [f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"],
     }
+
+
+def test_edit_is_not_offered_for_tencent_models_outside_seedream() -> None:
+    captured: Final[dict[str, object]] = {}
+
+    with pytest.raises(Exception, match="image edit is not supported for tencent"):
+        litellm.image_edit(
+            model="tencent/hy-image-v3.5-preview",
+            image=PNG_BYTES,
+            prompt="turn the square into a paper lantern",
+            api_key="sk-tokenhub",
+            client=_client(captured),
+        )
+
+    assert captured == {}
