@@ -19,6 +19,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+    JSON_MODE_PREAMBLE_TEXT_KEY,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import (
@@ -2676,6 +2677,16 @@ class AmazonConverseConfig(BaseConfig):
             json_mode_content_str: str | None = tools[0]["function"].get("arguments")
             if json_mode_content_str is not None:
                 json_mode_content_str = AmazonConverseConfig._unwrap_bedrock_properties(json_mode_content_str)
+                message_fields: Final = as_str_mapping(chat_completion_message)
+                existing_content: Final = (message_fields or {}).get("content")
+                if isinstance(existing_content, str) and existing_content.strip():
+                    existing_provider_fields: Final = TypeAdapter(dict[str, object]).validate_python(
+                        (message_fields.get("provider_specific_fields") or {}) if message_fields is not None else {}
+                    )
+                    chat_completion_message["provider_specific_fields"] = {  # rebind-ok: response is built in place
+                        **existing_provider_fields,
+                        JSON_MODE_PREAMBLE_TEXT_KEY: existing_content,
+                    }
                 chat_completion_message["content"] = json_mode_content_str
             return None
 

@@ -21,6 +21,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+    JSON_MODE_PREAMBLE_TEXT_KEY,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
@@ -3056,7 +3057,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 REFUSAL_STOP_FIELDS.validate_python(completion_response)
             )
             completion_response["stop_reason"] = "stop"
-            if refusal_fields:
+            if text_content and text_content.strip():
+                json_mode_message.provider_specific_fields = {
+                    **refusal_fields,
+                    JSON_MODE_PREAMBLE_TEXT_KEY: text_content,
+                }
+            elif refusal_fields:
                 json_mode_message.provider_specific_fields = dict(refusal_fields)
             if thinking_blocks:
                 json_mode_message.thinking_blocks = thinking_blocks
