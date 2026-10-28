@@ -1,5 +1,6 @@
 import base64
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import h11
@@ -99,7 +100,7 @@ class TestGetChatGPTSessionId:
         "explicit",
         [{"litellm_session_id": "chosen"}, {"session_id": "chosen"}, {"metadata": {"session_id": "chosen"}}],
     )
-    def test_explicit_session_id_wins_over_prompt_cache_key(self, explicit):
+    def test_explicit_session_id_wins_over_prompt_cache_key(self, explicit: Mapping[str, object]) -> None:
         assert get_chatgpt_session_id({**explicit, "prompt_cache_key": "conv-123"}) == "chosen"
 
     @pytest.mark.parametrize(
@@ -114,10 +115,10 @@ class TestGetChatGPTSessionId:
             },
         ],
     )
-    def test_prompt_cache_key_wins_over_request_scoped_ids(self, request_scoped):
+    def test_prompt_cache_key_wins_over_request_scoped_ids(self, request_scoped: Mapping[str, object]) -> None:
         assert get_chatgpt_session_id({**request_scoped, "prompt_cache_key": "conv-123"}) == "conv-123"
 
-    def test_proxy_mapped_session_header_wins_over_body_session_id(self):
+    def test_proxy_mapped_session_header_wins_over_body_session_id(self) -> None:
         assert (
             get_chatgpt_session_id(
                 {"litellm_session_id": "header-session", "session_id": "body-session", "prompt_cache_key": "conv-123"}
@@ -126,7 +127,7 @@ class TestGetChatGPTSessionId:
         )
 
     @pytest.mark.parametrize("prompt_cache_key", [{"tenant": "a"}, 12345, True, ["x", "y"]])
-    def test_non_string_prompt_cache_key_is_ignored(self, prompt_cache_key):
+    def test_non_string_prompt_cache_key_is_ignored(self, prompt_cache_key: object) -> None:
         assert get_chatgpt_session_id({"prompt_cache_key": prompt_cache_key, "litellm_call_id": "call-1"}) == "call-1"
 
     @pytest.mark.parametrize(
@@ -137,7 +138,7 @@ class TestGetChatGPTSessionId:
             ("conv-123 ", " conv-123"),
         ],
     )
-    def test_header_unsafe_cache_keys_map_to_distinct_stable_header_values(self, first, second):
+    def test_header_unsafe_cache_keys_map_to_distinct_stable_header_values(self, first: str, second: str) -> None:
         first_id: Final = get_chatgpt_session_id({"prompt_cache_key": first})
         second_id: Final = get_chatgpt_session_id({"prompt_cache_key": second})
 
