@@ -374,6 +374,7 @@ fn the_bundled_registry_has_no_problems() {
     assert!(problems.is_empty(), "{problems:#?}");
     const REFERENCE_MODEL_COUNT: usize = 4303;
     let catalog = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;
+    assert!(catalog.removals().next().is_none());
     assert!(catalog.model_count() as f64 >= REFERENCE_MODEL_COUNT as f64 * 0.9);
 }
 

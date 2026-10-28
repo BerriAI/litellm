@@ -1,14 +1,28 @@
 """
 Tests for the ``aliases`` feature in the model cost map.
 
-The ``_expand_model_aliases`` function processes ``aliases`` lists from model
-entries, creating shared dict references for alias entries at load time.
+The Rust catalog serves every name in an ``aliases`` list as its own key, sharing one dict with the canonical entry
 """
 
-from unittest.mock import patch
+import json
 
-from litellm import verbose_logger
-from litellm.litellm_core_utils.get_model_cost_map import _expand_model_aliases
+from litellm._catalog import Catalog, Parsed, Unavailable
+
+
+def _parsed(model_cost: dict) -> Parsed | Unavailable:
+    return Catalog.parse(json.dumps(model_cost).encode(), etag=None, min_model_count=0, max_shrink_ratio=0.0)
+
+
+def _expand(model_cost: dict) -> dict:
+    parsed = _parsed(model_cost)
+    assert isinstance(parsed, Parsed)
+    return parsed.served()
+
+
+def _error_kinds(model_cost: dict) -> list[str]:
+    parsed = _parsed(model_cost)
+    assert isinstance(parsed, Parsed)
+    return [error.kind for error in parsed.errors()]
 
 
 # ---------------------------------------------------------------------------
@@ -29,7 +43,7 @@ class TestExpandModelAliases:
                 "mode": "chat",
             },
         }
-        result = _expand_model_aliases(model_cost)
+        result = _expand(model_cost)
 
         assert "my-model-20250101" in result
         assert result["my-model-20250101"]["input_cost_per_token"] == 1e-06
@@ -45,7 +59,7 @@ class TestExpandModelAliases:
                 "mode": "chat",
             },
         }
-        result = _expand_model_aliases(model_cost)
+        result = _expand(model_cost)
 
         assert "provider/model-v1" in result
         assert "provider/model-v2" in result
@@ -60,7 +74,7 @@ class TestExpandModelAliases:
                 "mode": "chat",
             },
         }
-        result = _expand_model_aliases(model_cost)
+        result = _expand(model_cost)
 
         assert result["alias-model"] is result["canonical-model"]
 
@@ -74,7 +88,7 @@ class TestExpandModelAliases:
                 "mode": "chat",
             },
         }
-        result = _expand_model_aliases(model_cost)
+        result = _expand(model_cost)
 
         assert "aliases" not in result["my-model"]
         assert "aliases" not in result["my-model-alias"]
@@ -88,7 +102,7 @@ class TestExpandModelAliases:
                 "mode": "chat",
             },
         }
-        result = _expand_model_aliases(model_cost)
+        result = _expand(model_cost)
 
         assert "plain-model" in result
         assert result["plain-model"]["input_cost_per_token"] == 3e-06
@@ -104,7 +118,7 @@ class TestExpandModelAliases:
                 "mode": "chat",
             },
         }
-        result = _expand_model_aliases(model_cost)
+        result = _expand(model_cost)
 
         assert len(result) == 1
         assert "model-a" in result
@@ -134,15 +148,11 @@ class TestAliasConflicts:
                 "mode": "chat",
             },
         }
-        with patch.object(verbose_logger, "warning") as mock_warn:
-            result = _expand_model_aliases(model_cost)
+        result = _expand(model_cost)
 
         # The canonical "model-dated" entry is preserved, not overwritten
         assert "model-dated" in result
-        # Verify a warning about the alias conflict was logged
-        mock_warn.assert_called()
-        warning_messages = " ".join(str(c) for c in mock_warn.call_args_list)
-        assert "alias conflict" in warning_messages.lower()
+        assert "alias_shadows_model" in _error_kinds(model_cost)
 
     def test_duplicate_alias_across_entries(self):
         """Same alias claimed by two different entries: second one is skipped."""
@@ -160,16 +170,12 @@ class TestAliasConflicts:
                 "mode": "chat",
             },
         }
-        with patch.object(verbose_logger, "warning") as mock_warn:
-            result = _expand_model_aliases(model_cost)
+        result = _expand(model_cost)
 
         # "shared-alias" should point to model-a (first one wins)
         assert "shared-alias" in result
         assert result["shared-alias"]["input_cost_per_token"] == 1e-06
-        # Verify a warning about the alias conflict was logged
-        mock_warn.assert_called()
-        warning_messages = " ".join(str(c) for c in mock_warn.call_args_list)
-        assert "alias conflict" in warning_messages.lower()
+        assert "alias_taken" in _error_kinds(model_cost)
 
     def test_canonical_entry_not_overwritten_by_alias(self):
         """An alias must never overwrite an existing canonical entry's data."""
@@ -187,7 +193,7 @@ class TestAliasConflicts:
                 "mode": "chat",
             },
         }
-        result = _expand_model_aliases(model_cost)
+        result = _expand(model_cost)
 
         # Original entry must be preserved
         assert result["existing-model"]["input_cost_per_token"] == original_cost
@@ -211,7 +217,7 @@ class TestAliasIntegration:
                 "mode": "chat",
             },
         }
-        result = _expand_model_aliases(model_cost)
+        result = _expand(model_cost)
 
         # Mutate via alias
         result["alias"]["input_cost_per_token"] = 999
@@ -232,7 +238,7 @@ class TestAliasIntegration:
                 "mode": "chat",
             },
         }
-        result = _expand_model_aliases(model_cost)
+        result = _expand(model_cost)
 
         assert len(result) == 4  # 2 canonical + 2 aliases
         assert "alias-1" in result
@@ -240,6 +246,5 @@ class TestAliasIntegration:
         assert "plain-model" in result
         assert "model-with-alias" in result
 
-    def test_expand_on_empty_dict(self):
-        """Expanding an empty dict returns an empty dict."""
-        assert _expand_model_aliases({}) == {}
+    def test_an_empty_map_is_unavailable(self):
+        assert isinstance(_parsed({}), Unavailable)

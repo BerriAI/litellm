@@ -186,16 +186,32 @@ def test_bot_may_only_touch_the_cost_map_files() -> None:
     )
 
 
+_REMOVED_B: Final = "openrouter/b is removed without a null; write it as null so older wheels stop serving it"
+_REMOVED_VISION: Final = (
+    "openrouter/a.supports_vision is removed without a null; write it as null so older wheels stop serving it"
+)
+
+
 def test_bot_may_not_remove_models() -> None:
     head = _snapshot({key: value for key, value in BASE_MAP.items() if key != "openrouter/b"})
-    assert _failures(head, bot=False) == ()
-    assert _failures(head) == ("bot PRs may not remove models: openrouter/b",)
+    assert _failures(head, bot=False) == (_REMOVED_B,)
+    assert _failures(head) == (_REMOVED_B, "bot PRs may not remove models: openrouter/b")
 
 
 def test_bot_may_not_remove_fields() -> None:
     head = _snapshot({**BASE_MAP, "openrouter/a": _entry()})
+    assert _failures(head, bot=False) == (_REMOVED_VISION,)
+    assert _failures(head) == (_REMOVED_VISION, "bot PRs may not remove fields: openrouter/a.supports_vision")
+
+
+def test_a_human_pr_retires_a_model_or_a_price_field_by_writing_null() -> None:
+    head = _snapshot({**BASE_MAP, "openrouter/a": {**_entry(), "supports_vision": None}, "openrouter/b": None})
     assert _failures(head, bot=False) == ()
-    assert _failures(head) == ("bot PRs may not remove fields: openrouter/a.supports_vision",)
+
+
+def test_a_human_pr_may_drop_a_field_that_is_not_a_price_or_capability() -> None:
+    head = _snapshot({**BASE_MAP, "openrouter/b": {k: v for k, v in _entry(2e-06).items() if k != "max_tokens"}})
+    assert _failures(head, bot=False) == ()
 
 
 def test_bot_may_not_change_special_root_keys() -> None:
@@ -244,7 +260,7 @@ def _run_guard(repo: Path, base: str, head: str, head_ref: str) -> subprocess.Co
     ("head_ref", "expected_code", "expected_line"),
     [
         (BOT_REF, 1, "- bot PRs may not remove models: openrouter/b"),
-        ("litellm_fix_pricing", 0, "cost map guard passed (human PR, file checks only)"),
+        ("litellm_fix_pricing", 1, f"- {_REMOVED_B}"),
     ],
 )
 def test_main_reads_both_revisions_from_git(

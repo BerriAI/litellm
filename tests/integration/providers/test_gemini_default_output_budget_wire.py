@@ -38,7 +38,7 @@ from integration.providers._gemini_long_decode_support import (
 )
 from pydantic import JsonValue
 
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm._catalog import CATALOG
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
@@ -49,9 +49,7 @@ _JOINED: Final = FIRST_HALF.text + SECOND_HALF.text
 
 
 def _row_limit(key: str) -> int:
-    limit: Final = JSON_OBJECT.validate_python(GetModelCostMap.load_local_model_cost_map()[key]).get(
-        "max_output_tokens"
-    )
+    limit: Final = JSON_OBJECT.validate_python(CATALOG.bundled().served()[key]).get("max_output_tokens")
     assert isinstance(limit, int), (key, limit)
     return limit
 

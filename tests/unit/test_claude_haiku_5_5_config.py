@@ -16,7 +16,7 @@ from typing import Final, cast
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm._catalog import CATALOG
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
 REPO_ROOT: Final = os.path.join(os.path.dirname(__file__), "../..")
@@ -74,7 +74,7 @@ def test_haiku_5_5_rows_allow_disabling_thinking_and_forced_tools(
     model_name: str,
 ) -> None:
     root: Final = _load_root_cost_map()
-    backup: Final = GetModelCostMap.load_local_model_cost_map()
+    backup: Final = CATALOG.bundled().served()
     assert model_name in root
     row: Final = root[model_name]
     # https://platform.claude.com/docs/en/models/haiku-5-5/whats-new-haiku-5-5 (2026-10-07):

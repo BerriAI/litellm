@@ -5,6 +5,9 @@ checks: the files parse and the backup copy matches the root file. A pull reques
 skips them, since merging it keeps the base branch's copies and its head tree only carries whatever state the
 branch was cut from. Pull requests from the cost map sync bot (branches named litellm_cost_map_sync_*) always
 get the file checks and additionally may only touch those two files and may only add or update models.
+
+Installed wheels layer a fetched map over their bundled one, so a key or a price or ``supports_*`` field the map
+leaves out is still served from the wheel. Every pull request that drops one must write it as ``null`` instead.
 """
 
 from __future__ import annotations
@@ -91,6 +94,35 @@ def _entries(cost_map: CostMap) -> dict[str, dict[str, object]]:
     return {key: entry for key, entry in cost_map.items() if isinstance(entry, dict)}
 
 
+def _retired_by_null(field: str) -> bool:
+    return "cost" in field or field in ("tiered_pricing", "off_peak_pricing") or field.startswith("supports_")
+
+
+def _silent_removal_failures(base: Snapshot, head_map: CostMap) -> tuple[str, ...]:
+    base_map: Final = _parse_object(base.cost_map, COST_MAP_PATH)
+    if isinstance(base_map, str):
+        return ()
+    head_entries: Final = _entries(head_map)
+    removed_fields: Final = tuple(
+        f"{key}.{field}"
+        for key, entry in _entries(base_map).items()
+        if key in head_entries
+        for field in entry
+        if _retired_by_null(field) and field not in head_entries[key]
+    )
+    return (
+        *(
+            f"{key} is removed without a null; write it as null so older wheels stop serving it"
+            for key in base_map
+            if key not in head_map and key not in SPECIAL_ROOT_KEYS
+        ),
+        *(
+            f"{ref} is removed without a null; write it as null so older wheels stop serving it"
+            for ref in removed_fields
+        ),
+    )
+
+
 def _bot_failures(base: Snapshot, head_map: CostMap, changed_files: Sequence[str]) -> tuple[str, ...]:
     base_map: Final = _parse_object(base.cost_map, COST_MAP_PATH)
     if isinstance(base_map, str):
@@ -147,6 +179,7 @@ def guard_failures(
         *_file_failures(
             head, head_map, evaluation_output_price_sources=evaluation_output_price_sources
         ),
+        *_silent_removal_failures(base, head_map),
         *(_bot_failures(base, head_map, changed_files) if bot else ()),
     )
 

@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm._catalog import CATALOG
 from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
 from litellm.llms.azure.azure import AzureChatCompletion
 from litellm.llms.azure.image_generation import get_azure_image_generation_config
@@ -20,7 +20,7 @@ from litellm.utils import _invalidate_model_cost_lowercase_map, get_optional_par
 
 @pytest.fixture(autouse=True)
 def use_local_model_cost_map(monkeypatch):
-    monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+    monkeypatch.setattr(litellm, "model_cost", CATALOG.bundled().served())
     litellm.get_model_info.cache_clear()
     _invalidate_model_cost_lowercase_map()
     yield

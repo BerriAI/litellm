@@ -12,7 +12,6 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook, targets_openai_api
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params, process_response_headers
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
 )
@@ -209,7 +208,9 @@ def _bundled_openai_reasoning_models() -> frozenset[str]:
     map it fetches), and a lagging entry must never strip `reasoning` from a model this
     release knows accepts it.
     """
-    bundled: Final = _BUNDLED_COST_MAP.validate_json(GetModelCostMap.read_local_model_cost_map_text())
+    from litellm._catalog import CATALOG
+
+    bundled: Final = _BUNDLED_COST_MAP.validate_python(CATALOG.bundled().document())
     return frozenset(
         name
         for name, entry in bundled.items()

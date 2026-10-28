@@ -19,8 +19,8 @@ import os
 
 import pytest
 
+from litellm._catalog import CATALOG
 from litellm.constants import BEDROCK_CONVERSE_MODELS
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "../..")
 
@@ -82,7 +82,7 @@ OPUS_5_5_VARIANTS = (
 
 @pytest.mark.parametrize("model_name", OPUS_5_5_VARIANTS)
 def test_opus_5_5_present_in_bundled_backup(model_name):
-    backup = GetModelCostMap.load_local_model_cost_map()
+    backup = CATALOG.bundled().served()
     root = _load_root_cost_map()
     assert model_name in backup
     assert model_name in root

@@ -64,6 +64,15 @@ _EXPECTED_RESYNC_APPLIED_CONFIG_PARAM_NAMES = frozenset(
 _STARTUP_ONLY_CONFIG_PARAM_NAMES = ("environment_variables",)
 
 
+def _reloaded(cost_map: dict) -> "ModelCostMapReloaded":
+    from litellm._catalog import Catalog, Parsed
+    from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+
+    parsed = Catalog.parse(json.dumps(cost_map).encode(), etag=None, min_model_count=0, max_shrink_ratio=0.0)
+    assert isinstance(parsed, Parsed)
+    return ModelCostMapReloaded(parsed=parsed)
+
+
 class _RecordingRedisClient(Redis):
     def __init__(self) -> None:
         self.published: List[Tuple[str, str]] = []
@@ -860,7 +869,7 @@ async def test_model_cost_map_reload_does_not_publish_config_change() -> None:
         with patch(
             "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
             new=AsyncMock(
-                return_value=ModelCostMapReloaded(model_cost_map={"gpt-5.2": {"input_cost_per_token": 0.001}})
+                return_value=_reloaded({"gpt-5.2": {"input_cost_per_token": 0.001}})
             ),
         ):
             await ProxyConfig()._check_and_reload_model_cost_map(prisma_client=prisma_client)

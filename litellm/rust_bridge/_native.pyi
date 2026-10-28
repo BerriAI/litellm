@@ -1,6 +1,7 @@
 from asyncio import Future
 from collections.abc import Mapping, Sequence
-from typing import Never, final
+from types import ModuleType
+from typing import Literal, Never, final
 
 import httpx
 from pydantic import JsonValue
@@ -15,6 +16,72 @@ class ProcessReservedForForking(RuntimeError): ...
 
 def trace_encode_error(message: str) -> bytes: ...
 def bundled_model_cost_map() -> bytes: ...
+
+RowErrorKind = Literal[
+    "json",
+    "empty",
+    "below_minimum",
+    "shrunk",
+    "not_an_object",
+    "invalid",
+    "unknown_block_key",
+    "missing_provider",
+    "unknown_timezone",
+    "alias_shadows_model",
+    "alias_taken",
+    "duplicate_price",
+    "suffix_inside_block",
+    "tier_range",
+    "tier_reversed",
+    "tier_gap",
+    "mixed_tier_basis",
+    "not_priced_by_results",
+    "bands_from_two_sources",
+    "not_an_off_peak_rate",
+    "no_off_peak_prices",
+    "no_off_peak_hours",
+    "empty_list",
+    "invalid_date",
+]
+
+@final
+class RowError:
+    key: str
+    field: str | None
+    kind: RowErrorKind
+    rejects: bool
+    message: str
+
+@final
+class Parsed:
+    revision: str
+    etag: str | None
+    def served(self) -> dict[str, dict[str, JsonValue]]: ...
+    def document(self) -> dict[str, JsonValue]: ...
+    def fallback_rules(self) -> list[JsonValue] | None: ...
+    def errors(self) -> list[RowError]: ...
+
+@final
+class Installed:
+    count: int
+    written: int
+    removed: int
+    rejected: list[RowError]
+
+@final
+class Unavailable:
+    reason: str
+
+@final
+class Catalog:
+    @staticmethod
+    def bound_to(module: ModuleType, attr: str) -> Catalog: ...
+    def bundled(self) -> Parsed: ...
+    @staticmethod
+    def parse(
+        body: bytes, *, etag: str | None, min_model_count: int, max_shrink_ratio: float
+    ) -> Parsed | Unavailable: ...
+    def install(self, parsed: Parsed) -> Installed: ...
 
 @final
 class NativeClickHouseSpendConfig:
