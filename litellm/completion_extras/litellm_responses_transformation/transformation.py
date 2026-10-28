@@ -2012,7 +2012,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
                 function_chunk: Final = ChatCompletionToolCallFunctionChunk(
                     name=converted["function"]["name"] or None,
-                    arguments=converted["function"]["arguments"] or parsed_chunk.get("arguments") or "",
+                    arguments=parsed_chunk.get("arguments") or "",
                 )
                 if provider_specific_fields:
                     function_chunk["provider_specific_fields"] = provider_specific_fields
