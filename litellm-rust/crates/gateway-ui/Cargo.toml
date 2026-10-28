@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-error.workspace = true
 axum = { workspace = true, features = ["json", "original-uri", "query"] }
 axum-login.workspace = true
 base64.workspace = true
@@ -22,6 +23,7 @@ tower-http = { version = "0.6.11", features = ["fs", "set-header"] }
 tower-sessions.workspace = true
 
 [dev-dependencies]
+futures-util.workspace = true
 serde_json.workspace = true
 tower = { version = "0.5", features = ["util"] }
 litellm-auth-types.workspace = true
