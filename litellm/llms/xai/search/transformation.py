@@ -88,7 +88,7 @@ class XAISearchConfig(BaseSearchConfig):
         options: Final = _SearchOptions.model_validate(optional_params)
         tool: Final = _X_SEARCH_TOOL.validate_python({**optional_params, "type": "x_search"})
         return {
-            "model": options.search_model or get_secret_str("XAI_SEARCH_MODEL") or "grok-4.7",
+            "model": options.search_model or "grok-4.7",
             "input": "\n".join(query) if isinstance(query, list) else query,
             "tools": [tool],
             "tool_choice": "required",
