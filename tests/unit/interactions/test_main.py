@@ -364,9 +364,16 @@ class TestGoogleInteractionsCreate:
         assert e.value.status_code == 400
         assert not route.called
 
+    @pytest.mark.parametrize(
+        "drop_kwargs",
+        [
+            pytest.param({"drop_params": True}, id="drop-params"),
+            pytest.param({"additional_drop_params": ["agent_config"]}, id="additional-drop-params"),
+        ],
+    )
     @pytest.mark.usefixtures("fake_provider_credentials")
     def test_create_with_drop_params_drops_agent_config_a_bridged_provider_cannot_take(
-        self, respx_mock: MockRouter
+        self, respx_mock: MockRouter, drop_kwargs: Mapping[str, object]
     ) -> None:
         route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
             return_value=httpx.Response(200, json=_openai_response_body("resp-agent-config", "Hi"))
@@ -376,8 +383,8 @@ class TestGoogleInteractionsCreate:
             model="gpt-5.6",
             agent_config={"type": "antigravity", "model": "gemini-3.8-flash"},
             input="Say hi in one word.",
-            drop_params=True,
             api_key="sk-offline",
+            **drop_kwargs,
         )
 
         assert json.loads(route.calls.last.request.content) == {"model": "gpt-5.6", "input": "Say hi in one word."}

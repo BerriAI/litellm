@@ -308,7 +308,9 @@ def create(
         # Check if this is a bridge provider (litellm_responses) - similar to responses API
         # Either provider is explicitly "litellm_responses" or no config found (bridge to responses)
         if custom_llm_provider == "litellm_responses" or interactions_api_config is None:
-            if agent_config is not None and not drops_unsupported_params(kwargs.get("drop_params")):
+            if optional_params.get("agent_config") is not None and not drops_unsupported_params(
+                kwargs.get("drop_params")
+            ):
                 raise litellm.UnsupportedParamsError(
                     message=f"'agent_config' is not supported for {custom_llm_provider} interactions. "
                     "Set drop_params to drop it.",
