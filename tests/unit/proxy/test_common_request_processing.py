@@ -216,9 +216,9 @@ class _RecordsDeferral(CustomLogger):
         self,
         user_api_key_dict: ProxyUserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> dict:
+    ) -> dict[str, object]:
         logging_obj: Final = data["litellm_logging_obj"]
         assert isinstance(logging_obj, LiteLLMLoggingObj)
         self.deferred.append(logging_obj.defer_async_logging)
@@ -7543,7 +7543,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         processor = ProxyBaseLLMRequestProcessing(data={"model": primary_model})
 
         call_count = 0
-        deferred_per_call = []
+        deferred_per_call: Final[list[bool]] = []
 
         async def mock_pre_call_logic(**kwargs):
             nonlocal call_count
