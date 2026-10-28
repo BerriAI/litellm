@@ -566,6 +566,60 @@ class TestDailyLimits:
         with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
             await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
 
+    def test_pre_call_check_rejected_requests_hand_back_rpm_and_rpd(self):
+        clock = Clock(DAY_ONE)
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+
+        assert _pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+        with pytest.raises(litellm.RateLimitError, match="RPM limit=1, current usage=2"):
+            _pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        with pytest.raises(litellm.RateLimitError, match="RPM limit=1, current usage=2"):
+            _pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        clock.now = DAY_ONE - timedelta(minutes=1)
+        assert _pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+
+        clock.now = DAY_ONE - timedelta(minutes=2)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
+            _pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
+            _pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_check_rejected_requests_hand_back_rpm_and_rpd(self):
+        clock = Clock(DAY_ONE)
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+
+        assert await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+        with pytest.raises(litellm.RateLimitError, match="RPM limit=1, current usage=2"):
+            await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        with pytest.raises(litellm.RateLimitError, match="RPM limit=1, current usage=2"):
+            await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        clock.now = DAY_ONE - timedelta(minutes=1)
+        assert await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+
+        clock.now = DAY_ONE - timedelta(minutes=2)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
+            await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
+            await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_check_refunds_rpm_and_rpd_in_one_cache_trip(self):
+        mock_cache = MagicMock()
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_cache.async_increment_cache_pipeline = AsyncMock(side_effect=[[1.0, 3.0], [0.0, 2.0]])
+        check = ModelRateLimitingCheck(dual_cache=mock_cache, clock=Clock(DAY_ONE))
+
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
+            await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+
+        assert mock_cache.async_increment_cache_pipeline.await_count == 2
+        refund = mock_cache.async_increment_cache_pipeline.call_args_list[1].kwargs["increment_list"]
+        assert [(op["key"], op["increment_value"], op["ttl"]) for op in refund] == [
+            ("daily-test-id:gpt-4.1-mini:rpm:23-59", -1, 60),
+            ("daily-test-id:gpt-4.1-mini:rpd:2026-10-28", -1, 86400),
+        ]
+
     @pytest.mark.asyncio
     async def test_async_pre_call_check_increments_rpm_and_rpd_in_one_cache_trip(self):
         mock_cache = MagicMock()

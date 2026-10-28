@@ -52,7 +52,7 @@ else:
 
 class RoutingArgs:
     ttl: int = 60  # 1min (RPM/TPM expire key)
-    daily_ttl: int = 86400  # 1 day (RPD/TPD expire key)
+    daily_ttl: int = 86400
 
 
 DAY_FORMAT: Final = "%Y-%m-%d"
@@ -139,19 +139,29 @@ class ModelRateLimitingCheck(CustomLogger):
         )
         return None if count is None else int(count)
 
-    async def _async_refund_rpd(self, rpd_key: str, current_rpd: int | None, parent_otel_span: Span | None) -> None:
-        if current_rpd is None:
-            return
-        await self._async_increment(rpd_key, -1, RoutingArgs.daily_ttl, parent_otel_span)
+    @staticmethod
+    def _request_count_operations(
+        rpm_key: str | None, rpd_key: str | None, increment_value: int
+    ) -> tuple[RedisPipelineIncrementOperation, ...]:
+        return tuple(
+            RedisPipelineIncrementOperation(key=key, increment_value=increment_value, ttl=ttl)
+            for key, ttl in ((rpm_key, RoutingArgs.ttl), (rpd_key, RoutingArgs.daily_ttl))
+            if key is not None
+        )
+
+    async def _async_refund_request_counts(
+        self, rpm_key: str | None, rpd_key: str | None, parent_otel_span: Span | None
+    ) -> None:
+        operations: Final = self._request_count_operations(rpm_key, rpd_key, -1)
+        if operations:
+            await self.dual_cache.async_increment_cache_pipeline(
+                increment_list=list(operations), parent_otel_span=parent_otel_span
+            )
 
     async def _async_increment_request_counts(
         self, rpm_key: str | None, rpd_key: str | None, parent_otel_span: Span | None
     ) -> tuple[int | None, int | None]:
-        operations: Final = tuple(
-            RedisPipelineIncrementOperation(key=key, increment_value=1, ttl=ttl)
-            for key, ttl in ((rpm_key, RoutingArgs.ttl), (rpd_key, RoutingArgs.daily_ttl))
-            if key is not None
-        )
+        operations: Final = self._request_count_operations(rpm_key, rpd_key, 1)
         if not operations:
             return None, None
         counts: Final = await self.dual_cache.async_increment_cache_pipeline(
@@ -240,6 +250,7 @@ class ModelRateLimitingCheck(CustomLogger):
         if rpd_limit is not None:
             current_rpd: Final = self._increment(rpd_key, 1, RoutingArgs.daily_ttl)
             if current_rpd > rpd_limit:
+                self._increment(rpd_key, -1, RoutingArgs.daily_ttl)
                 raise deployment.limit_error("rpd", rpd_limit, current_rpd, now)
 
     def _get_cache_keys(self, deployment: dict, current_minute: str) -> tuple[str, str]:
@@ -325,6 +336,7 @@ class ModelRateLimitingCheck(CustomLogger):
             if rpm_limit is not None:
                 current_rpm: Final = self._increment(rpm_key, 1, RoutingArgs.ttl)
                 if current_rpm is not None and current_rpm > rpm_limit:
+                    self._increment(rpm_key, -1, RoutingArgs.ttl)
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
                         llm_provider="",
@@ -340,7 +352,12 @@ class ModelRateLimitingCheck(CustomLogger):
                         ),
                     )
 
-            self._check_daily_limits(daily, dt)
+            try:
+                self._check_daily_limits(daily, dt)
+            except litellm.RateLimitError:
+                if rpm_limit is not None:
+                    self._increment(rpm_key, -1, RoutingArgs.ttl)
+                raise
             return deployment
 
         except litellm.RateLimitError:
@@ -408,14 +425,13 @@ class ModelRateLimitingCheck(CustomLogger):
                 if current_tpd is not None and current_tpd >= tpd_limit:
                     raise daily.limit_error("tpd", tpd_limit, current_tpd, dt)
 
-            # rpm and rpd are incremented in one cache trip; a minute reject hands the rpd count back
+            charged_rpm_key: Final = rpm_key if rpm_limit is not None else None
+            charged_rpd_key: Final = rpd_key if rpd_limit is not None else None
             current_rpm, current_rpd = await self._async_increment_request_counts(
-                rpm_key if rpm_limit is not None else None,
-                rpd_key if rpd_limit is not None else None,
-                parent_otel_span,
+                charged_rpm_key, charged_rpd_key, parent_otel_span
             )
             if rpm_limit is not None and current_rpm is not None and current_rpm > rpm_limit:
-                await self._async_refund_rpd(rpd_key, current_rpd, parent_otel_span)
+                await self._async_refund_request_counts(charged_rpm_key, charged_rpd_key, parent_otel_span)
                 raise litellm.RateLimitError(
                     message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
                     llm_provider="",
@@ -433,6 +449,7 @@ class ModelRateLimitingCheck(CustomLogger):
                 )
 
             if rpd_limit is not None and current_rpd is not None and current_rpd > rpd_limit:
+                await self._async_refund_request_counts(charged_rpm_key, charged_rpd_key, parent_otel_span)
                 raise daily.limit_error("rpd", rpd_limit, current_rpd, dt)
 
             return deployment
