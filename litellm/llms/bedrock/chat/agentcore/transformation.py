@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import quote
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -50,6 +51,8 @@ else:
     LiteLLMLoggingObj = Any
     HTTPHandler = Any
     AsyncHTTPHandler = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
@@ -314,7 +317,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return None
 
         try:
-            data: Final[object] = json.loads(json_str)
+            data: Final = _DECODED_JSON.validate_python(json.loads(json_str))
             # Skip non-dict data (some lines contain JSON strings)
             return data if isinstance(data, dict) else None
         except json.JSONDecodeError:
@@ -482,7 +485,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         if "application/json" in content_type:
             # Direct JSON response
             verbose_logger.debug("Parsing JSON response")
-            response_json: Final[object] = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
             verbose_logger.debug("Response JSON: %s", response_json)
             return self._parse_json_response(response_json)
         else:
@@ -566,7 +569,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                     continue
 
                 try:
-                    data_obj = json.loads(json_str)
+                    data_obj = _DECODED_JSON.validate_python(json.loads(json_str))
                     if not isinstance(data_obj, dict):
                         continue
 
@@ -706,7 +709,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             )
             try:
                 body: Final = response.read()
-                response_json: Final[object] = json.loads(body)
+                response_json: Final = _DECODED_JSON.validate_python(json.loads(body))
             except (json.JSONDecodeError, Exception) as e:
                 raise BedrockError(
                     status_code=response.status_code,
@@ -788,7 +791,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                     continue
 
                 try:
-                    data_obj = json.loads(json_str)
+                    data_obj = _DECODED_JSON.validate_python(json.loads(json_str))
                     if not isinstance(data_obj, dict):
                         continue
 
@@ -928,7 +931,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             )
             try:
                 body: Final = await response.aread()
-                response_json: Final[object] = json.loads(body)
+                response_json: Final = _DECODED_JSON.validate_python(json.loads(body))
             except (json.JSONDecodeError, Exception) as e:
                 raise BedrockError(
                     status_code=response.status_code,

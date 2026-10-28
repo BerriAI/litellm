@@ -161,6 +161,12 @@ def test_api_base_line_keeps_an_at_sign_in_the_path(api_base: str) -> None:
 context_window_test_cases = [
     # Positive cases (should return True)
     (
+        '"{\n  "error": {\n    "message": "Your input exceeds the context window of this model. '
+        'Please adjust your input and try again.",\n    "type": "invalid_request_error",\n'
+        '    "param": "input",\n    "code": "context_length_exceeded"\n  }\n}"',
+        True,
+    ),
+    (
         "An error occurred: The input exceeds the model's maximum context limit of 8192 tokens.",
         True,
     ),
@@ -1510,9 +1516,9 @@ def test_bedrock_mantle_openai_envelope_context_overflow_maps_to_context_window_
 
 
 def test_bedrock_mantle_streamed_context_overflow_event_maps_to_context_window_exceeded():
-    from litellm.responses.streaming_iterator import _map_stream_error_to_exception
+    from litellm.responses.streaming_iterator import map_stream_error_to_exception
 
-    mapped_exception = _map_stream_error_to_exception(
+    mapped_exception = map_stream_error_to_exception(
         {
             "code": "context_length_exceeded",
             "message": "Your input exceeds the context window of this model. Please adjust your input and try again.",
