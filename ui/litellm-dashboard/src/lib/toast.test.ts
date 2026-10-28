@@ -108,6 +108,25 @@ describe("toast", () => {
       });
     });
 
+    it.each([
+      [403, "permission_error", sonner.error, "Access Denied"],
+      [401, "authentication_error", sonner.error, "Authentication Error"],
+      [429, "rate_limit_error", sonner.warning, "Rate Limit Exceeded"],
+      [422, "invalid_request_error", sonner.error, "Request Error"],
+    ] as const)(
+      "titles an Anthropic SDK %s error on the Messages playground by its %s type",
+      (status, type, fn, title) => {
+        const body = JSON.stringify({ type: "error", error: { type, message: "Team not allowed to access model" } });
+        toast.fromError(
+          `Error occurred while generating model response. Please try again. Error: Error: ${status} ${body}`,
+        );
+        expect(fn).toHaveBeenCalledWith(title, {
+          description: `Error occurred while generating model response. Please try again. Error: Error: ${status} Team not allowed to access model`,
+          duration: 6000,
+        });
+      },
+    );
+
     it("leaves a string alone when its braces are not a JSON envelope", () => {
       toast.fromError("Template {name} is invalid");
       expect(sonner.error).toHaveBeenCalledWith("Error", {

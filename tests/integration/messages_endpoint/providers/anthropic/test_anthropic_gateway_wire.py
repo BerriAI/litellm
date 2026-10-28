@@ -97,9 +97,10 @@ def test_shared_gateway_route_is_disabled_without_reaching_provider(gateway: Gat
             headers=_cli_bearer_headers(gateway.key),
         )
         assert response.status_code == 404, response.text
-        assert _JSON_OBJECT.validate_json(response.content) == {"detail": "Claude Code gateway is not enabled"}, (
-            response.text
-        )
+        assert _JSON_OBJECT.validate_json(response.content) == {
+            "type": "error",
+            "error": {"type": "not_found_error", "message": "Claude Code gateway is not enabled"},
+        }, response.text
         assert wire.drain() == ()
 
 

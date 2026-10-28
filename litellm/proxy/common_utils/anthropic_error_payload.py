@@ -1,10 +1,5 @@
-"""Renders the Anthropic error envelope for the Anthropic routes, wherever the failure is raised.
-
-The central ``ProxyException`` handler answers every route with OpenAI's ``{"error": {...}}``
-body, which an Anthropic SDK cannot read. Auth, key, budget and model-access failures are
-raised by ``user_api_key_auth`` before the route handler runs, so the envelope is picked
-from the request route rather than inside the handler.
-"""
+"""Auth, budget and model-access failures are raised by ``user_api_key_auth`` before the Messages
+handler runs, so the central handlers pick the Anthropic envelope from the request route."""
 
 from collections.abc import Mapping
 from typing import Final
@@ -33,21 +28,10 @@ ANTHROPIC_PASS_THROUGH_PREFIX: Final = "/anthropic/"
 
 
 def uses_anthropic_error_envelope(route: str) -> bool:
-    """True for the Messages routes and the Anthropic pass-through, whose callers read the Anthropic envelope.
-
-    Narrower than ``LiteLLMRoutes.anthropic_routes``: the Skills and marketplace routes there
-    answer their own body shape. The pass-through relays upstream errors as Anthropic sent them,
-    so the proxy's own refusals there answer the same envelope.
-    """
     return route in ANTHROPIC_MESSAGES_ROUTES or route.startswith(ANTHROPIC_PASS_THROUGH_PREFIX)
 
 
 def anthropic_error_status_code(exc: ProxyException) -> int:
-    """The exception's stringified ``code`` as a status, else 500.
-
-    ``ProxyException.__init__`` stringifies ``code``, so a code-less exception holds the
-    literal ``"None"``, which must not be parsed as a status.
-    """
     code: Final = exc.code
     if code.isdigit():
         return int(code)
@@ -79,7 +63,6 @@ def anthropic_error_content(
     request_id: str | None,
     general_settings: Mapping[str, object],
 ) -> AnthropicErrorResponse:
-    """The Anthropic ``{"type": "error", "error": {...}}`` body for ``exc``, typed by status."""
     envelope: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
         status_code=status_code,
         raw_message=exc.message,
@@ -94,11 +77,6 @@ def anthropic_error_content(
 
 
 def anthropic_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
-    """The Anthropic error response for a Messages request, span close included.
-
-    Shared by the Messages handlers and the central handler, so a failure raised before the
-    handler and one raised inside it answer identically.
-    """
     from litellm.proxy.proxy_server import (
         _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; a JSONResponse returned instead of a raised error must stamp the OTel server span like the global ProxyException handler does
         general_settings_view,
@@ -110,3 +88,12 @@ def anthropic_error_json_response(exc: ProxyException, request: Request) -> JSON
         exc, status_code, request.headers.get("x-request-id"), general_settings_view()
     )
     return JSONResponse(status_code=status_code, content=content, headers=exc.headers)
+
+
+def anthropic_internal_server_error_response(request: Request) -> JSONResponse:
+    content: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        raw_message="Internal server error",
+        request_id=request.headers.get("x-request-id"),
+    )
+    return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=content)

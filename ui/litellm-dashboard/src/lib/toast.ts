@@ -46,6 +46,17 @@ const STATUS_TITLES: Readonly<Record<number, string>> = {
   503: "Service Unavailable",
 };
 
+const ANTHROPIC_TYPE_TITLES: Readonly<Record<string, string>> = {
+  invalid_request_error: "Request Error",
+  authentication_error: "Authentication Error",
+  permission_error: "Access Denied",
+  not_found_error: "Not Found",
+  request_too_large: "Request Error",
+  rate_limit_error: "Rate Limit Exceeded",
+  api_error: "Server Error",
+  overloaded_error: "Service Unavailable",
+};
+
 const WARNING_TITLES: ReadonlySet<string> = new Set(["Budget Exceeded", "Rate Limit Exceeded"]);
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
@@ -123,7 +134,8 @@ const titleFor = ({ status, proxyType }: ErrorFacts): string => {
   if (proxyType?.endsWith("_access_denied")) return "Access Denied";
   const byType = proxyType === undefined ? undefined : PROXY_TYPE_TITLES[proxyType];
   if (byType !== undefined) return byType;
-  return status === undefined ? "Error" : titleForStatus(status);
+  if (status !== undefined) return titleForStatus(status);
+  return (proxyType === undefined ? undefined : ANTHROPIC_TYPE_TITLES[proxyType]) ?? "Error";
 };
 
 const show = (kind: ToastKind, message: ReactNode, options?: ToastOptions): void => {

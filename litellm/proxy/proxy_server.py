@@ -462,6 +462,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     is_azure_model_router_request,
     log_llm_api_exception,
     open_sse_before_first_byte,
+    proxy_exception_from_http_exception,
     proxy_exception_from_route_error,
     request_litellm_call_id,
     resolve_litellm_call_id,
@@ -471,6 +472,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
 )
 from litellm.proxy.common_utils.anthropic_error_payload import (
     anthropic_error_json_response,
+    anthropic_internal_server_error_response,
     uses_anthropic_error_envelope,
 )
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
@@ -2229,6 +2231,10 @@ async def otlp_http_exception_handler(connection: Request | WebSocket, exc: Star
     if response is not None:
         _close_dangling_otel_server_span(connection, exc.status_code, exc=exc)
         return response
+    if uses_anthropic_error_envelope(get_request_route(connection)):
+        return anthropic_error_json_response(
+            proxy_exception_from_http_exception(exc, dict(exc.headers or {})), connection
+        )
     return await http_exception_handler(connection, exc)
 
 
@@ -2436,6 +2442,8 @@ async def _unhandled_exception_response(request: Request, exc: Exception) -> Res
     otlp_response: Final = tracing_endpoints.otlp_error_response(request, 500)
     if otlp_response is not None:
         return otlp_response
+    if uses_anthropic_error_envelope(get_request_route(request)):
+        return anthropic_internal_server_error_response(request)
     return JSONResponse(
         status_code=500,
         content={
