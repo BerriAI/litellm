@@ -6,23 +6,23 @@ knowledge lives in one place. Uses guardrail translation handlers where availabl
 with standalone extractors for generate_content and MCP.
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.llms import load_guardrail_translation_mappings
+from litellm.llms.base_llm.guardrail_translation.utils import list_field
 from litellm.types.utils import CallTypes
 
 # Call types that have no guardrail translation handler; we use standalone extractors
 STANDALONE_EXTRACTORS: Final[dict[str, Any]] = {}
 
 
-def _extract_generate_content_tool_names(data: dict) -> list[str]:
+def _extract_generate_content_tool_names(data: Mapping[str, object]) -> list[str]:
     """Google generateContent: tools[].functionDeclarations[].name"""
     names: Final[list[str]] = []
-    for tool in data.get("tools") or []:
-        if not isinstance(tool, dict):
-            continue
-        for decl in tool.get("functionDeclarations") or []:
+    for tool in list_field(data, "tools"):
+        for decl in list_field(tool, "functionDeclarations"):
             if isinstance(decl, dict) and decl.get("name"):
                 names.append(str(decl["name"]))
     return names

@@ -15,8 +15,8 @@ import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.llms.oci.chat.generic import (
-    _normalize_oci_finish_reason,
-    _synthesize_oci_tool_call_id,
+    normalize_oci_finish_reason,
+    synthesize_oci_tool_call_id,
 )
 from litellm.llms.oci.common_utils import (
     OCI_JSON_TO_PYTHON_TYPES,
@@ -76,10 +76,12 @@ def _content_text(content: str | Iterable[Mapping[str, object]] | None) -> str:
     return str(content)
 
 
-def _extract_text_content(content: str | Iterable[Mapping[str, object]] | None) -> str:
+def extract_text_content(content: str | Iterable[Mapping[str, object]] | None) -> str:
     """Return the plain-text representation of a message content value."""
     return _content_text(content)
 
+
+_extract_text_content = extract_text_content
 
 _TOOL_ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
@@ -138,7 +140,7 @@ def adapt_messages_to_cohere_standard(
     chat_history: Final[list[CohereMessage]] = []
     for msg in history_source:
         role = msg.get("role")
-        content = _extract_text_content(msg.get("content"))
+        content = extract_text_content(msg.get("content"))
 
         tool_calls = (
             [_to_cohere_tool_call(tool_call) for tool_call in msg["tool_calls"]]
@@ -235,13 +237,13 @@ def handle_cohere_response(
     model_response.created = int(datetime.datetime.now().timestamp())
 
     response_text: Final = cohere_response.chatResponse.text
-    finish_reason: Final = _normalize_oci_finish_reason(cohere_response.chatResponse.finishReason)
+    finish_reason: Final = normalize_oci_finish_reason(cohere_response.chatResponse.finishReason)
 
     tool_calls: list[dict[str, object]] | None = None
     if cohere_response.chatResponse.toolCalls:
         tool_calls = [
             {
-                "id": _synthesize_oci_tool_call_id(i, tc.name, json.dumps(tc.parameters, sort_keys=True)),
+                "id": synthesize_oci_tool_call_id(i, tc.name, json.dumps(tc.parameters, sort_keys=True)),
                 "type": "function",
                 "function": {
                     "name": tc.name,
@@ -290,19 +292,14 @@ def handle_cohere_stream_chunk(
 ) -> ModelResponseStream:
     """Parse a single Cohere SSE chunk into a LiteLLM ModelResponseStream.
 
-    ``prior_tool_calls_emitted`` lets the caller signal whether tool calls
-    were already emitted in earlier chunks of the same stream. When set, the
-    terminal consolidation chunk's tool calls are suppressed (they would
-    duplicate prior deltas); otherwise they are passed through so a stream
-    that delivers tool calls only on the terminal chunk doesn't silently
-    drop them.
-
-    ``prior_text_emitted`` plays the analogous role for the ``text`` field:
-    when set, the terminal consolidation chunk's ``text`` is suppressed
-    (it would re-emit the full assembled response on top of prior deltas);
-    when unset (e.g. a degenerate stream that delivers the entire response
-    in a single SSE event carrying both ``chatHistory`` and ``finishReason``),
-    the text is passed through so the response content isn't silently lost.
+    OCI Cohere streams the answer as single-token ``text`` deltas, then restates
+    the whole assembled ``text`` on every chunk that carries ``toolCalls`` or
+    ``chatHistory`` (the tool-calls event and the terminal event). Once the
+    caller reports that earlier chunks already emitted text
+    (``prior_text_emitted``), those restatements are dropped so the client does
+    not see the answer twice; a stream whose only text lives on such a chunk
+    keeps it. ``prior_tool_calls_emitted`` plays the same role for the tool
+    calls the terminal ``chatHistory`` chunk repeats.
     """
     try:
         typed_chunk: Final = CohereStreamChunk.model_validate(dict_chunk)
@@ -315,33 +312,10 @@ def handle_cohere_stream_chunk(
     if typed_chunk.index is None:
         typed_chunk.index = 0
 
-    # OCI Cohere's terminal SSE event re-sends the full assembled response in
-    # `text` alongside a populated `chatHistory` and a non-null `finishReason`.
-    # Emitting that text would concatenate the whole response onto the
-    # already-streamed deltas. We require both signals to be present so that a
-    # future API change which adds `chatHistory` to intermediate chunks (or a
-    # rare early-populated case) doesn't silently drop legitimate token deltas.
-    is_terminal_consolidation: Final = typed_chunk.chatHistory is not None and typed_chunk.finishReason is not None
-    # On non-terminal text-free chunks (e.g. tool-call-only or keep-alive
-    # chunks) emit ``content=None`` rather than ``content=""`` so downstream
-    # stream-mergers that distinguish "no text in this delta" from "an
-    # explicitly empty text delta" behave correctly.
-    #
-    # We only suppress the terminal chunk's ``text`` when the caller has
-    # confirmed that text deltas were already emitted earlier — otherwise
-    # (e.g. a degenerate stream that delivers the whole response in a
-    # single SSE event), passing it through is the only chance to surface it.
-    text: Final[str | None] = None if (is_terminal_consolidation and prior_text_emitted) else typed_chunk.text
-
-    # Tool calls on the terminal consolidation chunk (whether from
-    # `typed_chunk.toolCalls` or from `chatHistory`) typically restate what
-    # was already streamed in intermediate chunks. Re-emitting them would
-    # mint fresh `uuid4` IDs and cause downstream consumers to execute each
-    # tool call twice. We only suppress when the caller has confirmed that
-    # tool calls were already emitted earlier — otherwise (e.g. a short
-    # response that delivers tool calls exclusively on the terminal chunk),
-    # passing them through is the only chance to surface them.
-    cohere_tool_calls = None if (is_terminal_consolidation and prior_tool_calls_emitted) else typed_chunk.toolCalls
+    restates_text: Final = typed_chunk.chatHistory is not None or typed_chunk.toolCalls is not None
+    restates_tool_calls: Final = typed_chunk.chatHistory is not None
+    text: Final[str | None] = None if (restates_text and prior_text_emitted) else typed_chunk.text
+    cohere_tool_calls: Final = None if (restates_tool_calls and prior_tool_calls_emitted) else typed_chunk.toolCalls
 
     tool_calls: list[dict[str, object]] | None = None
     if cohere_tool_calls:
@@ -351,7 +325,7 @@ def handle_cohere_stream_chunk(
                 # deterministically from the call's content/position. A random
                 # uuid4 per chunk would cause downstream stream-mergers to
                 # treat each chunk as a distinct tool call.
-                "id": _synthesize_oci_tool_call_id(i, tc.name, json.dumps(tc.parameters, sort_keys=True)),
+                "id": synthesize_oci_tool_call_id(i, tc.name, json.dumps(tc.parameters, sort_keys=True)),
                 "type": "function",
                 "function": {
                     "name": tc.name,
@@ -361,7 +335,7 @@ def handle_cohere_stream_chunk(
             for i, tc in enumerate(cohere_tool_calls)
         ]
 
-    finish_reason: Final = _normalize_oci_finish_reason(typed_chunk.finishReason)
+    finish_reason: Final = normalize_oci_finish_reason(typed_chunk.finishReason)
 
     return ModelResponseStream(
         choices=[

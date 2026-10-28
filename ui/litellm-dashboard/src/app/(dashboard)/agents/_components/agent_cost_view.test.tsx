@@ -3,18 +3,30 @@ import { describe, it, expect } from "vitest";
 import { screen } from "@testing-library/react";
 import { renderWithProviders } from "@/../tests/test-utils";
 import AgentCostView from "./agent_cost_view";
-import type { Agent } from "@/components/agents/types";
+import { toAgent, type Agent } from "@/components/agents/types";
 
-const makeAgent = (litellmParams: Agent["litellm_params"]): Agent => ({
-  agent_id: "agent-1",
-  agent_name: "Test Agent",
-  litellm_params: litellmParams,
-});
+const makeAgent = (litellmParams: Agent["litellm_params"]): Agent =>
+  toAgent({
+    agent_id: "agent-1",
+    agent_name: "Test Agent",
+    litellm_params: litellmParams,
+    agent_card_params: {},
+    enabled: true,
+    execution_mode: "autonomous",
+    identity_managed: false,
+    jwt_auth_configured: false,
+  });
 
 describe("AgentCostView", () => {
   it("renders nothing when the agent has no cost configuration at all", () => {
     const { container } = renderWithProviders(<AgentCostView agent={makeAgent({ model: "gpt-4" })} />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("omits null costs while still displaying a configured zero", () => {
+    renderWithProviders(<AgentCostView agent={makeAgent({ cost_per_query: null, input_cost_per_token: 0 })} />);
+    expect(screen.queryByText("Cost Per Query")).not.toBeInTheDocument();
+    expect(screen.getByText("$0")).toBeInTheDocument();
   });
 
   it("renders every configured cost with a dollar-prefixed value", () => {

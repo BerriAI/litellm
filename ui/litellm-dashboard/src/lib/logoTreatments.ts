@@ -7,6 +7,7 @@ const BUNDLED_LOGO_PATH = /(?:\/assets\/logos\/|\/_next\/static\/media\/)/;
 const TREATMENT_BY_ASSET: Readonly<Record<string, LogoTreatment>> = {
   "baseten.svg": "invert",
   "cursor.svg": "invert",
+  "edenai.svg": "invert",
   "enkrypt_ai.avif": "invert",
   "friendli.svg": "invert",
   "github.svg": "invert",
@@ -14,6 +15,7 @@ const TREATMENT_BY_ASSET: Readonly<Record<string, LogoTreatment>> = {
   "lago.svg": "invert",
   "lambda.svg": "invert",
   "langflow.svg": "invert",
+  "litellm_monogram.svg": "invert",
   "lmstudio.svg": "invert",
   "moonshot.svg": "invert",
   "nebius.svg": "invert",

@@ -67,7 +67,7 @@ def _container_model_object_id(original_container_id: str, custom_llm_provider: 
 
 
 def decode_container_id_for_ownership(container_id: str, custom_llm_provider: str) -> tuple[str, str]:
-    decoded: Final = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    decoded: Final = ResponsesAPIRequestUtils.decode_container_id(container_id)
     original_container_id: Final = decoded.get("response_id", container_id)
     decoded_provider: Final = decoded.get("custom_llm_provider")
     if decoded_provider and custom_llm_provider == "openai":
@@ -82,7 +82,7 @@ async def get_container_forwarding_params(
         "container_id": original_container_id,
         "custom_llm_provider": custom_llm_provider,
     }
-    decoded: Final = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    decoded: Final = ResponsesAPIRequestUtils.decode_container_id(container_id)
     model_id = decoded.get("model_id")
     if not (isinstance(model_id, str) and model_id):
         # Native upstream IDs (e.g. Azure ``cntr_<hex>``) carry no LiteLLM
@@ -92,7 +92,7 @@ async def get_container_forwarding_params(
         # selected a specific deployment that ID embeds the model_id.
         stored_id: Final = await _get_stored_container_id(original_container_id, custom_llm_provider)
         if stored_id and stored_id != container_id:
-            stored_decoded: Final = ResponsesAPIRequestUtils._decode_container_id(stored_id)
+            stored_decoded: Final = ResponsesAPIRequestUtils.decode_container_id(stored_id)
             stored_model_id: Final = stored_decoded.get("model_id")
             if isinstance(stored_model_id, str) and stored_model_id:
                 model_id = stored_model_id

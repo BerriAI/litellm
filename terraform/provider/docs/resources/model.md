@@ -110,7 +110,9 @@ The following arguments are supported:
 
 * `custom_llm_provider` - (Required) string. The LLM provider for this model (e.g., "openai", "anthropic", "azure", "bedrock").
 
-* `model_api_key` - (Optional) string (Sensitive). The API key for the underlying model provider. Sensitive attributes are hidden from Terraform output but still stored in plaintext in the state file; prefer storing provider secrets in a `litellm_credential` and referencing it via `litellm_credential_name`, and secure your state backend.
+* `model_api_key` - (Optional) string (Sensitive). The API key for the underlying model provider. Sensitive attributes are hidden from Terraform output but still stored in plaintext in the state file; use `model_api_key_wo` or a `litellm_credential` referenced via `litellm_credential_name` to keep it out of state. Conflicts with `model_api_key_wo`.
+* `model_api_key_wo` - (Optional, Write-only) string (Sensitive). Same as `model_api_key`, but sent to the proxy on every apply and never written to plan or state. Requires Terraform 1.11 or later and `model_api_key_wo_version`.
+* `model_api_key_wo_version` - (Optional) integer. Bump it whenever `model_api_key_wo` changes to trigger an update, since write-only values produce no diff on their own.
 
 * `model_api_base` - (Optional) string. The base URL for the model provider's API.
 
@@ -125,6 +127,8 @@ The following arguments are supported:
 * `tier` - (Optional) string. The usage tier for this model. Valid values are `"free"` or `"paid"`. Default: `"free"`.
 
 * `team_id` - (Optional) string. Associate the model with a specific team.
+
+* `display_name` - (Optional) string. Human-readable name stored in `model_info.display_name` and returned as `display_name` by `/v1/models`, so clients such as Claude Code and Claude Desktop show it in their model picker instead of `model_name`. When unset, clients fall back to `model_name`.
 
 * `mode` - (Optional) string. The intended use of the model. Valid values are:
   * `completion`
@@ -167,7 +171,9 @@ The following arguments are supported:
 
 * `vertex_location` - (Optional) string. Vertex AI location (e.g., `us-central1`).
 
-* `vertex_credentials` - (Optional) string. Vertex credentials (JSON string or path depending on your setup).
+* `vertex_credentials` - (Optional) string (Sensitive). Vertex credentials (JSON string or path depending on your setup). Stored in plaintext in the state file. Conflicts with `vertex_credentials_wo`.
+* `vertex_credentials_wo` - (Optional, Write-only) string (Sensitive). Same as `vertex_credentials`, but never written to plan or state. Requires Terraform 1.11 or later and `vertex_credentials_wo_version`.
+* `vertex_credentials_wo_version` - (Optional) integer. Bump it whenever `vertex_credentials_wo` changes to trigger an update.
 
 * `additional_litellm_params` - (Optional) map(string). A map of arbitrary additional parameters that will be merged into the `litellm_params` object sent to the LiteLLM API. This is intended for provider-specific or experimental options not exposed as dedicated arguments.
 
@@ -177,16 +183,16 @@ The following arguments are supported:
     * Numeric strings are parsed first as integers; if integer parsing fails, parsed as floats (e.g., `"16384"` -> 16384, `"0.75"` -> 0.75)
     * JSON strings (starting with `[` or `{`) are parsed as JSON objects/arrays
     * Non-convertible strings remain strings
-  * Non-string map values (if supplied) are passed through unchanged.
   * The provider merges these keys into the `litellm_params` payload sent to the API.
   * Note: the remote API may not echo back all custom parameters; this provider preserves `additional_litellm_params` in state when present in configuration.
 
-  **Special parameter: `additional_drop_params`**
-  * When `additional_drop_params` is provided as a JSON array string, it specifies parameters to remove from the final `litellm_params` before sending to the API
-  * This allows you to override or remove built-in parameters if needed
-  * The `additional_drop_params` key itself is not included in the final parameters
+  **`additional_drop_params`**
+  * Give it a JSON array string, such as `jsonencode(["store"])`. The provider sends the list to the proxy as the deployment's `additional_drop_params`, and the proxy applies it the same as `additional_drop_params` in a `model_list` entry. `terraform plan` fails on any other value, an empty value, or an entry that is not a name, and `null` entries are skipped
+  * Other keys on the resource, such as `vertex_location`, are sent unchanged
+  * When the configuration sets the list, refresh reads the stored list back from the proxy, so a list changed outside Terraform shows up as drift. A model whose configuration has no list keeps a list set outside Terraform out of the plan, but the proxy clears it on the next update
+  * When the proxy has no stored list, as on a model an older provider created, the next plan shows the list and every listed key the configuration sets as changes, since the next apply writes them
 
-  Example showing booleans, integers, floats, strings, and parameter dropping:
+  Example showing booleans, integers, floats, strings, JSON, and dropped request parameters:
 
   ```hcl
   resource "litellm_model" "with_additional" {
@@ -202,7 +208,7 @@ The following arguments are supported:
       "scale"                  = "0.75"                    # becomes float 0.75
       "note"                   = "for testing"             # stays string
       "complex_config"         = "{\"nested\": {\"value\": 42}}"  # parsed as JSON object
-      "additional_drop_params" = "[\"reasoningEffort\"]"   # removes reasoningEffort parameter
+      "additional_drop_params" = "[\"reasoning_effort\"]"  # proxy drops reasoning_effort from requests
     }
   }
   ```
@@ -211,7 +217,9 @@ The following arguments are supported:
 
 * `aws_access_key_id` - (Optional) string (Sensitive). AWS access key ID for AWS-based models.
 
-* `aws_secret_access_key` - (Optional) string (Sensitive). AWS secret access key for AWS-based models. As with `model_api_key`, the value is stored in plaintext in the state file; prefer a `litellm_credential` referenced via `litellm_credential_name` and secure your state backend.
+* `aws_secret_access_key` - (Optional) string (Sensitive). AWS secret access key for AWS-based models. As with `model_api_key`, the value is stored in plaintext in the state file; use `aws_secret_access_key_wo` or a `litellm_credential` referenced via `litellm_credential_name` to keep it out of state. Conflicts with `aws_secret_access_key_wo`.
+* `aws_secret_access_key_wo` - (Optional, Write-only) string (Sensitive). Same as `aws_secret_access_key`, but never written to plan or state. Requires Terraform 1.11 or later and `aws_secret_access_key_wo_version`.
+* `aws_secret_access_key_wo_version` - (Optional) integer. Bump it whenever `aws_secret_access_key_wo` changes to trigger an update.
 
 * `aws_region_name` - (Optional) string. AWS region name for AWS-based models.
 

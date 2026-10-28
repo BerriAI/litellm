@@ -17,6 +17,7 @@ WORKDIR /app
 # Layer the lockfile-only install above the source copy so source-only
 # edits don't bust the install cache.
 COPY ui/litellm-dashboard/package.json ui/litellm-dashboard/package-lock.json ./
+COPY ui/litellm-dashboard/vendor/ ./vendor/
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --prefer-offline
 
@@ -31,6 +32,9 @@ RUN rm -f /etc/nginx/conf.d/default.conf
 
 # Static export → web root.
 COPY --from=builder /app/out /usr/share/nginx/html
+
+# Runtime backend discovery config.
+COPY ui/docker-entrypoint.d/40-litellm-runtime-config.sh /docker-entrypoint.d/
 
 # Routing rules — see ui/nginx.conf for the full description.
 COPY ui/nginx.conf /etc/nginx/nginx.conf

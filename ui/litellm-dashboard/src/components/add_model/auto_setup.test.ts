@@ -1,7 +1,13 @@
+import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import { describe, expect, it } from "vitest";
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
-import { buildModelAvailability } from "@/lib/autorouter_presets";
-import { buildAutomaticRouterConfig, buildPreferredTierModels, type PreferredTierModels } from "./auto_setup";
+import { buildModelAvailability, deploymentRefsFromModelInfo } from "@/lib/autorouter_presets";
+import {
+  buildAutomaticRouterConfig,
+  buildPreferredTierModels,
+  prefillEmptyTiers,
+  type PreferredTierModels,
+} from "./auto_setup";
 
 const models = (...names: string[]) => names.map((model_group) => ({ model_group, mode: "chat" }));
 const reasoningModel = (model_group: string, supported_reasoning_efforts: string[]) => ({
@@ -54,6 +60,42 @@ describe("buildPreferredTierModels", () => {
 });
 
 describe("buildAutomaticRouterConfig", () => {
+  it("selects native Terra and Sol groups with their reasoning settings, retaining cloud fallback", () => {
+    const modelNames = ["gpt-5.6-terra", "gpt-5.6-sol"];
+    const deployments = modelNames.flatMap((model) => [
+      deployment(model, `azure/${model}`),
+      deployment(`z-native-${model}`, `openai/${model}`),
+    ]);
+    const available = deployments.map(({ model_name }) => reasoningModel(model_name!, ["none", "high"]));
+    const availability = buildModelAvailability(
+      available.map(({ model_group }) => model_group),
+      deploymentRefsFromModelInfo(deployments),
+    );
+    const preferred = buildPreferredTierModels([], availability);
+    const config = buildAutomaticRouterConfig(available, deployments, preferred);
+
+    expect(tierModels(config)).toEqual([
+      "z-native-gpt-5.6-terra",
+      "z-native-gpt-5.6-terra",
+      "z-native-gpt-5.6-sol",
+      "z-native-gpt-5.6-sol",
+    ]);
+    expect(config?.tier_model_params).toEqual({
+      REASONING: { "z-native-gpt-5.6-sol": { reasoning_effort: "high" } },
+    });
+
+    const cloudOnly = models(...modelNames);
+    const cloudAvailability = buildModelAvailability(modelNames, deploymentRefsFromModelInfo(deployments));
+    const cloudPreferred = buildPreferredTierModels([], cloudAvailability);
+
+    expect(tierModels(buildAutomaticRouterConfig(cloudOnly, deployments, cloudPreferred))).toEqual([
+      "gpt-5.6-terra",
+      "gpt-5.6-terra",
+      "gpt-5.6-sol",
+      "gpt-5.6-sol",
+    ]);
+  });
+
   it("selects one preferred model for each tier", () => {
     const preferred: PreferredTierModels = {
       SIMPLE: ["simple"],
@@ -192,5 +234,41 @@ describe("buildAutomaticRouterConfig", () => {
         buildAutomaticRouterConfig(available, [deployment("smart-router", "auto_router/complexity_router")], preferred),
       ),
     ).toEqual(["gpt-4o-mini", "gpt-4o-mini", "gpt-4o-mini", "gpt-4o-mini"]);
+  });
+});
+
+describe("prefillEmptyTiers", () => {
+  const empty: ComplexityRouterConfigValue = {
+    classifier_type: "jev",
+    jev_classifier_config: { model: "jev-custom", timeout_ms: 4200 },
+    classification_mode: "user_turn",
+    tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
+  };
+  const automatic: ComplexityRouterConfigValue = {
+    classifier_type: "heuristic_v2",
+    tiers: { SIMPLE: ["fast"], MEDIUM: ["mid"], COMPLEX: ["strong"], REASONING: ["strong"] },
+    tier_model_params: { REASONING: { strong: { reasoning_effort: "high" } } },
+  };
+  it("fills tiers while preserving a classifier configured before models load", () => {
+    expect(prefillEmptyTiers(empty, automatic)).toEqual({
+      ...empty,
+      tiers: automatic.tiers,
+      tier_model_params: automatic.tier_model_params,
+    });
+  });
+  it("leaves the draft alone when no recommended models are available", () => {
+    expect(prefillEmptyTiers(empty, null)).toBe(empty);
+  });
+  it("preserves a partial manual assignment", () => {
+    const partial = { ...empty, tiers: { ...empty.tiers, SIMPLE: ["manual"] } };
+    expect(prefillEmptyTiers(partial, automatic)).toBe(partial);
+  });
+  it("preserves a custom tier set created before models load", () => {
+    const custom = { ...empty, custom_tier_set: { tiers: [], fallback_tier_id: "" } };
+    expect(prefillEmptyTiers(custom, automatic)).toBe(custom);
+  });
+  it.each(["capability", "llm_v2"] as const)("does not prefill %s solver pools", (classifier_type) => {
+    const solver = { ...empty, classifier_type };
+    expect(prefillEmptyTiers(solver, automatic)).toBe(solver);
   });
 });

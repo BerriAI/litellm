@@ -5,7 +5,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl } from "@/components/networking";
 import { OPEN_AI_VOICE_SELECT_OPTIONS } from "./chatConstants";
 
 interface RealtimeMessage {
@@ -96,7 +96,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     try {
       audioContextRef.current = new AudioContext({ sampleRate: 24000 });
 
-      const baseUrl = customProxyBaseUrl || getProxyBaseUrl();
+      const baseUrl = customProxyBaseUrl || getGatewayBaseUrl();
       const wsBase = baseUrl.replace(/^http/, "ws");
       let url = `${wsBase}/v1/realtime?model=${encodeURIComponent(selectedModel)}`;
       if (selectedGuardrails && selectedGuardrails.length > 0) {

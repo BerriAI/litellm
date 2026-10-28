@@ -72,7 +72,7 @@ class ModelsManagementClient:
         model_params: Mapping[str, object],
         model_info: Mapping[str, object] | None = None,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Add a new model to the proxy.
 
@@ -115,7 +115,7 @@ class ModelsManagementClient:
                 raise UnauthorizedError(e)
             raise
 
-    def delete(self, model_id: str, return_request: bool = False) -> dict[str, Any] | requests.Request:
+    def delete(self, model_id: str, return_request: bool = False) -> dict[str, object] | requests.Request:
         """
         Delete a model from the proxy.
 
@@ -249,7 +249,7 @@ class ModelsManagementClient:
         model_params: Mapping[str, object],
         model_info: Mapping[str, object] | None = None,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Update an existing model's configuration.
 

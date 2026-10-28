@@ -1,7 +1,7 @@
 import json
 from typing import TYPE_CHECKING, Any, Final
 
-from litellm.proxy._types import SpanAttributes
+from litellm.types.integrations.otel_span_attributes import SpanAttributes
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -9,6 +9,14 @@ if TYPE_CHECKING:
     Span = _Span | Any
 else:
     Span = Any
+
+LANGTRACE_DEFAULT_HOST: Final = "https://app.langtrace.ai"
+LANGTRACE_TRACE_PATH: Final = "/api/trace"
+
+
+def langtrace_trace_endpoint(api_host: str | None) -> str:
+    host: Final = (api_host or LANGTRACE_DEFAULT_HOST).rstrip("/")
+    return host if host.endswith(LANGTRACE_TRACE_PATH) else host + LANGTRACE_TRACE_PATH
 
 
 class LangtraceAttributes:

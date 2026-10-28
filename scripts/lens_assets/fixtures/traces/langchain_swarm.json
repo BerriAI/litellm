@@ -1,0 +1,1842 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.45.0"
+            }
+          },
+          {
+            "key": "service.instance.id",
+            "value": {
+              "stringValue": "e6b52b2a-b32e-4e1a-9d06-f5218d8c3ddf"
+            }
+          },
+          {
+            "key": "telemetry.auto.version",
+            "value": {
+              "stringValue": "0.66b0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:python3"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "openinference.instrumentation.langchain",
+            "version": "0.1.78"
+          },
+          "spans": [
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "729ddc9632ec5a57",
+              "parentSpanId": "df581e63788c9ea0",
+              "name": "ChatOpenAI",
+              "kind": 1,
+              "startTimeUnixNano": "1791061384285580032",
+              "endTimeUnixNano": "1791061386059563008",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [[{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"SystemMessage\"], \"kwargs\": {\"content\": \"Use search, then write, then return the written answer.\", \"type\": \"system\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is an agent trace?\", \"type\": \"human\", \"id\": \"23d0f761-90e1-432c-b253-4e3c8c458c76\"}}]]}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"generations\": [[{\"text\": \"\", \"generation_info\": {\"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ChatGeneration\", \"message\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 33, \"prompt_tokens\": 84, \"total_tokens\": 117, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_06a9b3f010e59326006ac16d8870d087d08ff993cfcc854652\", \"service_tier\": \"default\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"id\": \"lc_run--01a10393-dc5d-7d32-bed9-0509380eda49-0\", \"tool_calls\": [{\"name\": \"search\", \"args\": {\"query\": \"definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs\"}, \"id\": \"call_e6vczCDDmccHLPoAOjh2kOYk\", \"type\": \"tool_call\"}], \"usage_metadata\": {\"input_tokens\": 84, \"output_tokens\": 33, \"total_tokens\": 117, \"input_token_details\": {\"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"reasoning\": 0}}, \"invalid_tool_calls\": []}}}]], \"llm_output\": {\"token_usage\": {\"completion_tokens\": 33, \"prompt_tokens\": 84, \"total_tokens\": 117, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_06a9b3f010e59326006ac16d8870d087d08ff993cfcc854652\", \"service_tier\": \"default\"}, \"run\": null, \"type\": \"LLMResult\"}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "system"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.content",
+                  "value": {
+                    "stringValue": "Use search, then write, then return the written answer."
+                  }
+                },
+                {
+                  "key": "llm.input_messages.1.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.1.message.content",
+                  "value": {
+                    "stringValue": "What is an agent trace?"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.role",
+                  "value": {
+                    "stringValue": "assistant"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.tool_calls.0.tool_call.id",
+                  "value": {
+                    "stringValue": "call_e6vczCDDmccHLPoAOjh2kOYk"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.tool_calls.0.tool_call.function.name",
+                  "value": {
+                    "stringValue": "search"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
+                  "value": {
+                    "stringValue": "{\"query\": \"definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs\"}"
+                  }
+                },
+                {
+                  "key": "llm.invocation_parameters",
+                  "value": {
+                    "stringValue": "{\"model\": \"openai/gpt-6-luna\", \"model_name\": \"openai/gpt-6-luna\", \"stream\": false, \"_type\": \"openai-chat\", \"stop\": null, \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"search\", \"description\": \"Find key facts about a topic.\", \"parameters\": {\"properties\": {\"query\": {\"type\": \"string\"}}, \"required\": [\"query\"], \"type\": \"object\"}}}, {\"type\": \"function\", \"function\": {\"name\": \"write\", \"description\": \"Write a short answer from facts.\", \"parameters\": {\"properties\": {\"facts\": {\"type\": \"string\"}}, \"required\": [\"facts\"], \"type\": \"object\"}}}]}"
+                  }
+                },
+                {
+                  "key": "llm.tools.0.tool.json_schema",
+                  "value": {
+                    "stringValue": "{\"type\": \"function\", \"function\": {\"name\": \"search\", \"description\": \"Find key facts about a topic.\", \"parameters\": {\"properties\": {\"query\": {\"type\": \"string\"}}, \"required\": [\"query\"], \"type\": \"object\"}}}"
+                  }
+                },
+                {
+                  "key": "llm.tools.1.tool.json_schema",
+                  "value": {
+                    "stringValue": "{\"type\": \"function\", \"function\": {\"name\": \"write\", \"description\": \"Write a short answer from facts.\", \"parameters\": {\"properties\": {\"facts\": {\"type\": \"string\"}}, \"required\": [\"facts\"], \"type\": \"object\"}}}"
+                  }
+                },
+                {
+                  "key": "llm.provider",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "llm.system",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "llm.model_name",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt",
+                  "value": {
+                    "intValue": "84"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion",
+                  "value": {
+                    "intValue": "33"
+                  }
+                },
+                {
+                  "key": "llm.token_count.total",
+                  "value": {
+                    "intValue": "117"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion_details.reasoning",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt_details.cache_read",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.finish_reason",
+                  "value": {
+                    "stringValue": "tool_calls"
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_chat_model\", \"lc_agent_name\": \"research_agent\", \"langgraph_step\": 1, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:af2e1a98-a031-1f65-7945-4dee9d79f83a\", \"checkpoint_ns\": \"model:af2e1a98-a031-1f65-7945-4dee9d79f83a\", \"ls_provider\": \"openai\", \"ls_model_name\": \"openai/gpt-6-luna\", \"ls_model_type\": \"chat\", \"ls_temperature\": null, \"lc_versions\": {\"langchain-core\": \"1.6.6\", \"langchain\": \"1.4.3\", \"langchain-openai\": \"1.6.7\"}}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "LLM"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "df581e63788c9ea0",
+              "parentSpanId": "eb0d732be7fc2e44",
+              "name": "model",
+              "kind": 1,
+              "startTimeUnixNano": "1791061384284665088",
+              "endTimeUnixNano": "1791061386060408064",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"What is an agent trace?\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"23d0f761-90e1-432c-b253-4e3c8c458c76\"}}]}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "[{\"graph\": null, \"update\": {\"messages\": [{\"type\": \"ai\", \"data\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 33, \"prompt_tokens\": 84, \"total_tokens\": 117, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_06a9b3f010e59326006ac16d8870d087d08ff993cfcc854652\", \"service_tier\": \"default\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"lc_run--01a10393-dc5d-7d32-bed9-0509380eda49-0\", \"tool_calls\": [{\"name\": \"search\", \"args\": {\"query\": \"definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs\"}, \"id\": \"call_e6vczCDDmccHLPoAOjh2kOYk\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 84, \"output_tokens\": 33, \"total_tokens\": 117, \"input_token_details\": {\"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"reasoning\": 0}}}}]}, \"resume\": null, \"goto\": []}]"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.content",
+                  "value": {
+                    "stringValue": "What is an agent trace?"
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"research_agent\", \"langgraph_step\": 1, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:af2e1a98-a031-1f65-7945-4dee9d79f83a\"}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "CHAIN"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.45.0"
+            }
+          },
+          {
+            "key": "service.instance.id",
+            "value": {
+              "stringValue": "e6b52b2a-b32e-4e1a-9d06-f5218d8c3ddf"
+            }
+          },
+          {
+            "key": "telemetry.auto.version",
+            "value": {
+              "stringValue": "0.66b0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:python3"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "openinference.instrumentation.langchain",
+            "version": "0.1.78"
+          },
+          "spans": [
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "c33a26efd3975cb0",
+              "parentSpanId": "631311bf23f27124",
+              "name": "ChatOpenAI",
+              "kind": 1,
+              "startTimeUnixNano": "1791061386062722048",
+              "endTimeUnixNano": "1791061390549850112",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [[{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"SystemMessage\"], \"kwargs\": {\"content\": \"Find key facts about the topic.\", \"type\": \"system\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs\", \"type\": \"human\", \"id\": \"b648bbc6-21f1-440b-8ffc-8bddc7e1c491\"}}]]}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"generations\": [[{\"text\": \"An **agent trace** is a chronological record of an AI agent\u2019s execution: what information it received, what it did, what tools it called, and what results it observed as it worked toward a task.\\n\\nA trace commonly includes:\\n\\n1. **Input or task** \u2014 the user request and relevant context.\\n2. **Agent steps** \u2014 decisions or actions, such as searching, planning, or answering.\\n3. **Tool calls** \u2014 the tool, arguments, and time of the call.\\n4. **Tool results and observations** \u2014 outputs the agent received and incorporated.\\n5. **State or handoffs** \u2014 changes in task state, control passing between agents, or errors and retries.\\n6. **Final output** \u2014 the response or result delivered to the user.\\n\\nFor example:\\n\\n```text\\nInput: \u201cWhat is the weather in Paris?\u201d\\nAction: Call weather tool\\nTool call: weather(city=\\\"Paris\\\")\\nObservation: 18\u00b0C, light rain\\nAction: Compose response\\nOutput: \u201cIt\u2019s 18\u00b0C with light rain in Paris.\u201d\\n```\\n\\nTraces are useful for **debugging, auditing, evaluation, and reproducing agent behavior**. They may include timestamps, token usage, or other metadata.\\n\\n\u201cReasoning logs\u201d can be part of a trace in a limited form\u2014for example, a brief decision summary or rationale. A trace does **not** necessarily contain the model\u2019s full internal reasoning; many systems omit that and record actions, observations, and concise explanations instead.\", \"generation_info\": {\"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ChatGeneration\", \"message\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"An **agent trace** is a chronological record of an AI agent\u2019s execution: what information it received, what it did, what tools it called, and what results it observed as it worked toward a task.\\n\\nA trace commonly includes:\\n\\n1. **Input or task** \u2014 the user request and relevant context.\\n2. **Agent steps** \u2014 decisions or actions, such as searching, planning, or answering.\\n3. **Tool calls** \u2014 the tool, arguments, and time of the call.\\n4. **Tool results and observations** \u2014 outputs the agent received and incorporated.\\n5. **State or handoffs** \u2014 changes in task state, control passing between agents, or errors and retries.\\n6. **Final output** \u2014 the response or result delivered to the user.\\n\\nFor example:\\n\\n```text\\nInput: \u201cWhat is the weather in Paris?\u201d\\nAction: Call weather tool\\nTool call: weather(city=\\\"Paris\\\")\\nObservation: 18\u00b0C, light rain\\nAction: Compose response\\nOutput: \u201cIt\u2019s 18\u00b0C with light rain in Paris.\u201d\\n```\\n\\nTraces are useful for **debugging, auditing, evaluation, and reproducing agent behavior**. They may include timestamps, token usage, or other metadata.\\n\\n\u201cReasoning logs\u201d can be part of a trace in a limited form\u2014for example, a brief decision summary or rationale. A trace does **not** necessarily contain the model\u2019s full internal reasoning; many systems omit that and record actions, observations, and concise explanations instead.\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 430, \"prompt_tokens\": 34, \"total_tokens\": 464, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 118, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"chatcmpl-EV1AoqQpZr19I6iVeZ8rquE3v7yMx\", \"service_tier\": \"default\", \"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ai\", \"id\": \"lc_run--01a10393-e34e-7fd3-91a8-8730f66b7137-0\", \"usage_metadata\": {\"input_tokens\": 34, \"output_tokens\": 430, \"total_tokens\": 464, \"input_token_details\": {\"audio\": 0, \"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 118}}, \"tool_calls\": [], \"invalid_tool_calls\": []}}}]], \"llm_output\": {\"token_usage\": {\"completion_tokens\": 430, \"prompt_tokens\": 34, \"total_tokens\": 464, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 118, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"chatcmpl-EV1AoqQpZr19I6iVeZ8rquE3v7yMx\", \"service_tier\": \"default\"}, \"run\": null, \"type\": \"LLMResult\"}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "system"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.content",
+                  "value": {
+                    "stringValue": "Find key facts about the topic."
+                  }
+                },
+                {
+                  "key": "llm.input_messages.1.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.1.message.content",
+                  "value": {
+                    "stringValue": "definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.role",
+                  "value": {
+                    "stringValue": "assistant"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.content",
+                  "value": {
+                    "stringValue": "An **agent trace** is a chronological record of an AI agent\u2019s execution: what information it received, what it did, what tools it called, and what results it observed as it worked toward a task.\n\nA trace commonly includes:\n\n1. **Input or task** \u2014 the user request and relevant context.\n2. **Agent steps** \u2014 decisions or actions, such as searching, planning, or answering.\n3. **Tool calls** \u2014 the tool, arguments, and time of the call.\n4. **Tool results and observations** \u2014 outputs the agent received and incorporated.\n5. **State or handoffs** \u2014 changes in task state, control passing between agents, or errors and retries.\n6. **Final output** \u2014 the response or result delivered to the user.\n\nFor example:\n\n```text\nInput: \u201cWhat is the weather in Paris?\u201d\nAction: Call weather tool\nTool call: weather(city=\"Paris\")\nObservation: 18\u00b0C, light rain\nAction: Compose response\nOutput: \u201cIt\u2019s 18\u00b0C with light rain in Paris.\u201d\n```\n\nTraces are useful for **debugging, auditing, evaluation, and reproducing agent behavior**. They may include timestamps, token usage, or other metadata.\n\n\u201cReasoning logs\u201d can be part of a trace in a limited form\u2014for example, a brief decision summary or rationale. A trace does **not** necessarily contain the model\u2019s full internal reasoning; many systems omit that and record actions, observations, and concise explanations instead."
+                  }
+                },
+                {
+                  "key": "llm.invocation_parameters",
+                  "value": {
+                    "stringValue": "{\"model\": \"openai/gpt-6-luna\", \"model_name\": \"openai/gpt-6-luna\", \"stream\": false, \"_type\": \"openai-chat\", \"stop\": null}"
+                  }
+                },
+                {
+                  "key": "llm.provider",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "llm.system",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "llm.model_name",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt",
+                  "value": {
+                    "intValue": "34"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion",
+                  "value": {
+                    "intValue": "430"
+                  }
+                },
+                {
+                  "key": "llm.token_count.total",
+                  "value": {
+                    "intValue": "464"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion_details.audio",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion_details.reasoning",
+                  "value": {
+                    "intValue": "118"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt_details.audio",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt_details.cache_read",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.finish_reason",
+                  "value": {
+                    "stringValue": "stop"
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_chat_model\", \"lc_agent_name\": \"search_agent\", \"langgraph_step\": 1, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"tools:1f62c1f8-6b1b-e9e2-8e59-0e4dd8b50c69|model:d02459df-fc95-afec-06e3-0f0824db9d5c\", \"checkpoint_ns\": \"tools:1f62c1f8-6b1b-e9e2-8e59-0e4dd8b50c69\", \"ls_provider\": \"openai\", \"ls_model_name\": \"openai/gpt-6-luna\", \"ls_model_type\": \"chat\", \"ls_temperature\": null, \"lc_versions\": {\"langchain-core\": \"1.6.6\", \"langchain\": \"1.4.3\", \"langchain-openai\": \"1.6.7\"}}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "LLM"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "631311bf23f27124",
+              "parentSpanId": "26ec249c3cb600d9",
+              "name": "model",
+              "kind": 1,
+              "startTimeUnixNano": "1791061386062467072",
+              "endTimeUnixNano": "1791061390550209024",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"b648bbc6-21f1-440b-8ffc-8bddc7e1c491\"}}]}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "[{\"graph\": null, \"update\": {\"messages\": [{\"type\": \"ai\", \"data\": {\"content\": \"An **agent trace** is a chronological record of an AI agent\u2019s execution: what information it received, what it did, what tools it called, and what results it observed as it worked toward a task.\\n\\nA trace commonly includes:\\n\\n1. **Input or task** \u2014 the user request and relevant context.\\n2. **Agent steps** \u2014 decisions or actions, such as searching, planning, or answering.\\n3. **Tool calls** \u2014 the tool, arguments, and time of the call.\\n4. **Tool results and observations** \u2014 outputs the agent received and incorporated.\\n5. **State or handoffs** \u2014 changes in task state, control passing between agents, or errors and retries.\\n6. **Final output** \u2014 the response or result delivered to the user.\\n\\nFor example:\\n\\n```text\\nInput: \u201cWhat is the weather in Paris?\u201d\\nAction: Call weather tool\\nTool call: weather(city=\\\"Paris\\\")\\nObservation: 18\u00b0C, light rain\\nAction: Compose response\\nOutput: \u201cIt\u2019s 18\u00b0C with light rain in Paris.\u201d\\n```\\n\\nTraces are useful for **debugging, auditing, evaluation, and reproducing agent behavior**. They may include timestamps, token usage, or other metadata.\\n\\n\u201cReasoning logs\u201d can be part of a trace in a limited form\u2014for example, a brief decision summary or rationale. A trace does **not** necessarily contain the model\u2019s full internal reasoning; many systems omit that and record actions, observations, and concise explanations instead.\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 430, \"prompt_tokens\": 34, \"total_tokens\": 464, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 118, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"chatcmpl-EV1AoqQpZr19I6iVeZ8rquE3v7yMx\", \"service_tier\": \"default\", \"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"search_agent\", \"id\": \"lc_run--01a10393-e34e-7fd3-91a8-8730f66b7137-0\", \"tool_calls\": [], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 34, \"output_tokens\": 430, \"total_tokens\": 464, \"input_token_details\": {\"audio\": 0, \"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 118}}}}]}, \"resume\": null, \"goto\": []}]"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.content",
+                  "value": {
+                    "stringValue": "definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs"
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"search_agent\", \"langgraph_step\": 1, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"tools:1f62c1f8-6b1b-e9e2-8e59-0e4dd8b50c69|model:d02459df-fc95-afec-06e3-0f0824db9d5c\", \"checkpoint_ns\": \"tools:1f62c1f8-6b1b-e9e2-8e59-0e4dd8b50c69\"}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "CHAIN"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "26ec249c3cb600d9",
+              "parentSpanId": "eae604e0b5ce15a2",
+              "name": "search_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1791061386062041088",
+              "endTimeUnixNano": "1791061390550477056",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [{\"role\": \"user\", \"content\": \"definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs\"}]}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"b648bbc6-21f1-440b-8ffc-8bddc7e1c491\"}}, {\"type\": \"ai\", \"data\": {\"content\": \"An **agent trace** is a chronological record of an AI agent\u2019s execution: what information it received, what it did, what tools it called, and what results it observed as it worked toward a task.\\n\\nA trace commonly includes:\\n\\n1. **Input or task** \u2014 the user request and relevant context.\\n2. **Agent steps** \u2014 decisions or actions, such as searching, planning, or answering.\\n3. **Tool calls** \u2014 the tool, arguments, and time of the call.\\n4. **Tool results and observations** \u2014 outputs the agent received and incorporated.\\n5. **State or handoffs** \u2014 changes in task state, control passing between agents, or errors and retries.\\n6. **Final output** \u2014 the response or result delivered to the user.\\n\\nFor example:\\n\\n```text\\nInput: \u201cWhat is the weather in Paris?\u201d\\nAction: Call weather tool\\nTool call: weather(city=\\\"Paris\\\")\\nObservation: 18\u00b0C, light rain\\nAction: Compose response\\nOutput: \u201cIt\u2019s 18\u00b0C with light rain in Paris.\u201d\\n```\\n\\nTraces are useful for **debugging, auditing, evaluation, and reproducing agent behavior**. They may include timestamps, token usage, or other metadata.\\n\\n\u201cReasoning logs\u201d can be part of a trace in a limited form\u2014for example, a brief decision summary or rationale. A trace does **not** necessarily contain the model\u2019s full internal reasoning; many systems omit that and record actions, observations, and concise explanations instead.\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 430, \"prompt_tokens\": 34, \"total_tokens\": 464, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 118, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"chatcmpl-EV1AoqQpZr19I6iVeZ8rquE3v7yMx\", \"service_tier\": \"default\", \"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"search_agent\", \"id\": \"lc_run--01a10393-e34e-7fd3-91a8-8730f66b7137-0\", \"tool_calls\": [], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 34, \"output_tokens\": 430, \"total_tokens\": 464, \"input_token_details\": {\"audio\": 0, \"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 118}}}}]}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"search_agent\", \"langgraph_step\": 2, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:1f62c1f8-6b1b-e9e2-8e59-0e4dd8b50c69\", \"checkpoint_ns\": \"tools:1f62c1f8-6b1b-e9e2-8e59-0e4dd8b50c69\"}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "AGENT"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "eae604e0b5ce15a2",
+              "parentSpanId": "3ce56c503d8c2cfe",
+              "name": "search",
+              "kind": 1,
+              "startTimeUnixNano": "1791061386061693952",
+              "endTimeUnixNano": "1791061390550631936",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"type\": \"tool\", \"data\": {\"content\": \"An **agent trace** is a chronological record of an AI agent\u2019s execution: what information it received, what it did, what tools it called, and what results it observed as it worked toward a task.\\n\\nA trace commonly includes:\\n\\n1. **Input or task** \u2014 the user request and relevant context.\\n2. **Agent steps** \u2014 decisions or actions, such as searching, planning, or answering.\\n3. **Tool calls** \u2014 the tool, arguments, and time of the call.\\n4. **Tool results and observations** \u2014 outputs the agent received and incorporated.\\n5. **State or handoffs** \u2014 changes in task state, control passing between agents, or errors and retries.\\n6. **Final output** \u2014 the response or result delivered to the user.\\n\\nFor example:\\n\\n```text\\nInput: \u201cWhat is the weather in Paris?\u201d\\nAction: Call weather tool\\nTool call: weather(city=\\\"Paris\\\")\\nObservation: 18\u00b0C, light rain\\nAction: Compose response\\nOutput: \u201cIt\u2019s 18\u00b0C with light rain in Paris.\u201d\\n```\\n\\nTraces are useful for **debugging, auditing, evaluation, and reproducing agent behavior**. They may include timestamps, token usage, or other metadata.\\n\\n\u201cReasoning logs\u201d can be part of a trace in a limited form\u2014for example, a brief decision summary or rationale. A trace does **not** necessarily contain the model\u2019s full internal reasoning; many systems omit that and record actions, observations, and concise explanations instead.\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"tool\", \"name\": \"search\", \"id\": null, \"tool_call_id\": \"call_e6vczCDDmccHLPoAOjh2kOYk\", \"artifact\": null, \"status\": \"success\"}}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "tool.name",
+                  "value": {
+                    "stringValue": "search"
+                  }
+                },
+                {
+                  "key": "tool.description",
+                  "value": {
+                    "stringValue": "Find key facts about a topic."
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"research_agent\", \"langgraph_step\": 2, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:1f62c1f8-6b1b-e9e2-8e59-0e4dd8b50c69\", \"checkpoint_ns\": \"tools:1f62c1f8-6b1b-e9e2-8e59-0e4dd8b50c69\"}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "TOOL"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "3ce56c503d8c2cfe",
+              "parentSpanId": "eb0d732be7fc2e44",
+              "name": "tools",
+              "kind": 1,
+              "startTimeUnixNano": "1791061386061031168",
+              "endTimeUnixNano": "1791061390550978816",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "[{\"name\": \"search\", \"args\": {\"query\": \"definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs\"}, \"id\": \"call_e6vczCDDmccHLPoAOjh2kOYk\", \"type\": \"tool_call\"}]"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [{\"type\": \"tool\", \"data\": {\"content\": \"An **agent trace** is a chronological record of an AI agent\u2019s execution: what information it received, what it did, what tools it called, and what results it observed as it worked toward a task.\\n\\nA trace commonly includes:\\n\\n1. **Input or task** \u2014 the user request and relevant context.\\n2. **Agent steps** \u2014 decisions or actions, such as searching, planning, or answering.\\n3. **Tool calls** \u2014 the tool, arguments, and time of the call.\\n4. **Tool results and observations** \u2014 outputs the agent received and incorporated.\\n5. **State or handoffs** \u2014 changes in task state, control passing between agents, or errors and retries.\\n6. **Final output** \u2014 the response or result delivered to the user.\\n\\nFor example:\\n\\n```text\\nInput: \u201cWhat is the weather in Paris?\u201d\\nAction: Call weather tool\\nTool call: weather(city=\\\"Paris\\\")\\nObservation: 18\u00b0C, light rain\\nAction: Compose response\\nOutput: \u201cIt\u2019s 18\u00b0C with light rain in Paris.\u201d\\n```\\n\\nTraces are useful for **debugging, auditing, evaluation, and reproducing agent behavior**. They may include timestamps, token usage, or other metadata.\\n\\n\u201cReasoning logs\u201d can be part of a trace in a limited form\u2014for example, a brief decision summary or rationale. A trace does **not** necessarily contain the model\u2019s full internal reasoning; many systems omit that and record actions, observations, and concise explanations instead.\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"tool\", \"name\": \"search\", \"id\": \"7f6ee68a-6916-4e2b-ae03-b079d29e5bf6\", \"tool_call_id\": \"call_e6vczCDDmccHLPoAOjh2kOYk\", \"artifact\": null, \"status\": \"success\"}}]}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"research_agent\", \"langgraph_step\": 2, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:1f62c1f8-6b1b-e9e2-8e59-0e4dd8b50c69\"}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "CHAIN"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "4b53d7558643a4f1",
+              "parentSpanId": "60d56c0ca94254f6",
+              "name": "ChatOpenAI",
+              "kind": 1,
+              "startTimeUnixNano": "1791061390551481088",
+              "endTimeUnixNano": "1791061392668643840",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [[{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"SystemMessage\"], \"kwargs\": {\"content\": \"Use search, then write, then return the written answer.\", \"type\": \"system\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is an agent trace?\", \"type\": \"human\", \"id\": \"23d0f761-90e1-432c-b253-4e3c8c458c76\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 33, \"prompt_tokens\": 84, \"total_tokens\": 117, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_06a9b3f010e59326006ac16d8870d087d08ff993cfcc854652\", \"service_tier\": \"default\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"lc_run--01a10393-dc5d-7d32-bed9-0509380eda49-0\", \"tool_calls\": [{\"name\": \"search\", \"args\": {\"query\": \"definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs\"}, \"id\": \"call_e6vczCDDmccHLPoAOjh2kOYk\", \"type\": \"tool_call\"}], \"usage_metadata\": {\"input_tokens\": 84, \"output_tokens\": 33, \"total_tokens\": 117, \"input_token_details\": {\"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"reasoning\": 0}}, \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"An **agent trace** is a chronological record of an AI agent\u2019s execution: what information it received, what it did, what tools it called, and what results it observed as it worked toward a task.\\n\\nA trace commonly includes:\\n\\n1. **Input or task** \u2014 the user request and relevant context.\\n2. **Agent steps** \u2014 decisions or actions, such as searching, planning, or answering.\\n3. **Tool calls** \u2014 the tool, arguments, and time of the call.\\n4. **Tool results and observations** \u2014 outputs the agent received and incorporated.\\n5. **State or handoffs** \u2014 changes in task state, control passing between agents, or errors and retries.\\n6. **Final output** \u2014 the response or result delivered to the user.\\n\\nFor example:\\n\\n```text\\nInput: \u201cWhat is the weather in Paris?\u201d\\nAction: Call weather tool\\nTool call: weather(city=\\\"Paris\\\")\\nObservation: 18\u00b0C, light rain\\nAction: Compose response\\nOutput: \u201cIt\u2019s 18\u00b0C with light rain in Paris.\u201d\\n```\\n\\nTraces are useful for **debugging, auditing, evaluation, and reproducing agent behavior**. They may include timestamps, token usage, or other metadata.\\n\\n\u201cReasoning logs\u201d can be part of a trace in a limited form\u2014for example, a brief decision summary or rationale. A trace does **not** necessarily contain the model\u2019s full internal reasoning; many systems omit that and record actions, observations, and concise explanations instead.\", \"type\": \"tool\", \"name\": \"search\", \"id\": \"7f6ee68a-6916-4e2b-ae03-b079d29e5bf6\", \"tool_call_id\": \"call_e6vczCDDmccHLPoAOjh2kOYk\", \"status\": \"success\"}}]]}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"generations\": [[{\"text\": \"\", \"generation_info\": {\"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ChatGeneration\", \"message\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 124, \"prompt_tokens\": 430, \"total_tokens\": 554, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_030f6e7b0e7475f9006ac16d8ea0b087d082a3239e9778925d\", \"service_tier\": \"default\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"id\": \"lc_run--01a10393-f4d7-7032-966d-9429a5bd07c7-0\", \"tool_calls\": [{\"name\": \"write\", \"args\": {\"facts\": \"An agent trace is a chronological record of an AI agent's execution: input/context, actions or steps, tool calls and arguments, tool results/observations, state changes or handoffs, and final output. Example: user asks weather in Paris; agent calls weather tool; receives 18\u00b0C/light rain; responds. Traces help with debugging, auditing, evaluation, and reproducing behavior. May include timestamps and usage metadata. A trace need not include full internal reasoning; systems often record actions, observations, and concise rationales instead.\"}, \"id\": \"call_xFkj7Fhucd9UOhCf7b3DfeFZ\", \"type\": \"tool_call\"}], \"usage_metadata\": {\"input_tokens\": 430, \"output_tokens\": 124, \"total_tokens\": 554, \"input_token_details\": {\"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"reasoning\": 0}}, \"invalid_tool_calls\": []}}}]], \"llm_output\": {\"token_usage\": {\"completion_tokens\": 124, \"prompt_tokens\": 430, \"total_tokens\": 554, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_030f6e7b0e7475f9006ac16d8ea0b087d082a3239e9778925d\", \"service_tier\": \"default\"}, \"run\": null, \"type\": \"LLMResult\"}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "system"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.content",
+                  "value": {
+                    "stringValue": "Use search, then write, then return the written answer."
+                  }
+                },
+                {
+                  "key": "llm.input_messages.1.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.1.message.content",
+                  "value": {
+                    "stringValue": "What is an agent trace?"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.2.message.role",
+                  "value": {
+                    "stringValue": "assistant"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.2.message.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.2.message.tool_calls.0.tool_call.id",
+                  "value": {
+                    "stringValue": "call_e6vczCDDmccHLPoAOjh2kOYk"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.2.message.tool_calls.0.tool_call.function.name",
+                  "value": {
+                    "stringValue": "search"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments",
+                  "value": {
+                    "stringValue": "{\"query\": \"definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs\"}"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.3.message.role",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.3.message.content",
+                  "value": {
+                    "stringValue": "An **agent trace** is a chronological record of an AI agent\u2019s execution: what information it received, what it did, what tools it called, and what results it observed as it worked toward a task.\n\nA trace commonly includes:\n\n1. **Input or task** \u2014 the user request and relevant context.\n2. **Agent steps** \u2014 decisions or actions, such as searching, planning, or answering.\n3. **Tool calls** \u2014 the tool, arguments, and time of the call.\n4. **Tool results and observations** \u2014 outputs the agent received and incorporated.\n5. **State or handoffs** \u2014 changes in task state, control passing between agents, or errors and retries.\n6. **Final output** \u2014 the response or result delivered to the user.\n\nFor example:\n\n```text\nInput: \u201cWhat is the weather in Paris?\u201d\nAction: Call weather tool\nTool call: weather(city=\"Paris\")\nObservation: 18\u00b0C, light rain\nAction: Compose response\nOutput: \u201cIt\u2019s 18\u00b0C with light rain in Paris.\u201d\n```\n\nTraces are useful for **debugging, auditing, evaluation, and reproducing agent behavior**. They may include timestamps, token usage, or other metadata.\n\n\u201cReasoning logs\u201d can be part of a trace in a limited form\u2014for example, a brief decision summary or rationale. A trace does **not** necessarily contain the model\u2019s full internal reasoning; many systems omit that and record actions, observations, and concise explanations instead."
+                  }
+                },
+                {
+                  "key": "llm.input_messages.3.message.tool_call_id",
+                  "value": {
+                    "stringValue": "call_e6vczCDDmccHLPoAOjh2kOYk"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.3.message.name",
+                  "value": {
+                    "stringValue": "search"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.role",
+                  "value": {
+                    "stringValue": "assistant"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.tool_calls.0.tool_call.id",
+                  "value": {
+                    "stringValue": "call_xFkj7Fhucd9UOhCf7b3DfeFZ"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.tool_calls.0.tool_call.function.name",
+                  "value": {
+                    "stringValue": "write"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
+                  "value": {
+                    "stringValue": "{\"facts\": \"An agent trace is a chronological record of an AI agent's execution: input/context, actions or steps, tool calls and arguments, tool results/observations, state changes or handoffs, and final output. Example: user asks weather in Paris; agent calls weather tool; receives 18\u00b0C/light rain; responds. Traces help with debugging, auditing, evaluation, and reproducing behavior. May include timestamps and usage metadata. A trace need not include full internal reasoning; systems often record actions, observations, and concise rationales instead.\"}"
+                  }
+                },
+                {
+                  "key": "llm.invocation_parameters",
+                  "value": {
+                    "stringValue": "{\"model\": \"openai/gpt-6-luna\", \"model_name\": \"openai/gpt-6-luna\", \"stream\": false, \"_type\": \"openai-chat\", \"stop\": null, \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"search\", \"description\": \"Find key facts about a topic.\", \"parameters\": {\"properties\": {\"query\": {\"type\": \"string\"}}, \"required\": [\"query\"], \"type\": \"object\"}}}, {\"type\": \"function\", \"function\": {\"name\": \"write\", \"description\": \"Write a short answer from facts.\", \"parameters\": {\"properties\": {\"facts\": {\"type\": \"string\"}}, \"required\": [\"facts\"], \"type\": \"object\"}}}]}"
+                  }
+                },
+                {
+                  "key": "llm.tools.0.tool.json_schema",
+                  "value": {
+                    "stringValue": "{\"type\": \"function\", \"function\": {\"name\": \"search\", \"description\": \"Find key facts about a topic.\", \"parameters\": {\"properties\": {\"query\": {\"type\": \"string\"}}, \"required\": [\"query\"], \"type\": \"object\"}}}"
+                  }
+                },
+                {
+                  "key": "llm.tools.1.tool.json_schema",
+                  "value": {
+                    "stringValue": "{\"type\": \"function\", \"function\": {\"name\": \"write\", \"description\": \"Write a short answer from facts.\", \"parameters\": {\"properties\": {\"facts\": {\"type\": \"string\"}}, \"required\": [\"facts\"], \"type\": \"object\"}}}"
+                  }
+                },
+                {
+                  "key": "llm.provider",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "llm.system",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "llm.model_name",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt",
+                  "value": {
+                    "intValue": "430"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion",
+                  "value": {
+                    "intValue": "124"
+                  }
+                },
+                {
+                  "key": "llm.token_count.total",
+                  "value": {
+                    "intValue": "554"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion_details.reasoning",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt_details.cache_read",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.finish_reason",
+                  "value": {
+                    "stringValue": "tool_calls"
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_chat_model\", \"lc_agent_name\": \"research_agent\", \"langgraph_step\": 3, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:21f0d364-0b38-7725-782d-c21e3037b634\", \"checkpoint_ns\": \"model:21f0d364-0b38-7725-782d-c21e3037b634\", \"ls_provider\": \"openai\", \"ls_model_name\": \"openai/gpt-6-luna\", \"ls_model_type\": \"chat\", \"ls_temperature\": null, \"lc_versions\": {\"langchain-core\": \"1.6.6\", \"langchain\": \"1.4.3\", \"langchain-openai\": \"1.6.7\"}}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "LLM"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "60d56c0ca94254f6",
+              "parentSpanId": "eb0d732be7fc2e44",
+              "name": "model",
+              "kind": 1,
+              "startTimeUnixNano": "1791061390551193088",
+              "endTimeUnixNano": "1791061392669106944",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"What is an agent trace?\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"23d0f761-90e1-432c-b253-4e3c8c458c76\"}}, {\"type\": \"ai\", \"data\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 33, \"prompt_tokens\": 84, \"total_tokens\": 117, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_06a9b3f010e59326006ac16d8870d087d08ff993cfcc854652\", \"service_tier\": \"default\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"lc_run--01a10393-dc5d-7d32-bed9-0509380eda49-0\", \"tool_calls\": [{\"name\": \"search\", \"args\": {\"query\": \"definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs\"}, \"id\": \"call_e6vczCDDmccHLPoAOjh2kOYk\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 84, \"output_tokens\": 33, \"total_tokens\": 117, \"input_token_details\": {\"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"reasoning\": 0}}}}, {\"type\": \"tool\", \"data\": {\"content\": \"An **agent trace** is a chronological record of an AI agent\u2019s execution: what information it received, what it did, what tools it called, and what results it observed as it worked toward a task.\\n\\nA trace commonly includes:\\n\\n1. **Input or task** \u2014 the user request and relevant context.\\n2. **Agent steps** \u2014 decisions or actions, such as searching, planning, or answering.\\n3. **Tool calls** \u2014 the tool, arguments, and time of the call.\\n4. **Tool results and observations** \u2014 outputs the agent received and incorporated.\\n5. **State or handoffs** \u2014 changes in task state, control passing between agents, or errors and retries.\\n6. **Final output** \u2014 the response or result delivered to the user.\\n\\nFor example:\\n\\n```text\\nInput: \u201cWhat is the weather in Paris?\u201d\\nAction: Call weather tool\\nTool call: weather(city=\\\"Paris\\\")\\nObservation: 18\u00b0C, light rain\\nAction: Compose response\\nOutput: \u201cIt\u2019s 18\u00b0C with light rain in Paris.\u201d\\n```\\n\\nTraces are useful for **debugging, auditing, evaluation, and reproducing agent behavior**. They may include timestamps, token usage, or other metadata.\\n\\n\u201cReasoning logs\u201d can be part of a trace in a limited form\u2014for example, a brief decision summary or rationale. A trace does **not** necessarily contain the model\u2019s full internal reasoning; many systems omit that and record actions, observations, and concise explanations instead.\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"tool\", \"name\": \"search\", \"id\": \"7f6ee68a-6916-4e2b-ae03-b079d29e5bf6\", \"tool_call_id\": \"call_e6vczCDDmccHLPoAOjh2kOYk\", \"artifact\": null, \"status\": \"success\"}}]}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "[{\"graph\": null, \"update\": {\"messages\": [{\"type\": \"ai\", \"data\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 124, \"prompt_tokens\": 430, \"total_tokens\": 554, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_030f6e7b0e7475f9006ac16d8ea0b087d082a3239e9778925d\", \"service_tier\": \"default\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"lc_run--01a10393-f4d7-7032-966d-9429a5bd07c7-0\", \"tool_calls\": [{\"name\": \"write\", \"args\": {\"facts\": \"An agent trace is a chronological record of an AI agent's execution: input/context, actions or steps, tool calls and arguments, tool results/observations, state changes or handoffs, and final output. Example: user asks weather in Paris; agent calls weather tool; receives 18\u00b0C/light rain; responds. Traces help with debugging, auditing, evaluation, and reproducing behavior. May include timestamps and usage metadata. A trace need not include full internal reasoning; systems often record actions, observations, and concise rationales instead.\"}, \"id\": \"call_xFkj7Fhucd9UOhCf7b3DfeFZ\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 430, \"output_tokens\": 124, \"total_tokens\": 554, \"input_token_details\": {\"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"reasoning\": 0}}}}]}, \"resume\": null, \"goto\": []}]"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.content",
+                  "value": {
+                    "stringValue": "What is an agent trace?"
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"research_agent\", \"langgraph_step\": 3, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:21f0d364-0b38-7725-782d-c21e3037b634\"}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "CHAIN"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.45.0"
+            }
+          },
+          {
+            "key": "service.instance.id",
+            "value": {
+              "stringValue": "e6b52b2a-b32e-4e1a-9d06-f5218d8c3ddf"
+            }
+          },
+          {
+            "key": "telemetry.auto.version",
+            "value": {
+              "stringValue": "0.66b0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:python3"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "openinference.instrumentation.langchain",
+            "version": "0.1.78"
+          },
+          "spans": [
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "728ada739cc7ae6d",
+              "parentSpanId": "14932544a2166d25",
+              "name": "ChatOpenAI",
+              "kind": 1,
+              "startTimeUnixNano": "1791061392670942976",
+              "endTimeUnixNano": "1791061394060199936",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [[{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"SystemMessage\"], \"kwargs\": {\"content\": \"Write a short answer from the facts.\", \"type\": \"system\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"An agent trace is a chronological record of an AI agent's execution: input/context, actions or steps, tool calls and arguments, tool results/observations, state changes or handoffs, and final output. Example: user asks weather in Paris; agent calls weather tool; receives 18\u00b0C/light rain; responds. Traces help with debugging, auditing, evaluation, and reproducing behavior. May include timestamps and usage metadata. A trace need not include full internal reasoning; systems often record actions, observations, and concise rationales instead.\", \"type\": \"human\", \"id\": \"ed09ee83-9fb6-40ef-8174-8c2804a7fcc5\"}}]]}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"generations\": [[{\"text\": \"An agent trace is a chronological record of an AI agent\u2019s inputs, actions, tool calls and results, state changes, and final output. It supports debugging, auditing, evaluation, and reproducing behavior, and may include timestamps or usage metadata without revealing full internal reasoning.\", \"generation_info\": {\"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ChatGeneration\", \"message\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"An agent trace is a chronological record of an AI agent\u2019s inputs, actions, tool calls and results, state changes, and final output. It supports debugging, auditing, evaluation, and reproducing behavior, and may include timestamps or usage metadata without revealing full internal reasoning.\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 91, \"prompt_tokens\": 126, \"total_tokens\": 217, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 28, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"chatcmpl-EV1AuajdlNExILxmIiNuNoF0pCRRM\", \"service_tier\": \"default\", \"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ai\", \"id\": \"lc_run--01a10393-fd1e-7963-ae27-524239338906-0\", \"usage_metadata\": {\"input_tokens\": 126, \"output_tokens\": 91, \"total_tokens\": 217, \"input_token_details\": {\"audio\": 0, \"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 28}}, \"tool_calls\": [], \"invalid_tool_calls\": []}}}]], \"llm_output\": {\"token_usage\": {\"completion_tokens\": 91, \"prompt_tokens\": 126, \"total_tokens\": 217, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 28, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"chatcmpl-EV1AuajdlNExILxmIiNuNoF0pCRRM\", \"service_tier\": \"default\"}, \"run\": null, \"type\": \"LLMResult\"}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "system"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.content",
+                  "value": {
+                    "stringValue": "Write a short answer from the facts."
+                  }
+                },
+                {
+                  "key": "llm.input_messages.1.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.1.message.content",
+                  "value": {
+                    "stringValue": "An agent trace is a chronological record of an AI agent's execution: input/context, actions or steps, tool calls and arguments, tool results/observations, state changes or handoffs, and final output. Example: user asks weather in Paris; agent calls weather tool; receives 18\u00b0C/light rain; responds. Traces help with debugging, auditing, evaluation, and reproducing behavior. May include timestamps and usage metadata. A trace need not include full internal reasoning; systems often record actions, observations, and concise rationales instead."
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.role",
+                  "value": {
+                    "stringValue": "assistant"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.content",
+                  "value": {
+                    "stringValue": "An agent trace is a chronological record of an AI agent\u2019s inputs, actions, tool calls and results, state changes, and final output. It supports debugging, auditing, evaluation, and reproducing behavior, and may include timestamps or usage metadata without revealing full internal reasoning."
+                  }
+                },
+                {
+                  "key": "llm.invocation_parameters",
+                  "value": {
+                    "stringValue": "{\"model\": \"openai/gpt-6-luna\", \"model_name\": \"openai/gpt-6-luna\", \"stream\": false, \"_type\": \"openai-chat\", \"stop\": null}"
+                  }
+                },
+                {
+                  "key": "llm.provider",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "llm.system",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "llm.model_name",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt",
+                  "value": {
+                    "intValue": "126"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion",
+                  "value": {
+                    "intValue": "91"
+                  }
+                },
+                {
+                  "key": "llm.token_count.total",
+                  "value": {
+                    "intValue": "217"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion_details.audio",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion_details.reasoning",
+                  "value": {
+                    "intValue": "28"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt_details.audio",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt_details.cache_read",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.finish_reason",
+                  "value": {
+                    "stringValue": "stop"
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_chat_model\", \"lc_agent_name\": \"writer_agent\", \"langgraph_step\": 1, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"tools:00eb531d-6695-ce02-4365-127d8726415f|model:c297e3f7-a021-896c-eec6-d66a0769e2a5\", \"checkpoint_ns\": \"tools:00eb531d-6695-ce02-4365-127d8726415f\", \"ls_provider\": \"openai\", \"ls_model_name\": \"openai/gpt-6-luna\", \"ls_model_type\": \"chat\", \"ls_temperature\": null, \"lc_versions\": {\"langchain-core\": \"1.6.6\", \"langchain\": \"1.4.3\", \"langchain-openai\": \"1.6.7\"}}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "LLM"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "14932544a2166d25",
+              "parentSpanId": "ef9ac90e66fc36ce",
+              "name": "model",
+              "kind": 1,
+              "startTimeUnixNano": "1791061392670557952",
+              "endTimeUnixNano": "1791061394060498944",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"An agent trace is a chronological record of an AI agent's execution: input/context, actions or steps, tool calls and arguments, tool results/observations, state changes or handoffs, and final output. Example: user asks weather in Paris; agent calls weather tool; receives 18\u00b0C/light rain; responds. Traces help with debugging, auditing, evaluation, and reproducing behavior. May include timestamps and usage metadata. A trace need not include full internal reasoning; systems often record actions, observations, and concise rationales instead.\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"ed09ee83-9fb6-40ef-8174-8c2804a7fcc5\"}}]}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "[{\"graph\": null, \"update\": {\"messages\": [{\"type\": \"ai\", \"data\": {\"content\": \"An agent trace is a chronological record of an AI agent\u2019s inputs, actions, tool calls and results, state changes, and final output. It supports debugging, auditing, evaluation, and reproducing behavior, and may include timestamps or usage metadata without revealing full internal reasoning.\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 91, \"prompt_tokens\": 126, \"total_tokens\": 217, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 28, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"chatcmpl-EV1AuajdlNExILxmIiNuNoF0pCRRM\", \"service_tier\": \"default\", \"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"writer_agent\", \"id\": \"lc_run--01a10393-fd1e-7963-ae27-524239338906-0\", \"tool_calls\": [], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 126, \"output_tokens\": 91, \"total_tokens\": 217, \"input_token_details\": {\"audio\": 0, \"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 28}}}}]}, \"resume\": null, \"goto\": []}]"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.content",
+                  "value": {
+                    "stringValue": "An agent trace is a chronological record of an AI agent's execution: input/context, actions or steps, tool calls and arguments, tool results/observations, state changes or handoffs, and final output. Example: user asks weather in Paris; agent calls weather tool; receives 18\u00b0C/light rain; responds. Traces help with debugging, auditing, evaluation, and reproducing behavior. May include timestamps and usage metadata. A trace need not include full internal reasoning; systems often record actions, observations, and concise rationales instead."
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"writer_agent\", \"langgraph_step\": 1, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"tools:00eb531d-6695-ce02-4365-127d8726415f|model:c297e3f7-a021-896c-eec6-d66a0769e2a5\", \"checkpoint_ns\": \"tools:00eb531d-6695-ce02-4365-127d8726415f\"}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "CHAIN"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "ef9ac90e66fc36ce",
+              "parentSpanId": "e7b745c3c97657b8",
+              "name": "writer_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1791061392670056960",
+              "endTimeUnixNano": "1791061394060797952",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [{\"role\": \"user\", \"content\": \"An agent trace is a chronological record of an AI agent's execution: input/context, actions or steps, tool calls and arguments, tool results/observations, state changes or handoffs, and final output. Example: user asks weather in Paris; agent calls weather tool; receives 18\u00b0C/light rain; responds. Traces help with debugging, auditing, evaluation, and reproducing behavior. May include timestamps and usage metadata. A trace need not include full internal reasoning; systems often record actions, observations, and concise rationales instead.\"}]}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"An agent trace is a chronological record of an AI agent's execution: input/context, actions or steps, tool calls and arguments, tool results/observations, state changes or handoffs, and final output. Example: user asks weather in Paris; agent calls weather tool; receives 18\u00b0C/light rain; responds. Traces help with debugging, auditing, evaluation, and reproducing behavior. May include timestamps and usage metadata. A trace need not include full internal reasoning; systems often record actions, observations, and concise rationales instead.\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"ed09ee83-9fb6-40ef-8174-8c2804a7fcc5\"}}, {\"type\": \"ai\", \"data\": {\"content\": \"An agent trace is a chronological record of an AI agent\u2019s inputs, actions, tool calls and results, state changes, and final output. It supports debugging, auditing, evaluation, and reproducing behavior, and may include timestamps or usage metadata without revealing full internal reasoning.\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 91, \"prompt_tokens\": 126, \"total_tokens\": 217, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 28, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"chatcmpl-EV1AuajdlNExILxmIiNuNoF0pCRRM\", \"service_tier\": \"default\", \"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"writer_agent\", \"id\": \"lc_run--01a10393-fd1e-7963-ae27-524239338906-0\", \"tool_calls\": [], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 126, \"output_tokens\": 91, \"total_tokens\": 217, \"input_token_details\": {\"audio\": 0, \"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 28}}}}]}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"writer_agent\", \"langgraph_step\": 4, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:00eb531d-6695-ce02-4365-127d8726415f\", \"checkpoint_ns\": \"tools:00eb531d-6695-ce02-4365-127d8726415f\"}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "AGENT"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "e7b745c3c97657b8",
+              "parentSpanId": "dd561d961d3363ad",
+              "name": "write",
+              "kind": 1,
+              "startTimeUnixNano": "1791061392669801984",
+              "endTimeUnixNano": "1791061394060957952",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "An agent trace is a chronological record of an AI agent's execution: input/context, actions or steps, tool calls and arguments, tool results/observations, state changes or handoffs, and final output. Example: user asks weather in Paris; agent calls weather tool; receives 18\u00b0C/light rain; responds. Traces help with debugging, auditing, evaluation, and reproducing behavior. May include timestamps and usage metadata. A trace need not include full internal reasoning; systems often record actions, observations, and concise rationales instead."
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"type\": \"tool\", \"data\": {\"content\": \"An agent trace is a chronological record of an AI agent\u2019s inputs, actions, tool calls and results, state changes, and final output. It supports debugging, auditing, evaluation, and reproducing behavior, and may include timestamps or usage metadata without revealing full internal reasoning.\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"tool\", \"name\": \"write\", \"id\": null, \"tool_call_id\": \"call_xFkj7Fhucd9UOhCf7b3DfeFZ\", \"artifact\": null, \"status\": \"success\"}}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "tool.name",
+                  "value": {
+                    "stringValue": "write"
+                  }
+                },
+                {
+                  "key": "tool.description",
+                  "value": {
+                    "stringValue": "Write a short answer from facts."
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"research_agent\", \"langgraph_step\": 4, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:00eb531d-6695-ce02-4365-127d8726415f\", \"checkpoint_ns\": \"tools:00eb531d-6695-ce02-4365-127d8726415f\"}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "TOOL"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "dd561d961d3363ad",
+              "parentSpanId": "eb0d732be7fc2e44",
+              "name": "tools",
+              "kind": 1,
+              "startTimeUnixNano": "1791061392669481984",
+              "endTimeUnixNano": "1791061394061363968",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "[{\"name\": \"write\", \"args\": {\"facts\": \"An agent trace is a chronological record of an AI agent's execution: input/context, actions or steps, tool calls and arguments, tool results/observations, state changes or handoffs, and final output. Example: user asks weather in Paris; agent calls weather tool; receives 18\u00b0C/light rain; responds. Traces help with debugging, auditing, evaluation, and reproducing behavior. May include timestamps and usage metadata. A trace need not include full internal reasoning; systems often record actions, observations, and concise rationales instead.\"}, \"id\": \"call_xFkj7Fhucd9UOhCf7b3DfeFZ\", \"type\": \"tool_call\"}]"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [{\"type\": \"tool\", \"data\": {\"content\": \"An agent trace is a chronological record of an AI agent\u2019s inputs, actions, tool calls and results, state changes, and final output. It supports debugging, auditing, evaluation, and reproducing behavior, and may include timestamps or usage metadata without revealing full internal reasoning.\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"tool\", \"name\": \"write\", \"id\": \"43a046a8-1cb6-442c-8adb-8eda32752546\", \"tool_call_id\": \"call_xFkj7Fhucd9UOhCf7b3DfeFZ\", \"artifact\": null, \"status\": \"success\"}}]}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"research_agent\", \"langgraph_step\": 4, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:00eb531d-6695-ce02-4365-127d8726415f\"}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "CHAIN"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "0215ffe680b157f1",
+              "parentSpanId": "9d95519b4f2eefed",
+              "name": "ChatOpenAI",
+              "kind": 1,
+              "startTimeUnixNano": "1791061394061939968",
+              "endTimeUnixNano": "1791061395720283904",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [[{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"SystemMessage\"], \"kwargs\": {\"content\": \"Use search, then write, then return the written answer.\", \"type\": \"system\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is an agent trace?\", \"type\": \"human\", \"id\": \"23d0f761-90e1-432c-b253-4e3c8c458c76\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 33, \"prompt_tokens\": 84, \"total_tokens\": 117, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_06a9b3f010e59326006ac16d8870d087d08ff993cfcc854652\", \"service_tier\": \"default\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"lc_run--01a10393-dc5d-7d32-bed9-0509380eda49-0\", \"tool_calls\": [{\"name\": \"search\", \"args\": {\"query\": \"definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs\"}, \"id\": \"call_e6vczCDDmccHLPoAOjh2kOYk\", \"type\": \"tool_call\"}], \"usage_metadata\": {\"input_tokens\": 84, \"output_tokens\": 33, \"total_tokens\": 117, \"input_token_details\": {\"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"reasoning\": 0}}, \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"An **agent trace** is a chronological record of an AI agent\u2019s execution: what information it received, what it did, what tools it called, and what results it observed as it worked toward a task.\\n\\nA trace commonly includes:\\n\\n1. **Input or task** \u2014 the user request and relevant context.\\n2. **Agent steps** \u2014 decisions or actions, such as searching, planning, or answering.\\n3. **Tool calls** \u2014 the tool, arguments, and time of the call.\\n4. **Tool results and observations** \u2014 outputs the agent received and incorporated.\\n5. **State or handoffs** \u2014 changes in task state, control passing between agents, or errors and retries.\\n6. **Final output** \u2014 the response or result delivered to the user.\\n\\nFor example:\\n\\n```text\\nInput: \u201cWhat is the weather in Paris?\u201d\\nAction: Call weather tool\\nTool call: weather(city=\\\"Paris\\\")\\nObservation: 18\u00b0C, light rain\\nAction: Compose response\\nOutput: \u201cIt\u2019s 18\u00b0C with light rain in Paris.\u201d\\n```\\n\\nTraces are useful for **debugging, auditing, evaluation, and reproducing agent behavior**. They may include timestamps, token usage, or other metadata.\\n\\n\u201cReasoning logs\u201d can be part of a trace in a limited form\u2014for example, a brief decision summary or rationale. A trace does **not** necessarily contain the model\u2019s full internal reasoning; many systems omit that and record actions, observations, and concise explanations instead.\", \"type\": \"tool\", \"name\": \"search\", \"id\": \"7f6ee68a-6916-4e2b-ae03-b079d29e5bf6\", \"tool_call_id\": \"call_e6vczCDDmccHLPoAOjh2kOYk\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 124, \"prompt_tokens\": 430, \"total_tokens\": 554, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_030f6e7b0e7475f9006ac16d8ea0b087d082a3239e9778925d\", \"service_tier\": \"default\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"lc_run--01a10393-f4d7-7032-966d-9429a5bd07c7-0\", \"tool_calls\": [{\"name\": \"write\", \"args\": {\"facts\": \"An agent trace is a chronological record of an AI agent's execution: input/context, actions or steps, tool calls and arguments, tool results/observations, state changes or handoffs, and final output. Example: user asks weather in Paris; agent calls weather tool; receives 18\u00b0C/light rain; responds. Traces help with debugging, auditing, evaluation, and reproducing behavior. May include timestamps and usage metadata. A trace need not include full internal reasoning; systems often record actions, observations, and concise rationales instead.\"}, \"id\": \"call_xFkj7Fhucd9UOhCf7b3DfeFZ\", \"type\": \"tool_call\"}], \"usage_metadata\": {\"input_tokens\": 430, \"output_tokens\": 124, \"total_tokens\": 554, \"input_token_details\": {\"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"reasoning\": 0}}, \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"An agent trace is a chronological record of an AI agent\u2019s inputs, actions, tool calls and results, state changes, and final output. It supports debugging, auditing, evaluation, and reproducing behavior, and may include timestamps or usage metadata without revealing full internal reasoning.\", \"type\": \"tool\", \"name\": \"write\", \"id\": \"43a046a8-1cb6-442c-8adb-8eda32752546\", \"tool_call_id\": \"call_xFkj7Fhucd9UOhCf7b3DfeFZ\", \"status\": \"success\"}}]]}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"generations\": [[{\"text\": \"An agent trace is a chronological record of an AI agent\u2019s activity: its inputs, actions, tool calls and results, state changes, and final output. Traces help with debugging, auditing, and evaluating agent behavior. They may include timestamps or other metadata, but don\u2019t necessarily reveal the agent\u2019s full internal reasoning.\", \"generation_info\": {\"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ChatGeneration\", \"message\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"An agent trace is a chronological record of an AI agent\u2019s activity: its inputs, actions, tool calls and results, state changes, and final output. Traces help with debugging, auditing, and evaluating agent behavior. They may include timestamps or other metadata, but don\u2019t necessarily reveal the agent\u2019s full internal reasoning.\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 68, \"prompt_tokens\": 618, \"total_tokens\": 686, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_06f57ef1b0e4b810006ac16d92257c87d09bf101308035eee7\", \"service_tier\": \"default\", \"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ai\", \"id\": \"lc_run--01a10394-028d-7391-a431-db7ad95c5ee4-0\", \"usage_metadata\": {\"input_tokens\": 618, \"output_tokens\": 68, \"total_tokens\": 686, \"input_token_details\": {\"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"reasoning\": 0}}, \"tool_calls\": [], \"invalid_tool_calls\": []}}}]], \"llm_output\": {\"token_usage\": {\"completion_tokens\": 68, \"prompt_tokens\": 618, \"total_tokens\": 686, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_06f57ef1b0e4b810006ac16d92257c87d09bf101308035eee7\", \"service_tier\": \"default\"}, \"run\": null, \"type\": \"LLMResult\"}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "system"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.content",
+                  "value": {
+                    "stringValue": "Use search, then write, then return the written answer."
+                  }
+                },
+                {
+                  "key": "llm.input_messages.1.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.1.message.content",
+                  "value": {
+                    "stringValue": "What is an agent trace?"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.2.message.role",
+                  "value": {
+                    "stringValue": "assistant"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.2.message.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.2.message.tool_calls.0.tool_call.id",
+                  "value": {
+                    "stringValue": "call_e6vczCDDmccHLPoAOjh2kOYk"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.2.message.tool_calls.0.tool_call.function.name",
+                  "value": {
+                    "stringValue": "search"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments",
+                  "value": {
+                    "stringValue": "{\"query\": \"definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs\"}"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.3.message.role",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.3.message.content",
+                  "value": {
+                    "stringValue": "An **agent trace** is a chronological record of an AI agent\u2019s execution: what information it received, what it did, what tools it called, and what results it observed as it worked toward a task.\n\nA trace commonly includes:\n\n1. **Input or task** \u2014 the user request and relevant context.\n2. **Agent steps** \u2014 decisions or actions, such as searching, planning, or answering.\n3. **Tool calls** \u2014 the tool, arguments, and time of the call.\n4. **Tool results and observations** \u2014 outputs the agent received and incorporated.\n5. **State or handoffs** \u2014 changes in task state, control passing between agents, or errors and retries.\n6. **Final output** \u2014 the response or result delivered to the user.\n\nFor example:\n\n```text\nInput: \u201cWhat is the weather in Paris?\u201d\nAction: Call weather tool\nTool call: weather(city=\"Paris\")\nObservation: 18\u00b0C, light rain\nAction: Compose response\nOutput: \u201cIt\u2019s 18\u00b0C with light rain in Paris.\u201d\n```\n\nTraces are useful for **debugging, auditing, evaluation, and reproducing agent behavior**. They may include timestamps, token usage, or other metadata.\n\n\u201cReasoning logs\u201d can be part of a trace in a limited form\u2014for example, a brief decision summary or rationale. A trace does **not** necessarily contain the model\u2019s full internal reasoning; many systems omit that and record actions, observations, and concise explanations instead."
+                  }
+                },
+                {
+                  "key": "llm.input_messages.3.message.tool_call_id",
+                  "value": {
+                    "stringValue": "call_e6vczCDDmccHLPoAOjh2kOYk"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.3.message.name",
+                  "value": {
+                    "stringValue": "search"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.4.message.role",
+                  "value": {
+                    "stringValue": "assistant"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.4.message.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.4.message.tool_calls.0.tool_call.id",
+                  "value": {
+                    "stringValue": "call_xFkj7Fhucd9UOhCf7b3DfeFZ"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.4.message.tool_calls.0.tool_call.function.name",
+                  "value": {
+                    "stringValue": "write"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.4.message.tool_calls.0.tool_call.function.arguments",
+                  "value": {
+                    "stringValue": "{\"facts\": \"An agent trace is a chronological record of an AI agent's execution: input/context, actions or steps, tool calls and arguments, tool results/observations, state changes or handoffs, and final output. Example: user asks weather in Paris; agent calls weather tool; receives 18\u00b0C/light rain; responds. Traces help with debugging, auditing, evaluation, and reproducing behavior. May include timestamps and usage metadata. A trace need not include full internal reasoning; systems often record actions, observations, and concise rationales instead.\"}"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.5.message.role",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.5.message.content",
+                  "value": {
+                    "stringValue": "An agent trace is a chronological record of an AI agent\u2019s inputs, actions, tool calls and results, state changes, and final output. It supports debugging, auditing, evaluation, and reproducing behavior, and may include timestamps or usage metadata without revealing full internal reasoning."
+                  }
+                },
+                {
+                  "key": "llm.input_messages.5.message.tool_call_id",
+                  "value": {
+                    "stringValue": "call_xFkj7Fhucd9UOhCf7b3DfeFZ"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.5.message.name",
+                  "value": {
+                    "stringValue": "write"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.role",
+                  "value": {
+                    "stringValue": "assistant"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.content",
+                  "value": {
+                    "stringValue": "An agent trace is a chronological record of an AI agent\u2019s activity: its inputs, actions, tool calls and results, state changes, and final output. Traces help with debugging, auditing, and evaluating agent behavior. They may include timestamps or other metadata, but don\u2019t necessarily reveal the agent\u2019s full internal reasoning."
+                  }
+                },
+                {
+                  "key": "llm.invocation_parameters",
+                  "value": {
+                    "stringValue": "{\"model\": \"openai/gpt-6-luna\", \"model_name\": \"openai/gpt-6-luna\", \"stream\": false, \"_type\": \"openai-chat\", \"stop\": null, \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"search\", \"description\": \"Find key facts about a topic.\", \"parameters\": {\"properties\": {\"query\": {\"type\": \"string\"}}, \"required\": [\"query\"], \"type\": \"object\"}}}, {\"type\": \"function\", \"function\": {\"name\": \"write\", \"description\": \"Write a short answer from facts.\", \"parameters\": {\"properties\": {\"facts\": {\"type\": \"string\"}}, \"required\": [\"facts\"], \"type\": \"object\"}}}]}"
+                  }
+                },
+                {
+                  "key": "llm.tools.0.tool.json_schema",
+                  "value": {
+                    "stringValue": "{\"type\": \"function\", \"function\": {\"name\": \"search\", \"description\": \"Find key facts about a topic.\", \"parameters\": {\"properties\": {\"query\": {\"type\": \"string\"}}, \"required\": [\"query\"], \"type\": \"object\"}}}"
+                  }
+                },
+                {
+                  "key": "llm.tools.1.tool.json_schema",
+                  "value": {
+                    "stringValue": "{\"type\": \"function\", \"function\": {\"name\": \"write\", \"description\": \"Write a short answer from facts.\", \"parameters\": {\"properties\": {\"facts\": {\"type\": \"string\"}}, \"required\": [\"facts\"], \"type\": \"object\"}}}"
+                  }
+                },
+                {
+                  "key": "llm.provider",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "llm.system",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "llm.model_name",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt",
+                  "value": {
+                    "intValue": "618"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion",
+                  "value": {
+                    "intValue": "68"
+                  }
+                },
+                {
+                  "key": "llm.token_count.total",
+                  "value": {
+                    "intValue": "686"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion_details.reasoning",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt_details.cache_read",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.finish_reason",
+                  "value": {
+                    "stringValue": "stop"
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_chat_model\", \"lc_agent_name\": \"research_agent\", \"langgraph_step\": 5, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:02b414c2-f445-e60e-b73e-628deb877b8c\", \"checkpoint_ns\": \"model:02b414c2-f445-e60e-b73e-628deb877b8c\", \"ls_provider\": \"openai\", \"ls_model_name\": \"openai/gpt-6-luna\", \"ls_model_type\": \"chat\", \"ls_temperature\": null, \"lc_versions\": {\"langchain-core\": \"1.6.6\", \"langchain\": \"1.4.3\", \"langchain-openai\": \"1.6.7\"}}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "LLM"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "9d95519b4f2eefed",
+              "parentSpanId": "eb0d732be7fc2e44",
+              "name": "model",
+              "kind": 1,
+              "startTimeUnixNano": "1791061394061615872",
+              "endTimeUnixNano": "1791061395721248000",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"What is an agent trace?\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"23d0f761-90e1-432c-b253-4e3c8c458c76\"}}, {\"type\": \"ai\", \"data\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 33, \"prompt_tokens\": 84, \"total_tokens\": 117, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_06a9b3f010e59326006ac16d8870d087d08ff993cfcc854652\", \"service_tier\": \"default\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"lc_run--01a10393-dc5d-7d32-bed9-0509380eda49-0\", \"tool_calls\": [{\"name\": \"search\", \"args\": {\"query\": \"definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs\"}, \"id\": \"call_e6vczCDDmccHLPoAOjh2kOYk\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 84, \"output_tokens\": 33, \"total_tokens\": 117, \"input_token_details\": {\"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"reasoning\": 0}}}}, {\"type\": \"tool\", \"data\": {\"content\": \"An **agent trace** is a chronological record of an AI agent\u2019s execution: what information it received, what it did, what tools it called, and what results it observed as it worked toward a task.\\n\\nA trace commonly includes:\\n\\n1. **Input or task** \u2014 the user request and relevant context.\\n2. **Agent steps** \u2014 decisions or actions, such as searching, planning, or answering.\\n3. **Tool calls** \u2014 the tool, arguments, and time of the call.\\n4. **Tool results and observations** \u2014 outputs the agent received and incorporated.\\n5. **State or handoffs** \u2014 changes in task state, control passing between agents, or errors and retries.\\n6. **Final output** \u2014 the response or result delivered to the user.\\n\\nFor example:\\n\\n```text\\nInput: \u201cWhat is the weather in Paris?\u201d\\nAction: Call weather tool\\nTool call: weather(city=\\\"Paris\\\")\\nObservation: 18\u00b0C, light rain\\nAction: Compose response\\nOutput: \u201cIt\u2019s 18\u00b0C with light rain in Paris.\u201d\\n```\\n\\nTraces are useful for **debugging, auditing, evaluation, and reproducing agent behavior**. They may include timestamps, token usage, or other metadata.\\n\\n\u201cReasoning logs\u201d can be part of a trace in a limited form\u2014for example, a brief decision summary or rationale. A trace does **not** necessarily contain the model\u2019s full internal reasoning; many systems omit that and record actions, observations, and concise explanations instead.\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"tool\", \"name\": \"search\", \"id\": \"7f6ee68a-6916-4e2b-ae03-b079d29e5bf6\", \"tool_call_id\": \"call_e6vczCDDmccHLPoAOjh2kOYk\", \"artifact\": null, \"status\": \"success\"}}, {\"type\": \"ai\", \"data\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 124, \"prompt_tokens\": 430, \"total_tokens\": 554, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_030f6e7b0e7475f9006ac16d8ea0b087d082a3239e9778925d\", \"service_tier\": \"default\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"lc_run--01a10393-f4d7-7032-966d-9429a5bd07c7-0\", \"tool_calls\": [{\"name\": \"write\", \"args\": {\"facts\": \"An agent trace is a chronological record of an AI agent's execution: input/context, actions or steps, tool calls and arguments, tool results/observations, state changes or handoffs, and final output. Example: user asks weather in Paris; agent calls weather tool; receives 18\u00b0C/light rain; responds. Traces help with debugging, auditing, evaluation, and reproducing behavior. May include timestamps and usage metadata. A trace need not include full internal reasoning; systems often record actions, observations, and concise rationales instead.\"}, \"id\": \"call_xFkj7Fhucd9UOhCf7b3DfeFZ\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 430, \"output_tokens\": 124, \"total_tokens\": 554, \"input_token_details\": {\"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"reasoning\": 0}}}}, {\"type\": \"tool\", \"data\": {\"content\": \"An agent trace is a chronological record of an AI agent\u2019s inputs, actions, tool calls and results, state changes, and final output. It supports debugging, auditing, evaluation, and reproducing behavior, and may include timestamps or usage metadata without revealing full internal reasoning.\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"tool\", \"name\": \"write\", \"id\": \"43a046a8-1cb6-442c-8adb-8eda32752546\", \"tool_call_id\": \"call_xFkj7Fhucd9UOhCf7b3DfeFZ\", \"artifact\": null, \"status\": \"success\"}}]}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "[{\"graph\": null, \"update\": {\"messages\": [{\"type\": \"ai\", \"data\": {\"content\": \"An agent trace is a chronological record of an AI agent\u2019s activity: its inputs, actions, tool calls and results, state changes, and final output. Traces help with debugging, auditing, and evaluating agent behavior. They may include timestamps or other metadata, but don\u2019t necessarily reveal the agent\u2019s full internal reasoning.\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 68, \"prompt_tokens\": 618, \"total_tokens\": 686, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_06f57ef1b0e4b810006ac16d92257c87d09bf101308035eee7\", \"service_tier\": \"default\", \"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"lc_run--01a10394-028d-7391-a431-db7ad95c5ee4-0\", \"tool_calls\": [], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 618, \"output_tokens\": 68, \"total_tokens\": 686, \"input_token_details\": {\"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"reasoning\": 0}}}}]}, \"resume\": null, \"goto\": []}]"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.content",
+                  "value": {
+                    "stringValue": "What is an agent trace?"
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"research_agent\", \"langgraph_step\": 5, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:02b414c2-f445-e60e-b73e-628deb877b8c\"}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "CHAIN"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "ce49716bb1a145a783f6aad7c47e0021",
+              "spanId": "eb0d732be7fc2e44",
+              "name": "research_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1791061384283618816",
+              "endTimeUnixNano": "1791061395721590016",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [{\"role\": \"user\", \"content\": \"What is an agent trace?\"}]}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"What is an agent trace?\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"23d0f761-90e1-432c-b253-4e3c8c458c76\"}}, {\"type\": \"ai\", \"data\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 33, \"prompt_tokens\": 84, \"total_tokens\": 117, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_06a9b3f010e59326006ac16d8870d087d08ff993cfcc854652\", \"service_tier\": \"default\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"lc_run--01a10393-dc5d-7d32-bed9-0509380eda49-0\", \"tool_calls\": [{\"name\": \"search\", \"args\": {\"query\": \"definition of agent trace in AI agents, sequence of steps actions observations tool calls reasoning logs\"}, \"id\": \"call_e6vczCDDmccHLPoAOjh2kOYk\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 84, \"output_tokens\": 33, \"total_tokens\": 117, \"input_token_details\": {\"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"reasoning\": 0}}}}, {\"type\": \"tool\", \"data\": {\"content\": \"An **agent trace** is a chronological record of an AI agent\u2019s execution: what information it received, what it did, what tools it called, and what results it observed as it worked toward a task.\\n\\nA trace commonly includes:\\n\\n1. **Input or task** \u2014 the user request and relevant context.\\n2. **Agent steps** \u2014 decisions or actions, such as searching, planning, or answering.\\n3. **Tool calls** \u2014 the tool, arguments, and time of the call.\\n4. **Tool results and observations** \u2014 outputs the agent received and incorporated.\\n5. **State or handoffs** \u2014 changes in task state, control passing between agents, or errors and retries.\\n6. **Final output** \u2014 the response or result delivered to the user.\\n\\nFor example:\\n\\n```text\\nInput: \u201cWhat is the weather in Paris?\u201d\\nAction: Call weather tool\\nTool call: weather(city=\\\"Paris\\\")\\nObservation: 18\u00b0C, light rain\\nAction: Compose response\\nOutput: \u201cIt\u2019s 18\u00b0C with light rain in Paris.\u201d\\n```\\n\\nTraces are useful for **debugging, auditing, evaluation, and reproducing agent behavior**. They may include timestamps, token usage, or other metadata.\\n\\n\u201cReasoning logs\u201d can be part of a trace in a limited form\u2014for example, a brief decision summary or rationale. A trace does **not** necessarily contain the model\u2019s full internal reasoning; many systems omit that and record actions, observations, and concise explanations instead.\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"tool\", \"name\": \"search\", \"id\": \"7f6ee68a-6916-4e2b-ae03-b079d29e5bf6\", \"tool_call_id\": \"call_e6vczCDDmccHLPoAOjh2kOYk\", \"artifact\": null, \"status\": \"success\"}}, {\"type\": \"ai\", \"data\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 124, \"prompt_tokens\": 430, \"total_tokens\": 554, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_030f6e7b0e7475f9006ac16d8ea0b087d082a3239e9778925d\", \"service_tier\": \"default\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"lc_run--01a10393-f4d7-7032-966d-9429a5bd07c7-0\", \"tool_calls\": [{\"name\": \"write\", \"args\": {\"facts\": \"An agent trace is a chronological record of an AI agent's execution: input/context, actions or steps, tool calls and arguments, tool results/observations, state changes or handoffs, and final output. Example: user asks weather in Paris; agent calls weather tool; receives 18\u00b0C/light rain; responds. Traces help with debugging, auditing, evaluation, and reproducing behavior. May include timestamps and usage metadata. A trace need not include full internal reasoning; systems often record actions, observations, and concise rationales instead.\"}, \"id\": \"call_xFkj7Fhucd9UOhCf7b3DfeFZ\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 430, \"output_tokens\": 124, \"total_tokens\": 554, \"input_token_details\": {\"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"reasoning\": 0}}}}, {\"type\": \"tool\", \"data\": {\"content\": \"An agent trace is a chronological record of an AI agent\u2019s inputs, actions, tool calls and results, state changes, and final output. It supports debugging, auditing, evaluation, and reproducing behavior, and may include timestamps or usage metadata without revealing full internal reasoning.\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"tool\", \"name\": \"write\", \"id\": \"43a046a8-1cb6-442c-8adb-8eda32752546\", \"tool_call_id\": \"call_xFkj7Fhucd9UOhCf7b3DfeFZ\", \"artifact\": null, \"status\": \"success\"}}, {\"type\": \"ai\", \"data\": {\"content\": \"An agent trace is a chronological record of an AI agent\u2019s activity: its inputs, actions, tool calls and results, state changes, and final output. Traces help with debugging, auditing, and evaluating agent behavior. They may include timestamps or other metadata, but don\u2019t necessarily reveal the agent\u2019s full internal reasoning.\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 68, \"prompt_tokens\": 618, \"total_tokens\": 686, \"completion_tokens_details\": {\"accepted_prediction_tokens\": null, \"audio_tokens\": null, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": null, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": null, \"cache_write_tokens\": 0, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null, \"cache_creation_tokens\": 0}}, \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\", \"system_fingerprint\": null, \"id\": \"resp_06f57ef1b0e4b810006ac16d92257c87d09bf101308035eee7\", \"service_tier\": \"default\", \"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"lc_run--01a10394-028d-7391-a431-db7ad95c5ee4-0\", \"tool_calls\": [], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 618, \"output_tokens\": 68, \"total_tokens\": 686, \"input_token_details\": {\"cache_read\": 0, \"cache_creation\": 0}, \"output_token_details\": {\"reasoning\": 0}}}}]}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"research_agent\"}"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "AGENT"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

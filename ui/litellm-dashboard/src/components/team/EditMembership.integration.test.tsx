@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import EditMembership from "./EditMembership";
@@ -27,6 +29,27 @@ const additionalFields = [
 ];
 
 const teamMemberConfig = { title: "Edit Member", showEmail: true, showUserId: true, roleOptions, additionalFields };
+
+const tempBudgetConfig = {
+  ...teamMemberConfig,
+  additionalFields: [
+    ...additionalFields,
+    { name: "temp_budget_increase", label: "Temporary Budget Increase (USD)", type: "numerical" as const, step: 0.01 },
+    { name: "temp_budget_expiry", label: "Temporary Budget Expiry (UTC)", type: "utc-datetime" as const },
+  ],
+};
+
+const TEMP_BUDGET_PAIR_MESSAGE = "Set both a temporary budget increase and its expiry, or neither";
+
+const cappedMember = { user_id: "u1", user_email: "a@b.com", role: "user", max_budget_in_team: 10 };
+
+const tempBudgetMember = {
+  user_id: "u1",
+  user_email: "a@b.com",
+  role: "user",
+  temp_budget_increase: 25,
+  temp_budget_expiry: "2030-01-02T03:04:00Z",
+};
 
 const orgMemberConfig = { title: "Edit Member", showEmail: true, showUserId: true, roleOptions };
 
@@ -81,6 +104,79 @@ describe("EditMembership submit payload", () => {
       rpm_limit: 20,
       allowed_models: ["gpt-4o"],
     });
+  });
+
+  it("seeds the per-model budget editor from the member's stored budget and submits the edited cap", async () => {
+    const modelBudgetConfig = {
+      ...teamMemberConfig,
+      additionalFields: [
+        ...additionalFields,
+        {
+          name: "model_max_budget",
+          label: "Per-Model Budgets",
+          type: "model-max-budget" as const,
+          availableModels: ["gpt-4o"],
+          premiumUser: true,
+        },
+      ],
+    };
+    const member = {
+      user_id: "u1",
+      user_email: "a@b.com",
+      role: "user",
+      model_max_budget: { "gpt-4o": { max_budget: 5, budget_duration: "30d" } },
+    };
+    renderEdit(modelBudgetConfig, member);
+
+    const cap = await screen.findByPlaceholderText("Max spend ($)");
+    expect(cap).toHaveValue(5);
+    fireEvent.change(cap, { target: { value: "9" } });
+    save();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(submitted().model_max_budget).toStrictEqual({ "gpt-4o": { budget_limit: 9, time_period: "30d" } });
+  });
+
+  it("saves a role-only edit for a member with stored model caps", async () => {
+    const modelBudgetConfig = {
+      ...teamMemberConfig,
+      additionalFields: [
+        ...additionalFields,
+        {
+          name: "model_max_budget",
+          label: "Per-Model Budgets",
+          type: "model-max-budget" as const,
+          availableModels: ["gpt-4o"],
+          premiumUser: true,
+        },
+      ],
+    };
+    const member = {
+      user_id: "u1",
+      user_email: "a@b.com",
+      role: "user",
+      model_max_budget: { "gpt-4o": { max_budget: 5, budget_duration: "30d" } },
+    };
+    renderEdit(modelBudgetConfig, member);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Role(Current: User)" }));
+    await user.click(await screen.findByRole("option", { name: "Admin" }));
+    save();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    const expectedPayload = {
+      user_email: "a@b.com",
+      user_id: "u1",
+      role: "admin",
+      max_budget_in_team: null,
+      budget_duration: null,
+      tpm_limit: null,
+      rpm_limit: null,
+      allowed_models: [],
+      model_max_budget: { "gpt-4o": { budget_limit: 5, time_period: "30d" } },
+    };
+    expect(submitted()).toStrictEqual(expectedPayload);
   });
 
   it("omits a field the config hides even when the member record carries it", async () => {
@@ -206,15 +302,40 @@ describe("EditMembership submit payload", () => {
     expect(submitted().role).toBe("admin");
   });
 
-  it("blocks submission when the email is not an address", async () => {
-    renderEdit(orgMemberConfig, { user_id: "u1", user_email: "a@b.com", role: "user" });
+  it.each(["john_example.com#EXT#@tenant.onmicrosoft.com", "john#tag@example.com"])(
+    "saves budget and limit edits for %s",
+    async (user_email) => {
+      renderEdit(teamMemberConfig, { ...cappedMember, user_email });
 
-    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "not-an-email" } });
-    save();
+      fireEvent.change(screen.getByLabelText("Team Member Budget (USD)"), { target: { value: "25" } });
+      fireEvent.change(screen.getByLabelText("Team Member TPM Limit"), { target: { value: "100" } });
+      fireEvent.change(screen.getByLabelText("Team Member RPM Limit"), { target: { value: "10" } });
+      save();
 
-    expect(await screen.findByText("Please enter a valid email!")).toBeInTheDocument();
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+      const expectedChanges = {
+        user_id: "u1",
+        user_email,
+        max_budget_in_team: "25",
+        tpm_limit: "100",
+        rpm_limit: "10",
+      };
+      expect(submitted()).toEqual(expect.objectContaining(expectedChanges));
+    },
+  );
+
+  it.each(["not-an-email", "john@@example.com", "john tag@example.com", "john@example#com"])(
+    "blocks submission for an invalid address: %s",
+    async (user_email) => {
+      renderEdit(orgMemberConfig, { user_id: "u1", user_email: "a@b.com", role: "user" });
+
+      fireEvent.change(screen.getByLabelText("Email"), { target: { value: user_email } });
+      save();
+
+      expect(await screen.findByText("Please enter a valid email!")).toBeInTheDocument();
+      expect(onSubmit).not.toHaveBeenCalled();
+    },
+  );
 
   it("blocks submission when no role is selected", async () => {
     renderEdit(orgMemberConfig, { user_id: "u1", user_email: "a@b.com", role: "" });
@@ -242,6 +363,50 @@ describe("EditMembership submit payload", () => {
     await waitFor(() => expect(onSubmit).not.toHaveBeenCalled());
   });
 
+  it("submits a typed temporary increase with its expiry as a UTC ISO timestamp", async () => {
+    renderEdit(tempBudgetConfig, cappedMember);
+
+    fireEvent.change(screen.getByLabelText("Temporary Budget Increase (USD)"), { target: { value: "25" } });
+    fireEvent.change(screen.getByLabelText("Temporary Budget Expiry (UTC)"), { target: { value: "2030-01-02T03:04" } });
+
+    save();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(submitted().max_budget_in_team).toBe(10);
+    expect(submitted().temp_budget_increase).toBe("25");
+    expect(submitted().temp_budget_expiry).toBe("2030-01-02T03:04:00.000Z");
+  });
+
+  it("seeds a stored temporary budget into the controls and clears both to null when the operator blanks them", async () => {
+    renderEdit(tempBudgetConfig, tempBudgetMember);
+
+    expect(screen.getByLabelText("Temporary Budget Increase (USD)")).toHaveValue(25);
+    expect(screen.getByLabelText("Temporary Budget Expiry (UTC)")).toHaveValue("2030-01-02T03:04");
+
+    fireEvent.change(screen.getByLabelText("Temporary Budget Increase (USD)"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Temporary Budget Expiry (UTC)"), { target: { value: "" } });
+
+    save();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(submitted().temp_budget_increase).toBeNull();
+    expect(submitted().temp_budget_expiry).toBeNull();
+  });
+
+  it.each([
+    ["Temporary Budget Increase (USD)", "25"],
+    ["Temporary Budget Expiry (UTC)", "2030-01-02T03:04"],
+  ])("blocks submission when only %s is set", async (label, value) => {
+    renderEdit(tempBudgetConfig, { user_id: "u1", user_email: "a@b.com", role: "user" });
+
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+
+    save();
+
+    expect(await screen.findByText(TEMP_BUDGET_PAIR_MESSAGE)).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("clears the fields once the submit handler resolves", async () => {
     renderEdit(orgMemberConfig, { user_id: "u1", user_email: "a@b.com", role: "user" });
 
@@ -251,4 +416,58 @@ describe("EditMembership submit payload", () => {
     await waitFor(() => expect(screen.getByLabelText("User ID")).toHaveValue(""));
     expect(screen.getByLabelText("Email")).toHaveValue("");
   });
+});
+
+it("discards an unfinished per-model budget row when an edit session is reopened", async () => {
+  const user = userEvent.setup({ delay: null });
+  const modelBudgetConfig = {
+    ...teamMemberConfig,
+    additionalFields: [
+      ...additionalFields,
+      {
+        name: "model_max_budget",
+        label: "Per-Model Budgets",
+        type: "model-max-budget" as const,
+        availableModels: ["gpt-4o"],
+        premiumUser: true,
+      },
+    ],
+  };
+  const member = { user_id: "u1", user_email: "a@b.com", role: "user", model_max_budget: {} };
+  const otherMember = { ...member, user_id: "u2", user_email: "c@d.com" };
+  const Harness = ({ initialData }: { initialData: typeof member }) => {
+    const [visible, setVisible] = useState(false);
+    return (
+      <>
+        <button type="button" onClick={() => setVisible(true)}>
+          Open Edit Member
+        </button>
+        <EditMembership
+          visible={visible}
+          onCancel={() => setVisible(false)}
+          onSubmit={vi.fn()}
+          mode="edit"
+          config={modelBudgetConfig as never}
+          initialData={initialData as never}
+        />
+      </>
+    );
+  };
+
+  const { rerender } = renderWithProviders(<Harness initialData={member} />);
+
+  await user.click(screen.getByRole("button", { name: "Open Edit Member" }));
+  await user.click(screen.getByRole("button", { name: /Add Model Budget/i }));
+  expect(screen.getByPlaceholderText("Select model")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  await user.click(screen.getByRole("button", { name: "Open Edit Member" }));
+
+  expect(screen.queryByPlaceholderText("Select model")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: /Add Model Budget/i }));
+  expect(screen.getByPlaceholderText("Select model")).toBeInTheDocument();
+
+  rerender(<Harness initialData={otherMember} />);
+  expect(screen.queryByPlaceholderText("Select model")).not.toBeInTheDocument();
 });

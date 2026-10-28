@@ -7,12 +7,11 @@ llm-only key hitting a management route).
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+import warnings
+from dataclasses import dataclass, field, replace
 
 import jwt
-
 from e2e_config import MASTER_KEY
-from proxy_client import ProxyClient
 from e2e_http import (
     AuthHeaders,
     NetworkError,
@@ -22,9 +21,13 @@ from e2e_http import (
     StreamingResponse,
     Success,
     UnknownApiError,
+    retry_attempts,
     unwrap,
 )
+from e2e_metadata import STEP_FRAMES, step
 from models import (
+    AuditLogPage,
+    AuditLogParams,
     ChatBody,
     ChatMessage,
     ConnectionTestBody,
@@ -35,14 +38,20 @@ from models import (
     CustomerResponse,
     KeyBlockBody,
     KeyDeleteBody,
+    KeyDeleteByAliasBody,
     KeyGenerateBody,
     KeyGenerateResponse,
+    KeyInfoParams,
+    KeyInfoResponse,
     KeyListParams,
     KeyListResponse,
     KeyRegenerateBody,
     KeyResetSpendBody,
     KeyResetSpendResponse,
     KeyUpdateBody,
+    McpServerCreateBody,
+    McpServerRow,
+    McpServerUpdateBody,
     ModelDeleteBody,
     OrgDeleteBody,
     OrgInfoParams,
@@ -78,6 +87,7 @@ from models import (
     UserNewResponse,
     UserUpdateBody,
 )
+from proxy_client import Caller, ProxyClient
 
 MODEL_ACCESS_DENIED_MARKER = "key_model_access_denied"
 ROUTE_NOT_ALLOWED_MARKER = "not allowed to call this route"
@@ -94,7 +104,7 @@ class DashboardSession:
     its bearer on every subsequent call, the claims it renders the signed-in user
     from, and where it lands the browser."""
 
-    session_key: str
+    session_key: str = field(repr=False)
     claims: UiSessionClaims
     redirect_url: str
 
@@ -102,18 +112,23 @@ class DashboardSession:
 @dataclass(frozen=True, slots=True)
 class ManagementClient:
     proxy: ProxyClient
-    master_key: str
+    master_key: str = field(repr=False)
 
+    def with_caller(self, caller: Caller) -> ManagementClient:
+        return replace(self, proxy=self.proxy.with_caller(caller))
+
+    @step("Generate a virtual key limited to the LLM API routes")
     def llm_only_key(self) -> str:
         return self.proxy.generate_key(KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"]))
 
+    @step("Generate a virtual key with {body}")
     def generate_key(self, body: KeyGenerateBody, *, caller_key: str | None = None) -> Result[KeyGenerateResponse]:
         """POST /key/generate. `caller_key` is who is creating the key: the master
         key by default, or a virtual key (an admin filling in Create New Key on the
         dashboard creates it under the session key their sign-in minted). Returns
         the outcome rather than unwrapping it, so a caller can poll a route that is
         only transiently refusing."""
-        headers = self.proxy.transport.master if caller_key is None else self.proxy.transport.bearer(caller_key)
+        headers = self.proxy.management_headers(caller_key)
         return self.proxy.transport.post(
             "/key/generate",
             headers=headers,
@@ -121,15 +136,16 @@ class ManagementClient:
             response_type=KeyGenerateResponse,
         )
 
+    @step("Update the virtual key's settings with /key/update")
     def update_key(self, body: KeyUpdateBody, *, caller_key: str | None = None) -> Result[NoBody]:
         """POST /key/update. `caller_key` is who is editing: the master key by
         default, or a virtual key (the dashboard edits under the session key its
         sign-in minted, never the master key). Returns the outcome rather than
         unwrapping it, so a caller can poll a route that is only transiently
         refusing; `update_key_models` is the unwrapping shorthand."""
-        headers = self.proxy.transport.master if caller_key is None else self.proxy.transport.bearer(caller_key)
+        headers = self.proxy.management_headers(caller_key)
         last: Result[NoBody] = NetworkError(message="/key/update was never attempted")
-        for attempt in range(_KEY_WRITE_ATTEMPTS):
+        for attempt in range(retry_attempts(_KEY_WRITE_ATTEMPTS)):
             last = self.proxy.transport.post(
                 "/key/update",
                 headers=headers,
@@ -140,83 +156,133 @@ class ManagementClient:
                 case UnknownApiError(body=error_body) if any(
                     marker in error_body.lower() for marker in _TRANSIENT_BACKEND_MARKERS
                 ):
+                    warnings.warn(
+                        f"Transient backend response on attempt {attempt + 1}",
+                        RuntimeWarning,
+                        stacklevel=2 + STEP_FRAMES,
+                    )
                     time.sleep(0.5 * (attempt + 1))
                     continue
                 case _:
                     break
         return last
 
+    @step("Set the virtual key's models to [{models}]")
     def update_key_models(self, key: str, models: list[str]) -> None:
         _ = unwrap(self.update_key(KeyUpdateBody(key=key, models=models)))
 
-    def delete_key_strict(self, key: str) -> None:
-        """Strict delete for the act phase of a test: a failed delete is a hard
-        failure, unlike the warn-only ProxyClient.delete_key used at teardown."""
+    @step("Delete the virtual key with the alias {key_alias}")
+    def delete_key_by_alias(self, key_alias: str) -> None:
         _ = unwrap(
             self.proxy.transport.post(
                 "/key/delete",
-                headers=self.proxy.transport.master,
-                json=KeyDeleteBody(keys=[key]),
+                headers=self.proxy.management_headers(),
+                json=KeyDeleteByAliasBody(key_aliases=[key_alias]),
                 response_type=NoBody,
             )
         )
 
+    @step("Read the key's deletion entries from the /audit log")
+    def key_deleted_audit_logs(self, token_hash: str) -> AuditLogPage:
+        return unwrap(
+            self.proxy.transport.get(
+                "/audit",
+                headers=self.proxy.management_headers(),
+                params=AuditLogParams(
+                    object_id=token_hash,
+                    action="deleted",
+                    table_name="LiteLLM_VerificationToken",
+                    page_size=100,
+                ),
+                response_type=AuditLogPage,
+            )
+        )
+
+    @step("Read the key's settings back from /key/info")
+    def key_info_as(self, key: str, *, caller_key: str | None = None) -> Result[KeyInfoResponse]:
+        return self.proxy.transport.get(
+            "/key/info",
+            headers=self.proxy.management_headers(caller_key),
+            params=KeyInfoParams(key=key),
+            response_type=KeyInfoResponse,
+        )
+
+    @step("Delete the virtual key")
+    def delete_key_strict(self, key: str, *, caller_key: str | None = None, missing_ok: bool = False) -> None:
+        """Strict delete for the act phase of a test: a failed delete is a hard
+        failure, unlike the warn-only ProxyClient.delete_key used at teardown."""
+        result = self.proxy.transport.post(
+            "/key/delete",
+            headers=self.proxy.management_headers(caller_key),
+            json=KeyDeleteBody(keys=[key]),
+            response_type=NoBody,
+        )
+        if missing_ok and isinstance(result, UnknownApiError) and result.status_code == 404:
+            return
+        _ = unwrap(result)
+
+    @step("Delete the deployment")
     def delete_model_strict(self, model_id: str) -> None:
         """Strict delete for the act phase of a test: a failed delete is a hard
         failure, unlike the warn-only ProxyClient.delete_model used at teardown."""
         _ = unwrap(
             self.proxy.transport.post(
                 "/model/delete",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 json=ModelDeleteBody(id=model_id),
                 response_type=NoBody,
             )
         )
 
+    @step("Run Test Connection on {body.litellm_params.model} in {body.mode} mode with /health/test_connection")
     def connection_test(self, body: ConnectionTestBody) -> Result[ConnectionTestResponse]:
         """POST /health/test_connection, the call behind the Admin UI's Test
         Connection button, probing the live provider with the supplied params."""
         return self.proxy.transport.post(
             "/health/test_connection",
-            headers=self.proxy.transport.master,
+            headers=self.proxy.management_headers(),
             json=body,
             response_type=ConnectionTestResponse,
             timeout=120.0,
         )
 
+    @step("Block the virtual key")
     def block_key(self, key: str) -> None:
         _ = unwrap(
             self.proxy.transport.post(
                 "/key/block",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 json=KeyBlockBody(key=key),
                 response_type=NoBody,
             )
         )
+    @step("Regenerate the virtual key with /key/regenerate")
     def regenerate_key(self, key: str, *, grace_period: str | None = None) -> str:
         return unwrap(
             self.proxy.transport.post(
                 "/key/regenerate",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 json=KeyRegenerateBody(key=key, grace_period=grace_period),
                 response_type=KeyGenerateResponse,
             )
         ).key
 
+    @step("Reset the virtual key's spend to {reset_to}")
     def reset_key_spend(self, key: str, reset_to: float) -> KeyResetSpendResponse:
         return unwrap(
             self.proxy.transport.post(
                 f"/key/{key}/reset_spend",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 json=KeyResetSpendBody(reset_to=reset_to),
                 response_type=KeyResetSpendResponse,
             )
         )
 
+    @step("List the keys with the alias {key_alias} from /key/list")
     def key_list(self, key_alias: str, *, caller_key: str | None = None) -> Result[KeyListResponse]:
         """GET /key/list, the Virtual Keys page's own inventory call. `caller_key` is
         who is asking: the master key by default, or a virtual key."""
-        headers = self.proxy.transport.master if caller_key is None else self.proxy.transport.bearer(caller_key)
+        headers = self.proxy.management_headers(caller_key)
         return self.proxy.transport.get(
             "/key/list",
             headers=headers,
@@ -224,9 +290,11 @@ class ManagementClient:
             response_type=KeyListResponse,
         )
 
+    @step("Count the keys with the alias {key_alias} in /key/list")
     def key_alias_count(self, key_alias: str) -> int:
         return unwrap(self.key_list(key_alias)).total_count
 
+    @step("Sign in to the Admin UI with /v2/login")
     def dashboard_login(self, username: str, password: str) -> DashboardSession:
         """POST /v2/login, the call the Admin UI's sign-in form makes.
 
@@ -250,11 +318,12 @@ class ManagementClient:
             redirect_url=response.redirect_url,
         )
 
+    @step("Create a team with {body}")
     def create_team(self, body: TeamNewBody) -> str:
         team_id = unwrap(
             self.proxy.transport.post(
                 "/team/new",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 json=body,
                 response_type=TeamNewResponse,
             )
@@ -262,12 +331,13 @@ class ManagementClient:
         self._wait_for_team(team_id)
         return team_id
 
+    @step("Update a team with {body}")
     def update_team(self, body: TeamUpdateBody) -> None:
         last: Result[NoBody] | None = None
-        for attempt in range(5):
+        for attempt in range(retry_attempts(5)):
             last = self.proxy.transport.post(
                 "/team/update",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 json=body,
                 response_type=NoBody,
             )
@@ -277,6 +347,11 @@ class ManagementClient:
                 case UnknownApiError(body=body_text) if (
                     "connecting to redis" in body_text.lower() or "name resolution" in body_text.lower()
                 ):
+                    warnings.warn(
+                        f"Transient backend response on attempt {attempt + 1}",
+                        RuntimeWarning,
+                        stacklevel=2 + STEP_FRAMES,
+                    )
                     time.sleep(0.5 * (attempt + 1))
                     continue
                 case _:
@@ -284,46 +359,52 @@ class ManagementClient:
         assert last is not None
         raise AssertionError(last)
 
+    @step("Delete the team")
     def delete_team(self, team_id: str) -> None:
         _ = self.proxy.transport.post(
             "/team/delete",
-            headers=self.proxy.transport.master,
+            headers=self.proxy.management_headers(),
             json=TeamDeleteBody(team_ids=[team_id]),
             response_type=NoBody,
         )
 
+    @step("Read the team back from /team/info")
     def team_info(self, team_id: str) -> TeamData:
         return unwrap(
             self.proxy.transport.get(
                 "/team/info",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 params=TeamInfoParams(team_id=team_id),
                 response_type=TeamInfoResponse,
             )
         ).team_info
 
+    @step("List the teams from /team/list")
     def team_list_ids(self) -> tuple[str, ...]:
         return tuple(
             entry.team_id
             for entry in unwrap(
                 self.proxy.transport.get(
                     "/team/list",
-                    headers=self.proxy.transport.master,
+                    headers=self.proxy.management_headers(),
                     params=NoBody(),
                     response_type=TeamListResponse,
                 )
             ).root
         )
 
+    @step("Check whether /team/info finds the team")
     def team_info_status(self, team_id: str) -> ProbeResult:
-        return self.proxy.transport.probe("/team/info", params=TeamInfoParams(team_id=team_id))
+        return self.proxy.transport.probe(
+            "/team/info", params=TeamInfoParams(team_id=team_id), headers=self.proxy.management_headers()
+        )
 
     def _wait_for_team(self, team_id: str) -> None:
         last: Result[TeamInfoResponse] | None = None
-        for _ in range(_TEAM_READY_ATTEMPTS):
+        for _ in range(retry_attempts(_TEAM_READY_ATTEMPTS)):
             last = self.proxy.transport.get(
                 "/team/info",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 params=TeamInfoParams(team_id=team_id),
                 response_type=TeamInfoResponse,
             )
@@ -331,25 +412,32 @@ class ManagementClient:
                 case Success():
                     return
                 case _:
+                    warnings.warn("Repeating team read while the team becomes available", RuntimeWarning, stacklevel=2)
                     time.sleep(_TEAM_READY_SLEEP_SECONDS)
         assert last is not None
         raise AssertionError(last)
 
+    @step("Add a user to the team with /team/member_add")
     def add_team_member(self, team_id: str, user_id: str) -> None:
         last: Result[NoBody] | None = None
-        for attempt in range(_TEAM_READY_ATTEMPTS):
+        for attempt in range(retry_attempts(_TEAM_READY_ATTEMPTS)):
             last = self.proxy.transport.post(
                 "/team/member_add",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 json=TeamMemberAddBody(team_id=team_id, member=TeamMemberEntry(role="user", user_id=user_id)),
                 response_type=NoBody,
             )
             match last:
                 case Success():
                     return
-                case UnknownApiError(body=body) if (
-                    "doesn't exist" in body and attempt + 1 < _TEAM_READY_ATTEMPTS
+                case UnknownApiError(body=body) if "doesn't exist" in body and attempt + 1 < retry_attempts(
+                    _TEAM_READY_ATTEMPTS
                 ):
+                    warnings.warn(
+                        "Retrying team membership while the team becomes available",
+                        RuntimeWarning,
+                        stacklevel=2 + STEP_FRAMES,
+                    )
                     time.sleep(_TEAM_READY_SLEEP_SECONDS)
                     continue
                 case _:
@@ -357,186 +445,269 @@ class ManagementClient:
         assert last is not None
         raise AssertionError(last)
 
+    @step("Add a roster of members to the team with /team/member_add")
+    def add_team_members(self, team_id: str, members: list[TeamMemberEntry]) -> None:
+        """Bulk form of /team/member_add: `member` accepts a list, so one call
+        seeds a whole roster the way an admin import does."""
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/team/member_add",
+                headers=self.proxy.management_headers(),
+                json=TeamMemberAddBody(team_id=team_id, member=members),
+                response_type=NoBody,
+            )
+        )
+
+    @step("Try to delete the team with /team/delete")
+    def delete_team_status(self, team_id: str) -> StreamingResponse:
+        """POST /team/delete judged by HTTP outcome: the raw status and body, so a
+        test can assert on what a caller actually sees when the delete fails."""
+        return self.proxy.transport.send(
+            "/team/delete",
+            headers=self.proxy.management_headers(),
+            json=TeamDeleteBody(team_ids=[team_id]),
+        )
+
+    @step("Remove a user from the team with /team/member_delete")
     def delete_team_member(self, team_id: str, user_id: str) -> None:
         _ = unwrap(
             self.proxy.transport.post(
                 "/team/member_delete",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 json=TeamMemberDeleteBody(team_id=team_id, user_id=user_id),
                 response_type=NoBody,
             )
         )
 
+    @step("Create an internal user with {body}")
     def create_user(self, body: UserNewBody) -> str:
         return unwrap(
             self.proxy.transport.post(
                 "/user/new",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 json=body,
                 response_type=UserNewResponse,
             )
         ).user_id
 
+    @step("Create the end user {user_id}")
     def create_customer(self, user_id: str) -> str:
         _ = unwrap(
             self.proxy.transport.post(
                 "/customer/new",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 json=CustomerNewBody(user_id=user_id),
                 response_type=CustomerResponse,
             )
         )
         return user_id
 
+    @step("Read the end user {end_user_id} back from /customer/info")
     def customer_info(self, end_user_id: str) -> CustomerResponse:
         return unwrap(
             self.proxy.transport.get(
                 "/customer/info",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 params=CustomerInfoParams(end_user_id=end_user_id),
                 response_type=CustomerResponse,
             )
         )
 
+    @step("Delete the end user {user_id}")
     def delete_customer(self, user_id: str) -> None:
         _ = self.proxy.transport.post(
             "/customer/delete",
-            headers=self.proxy.transport.master,
+            headers=self.proxy.management_headers(),
             json=CustomerDeleteBody(user_ids=[user_id]),
             response_type=NoBody,
         )
 
+    @step("Update an internal user with {body}")
     def update_user(self, body: UserUpdateBody) -> None:
         _ = unwrap(
             self.proxy.transport.post(
                 "/user/update",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 json=body,
                 response_type=NoBody,
             )
         )
 
+    @step("Delete the internal user")
     def delete_user(self, user_id: str) -> None:
         _ = self.proxy.transport.post(
             "/user/delete",
-            headers=self.proxy.transport.master,
+            headers=self.proxy.management_headers(),
             json=UserDeleteBody(user_ids=[user_id]),
             response_type=NoBody,
         )
 
+    @step("Delete the internal user")
     def delete_user_strict(self, user_id: str) -> None:
         """Strict delete for the act phase of a test: a failed delete is a hard
         failure, unlike the warn-only delete_user used at teardown."""
         _ = unwrap(
             self.proxy.transport.post(
                 "/user/delete",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 json=UserDeleteBody(user_ids=[user_id]),
                 response_type=UserDeleteResponse,
             )
         )
 
-    def user_info(self, user_id: str) -> UserInfoResponse:
+    @step("Read the user back from /user/info")
+    def user_info(self, user_id: str | None = None) -> UserInfoResponse:
         return unwrap(
             self.proxy.transport.get(
                 "/user/info",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 params=UserInfoParams(user_id=user_id),
                 response_type=UserInfoResponse,
             )
         )
 
+    @step("Count the matching users in /user/list")
     def user_count(self, user_id: str) -> int:
         return unwrap(
             self.proxy.transport.get(
                 "/user/list",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 params=UserListParams(user_ids=user_id),
                 response_type=UserListResponse,
             )
         ).total
 
+    @step("List the matching users from /user/list")
     def user_list_ids(self, user_id: str) -> tuple[str, ...]:
         listing = unwrap(
             self.proxy.transport.get(
                 "/user/list",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 params=UserListParams(user_ids=user_id),
                 response_type=UserListResponse,
             )
         )
         return tuple(row.user_id for row in listing.users)
 
+    @step("Create an organization with {body}")
     def create_org(self, body: OrgNewBody) -> str:
         return unwrap(
             self.proxy.transport.post(
                 "/organization/new",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 json=body,
                 response_type=OrgNewResponse,
             )
         ).organization_id
 
+    @step("Update an organization with {body}")
     def update_org(self, body: OrgUpdateBody) -> None:
         _ = unwrap(
             self.proxy.transport.patch(
                 "/organization/update",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 json=body,
                 response_type=NoBody,
             )
         )
 
+    @step("Delete the organization")
     def delete_org(self, organization_id: str) -> None:
         _ = self.proxy.transport.delete(
             "/organization/delete",
-            headers=self.proxy.transport.master,
+            headers=self.proxy.management_headers(),
             json=OrgDeleteBody(organization_ids=[organization_id]),
             response_type=NoBody,
         )
 
+    @step("Read the organization back from /organization/info")
     def org_info(self, organization_id: str) -> OrgInfoResponse:
         return unwrap(
             self.proxy.transport.get(
                 "/organization/info",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 params=OrgInfoParams(organization_id=organization_id),
                 response_type=OrgInfoResponse,
             )
         )
 
+    @step("Check whether /organization/info finds the organization")
     def org_info_status(self, organization_id: str) -> ProbeResult:
-        return self.proxy.transport.probe("/organization/info", params=OrgInfoParams(organization_id=organization_id))
+        return self.proxy.transport.probe(
+            "/organization/info",
+            params=OrgInfoParams(organization_id=organization_id),
+            headers=self.proxy.management_headers(),
+        )
+
+    @step("Create a tag with {body}")
     def create_tag(self, body: TagNewBody) -> None:
         _ = unwrap(
             self.proxy.transport.post(
                 "/tag/new",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.management_headers(),
                 json=body,
                 response_type=NoBody,
             )
         )
 
+    @step("Delete the tag {name}")
     def delete_tag(self, name: str) -> None:
         _ = self.proxy.transport.post(
             "/tag/delete",
-            headers=self.proxy.transport.master,
+            headers=self.proxy.management_headers(),
             json=TagDeleteBody(name=name),
             response_type=NoBody,
         )
 
+    @step("List the tags from /tag/list")
     def tag_list(self) -> tuple[TagListEntry, ...]:
         return tuple(
             unwrap(
                 self.proxy.transport.get(
                     "/tag/list",
-                    headers=self.proxy.transport.master,
+                    headers=self.proxy.management_headers(),
                     params=NoBody(),
                     response_type=TagListResponse,
                 )
             ).root
         )
 
+    @step("Create an MCP server named {body.alias}")
+    def create_mcp_server(self, body: McpServerCreateBody) -> McpServerRow:
+        return unwrap(
+            self.proxy.transport.post(
+                "/v1/mcp/server",
+                headers=self.proxy.management_headers(),
+                json=body,
+                response_type=McpServerRow,
+            )
+        )
+
+    @step("Update the MCP server's settings with PUT /v1/mcp/server")
+    def update_mcp_server(self, body: McpServerUpdateBody) -> McpServerRow:
+        """PUT /v1/mcp/server, the call behind the dashboard's Save Changes: a partial
+        update where a field left unset keeps its stored value and None clears it."""
+        return unwrap(
+            self.proxy.transport.put(
+                "/v1/mcp/server",
+                headers=self.proxy.management_headers(),
+                json=body,
+                response_type=McpServerRow,
+            )
+        )
+
+    @step("Delete the MCP server")
+    def delete_mcp_server(self, server_id: str) -> Result[NoBody]:
+        """DELETE /v1/mcp/server/{server_id}. Returns the outcome so the act phase can
+        unwrap it while a deferred teardown can ignore an already-deleted server."""
+        return self.proxy.transport.delete(
+            f"/v1/mcp/server/{server_id}",
+            headers=self.proxy.management_headers(),
+            json=NoBody(),
+            response_type=NoBody,
+        )
+
+    @step("Send a /chat/completions request to {model}")
     def chat_status(self, key: str, model: str, content: str) -> StreamingResponse:
         return self.proxy.transport.send(
             "/chat/completions",
@@ -544,12 +715,15 @@ class ManagementClient:
             json=ChatBody(model=model, messages=[ChatMessage(role="user", content=content)], max_tokens=16),
         )
 
+    @step("Try to generate a virtual key with {body}, calling with a virtual key")
     def key_generate_status(self, key: str, body: KeyGenerateBody) -> StreamingResponse:
         return self.proxy.transport.send("/key/generate", headers=self.proxy.transport.bearer(key), json=body)
 
+    @step("Try to create a team with {body}, calling with a virtual key")
     def team_new_status(self, key: str, body: TeamNewBody) -> StreamingResponse:
         return self.proxy.transport.send("/team/new", headers=self.proxy.transport.bearer(key), json=body)
 
+    @step("Try to create an internal user with {body}, calling with a virtual key")
     def user_new_status(self, key: str, body: UserNewBody) -> StreamingResponse:
         return self.proxy.transport.send("/user/new", headers=self.proxy.transport.bearer(key), json=body)
 

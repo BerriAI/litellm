@@ -6,16 +6,19 @@ usage/spend data by querying the aggregated daily activity endpoints.
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import date
-from typing import Any, Final, Literal, NamedTuple, Protocol, cast, overload
+from typing import Final, Literal, NamedTuple, Protocol, cast, overload
 
+from fastapi import HTTPException
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
+from litellm.proxy._types import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
+from litellm.types.utils import ChatCompletionMessageToolCall
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -258,22 +261,34 @@ async def _query_activity(
 ) -> SpendAnalyticsPaginatedResponse:
     """Shared helper that calls the daily activity query layer."""
     from litellm.proxy.management_endpoints.common_daily_activity import (
+        daily_activity_repository,
+        daily_activity_scope,
         get_daily_activity,
         get_daily_activity_aggregated,
     )
     from litellm.proxy.proxy_server import prisma_client
 
     if use_aggregated:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        repository: Final = daily_activity_repository(prisma_client)
+        scope: Final = daily_activity_scope(
+            table_name,
+            entity_id_field,
+            entity_id,
+            None,
+            None,
+            start_date,
+            end_date,
+            None,
+            None,
+        )
         return await get_daily_activity_aggregated(
-            prisma_client=prisma_client,
-            table_name=table_name,
-            entity_id_field=entity_id_field,
-            entity_id=entity_id,
-            entity_metadata_field=None,
-            start_date=start_date,
-            end_date=end_date,
-            model=None,
-            api_key=None,
+            repository,
+            scope,
         )
     return await get_daily_activity(
         prisma_client=prisma_client,
@@ -482,26 +497,43 @@ async def _execute_tool_call(
     user_id: str | None,
     is_admin: bool,
 ) -> str:
-    """Run a single tool and return the summarised result text."""
+    """Run a single tool and return the summarised result text, or the reason the query
+    layer rejected its dates so the model can correct them."""
     kwargs: Final = _resolve_fetch_kwargs(fn_name, fn_args, user_id, is_admin)
-    raw_data: Final = await handler["fetch"](**kwargs)
+    try:
+        raw_data: Final = await handler["fetch"](**kwargs)
+    except HTTPException as e:
+        reason: Final = _invalid_date_reason(e)
+        if reason is None:
+            raise
+        return f"Invalid date range: {reason}"
     return handler["summarise"](raw_data)
 
 
+def _invalid_date_reason(error: HTTPException) -> str | None:
+    """The reason in the daily activity query layer's 400 for invalid or reversed dates."""
+    detail: Final = cast(object, error.detail)  # cast-ok: starlette types detail as str; the query layer passes a dict
+    match detail:
+        case {"error": str() as reason} if error.status_code == 400:
+            return reason
+        case _:
+            return None
+
+
 async def _process_tool_call(
-    tc: Any,
+    tc: ChatCompletionMessageToolCall,
     chat_messages: list[Mapping[str, object]],
     user_id: str | None,
     is_admin: bool,
 ) -> AsyncIterator[str]:
     """Execute a single tool call, yielding SSE events for status."""
-    fn_name: Final[str] = tc.function.name
+    fn_name: Final = tc.function.name
     fn_args: Final[Mapping[str, str]] = json.loads(tc.function.arguments)
 
     allowed_names: Final = {t["function"]["name"] for t in get_tools_for_role(is_admin)}
-    handler: Final = TOOL_HANDLERS.get(fn_name)
+    handler: Final = TOOL_HANDLERS.get(fn_name) if fn_name is not None else None
 
-    if fn_name not in allowed_names or not handler:
+    if fn_name is None or fn_name not in allowed_names or not handler:
         chat_messages.append(
             {
                 "role": "tool",

@@ -5,7 +5,7 @@
 #
 # Usage:
 #   export LITELLM_BASE_URL="https://litellm.example.com"
-#   export LITELLM_API_KEY="your-api-key"
+#   export LITELLM_API_KEY="<your-virtual-key>"
 #   ./run_parallel_health_checks.sh [num_parallel_jobs] [image_name] [container_runtime]
 #
 # Defaults:
@@ -20,16 +20,13 @@ NUM_PARALLEL_JOBS="${1:-16}"
 IMAGE_NAME="${2:-litellm/litellm-health-check:latest}"
 CONTAINER_RUNTIME="${3:-docker}"
 
-# Set defaults for environment variables if not provided
+# Require credentials for the target proxy
 if [ -z "$LITELLM_BASE_URL" ]; then
     export LITELLM_BASE_URL="https://litellm-perf-cache-and-router.onrender.com"
     echo "Warning: LITELLM_BASE_URL not set, using default: $LITELLM_BASE_URL" >&2
 fi
 
-if [ -z "$LITELLM_API_KEY" ]; then
-    export LITELLM_API_KEY="sk-1234"
-    echo "Warning: LITELLM_API_KEY not set, using default: $LITELLM_API_KEY" >&2
-fi
+: "${LITELLM_API_KEY:?set LITELLM_API_KEY}"
 
 # Check if container runtime is available
 if ! command -v "$CONTAINER_RUNTIME" &> /dev/null; then
