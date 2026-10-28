@@ -23,6 +23,12 @@ from litellm.accounting.types import (
     Outcome,
     Unpriced,
 )
+from litellm.constants import (
+    BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX,
+    BATCH_COST_REQUEST_ID_SUFFIX,
+    BILLED_RETRY_ATTEMPT_METADATA_KEY,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+)
 from litellm.litellm_core_utils.llm_cost_calc.cache_tokens import (
     extract_cache_creation_tokens,
     extract_cache_read_tokens,
@@ -58,8 +64,8 @@ class SpendLogAdapterError:
 class _Metadata(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    billed_retry_attempt: bool = False
-    internal_call_origin: str | None = None
+    billed_retry_attempt: bool = Field(default=False, alias=BILLED_RETRY_ATTEMPT_METADATA_KEY)
+    internal_call_origin: str | None = Field(default=None, alias=INTERNAL_CALL_ORIGIN_METADATA_KEY)
     usage_object: Mapping[str, JsonValue] | None = None
 
 
@@ -128,7 +134,7 @@ def _inbound(row: _SpendLog, context: SpendLogContext, outbound: OutboundUsageEv
         context.request_id is None
         or row.metadata.billed_retry_attempt
         or row.metadata.internal_call_origin
-        or row.request_id.endswith(("_batch_cost", "_background_cost"))
+        or row.request_id.endswith((BATCH_COST_REQUEST_ID_SUFFIX, BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX))
     ):
         return None
     outcome_metric: Final = (

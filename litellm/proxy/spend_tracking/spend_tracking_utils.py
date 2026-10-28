@@ -15,6 +15,8 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX,
+    BATCH_COST_REQUEST_ID_SUFFIX,
     BILLED_RETRY_ATTEMPT_METADATA_KEY,
     CALLER_SESSION_ID_METADATA_KEY,
     CLI_SESSION_KEY_PREFIX,
@@ -325,10 +327,6 @@ def _get_spend_logs_metadata(
     clean_metadata["litellm_call_id"] = litellm_call_id
 
     return clean_metadata
-
-
-BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
-BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX: Final = "_background_cost"
 
 
 def _cost_row_request_id_suffix(
