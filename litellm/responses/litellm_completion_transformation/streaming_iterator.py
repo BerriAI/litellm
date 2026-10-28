@@ -434,6 +434,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if self._is_tool_search_call(call_id, fn_name):
                 self._queue_tool_search_call_added(call_id, output_index, fn_args_delta)
                 continue
+            self._started_tool_call = True
 
             if call_id not in self._tool_args_by_call_id:
                 self._tool_args_by_call_id[call_id] = ""
