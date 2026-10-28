@@ -324,9 +324,9 @@ def test_continuation_output_ceilings_decline_once_a_ceiling_has_no_tokens_left(
         ({"tool_choice": "auto"}, False),
         ({"tool_choice": {"type": "function", "name": "lookup"}}, True),
         ({"tool_choice": {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "f"}]}}, True),
-        ({"tool_choice": {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "f"}]}}, False),
-        ({"tool_choice": {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": []}}}, False),
-        ({"tool_choice": {"type": "web_search_preview"}}, False),
+        ({"tool_choice": {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "f"}]}}, True),
+        ({"tool_choice": {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": []}}}, True),
+        ({"tool_choice": {"type": "web_search_preview"}}, True),
     ],
     ids=[
         "json_schema",

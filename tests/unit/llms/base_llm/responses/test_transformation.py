@@ -1643,6 +1643,102 @@ async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream
         router.discard()
 
 
+def _openai_stream_cut_after_output_item(preamble: str, item: Mapping[str, object]) -> httpx.Response:
+    return _sse(
+        {
+            "type": "response.output_text.delta", "sequence_number": 0,
+            "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": preamble,
+        },
+        {"type": "response.output_item.added", "sequence_number": 1, "output_index": 1, "item": item},
+        {
+            "type": "error", "sequence_number": 2,
+            "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"type": "shell_call", "id": "sh_1", "call_id": "call_1", "action": {"commands": ["ls"]}, "status": "in_progress"},
+        {
+            "type": "apply_patch_call", "id": "apc_1", "call_id": "call_1", "status": "in_progress",
+            "operation": {"type": "update_file", "path": "a.py", "diff": "@@"},
+        },
+        {
+            "type": "local_shell_call", "id": "lsh_1", "call_id": "call_1", "status": "in_progress",
+            "action": {"type": "exec", "command": ["ls"], "env": {}},
+        },
+        {
+            "type": "computer_call", "id": "cu_1", "call_id": "call_1", "status": "in_progress",
+            "action": {"type": "screenshot"}, "pending_safety_checks": [],
+        },
+        {"type": "mcp_approval_request", "id": "mcpr_1", "name": "lookup", "arguments": "{}", "server_label": "docs"},
+    ],
+    ids=lambda item: item["type"],
+)
+async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream_began_a_client_run_tool_call(
+    item: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_openai_stream_cut_after_output_item("Let me check the repo. ", item)
+    )
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("The repo has two files.")
+    )
+    router: Final = _primary_with_fallback("anthropic/claude-opus-5-5")
+    try:
+        stream: Final = await router.aresponses(model="primary", input="What is in the repo?", stream=True)
+        with pytest.raises(litellm.InternalServerError, match="interrupted"):
+            [event async for event in stream]
+        assert fallback.call_count == 0
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_surfaces_a_content_filter_that_cut_the_stream_mid_answer(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_sse(
+            {
+                "type": "response.output_text.delta", "sequence_number": 0,
+                "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": "Step one is to obtain the",
+            },
+            {
+                "type": "error", "sequence_number": 1,
+                "error": {
+                    "type": "invalid_request_error", "code": "content_policy_violation",
+                    "message": "The response was halted mid-stream.", "param": None,
+                },
+            },
+        )
+    )
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream(" reagents.")
+    )
+    router: Final = Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/gpt-6-astra", "api_key": "synthetic"}},
+            {"model_name": "fallback", "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "synthetic"}},
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        content_policy_fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+    )
+    try:
+        stream: Final = await router.aresponses(model="primary", input="How do I make it?", stream=True)
+        with pytest.raises(litellm.ContentPolicyViolationError, match="halted mid-stream"):
+            [event async for event in stream]
+        assert fallback.call_count == 0
+    finally:
+        router.discard()
+
+
 @pytest.mark.asyncio
 async def test_bridged_responses_fallback_surfaces_the_primary_error_once_the_cut_stream_began_a_tool_call(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch

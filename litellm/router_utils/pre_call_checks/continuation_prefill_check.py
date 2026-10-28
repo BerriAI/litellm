@@ -30,7 +30,6 @@ _STR_KEYED_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 _UNCONSTRAINED_RESPONSE_FORMAT: Final[Mapping[str, str]] = MappingProxyType({"type": "text"})
 _OUTPUT_CEILING_KEYS: Final = ("max_tokens", "max_completion_tokens", "max_output_tokens")
-_TOOL_FORCING_CHOICE_TYPES: Final = frozenset({"function", "custom", "tool", "any"})
 _QUOTED_ENDING_CHARS: Final = 100
 RESPONSES_CONTINUATION_KWARG: Final = "_responses_continuation"
 
@@ -58,23 +57,19 @@ def deployment_supports_prefill(deployment: object) -> bool:
     return model is not None and supports_assistant_prefill(model=model)
 
 
-def _forces_tool_call(tool_choice: object) -> bool:
-    choice: Final = _str_keyed(tool_choice)
-    mode: Final = choice.get("mode") or _str_keyed(choice.get("allowed_tools")).get("mode")
-    return tool_choice == "required" or mode == "required" or choice.get("type") in _TOOL_FORCING_CHOICE_TYPES
-
-
 def constrains_continuation(params: Mapping[str, object]) -> bool:
     sent: Final = {**params, **_str_keyed(params.get("extra_body"))}
     choice_count: Final = sent.get("n")
     response_format: Final = sent.get("response_format")
     text_format: Final = _str_keyed(sent.get("text")).get("format")
+    tool_choice: Final = sent.get("tool_choice")
     return (
         (isinstance(choice_count, int) and choice_count > 1)
         or (response_format is not None and response_format != _UNCONSTRAINED_RESPONSE_FORMAT)
         or (text_format is not None and text_format != _UNCONSTRAINED_RESPONSE_FORMAT)
         or sent.get("text_format") is not None
-        or _forces_tool_call(sent.get("tool_choice"))
+        or tool_choice == "required"
+        or isinstance(tool_choice, Mapping)
         or sent.get("merge_reasoning_content_in_choices") is True
     )
 

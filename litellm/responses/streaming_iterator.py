@@ -1698,7 +1698,18 @@ def _usage_as_model(usage: object) -> ResponseAPIUsage | None:
         return None
 
 
-_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call", "mcp_call"})
+_TOOL_CALL_ITEM_TYPES: Final = frozenset(
+    {
+        "function_call",
+        "custom_tool_call",
+        "mcp_call",
+        "mcp_approval_request",
+        "computer_call",
+        "local_shell_call",
+        "shell_call",
+        "apply_patch_call",
+    }
+)
 _TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
     {
         ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
