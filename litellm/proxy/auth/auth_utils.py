@@ -2,7 +2,7 @@ import importlib.util
 import os
 import re
 import sys
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from functools import lru_cache
 from itertools import accumulate, chain, repeat
 from logging import Logger
@@ -38,7 +38,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
 from litellm.types.router import (
-    CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
+    ConfigurableClientsideParamsCustomAuth,
     Deployment,
     reject_server_owned_wif_fields,
     server_owned_wif_fields_present,
@@ -189,7 +189,7 @@ def check_regex_or_str_match(request_body_value: Any, regex_str: str) -> bool:
 def _is_param_allowed(
     param: str,
     request_body_value: object,
-    configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
+    configurable_clientside_auth_params: Sequence[str | ConfigurableClientsideParamsCustomAuth] | None,
 ) -> bool:
     """
     Check if param is a str or dict and if request_body_value is in the list of allowed values

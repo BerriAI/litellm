@@ -415,6 +415,8 @@ from litellm.types.router import (
     SearchToolTypedDict,
     TaggedPreRoutingStrategy,
     holds_secret_pointer,
+    model_info_prices,
+    price_as_float,
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -506,15 +508,6 @@ RouterStrategySelector: TypeAlias = (
     | LowestTPMLoggingHandler
     | LowestTPMLoggingHandler_v2
 )
-
-
-def _cost_value_as_float(value: str | float | None) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def model_info_is_active_for_environment(model_info: Mapping[str, object] | None) -> bool:
@@ -12570,8 +12563,8 @@ class Router:
                 # Get mode from database model_info if available, otherwise default to "chat"
                 db_model_info = model.get("model_info", {})
                 mode = db_model_info.get("mode", "chat")
-                input_cost_per_token = _cost_value_as_float(db_model_info.get("input_cost_per_token"))
-                output_cost_per_token = _cost_value_as_float(db_model_info.get("output_cost_per_token"))
+                input_cost_per_token = price_as_float(db_model_info.get("input_cost_per_token"))
+                output_cost_per_token = price_as_float(db_model_info.get("output_cost_per_token"))
 
                 model_info = ModelMapInfo(
                     key=model_group,
@@ -12626,18 +12619,14 @@ class Router:
                     )
                 ):
                     model_group_info.max_output_tokens = model_info["max_output_tokens"]
-                _input_cost_per_token = _cost_value_as_float(model_info.get("input_cost_per_token"))
-                if _input_cost_per_token is not None and (
-                    model_group_info.input_cost_per_token is None
-                    or _input_cost_per_token > (model_group_info.input_cost_per_token or 0.0)
-                ):
-                    model_group_info.input_cost_per_token = _input_cost_per_token
-                _output_cost_per_token = _cost_value_as_float(model_info.get("output_cost_per_token"))
-                if _output_cost_per_token is not None and (
-                    model_group_info.output_cost_per_token is None
-                    or _output_cost_per_token > (model_group_info.output_cost_per_token or 0.0)
-                ):
-                    model_group_info.output_cost_per_token = _output_cost_per_token
+                group_prices = model_group_info.prices
+                model_group_info = model_group_info.model_copy(
+                    update={
+                        key: price
+                        for key, price in model_info_prices(model_info).items()
+                        if key not in group_prices or price > group_prices[key]
+                    }
+                )
                 if (
                     model_info.get("supports_parallel_function_calling", None) is not None
                     and model_info["supports_parallel_function_calling"] is True

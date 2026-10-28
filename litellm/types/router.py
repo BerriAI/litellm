@@ -6,6 +6,7 @@ import datetime
 import enum
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -22,7 +23,17 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from openai import Timeout as SDKTimeout
-from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, StrictInt, field_validator, model_validator
+from pydantic import (
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StrictInt,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+    with_config,
+)
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
@@ -58,6 +69,9 @@ from .utils import (
     MirroredPricingParams,
     ModelResponse,
     StandardLoggingRoutingDecision,
+)
+from .utils import (
+    ModelInfo as _CostMapModelInfo,
 )
 from .utils import (
     server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
@@ -962,7 +976,39 @@ def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
     return get_type_hints(model_class)
 
 
+_MODEL_INFO_PRICE_KEYS: Final[frozenset[str]] = frozenset(
+    key for key in _CostMapModelInfo.__required_keys__ | _CostMapModelInfo.__optional_keys__ if "cost" in key
+)
+
+
+_RAW_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def price_as_float(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def model_info_prices(model_info: Mapping[str, object]) -> Mapping[str, float]:
+    candidates: Final = (
+        (key, price_as_float(value)) for key, value in model_info.items() if key in _MODEL_INFO_PRICE_KEYS
+    )
+    return MappingProxyType({key: price for key, price in candidates if price is not None})
+
+
+@with_config(ConfigDict(extra="ignore"))
+class ModelGroupClientsideAuthParam(ConfigurableClientsideParamsCustomAuth):
+    pass
+
+
 class ModelGroupInfo(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="allow")
+    __pydantic_extra__: dict[str, float] = Field(init=False)  # pyright: ignore[reportIncompatibleVariableOverride]  # pydantic's documented way to type extras  # mutable-ok: pydantic only types extras via a dict
+
     model_group: str
     providers: list[str]
     max_input_tokens: float | None = None
@@ -988,7 +1034,7 @@ class ModelGroupInfo(LiteLLMBaseModel):
     supports_fast_mode: bool = Field(default=False)
     supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
     supported_openai_params: list[str] | None = Field(default=[])
-    configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+    configurable_clientside_auth_params: Sequence[str | ModelGroupClientsideAuthParam] | None = None
     description: str | None = None
     supported_endpoints: tuple[str, ...] | None = None
 
@@ -997,6 +1043,19 @@ class ModelGroupInfo(LiteLLMBaseModel):
             if field_type is bool and data.get(field_name) is None:
                 data[field_name] = False
         super().__init__(**data)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _keep_only_price_extras(cls, data: object) -> object:
+        if not isinstance(data, Mapping):
+            return data
+        fields: Final = _RAW_FIELDS.validate_python(data)
+        declared: Final = {key: value for key, value in fields.items() if key in cls.model_fields}
+        return {**model_info_prices(fields), **declared}
+
+    @property
+    def prices(self) -> Mapping[str, float]:
+        return model_info_prices({**vars(self), **self.__pydantic_extra__})
 
 
 class AssistantsTypedDict(TypedDict):

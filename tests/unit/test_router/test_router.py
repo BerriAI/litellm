@@ -2494,6 +2494,63 @@ def test_model_group_info_cost_none_for_unpriced_deployment_but_zero_when_declar
     assert priced.output_cost_per_token is not None and priced.output_cost_per_token > 0
 
 
+@pytest.mark.parametrize("deployment_order", [(0, 1), (1, 0)])
+def test_model_group_info_reports_every_price_at_the_highest_across_deployments(deployment_order):
+    deployment_prices: Final = (
+        {
+            "output_cost_per_image": 0.5,
+            "output_cost_per_image_token": 2e-05,
+            "input_cost_per_token_priority": 3e-06,
+            "input_cost_per_token_above_272k_tokens": 8e-06,
+        },
+        {
+            "output_cost_per_image": 0.25,
+            "output_cost_per_image_token": 4e-05,
+            "input_cost_per_token_priority": 6e-06,
+            "input_cost_per_token_above_272k_tokens": 4e-06,
+            "input_cost_per_token_batches": 1e-06,
+        },
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "tiered-pricing-group",
+                "litellm_params": {"model": f"openai/made-up-tiered-model-{index}", "api_key": "fake"},
+                "model_info": {
+                    "id": f"tiered-deployment-{index}",
+                    **deployment_prices[index],
+                    "output_cost_per_video_per_second": "free",
+                    "search_context_cost_per_query": {"search_context_size_low": 0.01},
+                },
+            }
+            for index in deployment_order
+        ]
+    )
+
+    info: Final = router.get_model_group_info(model_group="tiered-pricing-group")
+
+    assert info is not None
+    reported: Final = info.model_dump()
+    assert {key: reported.get(key) for key in deployment_prices[1]} == {
+        "output_cost_per_image": 0.5,
+        "output_cost_per_image_token": 4e-05,
+        "input_cost_per_token_priority": 6e-06,
+        "input_cost_per_token_above_272k_tokens": 8e-06,
+        "input_cost_per_token_batches": 1e-06,
+    }
+    assert reported.keys().isdisjoint(
+        {"output_cost_per_video_per_second", "search_context_cost_per_query", "litellm_provider", "key", "id"}
+    )
+
+
+def test_model_group_info_still_validates_from_attributes():
+    source: Final = SimpleNamespace(model_group="attribute-group", providers=["openai"], input_cost_per_token=1e-06)
+
+    info: Final = ModelGroupInfo.model_validate(source, from_attributes=True)
+
+    assert (info.model_group, info.providers, info.input_cost_per_token) == ("attribute-group", ["openai"], 1e-06)
+
+
 def test_model_group_info_description_from_model_info():
     """
     model_info.description set in the config should surface on ModelGroupInfo,
@@ -2839,12 +2896,14 @@ def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selecto
         (5, 5.0),
         (None, None),
         ("not-a-number", None),
+        (True, None),
+        ({"input_cost_per_token": 1e-05}, None),
     ],
 )
-def test_cost_value_as_float(value, expected):
-    from litellm.router import _cost_value_as_float
+def test_price_as_float(value, expected):
+    from litellm.types.router import price_as_float
 
-    assert _cost_value_as_float(value) == expected
+    assert price_as_float(value) == expected
 
 
 def test_model_group_info_with_stringified_cost_values():

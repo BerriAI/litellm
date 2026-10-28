@@ -955,19 +955,8 @@ def _azure_group_deployment(sku_host: str, mode: str, **model_info: object) -> d
     }
 
 
-@pytest.mark.parametrize(("team_id", "lists_batch"), [(None, False), ("team-a", True)])
-def test_model_group_info_lists_batch_only_to_the_team_that_owns_the_batch_deployment(
-    client, auth_as, monkeypatch, team_id: str | None, lists_batch: bool
-):
-    from litellm.proxy._types import LitellmUserRoles
+def _serve_model_groups_from(router: litellm.Router, monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy.agent_endpoints import model_list_helpers
-
-    router: Final = litellm.Router(
-        model_list=[
-            _azure_group_deployment("chat-sku", "chat", supported_endpoints=["/v1/chat/completions"]),
-            _azure_group_deployment("batch-sku", "batch", team_id="team-a"),
-        ]
-    )
 
     async def append_agents_to_model_group(*, model_groups, user_api_key_dict):
         return model_groups
@@ -981,12 +970,110 @@ def test_model_group_info_lists_batch_only_to_the_team_that_owns_the_batch_deplo
         model_list_helpers, "append_agents_to_model_group", AsyncMock(side_effect=append_agents_to_model_group)
     )
 
+
+@pytest.mark.parametrize(("team_id", "lists_batch"), [(None, False), ("team-a", True)])
+def test_model_group_info_lists_batch_only_to_the_team_that_owns_the_batch_deployment(
+    client, auth_as, monkeypatch, team_id: str | None, lists_batch: bool
+):
+    from litellm.proxy._types import LitellmUserRoles
+
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_group_deployment("chat-sku", "chat", supported_endpoints=["/v1/chat/completions"]),
+            _azure_group_deployment("batch-sku", "batch", team_id="team-a"),
+        ]
+    )
+    _serve_model_groups_from(router, monkeypatch)
+
     with auth_as(LitellmUserRoles.PROXY_ADMIN, team_id=team_id):
         response: Final = client.get("/model_group/info")
 
     assert response.status_code == 200
     groups: Final = {group["model_group"]: group for group in response.json()["data"]}
     assert ("/v1/batch" in (groups["gpt-mixed"]["supported_endpoints"] or ())) is lists_batch
+
+
+def test_model_group_info_reports_every_price_the_proxy_bills_at_the_highest_deployment_price(
+    client, auth_as, monkeypatch
+):
+    from litellm.proxy._types import LitellmUserRoles
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "image-pricing-group",
+                "litellm_params": {"model": "openai/made-up-image-model-a", "api_key": "dummy-key"},
+                "model_info": {
+                    "id": "image-deployment-a",
+                    "output_cost_per_image": 0.5,
+                    "output_cost_per_image_token": 2e-05,
+                    "input_cost_per_token_priority": 6e-06,
+                    "custom_tags": ["images"],
+                },
+            },
+            {
+                "model_name": "image-pricing-group",
+                "litellm_params": {"model": "openai/made-up-image-model-b", "api_key": "dummy-key"},
+                "model_info": {
+                    "id": "image-deployment-b",
+                    "output_cost_per_image": 0.25,
+                    "output_cost_per_image_token": 4e-05,
+                    "input_cost_per_token_above_272k_tokens": 8e-06,
+                },
+            },
+        ]
+    )
+    _serve_model_groups_from(router, monkeypatch)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response: Final = client.get("/model_group/info")
+
+    assert response.status_code == 200, response.text
+    (group,) = response.json()["data"]
+    assert group["custom_tags"] == ["images"]
+    assert {
+        key: group.get(key)
+        for key in (
+            "output_cost_per_image",
+            "output_cost_per_image_token",
+            "input_cost_per_token_priority",
+            "input_cost_per_token_above_272k_tokens",
+        )
+    } == {
+        "output_cost_per_image": 0.5,
+        "output_cost_per_image_token": 4e-05,
+        "input_cost_per_token_priority": 6e-06,
+        "input_cost_per_token_above_272k_tokens": 8e-06,
+    }
+
+
+def test_model_group_info_lists_only_the_api_base_of_a_clientside_auth_param(client, auth_as, monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "clientside-auth-group",
+                "litellm_params": {
+                    "model": "openai/made-up-clientside-auth-model",
+                    "api_key": "dummy-key",
+                    "configurable_clientside_auth_params": [
+                        "api_key",
+                        {"api_base": "^https://.*\\.example\\.com$", "unlisted_setting": "admin-only"},
+                    ],
+                },
+                "model_info": {"id": "clientside-auth-deployment"},
+            }
+        ]
+    )
+    _serve_model_groups_from(router, monkeypatch)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response: Final = client.get("/model_group/info")
+
+    assert response.status_code == 200, response.text
+    (group,) = response.json()["data"]
+    assert group["configurable_clientside_auth_params"] == ["api_key", {"api_base": "^https://.*\\.example\\.com$"}]
 
 
 # ---------------------------------------------------------------------------
