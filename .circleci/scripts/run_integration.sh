@@ -5,6 +5,10 @@ suite="${1:?integration suite required}"
 mode="${2:-standard}"
 side="${3:-}"
 requested_workers="${INTEGRATION_WORKERS:-}"
+license_env=()
+if [ -n "${LITELLM_LICENSE:-}" ]; then
+  license_env=("LITELLM_LICENSE=$LITELLM_LICENSE")
+fi
 if [ "$mode" = replica ]; then
   results="test-results/integration-${suite}-replica"
 elif [ "$mode" = parity ]; then
@@ -184,7 +188,7 @@ start_proxy() {
     "${database_env[@]}" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
     INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
     LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" LITELLM_UI_PATH="$LITELLM_UI_PATH" PROXY_BASE_URL="http://127.0.0.1:$port" \
-    LITELLM_LICENSE="${LITELLM_LICENSE:-}" \
+    "${license_env[@]}" \
     LITELLM_MODE=PRODUCTION STORE_MODEL_IN_DB=True LITELLM_ENABLE_MCP_STDIO=true "${cost_map_env[@]}" \
     AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 COVERAGE_FILE="$coverage_data" \
     "${proxy_command[@]}" --config tests/integration/proxy_config.yaml \
@@ -256,7 +260,7 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   "${shared_services[@]}" "${worker_coverage[@]}" \
   INTEGRATION_WORKERS="${INTEGRATION_WORKERS:-1}" \
   LITELLM_MODE=PRODUCTION \
-  LITELLM_LICENSE="${LITELLM_LICENSE:-}" \
+  "${license_env[@]}" \
   INTEGRATION_SEED="$INTEGRATION_SEED" \
   INTEGRATION_ORDER_SEED="$INTEGRATION_ORDER_SEED" \
   INTEGRATION_CASE_SHARDS="${CIRCLE_NODE_TOTAL:-1}" INTEGRATION_CASE_SHARD_INDEX="${CIRCLE_NODE_INDEX:-0}" \

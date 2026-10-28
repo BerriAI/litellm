@@ -8,7 +8,20 @@ on:
       suite:
         description: Integration group to run
         type: choice
-        options: [all, providers, database, management]
+        options:
+          - all
+          - providers
+          - extensions
+          - accounting
+          - management
+          - management-replica
+          - database
+          - database-replica
+          - mcp
+          - security
+          - cost
+          - sdk
+          - browser
         default: all
       workers:
         description: Workers per group, blank keeps each group's default
@@ -25,15 +38,15 @@ concurrency:
 jobs:
   integration:
     name: integration-trial ${{ matrix.suite }}
-    runs-on: ${{ matrix.suite == 'providers' && 'ubuntu-latest-64-cores' || 'ubuntu-latest-16-cores' }}
+    runs-on: ${{ fromJSON('{"providers":"ubuntu-latest-64-cores","extensions":"ubuntu-latest-64-cores","accounting":"ubuntu-latest-32-cores","management":"ubuntu-latest-32-cores","management-replica":"ubuntu-latest-32-cores"}')[matrix.suite] || 'ubuntu-latest-16-cores' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        suite: ${{ fromJSON((inputs.suite || 'all') == 'all' && '["providers","database","management"]' || format('["{0}"]', inputs.suite)) }}
+        suite: ${{ fromJSON((inputs.suite || 'all') == 'all' && '["providers","extensions","accounting","management","management-replica","database","database-replica","mcp","security","cost","sdk","browser"]' || format('["{0}"]', inputs.suite)) }}
     env:
       UV_PYTHON: "3.12"
-      INTEGRATION_WORKERS: ${{ inputs.workers || (matrix.suite == 'providers' && '32') || (matrix.suite == 'management' && '8') || '2' }}
+      INTEGRATION_WORKERS: ${{ inputs.workers || fromJSON('{"providers":"32","extensions":"32","accounting":"16","management":"16","management-replica":"16","cost":"16","mcp":"8","security":"8","database":"4","database-replica":"4"}')[matrix.suite] || '' }}
     services:
       postgres:
         image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
@@ -98,6 +111,36 @@ jobs:
           "$RUNNER_TEMP/redis-bin/redis-server" --version | grep -q 'v=7.2.16'
           echo "$RUNNER_TEMP/redis-bin" >> "$GITHUB_PATH"
 
+      - name: Install MCP SDK1 peer
+        if: matrix.suite == 'mcp'
+        timeout-minutes: 5
+        run: |
+          uv venv --python 3.12 .venv-mcp-peer
+          uv pip install --no-config --exclude-newer "3 days" --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
+          echo "MCP_TEST_PEER_PYTHON=$PWD/.venv-mcp-peer/bin/python" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        if: matrix.suite == 'browser'
+        timeout-minutes: 5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: ui/litellm-dashboard/.nvmrc
+          cache: "npm"
+          cache-dependency-path: |
+            ui/litellm-dashboard/package-lock.json
+            tests/e2e/ui/package-lock.json
+
+      - name: Install browser dependencies and build the dashboard
+        if: matrix.suite == 'browser'
+        timeout-minutes: 20
+        run: |
+          (cd ui/litellm-dashboard && npm ci)
+          (cd tests/e2e/ui && npm ci)
+          sudo env PATH="$PATH" DEBIAN_FRONTEND=noninteractive \
+            node tests/e2e/ui/node_modules/@playwright/test/cli.js install-deps chromium
+          node tests/e2e/ui/node_modules/@playwright/test/cli.js install chromium
+          (cd ui/litellm-dashboard && NEXT_TELEMETRY_DISABLED=1 npm run build)
+
       - name: Run integration contracts
         timeout-minutes: 45
         env:
@@ -105,7 +148,21 @@ jobs:
           INTEGRATION_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
           INTEGRATION_REDIS_CONTAINER: ${{ job.services.redis.id }}
           LITELLM_LICENSE: ${{ secrets.LITELLM_LICENSE }}
-        run: bash .circleci/scripts/run_integration.sh "$SUITE"
+        run: |
+          case "$SUITE" in
+            *-replica) bash .circleci/scripts/run_integration.sh "${SUITE%-replica}" replica ;;
+            *) bash .circleci/scripts/run_integration.sh "$SUITE" ;;
+          esac
+
+      - name: Verify every case ran exactly once
+        if: ${{ !cancelled() && matrix.suite != 'browser' }}
+        timeout-minutes: 2
+        run: |
+          record="$(find test-results -mindepth 2 -maxdepth 2 -name execution.json -print -quit)"
+          test -n "$record"
+          mkdir -p "$RUNNER_TEMP/shards/0"
+          cp "$record" "$RUNNER_TEMP/shards/0/execution.json"
+          .venv/bin/python -m tests.integration._support.sharding "$RUNNER_TEMP/shards" --shards 1
 
       - name: Upload results
         if: ${{ !cancelled() }}
