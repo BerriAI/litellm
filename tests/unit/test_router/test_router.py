@@ -31236,10 +31236,11 @@ def test_router_rejects_a_string_fallback_target_at_init(
             {"fallbacks": [{"gpt-4": [{"model": "gpt-3.5", "api_key": "other-key"}]}]},
             [{"gpt-4": [{"model": "gpt-3.5", "api_key": "other-key"}]}],
         ),
+        ({"fallbacks": [{"model": "gpt-3.5"}]}, [{"model": "gpt-3.5"}]),
     ],
-    ids=["list_fallback_target", "list_default_fallbacks", "dict_override_fallback_target"],
+    ids=["list_fallback_target", "list_default_fallbacks", "dict_override_fallback_target", "direct_target_entry"],
 )
-def test_router_keeps_list_valued_fallbacks(
+def test_router_keeps_supported_fallback_shapes(
     router_kwargs: Mapping[str, object], expected_fallbacks: list[dict[str, object]]
 ) -> None:
     router: Final = Router(model_list=list(_FALLBACK_VALIDATION_MODEL_LIST), **router_kwargs)

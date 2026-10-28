@@ -2856,11 +2856,12 @@ class Router:
                     f"Dictionary '{fallback_dict}' must have exactly one key, but has {len(fallback_dict)} keys."
                 )
             ((model_group, targets),) = fallback_dict.items()
-            if not isinstance(targets, list):
-                raise TypeError(
-                    f"Fallbacks for '{model_group}' must be a list of model names, got '{targets}'. "
-                    f"Use {{'{model_group}': ['{targets}']}}"
-                )
+            if isinstance(targets, list) or check_non_standard_fallback_format(fallbacks=[fallback_dict]):
+                continue
+            raise TypeError(
+                f"Fallbacks for '{model_group}' must be a list of model names, got '{targets}'. "
+                f"Use {{'{model_group}': ['{targets}']}}"
+            )
 
     def _add_encrypted_content_affinity_check(self, enable_global_affinity: bool) -> None:
         def _move_before_deployment_affinity(
