@@ -17,6 +17,7 @@ import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
+from openai.types.chat import ChatCompletionContentPartRefusalParam
 from pydantic import TypeAdapter
 from tiktoken.model import MODEL_TO_ENCODING
 from typing_extensions import ParamSpec, TypeVar
@@ -1691,7 +1692,13 @@ def _count_anthropic_content(
 
 
 _TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
-    {"text": "text", "thinking": "thinking", "redacted_thinking": "thinking", "compaction": "content"}
+    {
+        "text": "text",
+        "refusal": "refusal",
+        "thinking": "thinking",
+        "redacted_thinking": "thinking",
+        "compaction": "content",
+    }
 )
 
 
@@ -1700,6 +1707,7 @@ def _count_content_list(
     content_list: str
     | Iterable[
         OpenAIMessageContentListBlock
+        | ChatCompletionContentPartRefusalParam
         | ChatCompletionThinkingBlock
         | ChatCompletionRedactedThinkingBlock
         | AnthropicMessagesTextParam
@@ -1770,7 +1778,7 @@ def _count_content_list(
                 raise UnsupportedContentTypeError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
-                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
+                    f"(text, refusal, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
                     f"compaction, tool_reference, search_result)."
                 )
         return num_tokens
