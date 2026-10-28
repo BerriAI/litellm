@@ -4760,7 +4760,9 @@ class TransportErrorAfterChunksIterator:
         raise StopAsyncIteration
 
 
-def _reset_test_chunk(content: Optional[str] = None, finish_reason: Optional[str] = None) -> ModelResponseStream:
+def _reset_test_chunk(
+    content: Optional[str] = None, finish_reason: Optional[str] = None, index: int = 0
+) -> ModelResponseStream:
     return ModelResponseStream(
         id="chatcmpl-reset-test",
         created=1783458104,
@@ -4768,7 +4770,7 @@ def _reset_test_chunk(content: Optional[str] = None, finish_reason: Optional[str
         object="chat.completion.chunk",
         choices=[
             StreamingChoices(
-                index=0,
+                index=index,
                 delta=Delta(content=content),
                 finish_reason=finish_reason,
             )
@@ -4938,6 +4940,47 @@ async def test_sdk3_dropped_connection_after_finish_reason_ends_the_stream_clean
 
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "Hello"
     assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["stop"]
+
+
+def _two_choice_stream(
+    finished_choices: Sequence[int], sync_mode: bool, logging_obj: Logging
+) -> CustomStreamWrapper:
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={"n": 2})
+    return _openai_stream_over(
+        (
+            _reset_test_chunk(content="Hi", index=0),
+            _reset_test_chunk(content="Hel", index=1),
+            *(_reset_test_chunk(finish_reason="stop", index=index) for index in finished_choices),
+        ),
+        _httpx2_read_error(),
+        sync_mode,
+        logging_obj,
+    )
+
+
+@pytest.mark.asyncio
+@_SYNC_AND_ASYNC
+async def test_sdk3_dropped_connection_while_another_requested_choice_streams_raises(
+    logging_obj: Logging, sync_mode: bool
+):
+    wrapper: Final = _two_choice_stream((0,), sync_mode, logging_obj)
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await _collect(wrapper, sync_mode)
+
+    assert isinstance(excinfo.value.original_exception, litellm.APIConnectionError)
+
+
+@pytest.mark.asyncio
+@_SYNC_AND_ASYNC
+async def test_sdk3_dropped_connection_after_every_requested_choice_finished_ends_cleanly(
+    logging_obj: Logging, sync_mode: bool
+):
+    wrapper: Final = _two_choice_stream((0, 1), sync_mode, logging_obj)
+
+    chunks: Final = await _collect(wrapper, sync_mode)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "HiHel"
 
 
 @pytest.mark.asyncio

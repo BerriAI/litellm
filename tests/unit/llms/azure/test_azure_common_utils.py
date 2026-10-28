@@ -2360,3 +2360,35 @@ def test_an_azure_client_litellm_built_its_own_http_client_for_is_still_closed(m
     closer.reap()
 
     assert wrapper.is_closed() is True
+
+
+def test_full_deployment_url_keeps_its_extra_query_params_on_the_sdk_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    def echo_url(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-url",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt",
+                "choices": [
+                    {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": str(request.url)}}
+                ],
+            },
+        )
+
+    monkeypatch.setattr(litellm, "client_session", httpx.Client(transport=httpx.MockTransport(echo_url)))
+    client: Final = BaseAzureLLM().get_azure_openai_client(
+        api_key="azure-key",
+        api_base="https://gateway.example.com/openai/deployments/gpt/chat/completions"
+        "?api-version=2024-10-21&subscription-key=abc",
+        api_version="2025-02-01-preview",
+        litellm_params={},
+        _is_async=False,
+    )
+
+    response: Final = client.chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}])
+
+    sent: Final = httpx.URL(response.choices[0].message.content or "")
+    assert sent.path == "/openai/deployments/gpt/chat/completions"
+    assert dict(sent.params) == {"api-version": "2025-02-01-preview", "subscription-key": "abc"}

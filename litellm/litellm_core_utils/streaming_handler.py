@@ -93,6 +93,16 @@ def _next_sync_or_exhausted(it: Iterator[object]) -> object:
         return _SYNC_ITER_EXHAUSTED
 
 
+def _first_choice_index(chunk: ChatCompletionChunk | ModelResponseStream) -> int:
+    match chunk:
+        case ChatCompletionChunk(choices=[first, *_]):
+            return first.index
+        case ModelResponseStream(choices=[first, *_]):
+            return first.index
+        case _:
+            return 0
+
+
 def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming_response: ModelResponse) -> None:
     served_tier: Final = complete_streaming_response.model_dump().get("service_tier")
     if isinstance(served_tier, str) and served_tier:
@@ -333,6 +343,7 @@ class CustomStreamWrapper:
         self._provider_response_model: str | None = None
         self.received_finish_reason: str | None = None
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
+        self._finished_choice_indices: frozenset[int] = frozenset()
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -1091,7 +1102,7 @@ class CustomStreamWrapper:
         """
         return delta is not None and stored_attribute(delta, attribute_name) is not None
 
-    def _copy_delta_attribute(self, source_delta, target_delta, attribute_name: str) -> None:
+    def _copy_delta_attribute(self, source_delta: object, target_delta: object, attribute_name: str) -> None:
         """
         Copy a specific attribute from source delta to target delta.
         """
@@ -1575,6 +1586,9 @@ class CustomStreamWrapper:
                         f"{self.custom_llm_provider} raised a streaming error - finish_reason: error, no content string given. Received Chunk={response_obj}"
                     )
                 self.received_finish_reason = response_obj["finish_reason"]
+                self._finished_choice_indices = self._finished_choice_indices | {
+                    _first_choice_index(chunk) if isinstance(chunk, (ChatCompletionChunk, ModelResponseStream)) else 0
+                }
             if response_obj.get("original_chunk", None) is not None:
                 if hasattr(response_obj["original_chunk"], "id"):
                     model_response = self.set_model_id(response_obj["original_chunk"].id, model_response)
@@ -2205,11 +2219,24 @@ class CustomStreamWrapper:
             return next(self.completion_stream)
         except Exception as e:
             if (
-                self.received_finish_reason is None
+                not self._every_choice_finished()
                 or chained_transport_error_kind(e) is not TransportErrorKind.DROPPED_CONNECTION
             ):
                 raise
             raise StopIteration from e
+
+    def _every_choice_finished(self) -> bool:
+        if self.received_finish_reason is None:
+            return False
+        requested_choices: Final = self._requested_choice_count()
+        return requested_choices <= 1 or len(self._finished_choice_indices) >= requested_choices
+
+    def _requested_choice_count(self) -> int:
+        match getattr(self.logging_obj, "optional_params", None):
+            case {"n": int() as requested}:
+                return requested
+            case _:
+                return 1
 
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
@@ -2321,7 +2348,7 @@ class CustomStreamWrapper:
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except Exception as e:
             match chained_transport_error_kind(e):
-                case TransportErrorKind.DROPPED_CONNECTION if self.received_finish_reason is not None:
+                case TransportErrorKind.DROPPED_CONNECTION if self._every_choice_finished():
                     return await self._finalize_completed_stream(cache_hit=cache_hit)
                 case TransportErrorKind.TIMEOUT:
                     traceback_exception: Final = (
