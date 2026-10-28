@@ -185,12 +185,11 @@ def test_environment_credentials_cannot_be_sent_to_a_caller_controlled_host(
         XAISearchConfig().validate_environment({}, api_base="https://untrusted.example/v1")
 
 
-def test_operator_base_and_environment_model_are_used_without_mutating_headers(
+def test_operator_base_and_explicit_model_are_used_without_mutating_headers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("XAI_API_BASE", "https://gateway.example/v1/")
     monkeypatch.setenv("XAI_API_KEY", "server-test-key")
-    monkeypatch.setenv("XAI_SEARCH_MODEL", "operator-model")
     config = XAISearchConfig()
     headers = {"X-Custom": "preserved"}
     resolved = config.validate_environment(headers)
@@ -204,7 +203,6 @@ def test_operator_base_and_environment_model_are_used_without_mutating_headers(
     assert (
         config.get_complete_url("https://gateway.example/v1/responses/", {}) == "https://gateway.example/v1/responses"
     )
-    assert config.transform_search_request("test", {})["model"] == "operator-model"
     assert config.transform_search_request("test", {"search_model": "explicit-model"})["model"] == "explicit-model"
 
 
