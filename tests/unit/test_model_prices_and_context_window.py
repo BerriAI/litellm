@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -221,6 +221,50 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
         "dated model variants are missing flex/priority pricing their base alias has; "
         "sync the tier keys so service-tier requests against pinned snapshots are not "
         "billed at standard rates:\n" + "\n".join(drifted)
+    )
+
+
+PRIORITY_SUFFIX: Final = "_priority"
+MIN_PRIORITY_MARKUP: Final = 1.0
+MAX_PRIORITY_MARKUP: Final = 5.0
+
+
+def _rate(value: JsonValue | None) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _priority_markup(entry: Mapping[str, JsonValue], key: str) -> float | None:
+    if not key.endswith(PRIORITY_SUFFIX):
+        return None
+    priority: Final = _rate(entry[key])
+    standard: Final = _rate(entry.get(key.removesuffix(PRIORITY_SUFFIX)))
+    if priority is None or standard is None or standard <= 0:
+        return None
+    return priority / standard
+
+
+def priority_markups(prices: Mapping[str, JsonValue]) -> Iterator[tuple[str, str, float]]:
+    for name, entry in prices.items():
+        if not isinstance(entry, dict):
+            continue
+        for key in entry:
+            if (markup := _priority_markup(entry, key)) is not None:
+                yield name, key, markup
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_priority_rates_stay_within_a_premium_of_their_standard_rate(path: Path) -> None:
+    prices: Final = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    markups: Final = tuple(priority_markups(prices))
+    assert markups
+    overpriced: Final = tuple(
+        f"{name}.{key} is {markup:.1f}x its standard rate"
+        for name, key, markup in markups
+        if not MIN_PRIORITY_MARKUP <= markup <= MAX_PRIORITY_MARKUP
+    )
+    assert overpriced == (), (
+        "a priority rate is a premium on the standard rate, so one below it or far above it was likely copied from "
+        "another model; drop the key when the provider sells no priority tier for the model:\n" + "\n".join(overpriced)
     )
 
 
