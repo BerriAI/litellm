@@ -6,7 +6,7 @@ import itertools
 import random
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -684,77 +684,43 @@ class TestDeploymentLevelAllowedFails:
         )
 
 
+def _gpt_4_group_with_a_sibling() -> Sequence[Mapping[str, object]]:
+    return (
+        {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}, "model_info": {"id": "primary"}},
+        {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}, "model_info": {"id": "secondary"}},
+    )
+
+
+def _primary_cooldown_decisions_on_repeated_503s(router: Router) -> tuple[bool, ...]:
+    exception: Final = litellm.ServiceUnavailableError("down", "openai", "gpt-4")
+    return tuple(
+        _should_cooldown_deployment(
+            litellm_router_instance=router,
+            deployment="primary",
+            exception_status=503,
+            original_exception=exception,
+        )
+        for _ in range(litellm.allowed_fails + 1)
+    )
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestRouterLevelAllowedFailsEqualToDefault:
     def test_allowed_fails_equal_to_the_default_cools_down_after_that_many_fails(self):
-        """
-        Passing allowed_fails equal to litellm.allowed_fails must switch on the
-        count-based cooldown like any other value, not count as "not set".
-        """
-        router: Final = _make_router(
-            model_list=[
-                {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}, "model_info": {"id": "primary"}}
-            ],
-            allowed_fails=litellm.allowed_fails,
-        )
-        _exception: Final = litellm.ServiceUnavailableError("down", "openai", "gpt-4")
+        router: Final = _make_router(model_list=list(_gpt_4_group_with_a_sibling()), allowed_fails=litellm.allowed_fails)
 
-        decisions: Final = [
-            _should_cooldown_deployment(
-                litellm_router_instance=router,
-                deployment="primary",
-                exception_status=503,
-                original_exception=_exception,
-            )
-            for _ in range(litellm.allowed_fails + 1)
-        ]
-
-        assert decisions == [False] * litellm.allowed_fails + [True]
+        assert _primary_cooldown_decisions_on_repeated_503s(router) == (False,) * litellm.allowed_fails + (True,)
 
     def test_unset_allowed_fails_keeps_the_rate_based_default(self):
-        """
-        Without allowed_fails the router keeps its rate-based logic, which does not
-        cool a single-deployment group down on a handful of failures.
-        """
-        router: Final = _make_router(
-            model_list=[
-                {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}, "model_info": {"id": "primary"}}
-            ],
-        )
-        _exception: Final = litellm.ServiceUnavailableError("down", "openai", "gpt-4")
+        router: Final = _make_router(model_list=list(_gpt_4_group_with_a_sibling()))
 
-        decisions: Final = [
-            _should_cooldown_deployment(
-                litellm_router_instance=router,
-                deployment="primary",
-                exception_status=503,
-                original_exception=_exception,
-            )
-            for _ in range(litellm.allowed_fails + 1)
-        ]
-
-        assert decisions == [False] * (litellm.allowed_fails + 1)
+        assert _primary_cooldown_decisions_on_repeated_503s(router) == (False,) * (litellm.allowed_fails + 1)
 
     def test_default_allowed_fails_saved_through_update_settings_keeps_the_rate_based_default(self):
-        router: Final = _make_router(
-            model_list=[
-                {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}, "model_info": {"id": "primary"}}
-            ],
-        )
+        router: Final = _make_router(model_list=list(_gpt_4_group_with_a_sibling()))
         router.update_settings(allowed_fails=litellm.allowed_fails)
-        _exception: Final = litellm.ServiceUnavailableError("down", "openai", "gpt-4")
 
-        decisions: Final = [
-            _should_cooldown_deployment(
-                litellm_router_instance=router,
-                deployment="primary",
-                exception_status=503,
-                original_exception=_exception,
-            )
-            for _ in range(litellm.allowed_fails + 1)
-        ]
-
-        assert decisions == [False] * (litellm.allowed_fails + 1)
+        assert _primary_cooldown_decisions_on_repeated_503s(router) == (False,) * (litellm.allowed_fails + 1)
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -3072,10 +3038,65 @@ async def test_fallback_deployment_stays_up_while_the_primary_is_in_cooldown(
     assert tuple(cooldown_deployments) == ("primary-dep",)
 
 
-@pytest.mark.parametrize("use_policy", [False, True], ids=["allowed_fails", "allowed_fails_policy"])
+TIMED_OUT_DEPLOYMENT: Final = {
+    "model_name": "test-model",
+    "litellm_params": {"model": "openai/test-model", "api_key": "test-key"},
+    "model_info": {"id": "test-deployment"},
+}
+BACKUP_DEPLOYMENT: Final = {
+    "model_name": "backup-model",
+    "litellm_params": {"model": "openai/backup-model", "api_key": "test-key", "api_base": "https://backup.test/v1"},
+    "model_info": {"id": "backup-deployment"},
+}
+BACKUP_REPLY: Final = {
+    "id": "chatcmpl-backup",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "backup-model",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+async def _lone_call_outcome(router: Router) -> type[Exception]:
+    try:
+        await router.acompletion(model="test-model", messages=[{"role": "user", "content": "timeout test"}])
+    except (litellm.Timeout, RouterRateLimitError) as error:
+        return type(error)
+    pytest.fail("the timed-out deployment answered")
+
+
+BENCHED: Final = (litellm.Timeout, litellm.Timeout, RouterRateLimitError, RouterRateLimitError, RouterRateLimitError)
+
+
+@pytest.mark.parametrize(
+    ("router_kwargs", "model_info", "outcomes"),
+    [
+        ({"allowed_fails": 1}, {}, (litellm.Timeout,) * 5),
+        ({"allowed_fails": 1}, {"allowed_fails_policy": {}}, (litellm.Timeout,) * 5),
+        ({"allowed_fails_policy": AllowedFailsPolicy(RateLimitErrorAllowedFails=1)}, {}, (litellm.Timeout,) * 5),
+        ({"allowed_fails_policy": AllowedFailsPolicy(TimeoutErrorAllowedFails=1)}, {}, BENCHED),
+        ({"allowed_fails": 1, "fallbacks": [{"test-model": ["backup-model"]}]}, {}, BENCHED),
+        (
+            {"allowed_fails": 1, "fallbacks": [{"test-model": [{"model": "backup-model", "temperature": 0}]}]},
+            {},
+            BENCHED,
+        ),
+    ],
+    ids=[
+        "allowed_fails",
+        "allowed_fails_with_an_empty_deployment_policy",
+        "policy_names_another_exception",
+        "policy_names_timeout",
+        "allowed_fails_with_a_fallback_group",
+        "allowed_fails_with_a_dict_fallback_target",
+    ],
+)
 @pytest.mark.asyncio
-async def test_allowed_fails_cools_a_single_deployment(
-    use_policy: bool,
+async def test_router_allowed_fails_benches_a_lone_deployment_only_when_the_policy_names_the_exception(
+    router_kwargs: Mapping[str, object],
+    model_info: Mapping[str, object],
+    outcomes: tuple[type[Exception], ...],
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3083,38 +3104,52 @@ async def test_allowed_fails_cools_a_single_deployment(
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         side_effect=httpx.ReadTimeout("upstream timeout")
     )
-    policy_kwargs: Final = (
-        {"allowed_fails_policy": AllowedFailsPolicy(TimeoutErrorAllowedFails=1)}
-        if use_policy
-        else {"allowed_fails": 1}
+    deployment: Final = {**TIMED_OUT_DEPLOYMENT, "model_info": {**TIMED_OUT_DEPLOYMENT["model_info"], **model_info}}
+    router: Final = Router(model_list=[deployment], cooldown_time=300, num_retries=0, **router_kwargs)
+
+    seen: Final = tuple([await _lone_call_outcome(router) for _ in range(5)])
+
+    assert seen == outcomes
+    assert len(route.calls) == outcomes.count(litellm.Timeout)
+
+
+async def _group_call_outcome(router: Router) -> str:
+    try:
+        response: Final = await router.acompletion(
+            model="test-model", messages=[{"role": "user", "content": "timeout test"}]
+        )
+    except litellm.Timeout:
+        return "timeout"
+    return response.id
+
+
+@pytest.mark.asyncio
+async def test_router_allowed_fails_still_benches_a_deployment_that_has_a_sibling_in_its_group(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    timed_out: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=httpx.ReadTimeout("upstream timeout")
     )
+    respx_mock.post("https://backup.test/v1/chat/completions").mock(return_value=httpx.Response(200, json=BACKUP_REPLY))
     router: Final = Router(
-        model_list=[
-            {
-                "model_name": "test-model",
-                "litellm_params": {"model": "openai/test-model", "api_key": "test-key"},
-                "model_info": {"id": "test-deployment"},
-            }
-        ],
+        model_list=[TIMED_OUT_DEPLOYMENT, {**BACKUP_DEPLOYMENT, "model_name": "test-model"}],
         cooldown_time=300,
         num_retries=0,
-        **policy_kwargs,
+        allowed_fails=1,
     )
 
-    for _ in range(2):
-        with pytest.raises(litellm.Timeout):
-            await router.acompletion(
-                model="test-model",
-                messages=[{"role": "user", "content": "timeout test"}],
-            )
-
+    while len(timed_out.calls) < 2:
+        await _group_call_outcome(router)
     cooldown_deployments: Final = await async_get_cooldown_deployments(
-        litellm_router_instance=router,
-        parent_otel_span=None,
+        litellm_router_instance=router, parent_otel_span=None
     )
+    served: Final = tuple([await _group_call_outcome(router) for _ in range(5)])
 
-    assert len(route.calls) == 2
     assert tuple(cooldown_deployments) == ("test-deployment",)
+    assert served == ("chatcmpl-backup",) * 5
+    assert len(timed_out.calls) == 2
 
 
 def test_per_user_session_upstream_errors_never_cool_down_the_shared_deployment(single_deployment_router):

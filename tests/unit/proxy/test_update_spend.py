@@ -323,3 +323,31 @@ async def test_update_spend_logs_multiple_batches_with_failure():
 
     # Verify all logs were cleared from transactions
     assert len(prisma_client.spend_log_transactions) == 0
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_drops_row_prisma_cannot_encode_and_keeps_the_rest():
+    """A row the Prisma engine cannot utf-8 encode (a lone surrogate in a string
+    column) is permanent, so it must be dropped like any other poison row instead
+    of being requeued at the head of the queue where it would block every tenant."""
+    prisma_client = MockPrismaClient()
+    proxy_logging_obj = create_mock_proxy_logging()
+    prisma_client.spend_log_transactions = [
+        {"request_id": "good-1", "request_tags": '["a"]'},
+        {"request_id": "poison", "request_tags": "\ud800"},
+        {"request_id": "good-2", "request_tags": '["b"]'},
+    ]
+    written = []
+
+    async def create_many(data, skip_duplicates):
+        if any("\ud800" in row["request_tags"] for row in data):
+            raise UnicodeEncodeError("utf-8", "\ud800", 0, 1, "surrogates not allowed")
+        written.extend(row["request_id"] for row in data)
+
+    prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=create_many)
+
+    await update_spend(prisma_client, None, proxy_logging_obj)
+
+    assert sorted(written) == ["good-1", "good-2"]
+    assert prisma_client.spend_log_transactions == []
+    proxy_logging_obj.failure_handler.assert_not_called()

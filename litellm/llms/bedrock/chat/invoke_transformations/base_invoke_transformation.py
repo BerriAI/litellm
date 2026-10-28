@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_factory,
     render_custom_prompt_template,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -60,7 +61,7 @@ def _response_header(headers: Mapping[str, str], name: str) -> str | None:
     return headers.get(name, None)
 
 
-def _bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
+def bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
     try:
         guardrail_config: Final = _GUARDRAIL_CONFIG_VALIDATOR.validate_python(raw_guardrail_config)
     except ValidationError as e:
@@ -136,20 +137,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         aws_bedrock_runtime_endpoint: Final = optional_params.get(
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
-        endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
+        endpoint_url, _ = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=self._get_aws_region_name(optional_params=optional_params, model=model),
         )
-
-        if (stream is not None and stream is True) and provider != "ai21":
-            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
-        else:
-            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
-
-        return endpoint_url
+        invoke_route: Final = "invoke-with-response-stream" if stream is True and provider != "ai21" else "invoke"
+        return join_api_base(endpoint_url, f"model/{modelId}/{invoke_route}")
 
     def sign_request(
         self,
@@ -440,7 +434,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         guardrail_headers: Final = (
             ()
             if raw_guardrail_config is None
-            else tuple(_bedrock_invoke_guardrail_headers(raw_guardrail_config).items())
+            else tuple(bedrock_invoke_guardrail_headers(raw_guardrail_config).items())
         )
         owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
         return merge_bedrock_invoke_headers(headers, guardrail_headers, metadata_headers, owned_names)
