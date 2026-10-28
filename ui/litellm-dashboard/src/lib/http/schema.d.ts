@@ -19058,6 +19058,7 @@ export interface paths {
          * @description Args:
          *         request: TokenCountRequest
          *         call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
+         *         litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
          *
          *     Returns:
          *         TokenCountResponse
@@ -44163,6 +44164,11 @@ export interface components {
              */
             type: "tool_search_output";
         };
+        /** ResponsesAPIModeration */
+        ResponsesAPIModeration: {
+            /** Model */
+            model: string;
+        };
         /**
          * ResponsesAPIRequestParams
          * @description TypedDict for request parameters supported by the responses API.
@@ -44188,6 +44194,7 @@ export interface components {
             } | null;
             /** Model */
             model: string;
+            moderation?: components["schemas"]["ResponsesAPIModeration"] | null;
             /** Parallel Tool Calls */
             parallel_tool_calls?: boolean | null;
             /** Partial Images */
@@ -66975,6 +66982,7 @@ export interface operations {
                     } | null;
                     /** Model */
                     model: string;
+                    moderation?: components["schemas"]["ResponsesAPIModeration"] | null;
                     /** Parallel Tool Calls */
                     parallel_tool_calls?: boolean | null;
                     /** Partial Images */
@@ -70439,6 +70447,7 @@ export interface operations {
                     } | null;
                     /** Model */
                     model: string;
+                    moderation?: components["schemas"]["ResponsesAPIModeration"] | null;
                     /** Parallel Tool Calls */
                     parallel_tool_calls?: boolean | null;
                     /** Partial Images */
@@ -76765,7 +76774,9 @@ export interface operations {
             query?: {
                 call_endpoint?: boolean;
             };
-            header?: never;
+            header?: {
+                "x-litellm-call-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -81237,6 +81248,7 @@ export interface operations {
                     } | null;
                     /** Model */
                     model: string;
+                    moderation?: components["schemas"]["ResponsesAPIModeration"] | null;
                     /** Parallel Tool Calls */
                     parallel_tool_calls?: boolean | null;
                     /** Partial Images */

@@ -121,6 +121,12 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "input_cost_per_token": 4.2e-08,
         "output_cost_per_token": 0.0,
     },
+    "typesafe/jev-preview": {
+        "litellm_provider": "typesafe",
+        "mode": "evaluation",
+        "input_cost_per_token": 8.4e-08,
+        "output_cost_per_token": 0.0,
+    },
     "fireworks_ai/accounts/fireworks/routers/rune": {
         "litellm_provider": "fireworks_ai",
         "mode": "evaluation",
