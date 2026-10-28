@@ -19,6 +19,7 @@ from starlette.datastructures import Headers
 import litellm
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
+    COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     SERVER_STREAMING_CLASSIFICATION_KEY,
     SERVER_STREAMING_CLASSIFICATION_MARKER,
@@ -3682,6 +3683,110 @@ async def test_spend_log_caller_session_stays_out_of_requester_metadata(monkeypa
     assert updated["metadata"][CALLER_SESSION_ID_METADATA_KEY] == "convo-1"
     assert updated["metadata"]["requester_metadata"]["team_label"] == "kept"
     assert CALLER_SESSION_ID_METADATA_KEY not in updated["metadata"]["requester_metadata"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "surface,headers,body,child_id,trace_id",
+    [
+        (
+            "chat/completions", {"X-Session-Id": "child-01"}, {"metadata": {"session_id": "body-001"}},
+            "child-01", "parent-01",
+        ),
+        ("responses", {"x-vendor-session-id": "child-01"}, {}, "child-01", "parent-01"),
+        ("messages", {"session-id": "child-01", "user-agent": "codex_cli_rs/1.0"}, {}, "child-01", "parent-01"),
+        ("chat/completions", {"x-litellm-session-id": "short", "x-session-id": "child-01"}, {}, "short", "short"),
+        ("responses", {"x-litellm-trace-id": "trace-01", "x-session-id": "child-01"}, {}, "child-01", "trace-01"),
+        (
+            "messages", {"x-litellm-trace-id": "trace-01", "x-litellm-session-id": "child-01"},
+            {}, "child-01", "trace-01",
+        ),
+        ("responses", {}, {"metadata": {"session_id": "body-001"}}, "body-001", "parent-01"),
+        ("messages", {}, {"litellm_metadata": {"session_id": "body-001"}}, "body-001", "parent-01"),
+        ("chat/completions", {}, {"litellm_metadata": {"session_id": "body-001"}}, "body-001", "parent-01"),
+        ("messages", {"baggage": "session.id=child-01"}, {}, "child-01", "parent-01"),
+        (
+            "responses", {"baggage": "session.id=child-01"}, {"metadata": {"session_id": "body-001"}},
+            "body-001", "parent-01",
+        ),
+        (
+            "chat/completions", {}, {"litellm_session_id": "root-001", "metadata": {"session_id": "body-001"}},
+            "root-001", "parent-01",
+        ),
+        (
+            "responses", {}, {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": "active-1"}},
+            "active-1", "parent-01",
+        ),
+        (
+            "chat/completions", {},
+            {"metadata": {"session_id": "active-1"}, "litellm_metadata": {"session_id": "body-001"}},
+            "active-1", "parent-01",
+        ),
+        (
+            "chat/completions", {}, {"metadata": {"session_id": ""}, "litellm_metadata": {"session_id": "body-001"}},
+            None, "parent-01",
+        ),
+        (
+            "messages", {}, {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": ""}},
+            None, "parent-01",
+        ),
+        (
+            "messages", {}, {"litellm_session_id": "root-001", "litellm_metadata": {"session_id": "active-1"},
+            "metadata": {"session_id": "body-001", "user_id": "user_abc_account__session_anthro-1"}},
+            "anthro-1", "parent-01",
+        ),
+        ("messages", {"x-session-id": "child-01"}, {"metadata": {"user_id": {"session_id": "body-001"}}},
+         "child-01", "parent-01"),
+        ("chat/completions", {}, {}, None, "parent-01"),
+        ("responses", {"x-session-id": "bad"}, {}, None, "parent-01"),
+        ("messages", {}, {"metadata": {"session_id": 123}}, None, "parent-01"),
+        ("chat/completions", {"x-session-id": "parent-01"}, {}, None, "parent-01"),
+    ],
+)
+async def test_child_tier_identity_preserves_trace_and_body_session_precedence(
+    surface: str, headers: dict[str, str], body: dict[str, object], child_id: str | None, trace_id: str
+) -> None:
+    request: Final = _make_request_mock(f"/v1/{surface}", {"x-parent-session-id": "parent-01", **headers})
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "test-router", "messages": [], **copy.deepcopy(body)},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    metadata: Final = updated[get_metadata_variable_name(request)]
+    assert metadata[COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY] == child_id
+    assert metadata["session_id"] == metadata["trace_id"] == trace_id
+    assert updated["litellm_session_id"] == updated["litellm_trace_id"] == trace_id
+    expected_caller: Final = (
+        headers.get("x-litellm-session-id", "parent-01") if "x-litellm-trace-id" in headers else None
+    )
+    assert metadata.get(CALLER_SESSION_ID_METADATA_KEY) == expected_caller
+    assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in metadata.get("requester_metadata", {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface,parent_id", [("chat/completions", None), ("responses", None), ("messages", "bad")])
+async def test_non_child_requests_cannot_forge_a_child_tier_identity(surface: str, parent_id: str | None) -> None:
+    headers: Final = {"x-session-id": "child-01", **({"x-parent-session-id": parent_id} if parent_id else {})}
+    request: Final = _make_request_mock(f"/v1/{surface}", headers)
+    updated: Final = await add_litellm_data_to_request(
+        data={
+            "model": "test-router",
+            "messages": [],
+            "metadata": {COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: "forged-1"},
+            "litellm_metadata": {COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: "forged-2"},
+        },
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    for bucket in ("metadata", "litellm_metadata"):
+        metadata: Final = updated.get(bucket, {})
+        assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in metadata
+        assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in metadata.get("requester_metadata", {})
+    assert updated[get_metadata_variable_name(request)]["session_id"] == "child-01"
 
 
 def test_add_litellm_metadata_from_request_headers_x_litellm_session_id_sets_chain_id():

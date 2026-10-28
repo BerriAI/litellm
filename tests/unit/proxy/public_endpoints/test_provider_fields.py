@@ -33,6 +33,14 @@ async def test_tsubasa_dashboard_fields_resolve_to_a_registered_model() -> None:
     }
     assert endpoints_response.status_code == 200, endpoints_response.text
     endpoints: Final = SupportedEndpointsResponse.model_validate(endpoints_response.json()).endpoints
-    assert [
+    assert {
         endpoint.key for endpoint in endpoints if any(p.slug == provider.litellm_provider for p in endpoint.providers)
-    ] == ["chat_completions"]
+    } == {
+        "chat_completions",
+        "responses",
+        "text_completion",
+        "messages",
+        "interactions",
+        "a2a",
+        "generateContent",
+    }
