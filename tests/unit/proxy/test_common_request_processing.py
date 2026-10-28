@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
 )
 from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
-from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, StreamingChoices
+from litellm.types.utils import CachingDetails, CallTypesLiteral, Delta, ModelResponseStream, StreamingChoices
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -205,6 +205,24 @@ def test_include_guardrail_response_requested_is_false_without_exact_true():
         {"metadata": {"include_guardrail_response": "true"}, "litellm_metadata": {}}
     ) is False
     assert include_guardrail_response_requested({}) is False
+
+
+class _RecordsDeferral(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.deferred: list[bool] = []
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: ProxyUserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: CallTypesLiteral,
+    ) -> dict:
+        logging_obj: Final = data["litellm_logging_obj"]
+        assert isinstance(logging_obj, LiteLLMLoggingObj)
+        self.deferred.append(logging_obj.defer_async_logging)
+        return data
 
 
 class TestProxyBaseLLMRequestProcessing:
@@ -488,41 +506,24 @@ class TestProxyBaseLLMRequestProcessing:
     async def test_common_processing_pre_call_logic_defers_the_success_log_before_pre_call_hook_runs(
         self, monkeypatch: pytest.MonkeyPatch, defer_async_logging: bool
     ) -> None:
-        processing_obj: Final = ProxyBaseLLMRequestProcessing(data={})
-        mock_request: Final = MagicMock(spec=Request)
-        mock_request.headers = {}
-        deferred_when_hook_ran: Final[list[bool]] = []
+        from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
 
-        async def mock_add_litellm_data_to_request(*args: object, **kwargs: object) -> dict[str, object]:
-            return {}
+        recorder: Final = _RecordsDeferral()
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
 
-        async def mock_pre_call_hook(
-            user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str, skip_guardrails: bool = False
-        ) -> dict[str, object]:
-            logging_obj: Final = data["litellm_logging_obj"]
-            assert isinstance(logging_obj, LiteLLMLoggingObj)
-            deferred_when_hook_ran.append(logging_obj.defer_async_logging)
-            return data
-
-        mock_proxy_logging_obj: Final = MagicMock(spec=ProxyLogging)
-        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
-        monkeypatch.setattr(
-            litellm.proxy.common_request_processing,
-            "add_litellm_data_to_request",
-            mock_add_litellm_data_to_request,
-        )
-
-        await processing_obj.common_processing_pre_call_logic(
-            request=mock_request,
+        await ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
+        ).common_processing_pre_call_logic(
+            request=Request(scope={"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []}),
             general_settings={},
-            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
-            proxy_logging_obj=mock_proxy_logging_obj,
-            proxy_config=MagicMock(spec=ProxyConfig),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+            proxy_config=RealProxyConfig(),
             route_type="acompletion",
             defer_async_logging=defer_async_logging,
         )
 
-        assert deferred_when_hook_ran == [defer_async_logging]
+        assert recorder.deferred == [defer_async_logging]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("requested_model", [{"bad": "value"}, ["gpt-5.2"], 1])
