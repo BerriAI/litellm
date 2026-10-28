@@ -1433,10 +1433,91 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
             )
         assert request_data["visited_choices"] == (0, 1)
         assert request_data["metadata"]["trace"] == "retained"
-        assert request_data["responses"] is chunks
-        restored: Final = request_data["response"]
-        assert isinstance(restored, ModelResponse)
-        assert tuple(choice.index for choice in restored.choices) == (0, 1)
+        if transform:
+            # The transform path seeds "response" and "responses" up front as the context the
+            # guardrail reads, so they are its own values rather than leftovers.
+            assert request_data["responses"] is chunks
+            restored: Final = request_data["response"]
+            assert isinstance(restored, ModelResponse)
+            assert tuple(choice.index for choice in restored.choices) == (0, 1)
+        else:
+            # The ended-stream inspection loop owns these keys only while it runs; neither was in
+            # request_data beforehand, and the non-streaming path never sets "responses" at all.
+            assert "response" not in request_data
+            assert "responses" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_undeliverable_rewrite_still_inspects_the_remaining_choices(self) -> None:
+        """An undeliverable rewrite on one choice must not leave later choices uninspected.
+
+        The caller releases the original chunks when it catches UndeliverableStreamRewrite, so
+        bailing out of the loop would let a request with n > 1 pair a redactable choice with a
+        prohibited one and have the whole response delivered unchecked.
+        """
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class UndeliverableOnFirstChoice(CustomGuardrail):
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                response: Final = request_data["response"]
+                assert isinstance(response, ModelResponse)
+                index: Final = response.choices[0].index
+                request_data["visited_choices"] = (*request_data.get("visited_choices", ()), index)
+                if index == 0:
+                    raise UndeliverableStreamRewrite("undeliverable", "tool_call_mismatch")
+                return inputs
+
+        chunks: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=index, delta=Delta(content=text, tool_calls=[{
+                "index": 0, "id": f"call_{index}", "type": "function",
+                "function": {"name": "contact", "arguments": "{}"},
+            }]), finish_reason="tool_calls",
+        ) for index, text in enumerate(("redacted", "prohibited"))])]
+        request_data: Final = {}
+        with pytest.raises(UndeliverableStreamRewrite):
+            await OpenAIChatCompletionsHandler().process_output_streaming_response(
+                responses_so_far=chunks, guardrail_to_apply=UndeliverableOnFirstChoice(guardrail_name="undeliverable"),
+                request_data=request_data, deliver_ended_stream_rewrites=True,
+            )
+        assert request_data["visited_choices"] == (0, 1)
+
+    @pytest.mark.asyncio
+    async def test_undeliverable_rewrite_in_transform_mode_still_inspects_remaining_choices(self) -> None:
+        """The transform path runs its own per-choice loop and needs the same rule."""
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class UndeliverableOnFirstChoice(CustomGuardrail):
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                response: Final = request_data["response"]
+                assert isinstance(response, ModelResponse)
+                index: Final = response.choices[0].index
+                request_data["visited_choices"] = (*request_data.get("visited_choices", ()), index)
+                if index == 0:
+                    raise UndeliverableStreamRewrite("undeliverable", "tool_call_mismatch")
+                return inputs
+
+        chunks: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=index, delta=Delta(content=text, tool_calls=[{
+                "index": 0, "id": f"call_{index}", "type": "function",
+                "function": {"name": "contact", "arguments": "{}"},
+            }]), finish_reason="tool_calls",
+        ) for index, text in enumerate(("redacted", "prohibited"))])]
+        request_data: Final = {}
+        with pytest.raises(UndeliverableStreamRewrite):
+            await OpenAIChatCompletionsHandler().process_output_streaming_response(
+                responses_so_far=chunks, guardrail_to_apply=UndeliverableOnFirstChoice(guardrail_name="undeliverable"),
+                request_data=request_data, deliver_ended_stream_rewrites=True,
+                stream_transform_sink=StreamTransformSink(),
+            )
+        assert request_data["visited_choices"] == (0, 1)
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_tool_rewrites_keep_choice_indices(self) -> None:

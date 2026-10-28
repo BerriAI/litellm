@@ -669,7 +669,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if pre_guardrail_tool_calls and len(model_response.choices) > 1
             else (model_response,)
         )
+        # Local import avoids a module-level cyclic import with the policy engine.
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
         inspection_request_data: Final = request_data if request_data is not None else {}
+        missing: Final = object()
+        prior_response: Final = inspection_request_data.get("response", missing)
+        prior_responses: Final = inspection_request_data.get("responses", missing)
+        # An undeliverable rewrite on one choice must not end the loop: the caller releases the
+        # original chunks when it catches this, so leaving later choices uninspected would let a
+        # request with n > 1 pair a redactable choice with a prohibited one and have the whole
+        # response delivered unchecked. Inspect every choice, then raise the first failure.
+        undeliverable: UndeliverableStreamRewrite | None = None  # rebind-ok: keeps the first failure
         try:
             for inspection_response in inspection_responses:
                 inspection_request_data["response"] = inspection_response
@@ -681,16 +692,31 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     if len(inspection_response.choices) == 1
                     else responses_so_far
                 )
-                await self.process_output_response(
-                    response=inspection_response,
-                    guardrail_to_apply=guardrail_to_apply,
-                    litellm_logging_obj=litellm_logging_obj,
-                    user_api_key_dict=user_api_key_dict,
-                    request_data=inspection_request_data,
-                )
+                try:
+                    await self.process_output_response(
+                        response=inspection_response,
+                        guardrail_to_apply=guardrail_to_apply,
+                        litellm_logging_obj=litellm_logging_obj,
+                        user_api_key_dict=user_api_key_dict,
+                        request_data=inspection_request_data,
+                    )
+                except UndeliverableStreamRewrite as exc:
+                    if undeliverable is None:
+                        undeliverable = exc
         finally:
-            inspection_request_data["response"] = model_response
-            inspection_request_data["responses"] = responses_so_far
+            # Restore the caller's keys rather than overwriting them: the inspection loop owns
+            # these entries only for its own duration, and "responses" is not a key the
+            # non-streaming path sets at all.
+            if prior_response is missing:
+                inspection_request_data.pop("response", None)
+            else:
+                inspection_request_data["response"] = prior_response
+            if prior_responses is missing:
+                inspection_request_data.pop("responses", None)
+            else:
+                inspection_request_data["responses"] = prior_responses
+        if undeliverable is not None:
+            raise undeliverable
         if not deliver_ended_stream_rewrites:
             return
         await self._write_ended_stream_text_rewrites(
@@ -835,23 +861,38 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     )
                     for choice in assembled.choices
                 )
+                # Local import avoids a module-level cyclic import with the policy engine.
+                from litellm.proxy.policy_engine.pipeline_executor import (
+                    UndeliverableStreamRewrite,
+                )
+
+                # Same rule as the ended-stream inspection loop: an undeliverable rewrite on one
+                # choice must not leave the rest uninspected, because the caller releases the
+                # original chunks when it catches this.
+                transform_undeliverable: UndeliverableStreamRewrite | None = None  # rebind-ok: keeps the first failure
                 try:
                     for choice, choice_sink, choice_chunks in choice_rounds:
                         resolved_request_data["response"] = assembled.model_copy(
                             update=MappingProxyType({"choices": [choice]})
                         )
                         resolved_request_data["responses"] = choice_chunks
-                        await self._process_streaming_transform(
-                            responses_so_far=choice_chunks,
-                            guardrail_to_apply=guardrail_to_apply,
-                            litellm_logging_obj=litellm_logging_obj,
-                            user_api_key_dict=user_api_key_dict,
-                            request_data=resolved_request_data,
-                            sink=choice_sink,
-                        )
+                        try:
+                            await self._process_streaming_transform(
+                                responses_so_far=choice_chunks,
+                                guardrail_to_apply=guardrail_to_apply,
+                                litellm_logging_obj=litellm_logging_obj,
+                                user_api_key_dict=user_api_key_dict,
+                                request_data=resolved_request_data,
+                                sink=choice_sink,
+                            )
+                        except UndeliverableStreamRewrite as exc:
+                            if transform_undeliverable is None:
+                                transform_undeliverable = exc
                 finally:
                     resolved_request_data["response"] = assembled
                     resolved_request_data["responses"] = responses_so_far
+                if transform_undeliverable is not None:
+                    raise transform_undeliverable
                 merged_texts: Final = MappingProxyType(
                     dict(
                         chain.from_iterable(
