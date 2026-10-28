@@ -10,7 +10,9 @@ import json
 import logging
 import threading
 import traceback
+import uuid
 from collections.abc import Callable, Coroutine, Mapping
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
@@ -40,7 +42,7 @@ from starlette.types import Message
 
 import litellm
 from litellm import Router
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import JsonFormatter, verbose_proxy_logger
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -208,7 +210,6 @@ async def test_gpt_token_counting():
     assert response.request_model == "gpt-4"
 
 
-
 @pytest.mark.asyncio
 async def test_token_counter_leaves_the_routers_deployment_without_the_credentials_it_resolves(tmp_path, monkeypatch):
     """token_counter reads the router's own deployment, so loading the named credential into it would leave the
@@ -364,6 +365,8 @@ async def test_anthropic_messages_count_tokens_endpoint():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        litellm_call_id=None,
+        client_oauth_token=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
@@ -444,6 +447,8 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        litellm_call_id=None,
+        client_oauth_token=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
@@ -1262,6 +1267,8 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        litellm_call_id=None,
+        client_oauth_token=None,
     ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
@@ -1319,6 +1326,8 @@ async def test_anthropic_endpoint_403_permission_error_format():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        litellm_call_id=None,
+        client_oauth_token=None,
     ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
@@ -1376,6 +1385,8 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        litellm_call_id=None,
+        client_oauth_token=None,
     ):
         raise ProxyException(
             message="Rate limit exceeded",
@@ -1674,6 +1685,7 @@ async def _ladder(
             system=_COUNT_REQUEST.system,
         ),
         model_to_use="us.anthropic.claude-sonnet-5-5",
+        request_model=_COUNT_REQUEST.model,
         settings=settings,
         local_estimate_allowed=local_estimate_allowed,
     )
@@ -1737,6 +1749,7 @@ async def test_token_count_model_provider_selects_the_endpoint_and_preserves_the
             system=_COUNT_REQUEST.system,
         ),
         model_to_use="us.anthropic.claude-sonnet-5-5",
+        request_model=_COUNT_REQUEST.model,
         settings=settings,
         local_estimate_allowed=False,
     )
@@ -1775,15 +1788,22 @@ async def test_token_count_model_counts_the_same_request_in_its_own_region_witho
     assert _SONNET_DEPLOYMENT["litellm_params"]["aws_region_name"] == "us-west-2"
 
 
+@pytest.mark.parametrize(
+    "count_model",
+    [None, TokenCountModel(model="us.anthropic.claude-sonnet-5-5", region=None)],
+    ids=["no_token_count_model", "shipped_token_count_model_in_the_deployment_region"],
+)
 @pytest.mark.parametrize("status_code", [401, 403, 429, 500])
 @pytest.mark.asyncio
-async def test_errors_other_than_cannot_count_raise_even_with_framing(status_code: int):
+async def test_errors_other_than_cannot_count_raise_even_with_framing(
+    count_model: TokenCountModel | None, status_code: int
+):
     counter: Final = _ScriptedCounter(
         {"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=status_code)}
     )
 
     with pytest.raises(ProxyException) as raised:
-        await _ladder(counter, TokenCountSettings(framing=10, count_model=None))
+        await _ladder(counter, TokenCountSettings(framing=10, count_model=count_model))
 
     assert (raised.value.code, raised.value.message) == (str(status_code), f"scripted {status_code} for sonnet")
 
@@ -1829,28 +1849,97 @@ async def test_uncountable_model_without_framing_raises():
     assert raised.value.code == "404"
 
 
+@pytest.mark.parametrize(
+    ("count_model", "counted_as"),
+    [
+        (None, "us.anthropic.claude-sonnet-5-5"),
+        (
+            TokenCountModel(model="anthropic.claude-sonnet-5-5", region=None, litellm_provider="bedrock"),
+            "bedrock/anthropic.claude-sonnet-5-5",
+        ),
+        (_OPUS_IN_US_EAST_1, "us.anthropic.claude-opus-5-5"),
+    ],
+    ids=[
+        "no_token_count_model",
+        "shipped_token_count_model_in_the_deployment_region",
+        "shipped_token_count_model_pinned_to_a_region",
+    ],
+)
 @pytest.mark.asyncio
-async def test_uncountable_model_with_framing_falls_through_to_the_local_estimate():
-    counter: Final = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=400)})
+async def test_uncountable_model_with_framing_falls_through_to_the_local_estimate(
+    count_model: TokenCountModel | None, counted_as: str
+):
+    counter: Final = _ScriptedCounter({counted_as: _provider_reply("sonnet", status_code=400)})
 
-    result: Final = await _ladder(counter, TokenCountSettings(framing=0, count_model=None))
+    result: Final = await _ladder(counter, TokenCountSettings(framing=0, count_model=count_model))
 
     assert isinstance(result, ProviderCountFailure)
-    assert len(counter.calls) == 1
+    assert [call[0] for call in counter.calls] == [counted_as]
 
 
-@pytest.mark.parametrize("status_code", [400, 404])
+@pytest.mark.parametrize("status_code", [401, 403])
 @pytest.mark.asyncio
-async def test_token_count_model_error_stands_even_with_framing(status_code: int):
+async def test_framing_stands_in_when_a_shipped_token_count_model_region_denies_the_account(status_code: int):
+    counter: Final = _ScriptedCounter(
+        {"us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=status_code)}
+    )
+
+    result: Final = await _ladder(counter, TokenCountSettings(framing=50, count_model=_OPUS_IN_US_EAST_1))
+
+    assert isinstance(result, ProviderCountFailure)
+    assert result.status_code == status_code
+
+
+@pytest.mark.parametrize(
+    ("count_model", "region_hints"),
+    [
+        (replace(_OPUS_IN_US_EAST_1, configured=True), 1),
+        (replace(_OPUS_IN_US_EAST_1, region=None, configured=True), 0),
+    ],
+    ids=["pinned_to_a_region", "in_the_deployment_region"],
+)
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404])
+@pytest.mark.asyncio
+async def test_configured_token_count_model_error_stands_even_with_framing(
+    count_model: TokenCountModel, region_hints: int, status_code: int
+):
     counter: Final = _ScriptedCounter(
         {"us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=status_code)}
     )
 
     with pytest.raises(ProxyException) as raised:
-        await _ladder(counter, TokenCountSettings(framing=78, count_model=_OPUS_IN_US_EAST_1))
+        await _ladder(counter, TokenCountSettings(framing=78, count_model=count_model))
 
     assert raised.value.code == str(status_code)
-    assert "us.anthropic.claude-opus-5-5 in us-east-1" in raised.value.message
+    assert raised.value.message.startswith(f"scripted {status_code} for opus")
+    assert raised.value.message.count("counts tokens with us.anthropic.claude-opus-5-5 in us-east-1") == region_hints
+
+
+@pytest.mark.parametrize(
+    ("count_model", "region_hints"),
+    [(_OPUS_IN_US_EAST_1, frozenset({True})), (replace(_OPUS_IN_US_EAST_1, region=None), frozenset())],
+    ids=["pinned_to_a_region", "in_the_deployment_region"],
+)
+@pytest.mark.asyncio
+async def test_framing_standing_in_for_a_pinned_token_count_model_warns_with_its_model_and_region(
+    count_model: TokenCountModel, region_hints: frozenset[bool], caplog: pytest.LogCaptureFixture
+):
+    counter: Final = _ScriptedCounter({"us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=404)})
+    verbose_proxy_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+            result: Final = await _ladder(counter, TokenCountSettings(framing=50, count_model=count_model))
+    finally:
+        verbose_proxy_logger.removeHandler(caplog.handler)
+
+    assert isinstance(result, ProviderCountFailure)
+    stand_in_warnings: Final = [
+        r.getMessage() for r in caplog.records if "falls back to the framed local estimate" in r.getMessage()
+    ]
+    assert {
+        f"for {_COUNT_REQUEST.model} answered 404 from us.anthropic.claude-opus-5-5 in us-east-1" in message
+        for message in stand_in_warnings
+    } == region_hints
 
 
 @pytest.mark.asyncio
@@ -2826,7 +2915,9 @@ async def test_configured_token_count_model_overrides_the_shipped_one_and_an_emp
 async def test_shipped_token_count_model_keeps_the_prompt_in_the_deployment_geography(
     monkeypatch: pytest.MonkeyPatch, aws_region_name: str, counted_in: str
 ):
-    counter: Final = _ScriptedCounter({"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)})
+    counter: Final = _ScriptedCounter(
+        {"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)}
+    )
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
         "llm_router",
@@ -2877,7 +2968,9 @@ class _VaultWaitingForLoopProgress:
 async def test_region_lookup_for_a_shipped_count_model_leaves_the_event_loop_free(monkeypatch: pytest.MonkeyPatch):
     from litellm.proxy import proxy_server
 
-    counter: Final = _ScriptedCounter({"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)})
+    counter: Final = _ScriptedCounter(
+        {"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)}
+    )
 
     def bedrock_counter(deployment: object, model: str) -> tuple[_ScriptedCounter, str, str]:
         return counter, model, "bedrock"
@@ -3642,7 +3735,11 @@ async def test_responses_count_sends_openai_the_provider_file_id_inference_sends
         model_list=[
             {
                 "model_name": "gpt-files",
-                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key", "api_base": "https://count.test/v1"},
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                    "api_base": "https://count.test/v1",
+                },
                 "model_info": {"id": "deployment-a"},
             }
         ]
@@ -3822,9 +3919,7 @@ async def test_responses_count_on_claude_rejects_forced_tool_choice_without_drop
     monkeypatch.setitem(litellm.model_cost, "claude-zeta-9", {"supports_forced_tool_use": False})
 
     with pytest.raises(ProxyException) as rejected:
-        await _claude_count(
-            monkeypatch, {}, {"input": "Weather?", "tools": [_WEATHER_TOOL], "tool_choice": "required"}
-        )
+        await _claude_count(monkeypatch, {}, {"input": "Weather?", "tools": [_WEATHER_TOOL], "tool_choice": "required"})
 
     assert (rejected.value.code, "forced tool use" in rejected.value.message) == ("400", True)
 
@@ -3892,3 +3987,149 @@ async def test_responses_count_on_claude_counts_the_turns_previous_response_id_r
     ]
     assert [sorted(message) for message in messages if isinstance(message, dict)] == [["content", "role"]] * 3
     spend_logs.assert_awaited_once_with("chatcmpl-stored", ("chatcmpl-stored", "resp_client_form"))
+
+
+_COUNTED_HELLO: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"model": "count-log-gpt", "messages": [{"role": "user", "content": "Hello, how many tokens is this?"}]}
+)
+
+
+def _utils_token_counter(
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, JsonValue], headers: Mapping[str, str]
+) -> httpx.Response:
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "count-log-gpt",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                    "model_info": {"id": "count-log-utils-deployment"},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-test"))
+    return TestClient(app).post("/utils/token_counter", json=dict(body), headers=dict(headers))
+
+
+def test_utils_token_counter_logs_one_line_with_the_callers_call_id_model_and_count(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+) -> None:
+    response: Final = _utils_token_counter(monkeypatch, _COUNTED_HELLO, {"x-litellm-call-id": "count-log-utils"})
+
+    assert response.status_code == 200, response.text
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-utils",
+            "request_model": "count-log-gpt",
+            "model_id": "count-log-utils-deployment",
+            "model_used": "gpt-4o-mini",
+            "input_tokens": response.json()["total_tokens"],
+            "count_source": "local_estimate",
+            "status_code": 200,
+        },
+    )
+
+
+def test_utils_token_counter_logs_a_generated_call_id_when_the_client_sends_none(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+) -> None:
+    response: Final = _utils_token_counter(monkeypatch, _COUNTED_HELLO, {})
+
+    assert response.status_code == 200, response.text
+    (line,) = token_count_log_lines()
+    assert str(uuid.UUID(str(line["litellm_call_id"]))) == line["litellm_call_id"]
+
+
+def test_utils_token_counter_without_messages_logs_the_400_it_answers(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+) -> None:
+    response: Final = _utils_token_counter(
+        monkeypatch, {"model": "count-log-gpt"}, {"x-litellm-call-id": "count-log-utils-empty"}
+    )
+
+    assert response.status_code == 400, response.text
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-utils-empty",
+            "request_model": "count-log-gpt",
+            "model_id": None,
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )
+
+
+def test_utils_token_counter_failed_count_logs_its_status_in_place_of_a_count(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+) -> None:
+    response: Final = _utils_token_counter(
+        monkeypatch, {**_COUNTED_HELLO, "prompt": "and a prompt"}, {"x-litellm-call-id": "count-log-utils-error"}
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json() == {
+        "error": {
+            "message": "prompt cannot be sent with messages or contents. Set drop_params to count them without the prompt",
+            "type": "invalid_request_error",
+            "param": "prompt",
+            "code": "400",
+        }
+    }
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-utils-error",
+            "request_model": "count-log-gpt",
+            "model_id": "count-log-utils-deployment",
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )
+
+
+def test_utils_token_counter_json_line_keeps_its_own_fields_when_the_call_id_is_a_dict(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    forged_call_id: Final = "{'component':'forged-comp','logger':'forged.py:1','injected_key':'injected'}"
+
+    _utils_token_counter(monkeypatch, _COUNTED_HELLO, {"x-litellm-call-id": forged_call_id})
+
+    (line,) = token_count_log_lines()
+    (record,) = (record for record in caplog.records if "count_source" in record.__dict__)
+    rendered: Final = json.loads(JsonFormatter().format(record))
+    assert line["litellm_call_id"] == forged_call_id
+    assert {key: rendered.get(key) for key in ("litellm_call_id", "component", "logger", "injected_key")} == {
+        "litellm_call_id": forged_call_id,
+        "component": verbose_proxy_logger.name,
+        "logger": f"{record.filename}:{record.lineno}",
+        "injected_key": None,
+    }
+
+
+def test_utils_token_counter_line_stays_one_line_when_the_model_carries_a_newline(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    forged_model: Final = "count-log-gpt\ntoken count - litellm_call_id=forged input_tokens=1"
+
+    _utils_token_counter(monkeypatch, {**_COUNTED_HELLO, "model": forged_model}, {"x-litellm-call-id": "count log"})
+
+    (line,) = token_count_log_lines()
+    (message,) = (record.getMessage() for record in caplog.records if "count_source" in record.__dict__)
+    assert line["request_model"] == forged_model
+    assert "\n" not in message
+    assert message.startswith(f'token count - litellm_call_id="count log" request_model={json.dumps(forged_model)} ')
