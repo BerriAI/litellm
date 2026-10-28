@@ -12,7 +12,7 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 
 import json
 from collections.abc import Callable
-from itertools import accumulate
+from itertools import accumulate, islice
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1678,3 +1678,84 @@ async def test_citation_during_reasoning_streams_once_reasoning_closes(
     assert [event.annotation for event in citations] == [entry.model_dump() for entry in message.content[0].annotations]
     assert ("sequence_number" in citations[0].model_dump()) == ("sequence_number" in text_delta.model_dump())
     assert message.content[0].text == "Claim"
+
+
+def _citation_then_tool_call_finishing_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_annotation_only_chunk(), _tool_call_chunk(finish_reason="tool_calls"))
+
+
+def _reasoning_citation_then_tool_call_finishing_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_reasoning_chunk("let me think"), *_citation_then_tool_call_finishing_chunks())
+
+
+def _reasoning_citation_tool_call_then_empty_finish_chunks() -> tuple[ModelResponseStream, ...]:
+    return (
+        _reasoning_chunk("let me think"),
+        _annotation_only_chunk(),
+        _tool_call_chunk(),
+        _chunk("", finish_reason="tool_calls"),
+    )
+
+
+def _citation_between_reasoning_then_empty_finish_chunks() -> tuple[ModelResponseStream, ...]:
+    return (*_citation_between_reasoning_chunks(), _chunk("", finish_reason="stop"))
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("stream_chunks", "expected_citations"),
+    [
+        (_citation_then_tool_call_finishing_chunks, 0),
+        (_reasoning_citation_then_tool_call_finishing_chunks, 0),
+        (_reasoning_citation_tool_call_then_empty_finish_chunks, 1),
+        (_citation_between_reasoning_then_empty_finish_chunks, 1),
+        (_citation_between_reasoning_chunks, 1),
+    ],
+    ids=[
+        "citation_then_tool_call",
+        "reasoning_citation_then_tool_call",
+        "reasoning_citation_tool_call_then_empty_finish",
+        "citation_between_reasoning_then_empty_finish",
+        "citation_between_reasoning_without_finish",
+    ],
+)
+@pytest.mark.asyncio
+async def test_streamed_citations_match_the_completed_message(
+    stream_chunks: StreamChunks, expected_citations: int, sync_mode: bool
+) -> None:
+    events: Final = await _collect_events(_build_iterator(stream_chunks()), sync_mode)
+
+    output: Final = events[-1].response.output
+    completed_message_indexes: Final = [index for index, item in enumerate(output) if item.type == "message"]
+    completed_annotations: Final = [
+        annotation.model_dump() for index in completed_message_indexes for annotation in output[index].content[0].annotations
+    ]
+    streamed_message_indexes: Final = [event.output_index for event in events if _is_message_item(event)]
+    citations: Final = [event for event in events if event.type == "response.output_text.annotation.added"]
+    reasoning_done: Final = [
+        index
+        for index, event in enumerate(events)
+        if event.type == "response.output_item.done" and event.item.type == "reasoning"
+    ]
+    message_added: Final = [index for index, event in enumerate(events) if _is_message_item(event)]
+
+    assert len(citations) == expected_citations
+    assert [event.annotation for event in citations] == completed_annotations
+    assert sorted(set(streamed_message_indexes)) == completed_message_indexes
+    assert all(event.output_index in completed_message_indexes for event in citations)
+    assert len(reasoning_done) == sum(item.type == "reasoning" for item in output)
+    assert all(index < added for index in reasoning_done for added in message_added)
+
+
+def test_disconnect_after_a_held_citation_still_bills_it() -> None:
+    iterator: Final = _build_iterator((*_citation_between_reasoning_chunks(), _chunk("Claim", finish_reason="stop")))
+    reasoning_deltas: Final = (event for event in iterator if event.type == "response.reasoning_summary_text.delta")
+    assert len(list(islice(reasoning_deltas, 2))) == 2
+
+    incomplete: Final = iterator.partial_response_on_disconnect()
+
+    assert incomplete is not None
+    messages: Final = [item for item in incomplete.response.output if item.type == "message"]
+    assert [annotation.url for message in messages for annotation in message.content[0].annotations] == [
+        "https://example.com"
+    ]
