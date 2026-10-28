@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.types.utils import CallTypes
 
 from . import *
@@ -95,7 +96,7 @@ def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", mo
 
 
 _GUARDRAIL_TRANSLATION_PACKAGE: Final = "guardrail_translation"
-_MCP_GUARDRAIL_TRANSLATION_MODULE: Final = "litellm.proxy._experimental.mcp_server.guardrail_translation"
+_MCP_GUARDRAIL_TRANSLATION_MODULE: Final = "litellm.proxy.mcp_server.guardrail_translation"
 _NO_MAPPINGS: Final[Mapping[CallTypes, type["BaseTranslation"]]] = MappingProxyType({})
 
 
@@ -137,9 +138,7 @@ def _import_guardrail_translations(
             reason=f"{type(e).__name__}: {e}",
             missing_dependency=isinstance(e, ModuleNotFoundError) and _is_absent(e.name or ""),
         )
-    declared: Final[Mapping[CallTypes, type[BaseTranslation]] | None] = getattr(
-        module, "guardrail_translation_mappings", None
-    )
+    declared: Final = attribute_or_none(module, "guardrail_translation_mappings")
     return declared if isinstance(declared, dict) else _NO_MAPPINGS
 
 

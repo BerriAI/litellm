@@ -31,6 +31,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     encode_file_id_with_model,
 )
 from litellm.types.llms.openai import OpenAIFileObject
+from tests.unit.litellm_core_utils.attribute_forwarder import AttributeForwarder
 
 
 class _InMemoryManagedFileTable:
@@ -449,6 +450,20 @@ async def test_async_pre_call_deployment_hook_prefers_top_level_model_info():
     assert (
         result["input_file_id"] == top_level_provider_file
     ), "Should prefer top-level model_info over litellm_metadata"
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_reads_model_info_that_forwards_its_fields():
+    proxy_managed_files: Final = PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=MagicMock())
+    kwargs: Final = {
+        "input_file_id": "managed-file-abc",
+        "model_file_id_mapping": {"managed-file-abc": {"deployment-xyz": "file-provider-123"}},
+        "model_info": AttributeForwarder({"id": "deployment-xyz"}),
+    }
+
+    result: Final = await proxy_managed_files.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.acreate_batch)
+
+    assert result["input_file_id"] == "file-provider-123"
 
 
 @pytest.mark.asyncio

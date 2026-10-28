@@ -10,13 +10,13 @@ import pytest
 
 import litellm.llms as llms_package
 from litellm._logging import verbose_logger
-from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
+from litellm.proxy.mcp_server.guardrail_translation.handler import (
     MCPGuardrailTranslationHandler,
 )
 from litellm.types.utils import CallTypes
 
 OPENAI_CHAT_TRANSLATION_MODULE = "litellm.llms.openai.chat.guardrail_translation"
-MCP_TRANSLATION_MODULE = "litellm.proxy._experimental.mcp_server.guardrail_translation"
+MCP_TRANSLATION_MODULE = "litellm.proxy.mcp_server.guardrail_translation"
 
 
 class RaisingLoader(importlib.abc.MetaPathFinder, importlib.abc.Loader):

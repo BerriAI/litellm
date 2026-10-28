@@ -1,0 +1,78 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT e.spend AS \"spend?\",\n       e.blocked AS \"blocked?\",\n       b.max_budget AS \"max_budget?\",\n       b.rpm_limit AS \"rpm_limit?\",\n       b.tpm_limit AS \"tpm_limit?\"\nFROM (SELECT 1) AS one\nLEFT JOIN \"LiteLLM_EndUserTable\" AS e ON e.user_id = $1\nLEFT JOIN \"LiteLLM_BudgetTable\" AS assigned ON assigned.budget_id = e.budget_id\nLEFT JOIN \"LiteLLM_BudgetTable\" AS key_budget ON key_budget.budget_id = $3\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b ON b.budget_id = COALESCE(assigned.budget_id, key_budget.budget_id, $2)\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "spend?",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_EndUserTable\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "blocked?",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_EndUserTable\"",
+            "name": "blocked"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "max_budget?",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "max_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "rpm_limit?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "rpm_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "tpm_limit?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "tpm_limit"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "377d063cd0fc3a265d07d01f5aa64311d25428fd393bac4250891f148597e92e"
+}
