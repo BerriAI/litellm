@@ -2428,6 +2428,12 @@ class LiteLLMCompletionResponsesConfig:
                         if isinstance(txt, str) and txt:
                             text_acc.append(txt)
                             normalized_blocks.append({"type": "text", "text": txt})
+                    elif part_type == "tool_reference":
+                        match cast(Mapping[str, object], part):  # cast-ok: dict checked above
+                            case {"tool_name": str(tool_name)} if tool_name:
+                                normalized_blocks.append({"type": "tool_reference", "tool_name": tool_name})
+                            case _:
+                                continue
                     elif (media := _decode_responses_media(part)) is not None:
                         normalized_blocks.append(media)
 

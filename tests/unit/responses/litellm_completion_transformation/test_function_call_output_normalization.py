@@ -7,15 +7,18 @@ we normalize it to text/image blocks or a string.
 """
 
 import json
+from collections.abc import Mapping
 from copy import deepcopy
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_result
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.llms.openai import ChatCompletionToolMessage, ToolMessageContentPart
 
 
 def _normalize_media_content(kind: str, parts: list[dict[str, object]]) -> object:
@@ -171,3 +174,54 @@ def test_computer_screenshot_output_remains_structured_media() -> None:
             "image_url": {"url": "data:image/png;base64,AAAA", "detail": "auto"},
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("output", "expected_content"),
+    [
+        (
+            [{"type": "tool_reference", "tool_name": "get_weather"}],
+            [{"type": "tool_reference", "tool_name": "get_weather"}],
+        ),
+        (
+            [
+                {"type": "input_text", "text": "Loaded tools"},
+                {"type": "tool_reference", "tool_name": "get_weather"},
+                {"type": "input_text", "text": " and "},
+                {"type": "tool_reference", "tool_name": "get_forecast"},
+            ],
+            [
+                {"type": "text", "text": "Loaded tools"},
+                {"type": "tool_reference", "tool_name": "get_weather"},
+                {"type": "text", "text": " and "},
+                {"type": "tool_reference", "tool_name": "get_forecast"},
+            ],
+        ),
+        (
+            [
+                {"type": "tool_reference"},
+                {"type": "tool_reference", "tool_name": None},
+                {"type": "tool_reference", "tool_name": ""},
+                {"type": "tool_reference", "tool_name": "get_weather"},
+            ],
+            [{"type": "tool_reference", "tool_name": "get_weather"}],
+        ),
+    ],
+    ids=["reference-only", "interleaved-text-and-references", "malformed-references-omitted"],
+)
+def test_function_call_output_preserves_tool_references_for_anthropic(
+    output: list[Mapping[str, object]], expected_content: list[ToolMessageContentPart]
+) -> None:
+    messages: Final = (
+        LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
+            {"type": "function_call_output", "call_id": "call_load_tools", "output": output}
+        )
+    )
+
+    assert messages == [{"role": "tool", "tool_call_id": "call_load_tools", "content": expected_content}]
+    message: Final = cast(ChatCompletionToolMessage, messages[0])  # cast-ok: complete tool message asserted above
+    assert convert_to_anthropic_tool_result(message) == {
+        "type": "tool_result",
+        "tool_use_id": "call_load_tools",
+        "content": expected_content,
+    }
