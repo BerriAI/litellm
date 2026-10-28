@@ -545,35 +545,82 @@ def _tool_output_part_text(part: object) -> str | None:
     return text if fields.get("type") in _TOOL_OUTPUT_TEXT_PART_TYPES and isinstance(text, str) else None
 
 
-def _text_part_indices(parts: Sequence[object]) -> tuple[int, ...]:
-    return tuple(index for index, part in enumerate(parts) if _tool_output_part_text(part))
-
-
 def tool_output_texts(item: object) -> tuple[tuple[int | None, str], ...]:
     if not stream_item_field(item, "call_id") or stream_item_field(item, "type") == "computer_call_output":
         return ()
-    tool_content: Final = tool_output_to_chat_content(stream_item_field(item, "output"))
-    if isinstance(tool_content, str):
-        return ((None, tool_content),) if tool_content else ()
     parts: Final = stream_item_items(item, "output")
-    return tuple((index, text) for index, part in enumerate(parts) if (text := _tool_output_part_text(part)))
+    part_texts: Final = tuple(
+        (index, text) for index, part in enumerate(parts) if (text := _tool_output_part_text(part))
+    )
+    if part_texts:
+        return part_texts
+    tool_content: Final = tool_output_to_chat_content(stream_item_field(item, "output"))
+    return ((None, tool_content),) if isinstance(tool_content, str) and tool_content else ()
+
+
+def _multi_part_texts_by_call_id(input_data: "str | ResponseInputParam") -> Mapping[str, tuple[str, ...]]:
+    if isinstance(input_data, str):
+        return MappingProxyType({})
+    tool_outputs: Final = tuple(
+        item for item in input_data if stream_item_field(item, "type") in TOOL_CALL_OUTPUT_ITEM_TYPES
+    )
+    call_ids: Final = tuple(str(stream_item_field(item, "call_id")) for item in tool_outputs)
+    return MappingProxyType(
+        {
+            call_id: tuple(text for _, text in texts)
+            for call_id, texts in zip(call_ids, map(tool_output_texts, tool_outputs))
+            if len(texts) > 1 and call_ids.count(call_id) == 1
+        }
+    )
+
+
+def _string_tool_row_call_id(message: Mapping[str, object]) -> str | None:
+    if message.get("role") != "tool" or not isinstance(message.get("content"), str):
+        return None
+    return str(message.get("tool_call_id"))
+
+
+def _split_into_text_parts(
+    message: AllMessageValues, texts_by_call_id: Mapping[str, tuple[str, ...]]
+) -> AllMessageValues:
+    call_id: Final = _string_tool_row_call_id(message)
+    texts: Final = None if call_id is None else texts_by_call_id.get(call_id)
+    if texts is None:
+        return message
+    return cast(  # cast-ok: a tool row whose content is its text parts as chat text blocks
+        "AllMessageValues", {**message, "content": [{"type": "text", "text": text} for text in texts]}
+    )
+
+
+def _with_split_rows_restored(
+    rows: Sequence[AllMessageValues], split_rows: Sequence[tuple[AllMessageValues, AllMessageValues]]
+) -> Sequence[AllMessageValues]:
+    if not isinstance(rows, list):
+        return rows
+    return [next((original for split, original in split_rows if row == split), row) for row in rows]
 
 
 def _textless_tool_call_ids(input_data: "str | ResponseInputParam") -> frozenset[str]:
     if isinstance(input_data, str):
         return frozenset()
-    return frozenset(
-        str(stream_item_field(item, "call_id"))
-        for item in input_data
-        if stream_item_field(item, "type") in TOOL_CALL_OUTPUT_ITEM_TYPES and not tool_output_texts(item)
+    tool_outputs: Final = tuple(
+        item for item in input_data if stream_item_field(item, "type") in TOOL_CALL_OUTPUT_ITEM_TYPES
+    )
+    texted_call_ids: Final = frozenset(
+        str(stream_item_field(item, "call_id")) for item in tool_outputs if tool_output_texts(item)
+    )
+    return (
+        frozenset(str(stream_item_field(item, "call_id")) for item in tool_outputs if not tool_output_texts(item))
+        - texted_call_ids
     )
 
 
 def _is_textless_tool_row(message: Mapping[str, object], textless_call_ids: frozenset[str]) -> bool:
+    content: Final = message.get("content")
     return (
         message.get("role") == "tool"
-        and isinstance(message.get("content"), str)
-        and message.get("tool_call_id") in textless_call_ids
+        and isinstance(content, str)
+        and (not content or message.get("tool_call_id") in textless_call_ids)
     )
 
 
@@ -582,18 +629,7 @@ def _rewritten_whole_text(item: object, field: str, guardrail_response: str) -> 
         return guardrail_response
     if tool_output_texts(item) == ((None, guardrail_response),):
         return None
-    parts: Final = stream_item_items(item, field)
-    text_indices: Final = _text_part_indices(parts)
-    if not text_indices:
-        return guardrail_response
-    first_text_index: Final = text_indices[0]
-    return [
-        {**_item_fields_adapter.validate_python(part), "text": guardrail_response}
-        if index == first_text_index
-        else part
-        for index, part in enumerate(parts)
-        if index == first_text_index or index not in text_indices
-    ]
+    return guardrail_response
 
 
 def _patched_request_fields(
@@ -726,9 +762,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
             if not _is_textless_tool_row(all_messages[index], textless_call_ids)
         )
-        scoped_structured_messages: Final = (
-            [structured_messages[index] for index in scoped_indices] if structured_messages else None
+        texts_by_call_id: Final = _multi_part_texts_by_call_id(input_data)
+        split_rows: Final = tuple(
+            (_split_into_text_parts(all_messages[index], texts_by_call_id), all_messages[index])
+            for index in scoped_indices
         )
+        scoped_structured_messages: Final = [split for split, _ in split_rows] if structured_messages else None
         raw_tools: Final = data.get("tools")
         original_tools: Final[tuple[Mapping[str, object], ...]] = (
             tuple(raw_tools) if isinstance(raw_tools, list) else ()
@@ -768,6 +807,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             structured_messages or (),
             scoped_indices,
             scoped_structured_messages,
+            tuple((split, original) for split, original in split_rows if split is not original),
             guardrail_to_apply,
             guardrailed_inputs,
         )
@@ -868,12 +908,14 @@ class OpenAIResponsesHandler(BaseTranslation):
         structured_messages: Sequence[AllMessageValues],
         scoped_indices: Sequence[int],
         scoped_structured_messages: Sequence[AllMessageValues] | None,
+        split_rows: Sequence[tuple[AllMessageValues, AllMessageValues]],
         guardrail_to_apply: "CustomGuardrail",
         guardrailed_inputs: GenericGuardrailAPIInputs,
     ) -> _RequestFields | None:
-        guardrailed: Final = guardrailed_inputs.get("structured_messages")
-        if guardrailed is None or guardrailed is scoped_structured_messages:
+        returned: Final = guardrailed_inputs.get("structured_messages")
+        if returned is None or returned is scoped_structured_messages:
             return None
+        guardrailed: Final = _with_split_rows_restored(returned, split_rows)
         covers_full_request: Final = len(scoped_indices) == len(structured_messages) or (
             guardrail_to_apply.structured_messages_cover_full_request() and len(guardrailed) == len(structured_messages)
         )
