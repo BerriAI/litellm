@@ -1258,6 +1258,49 @@ def test_mistral_drops_replayed_reasoning_for_a_model_without_reasoning(
     assert result[1] == {"role": "assistant", "content": "I have picked it."}
 
 
+@pytest.mark.parametrize(
+    "config",
+    [pytest.param(MistralConfig(), id="mistral"), pytest.param(VertexAIMistralConfig(), id="vertex_ai")],
+)
+def test_mistral_drops_a_native_chunk_without_text_for_a_model_without_reasoning(config: MistralConfig):
+    tool_call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_time", "arguments": "{}"}}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "What time is it?"},
+            {"role": "assistant", "content": [_think_chunk("I should call get_time.")], "tool_calls": [tool_call]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "12:00"},
+        ],
+        config=config,
+        model="mistral-chat-model-without-reasoning",
+    )
+
+    assert result[1] == {"role": "assistant", "tool_calls": [tool_call]}
+
+
+@pytest.mark.parametrize(
+    "config",
+    [pytest.param(MistralConfig(), id="mistral"), pytest.param(VertexAIMistralConfig(), id="vertex_ai")],
+)
+def test_mistral_drops_a_native_chunk_from_an_image_history_for_a_model_without_reasoning(config: MistralConfig):
+    image_part: Final = {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": [{"type": "text", "text": "What is this?"}, image_part]},
+            {
+                "role": "assistant",
+                "content": [_think_chunk("It has whiskers."), {"type": "text", "text": "A cat."}],
+            },
+            {"role": "user", "content": "What color?"},
+        ],
+        config=config,
+        model="mistral-chat-model-without-reasoning",
+    )
+
+    assert result[1] == {"role": "assistant", "content": [{"type": "text", "text": "A cat."}]}
+
+
 def test_mistral_transform_request_keeps_an_empty_tool_message_after_its_tool_call():
     messages: List[AllMessageValues] = cast(
         List[AllMessageValues],

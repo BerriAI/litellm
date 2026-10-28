@@ -494,10 +494,10 @@ class MistralConfig(OpenAIGPTConfig):
         if message["role"] != "assistant":
             return message
         stripped_message: Final = strip_litellm_internal_message_fields(message)
-        if not keeps_reasoning:
-            return stripped_message
-        reasoning_text: Final = MistralConfig._replayed_reasoning_text(message)
         content_parts: Final = MistralConfig._assistant_content_parts(message)
+        if not keeps_reasoning:
+            return MistralConfig._without_think_chunks(stripped_message, content_parts)
+        reasoning_text: Final = MistralConfig._replayed_reasoning_text(message)
         has_turn_output: Final = bool(content_parts) or bool(message.get("tool_calls"))
         if reasoning_text is None or content_parts is None or not has_turn_output:
             return stripped_message
@@ -508,6 +508,15 @@ class MistralConfig(OpenAIGPTConfig):
         )
         return cast(  # cast-ok: Mistral's ThinkChunk is outside the OpenAI assistant content union
             AllMessageValues, {**stripped_message, "content": [think_chunk, *content_parts]}
+        )
+
+    @staticmethod
+    def _without_think_chunks(message: AllMessageValues, content_parts: tuple[object, ...] | None) -> AllMessageValues:
+        if content_parts is None or not any(map(MistralConfig._is_mistral_think_chunk, content_parts)):
+            return message
+        kept_parts: Final = [part for part in content_parts if not MistralConfig._is_mistral_think_chunk(part)]
+        return cast(  # cast-ok: an assistant turn takes a content list or no content
+            AllMessageValues, {**message, "content": kept_parts or None}
         )
 
     @staticmethod
