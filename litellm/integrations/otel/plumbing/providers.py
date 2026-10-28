@@ -602,10 +602,11 @@ def _verdict_key(request: _RequestKey, destination: "OtelDestination") -> _Verdi
 
 
 def _keeps_tree(destination: "OtelDestination", tree: _PendingTree, trace_id: int) -> bool:
-    """Whether the destination keeps a request tree of ``trace_id``: a ``failure_only``
-    destination none whose request did not fail. Otherwise a tree with a failed span
-    answers to ``arize_error_sampling_rate``, the rest to ``arize_success_sampling_rate``,
-    an unset rate keeps everything and ``0.0`` keeps nothing.
+    """Whether the destination keeps a request tree of ``trace_id``. A ``failure_only``
+    destination drops every tree whose request did not fail. Otherwise a tree with a
+    failed span answers to ``arize_error_sampling_rate``, the rest to
+    ``arize_success_sampling_rate``, an unset rate keeps everything and ``0.0`` keeps
+    nothing.
 
     The first eight bytes of a SHA-256 of the trace id are read against the rate, so
     every process deciding a request of the trace with the same outcome reaches the same
@@ -912,9 +913,9 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         now: Final = time.monotonic()
         if self._warned_early_at is None or now - self._warned_early_at >= _EARLY_DECISION_WARNING_SECONDS:
             verbose_logger.warning(
-                "OTel V2 fan-out: %d request trees were sent or dropped before their request finished, because "
-                "more than %d were held for sampled or failure-only destinations; a failure that came later "
-                "did not reach a failure-only destination",
+                "OTel V2 fan-out: %d request trees were decided before their request finished, because more "
+                "than %d were held for sampled or failure-only destinations. A failure-only destination misses "
+                "a failure that came after that",
                 self._decided_early,
                 _MAX_PENDING_TREES,
             )
