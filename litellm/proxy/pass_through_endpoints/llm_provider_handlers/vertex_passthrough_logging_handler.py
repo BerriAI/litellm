@@ -11,6 +11,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import VERTEX_BATCH_PREDICTION_JOBS_ROUTE
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
     InteractionsUsageObjectTransformation,
@@ -225,7 +226,7 @@ class VertexPassthroughLoggingHandler:
                 start_time=start_time,
                 end_time=end_time,
                 logging_obj=logging_obj,
-                custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route),
+                custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider(url_route, logging_obj),
                 vertex_location=vertex_location,
             )
 
@@ -549,7 +550,7 @@ class VertexPassthroughLoggingHandler:
                 response_json=response_json,
             )
 
-        custom_llm_provider: Final = VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route)
+        custom_llm_provider: Final = VertexPassthroughLoggingHandler._get_custom_llm_provider(url_route, logging_obj)
 
         litellm_embedding_response.model = model
         logging_obj.model = model
@@ -621,7 +622,9 @@ class VertexPassthroughLoggingHandler:
             start_time=start_time,
             end_time=end_time,
             logging_obj=litellm_logging_obj,
-            custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route),
+            custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider(
+                url_route, litellm_logging_obj
+            ),
             vertex_location=vertex_location,
         )
 
@@ -669,8 +672,15 @@ class VertexPassthroughLoggingHandler:
         all_openai_chunks: Final = [parsed_chunk for parsed_chunk in parsed_chunks if parsed_chunk is not None]
 
         complete_streaming_response: Final = litellm.stream_chunk_builder(chunks=all_openai_chunks)
+        VertexPassthroughLoggingHandler._drop_location_blind_stream_builder_cost(complete_streaming_response)
 
         return complete_streaming_response
+
+    @staticmethod
+    def _drop_location_blind_stream_builder_cost(response: ModelResponse | TextCompletionResponse | None) -> None:
+        hidden_params: Final = get_hidden_params(response)
+        if hidden_params is not None:
+            hidden_params.pop("response_cost", None)
 
     @staticmethod
     def extract_model_from_url(url: str) -> str:
@@ -724,9 +734,15 @@ class VertexPassthroughLoggingHandler:
         return None
 
     @staticmethod
-    def _get_custom_llm_provider_from_url(url: str) -> str:
-        parsed_url: Final = urlparse(url)
-        if parsed_url.hostname and parsed_url.hostname.endswith("generativelanguage.googleapis.com"):
+    def _get_custom_llm_provider(url: str, logging_obj: LiteLLMLoggingObj) -> str:
+        hostname: Final = urlparse(url).hostname
+        if logging_obj.model_call_details.get("custom_llm_provider") == litellm.LlmProviders.GEMINI.value or (
+            hostname is not None
+            and (
+                hostname == "generativelanguage.googleapis.com"
+                or hostname.endswith(".generativelanguage.googleapis.com")
+            )
+        ):
             return litellm.LlmProviders.GEMINI.value
         return litellm.LlmProviders.VERTEX_AI.value
 

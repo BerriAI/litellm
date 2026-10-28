@@ -12,7 +12,8 @@ from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -21,6 +22,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     filter_exceptions_from_params,
     filter_internal_params,
     map_finish_reason,
@@ -61,8 +63,10 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_cleaned_output_schema,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
+    bedrock_native_output_is_opt_in,
     bedrock_supports_tool_search,
     deployment_model_info,
+    requests_output_config_format,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -158,6 +162,14 @@ _TOOLS_AS_SENT: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _JSON_VALUE: Final = TypeAdapter(object)
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_AS_RECEIVED: Final = TypeAdapter(list[object])
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _ToolCallInContent(TypedDict):
+    name: ReadOnly[str]
+
+
+_TOOL_CALL_IN_CONTENT: Final = TypeAdapter(_ToolCallInContent)
 CLAUDE_ON_BEDROCK_INVOKE_REMEDY: Final = " This model runs tool search on Bedrock through `bedrock/invoke/<model>`."
 _DEPLOYMENT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
@@ -168,6 +180,18 @@ def _tools_the_model_accepts(
     if bedrock_model_supports_regex_lookaround(model, litellm_params):
         return list(tools)
     return [tool_with_sanitized_parameters(tool, drop_lookaround_regex_patterns) for tool in tools]
+
+
+_OUTPUT_CONFIG_BLOCK: Final = TypeAdapter(OutputConfigBlock)
+
+
+def _has_native_text_format(output_config: object) -> bool:
+    if not isinstance(output_config, Mapping):
+        return False
+    try:
+        return _OUTPUT_CONFIG_BLOCK.validate_python(output_config).get("textFormat") is not None
+    except ValidationError:
+        return False
 
 
 class AmazonConverseConfig(BaseConfig):
@@ -371,7 +395,7 @@ class AmazonConverseConfig(BaseConfig):
 
     @staticmethod
     def _requires_min_max_tokens(model: str) -> bool:
-        return re.search(r"openai\.gpt-\d|xai\.grok-", model) is not None
+        return re.search(r"openai\.gpt-\d|xai\.grok-|moonshotai\.kimi-k3", model) is not None
 
     def _is_nova_2_model(self, model: str) -> bool:
         """
@@ -1333,6 +1357,22 @@ class AmazonConverseConfig(BaseConfig):
         optional_params["json_mode"] = True
         return optional_params
 
+    @staticmethod
+    def sends_native_text_format(optional_params: Mapping[str, object]) -> bool:
+        return _has_native_text_format(optional_params.get("outputConfig"))
+
+    def uses_opt_in_native_output(
+        self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> bool:
+        native_output_requested: Final = (
+            optional_params.get("json_mode") is True and self.sends_native_text_format(optional_params)
+        ) or requests_output_config_format(optional_params)
+        return native_output_requested and bedrock_native_output_is_opt_in(
+            bedrock_capability_model(model, litellm_params.get("base_model")),
+            self.custom_llm_provider or "bedrock_converse",
+            deployment_model_info(litellm_params),
+        )
+
     def update_optional_params_with_thinking_tokens(self, non_default_params: dict, optional_params: dict):
         """
         Handles scenario where max tokens is not specified. For anthropic models (anthropic api/bedrock/vertex ai), this requires having the max tokens being set and being greater than the thinking token budget.
@@ -1915,7 +1955,7 @@ class AmazonConverseConfig(BaseConfig):
         anthropic_beta_list: list,
     ) -> None:
         """Keep only compact_20260112 edits for Bedrock; add beta header or drop field."""
-        from litellm.llms.anthropic.pass_through.context_management.constants import (
+        from litellm.llms.anthropic.messages.context_management.constants import (
             COMPACT_EDIT_TYPE,
         )
         from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
@@ -2097,6 +2137,7 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
                     base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                    drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
                 ),
                 capability_model,
             )
@@ -2177,6 +2218,7 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
                     base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                    drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
                 ),
                 capability_model,
             )
@@ -2421,9 +2463,17 @@ class AmazonConverseConfig(BaseConfig):
         if message.content is not None:
             try:
                 tool_call_names: Final = self.get_tool_call_names(tools)
-                json_content: Final = json.loads(message.content)
-                if json_content.get("type") == "function" and json_content.get("name") in tool_call_names:
-                    tool_calls: Final = [ChatCompletionMessageToolCall(function=Function(**json_content))]
+                json_content: Final = as_str_mapping(_JSON_VALUE.validate_python(json.loads(message.content)))
+                if (
+                    json_content is not None
+                    and json_content.get("type") == "function"
+                    and json_content.get("name") in tool_call_names
+                ):
+                    tool_calls: Final = [
+                        ChatCompletionMessageToolCall(
+                            function=Function(**_TOOL_CALL_IN_CONTENT.validate_python(json_content))
+                        )
+                    ]
 
                     message.tool_calls = tool_calls
                     message.content = None
@@ -2809,6 +2859,8 @@ class AmazonConverseConfig(BaseConfig):
         # Add "trace" from Bedrock guardrails - if user has opted in to returning it
         if "trace" in completion_response:
             setattr(model_response, "trace", completion_response["trace"])
+            if logging_obj is not None:
+                logging_obj.record_native_bedrock_guardrail(model_response)
 
         # Add service_tier if present in Bedrock response
         # Map Bedrock serviceTier (object) to OpenAI service_tier (string)

@@ -76,6 +76,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     add_internal_model_credentials,
     apply_team_provider_credentials,
     authorize_model_for_key,
+    deployment_drop_params,
     encode_file_id_with_model,
     extract_file_creation_params,
     get_authorized_credentials_for_model,
@@ -457,7 +458,7 @@ async def route_create_file(
         # Merge credentials into the request
         prepare_data_with_credentials(
             data=_create_file_request,
-            credentials=credentials,
+            credentials={**credentials, **deployment_drop_params(llm_router, model, _create_file_request)},
         )
 
         # Create the file with model credentials
@@ -1102,14 +1103,10 @@ async def get_file_content(
                     }
                 )
         else:
-            # A raw cloud-storage URI (s3://, gs://) supplied here would skip the
-            # managed-file owner/team check that only runs for unified ids, letting
-            # a caller read another tenant's object by its key. Such objects are only
-            # reachable through their managed unified id.
-            if is_managed_cloud_storage_uri(file_id):
+            if is_managed_cloud_storage_uri(file_id) and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
                 raise HTTPException(
-                    status_code=400,
-                    detail="Raw cloud storage file ids cannot be retrieved directly. Use the LiteLLM managed file id returned when the file was created.",
+                    status_code=403,
+                    detail="Raw cloud storage file ids can only be retrieved by a proxy admin key. Use the LiteLLM managed file id returned when the file was created.",
                 )
             # Check for model-based credential routing
             (

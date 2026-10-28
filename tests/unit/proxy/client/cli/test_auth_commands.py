@@ -5,7 +5,6 @@ import time
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-
 import pytest
 import responses
 from click.testing import CliRunner
@@ -26,7 +25,6 @@ from litellm.litellm_core_utils.cli_token_utils import (
 )
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands import claude_settings as claude_settings_module
-from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
 from litellm.proxy.client.cli.commands.auth import (
     get_stored_api_key,
     login,
@@ -34,6 +32,7 @@ from litellm.proxy.client.cli.commands.auth import (
     print_token,
     whoami,
 )
+from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
 
 
 @pytest.fixture
@@ -1718,6 +1717,35 @@ class TestPkceLoginCommand:
         save.assert_called_once()
         assert _FakeSession.instances[0].posts == []
 
+    @pytest.mark.parametrize(
+        ("saved", "args", "uses_pkce"),
+        [
+            ("true", [], True),
+            ("false", [], False),
+            (None, [], False),
+            ("true", ["--no-pkce"], False),
+            ("false", ["--pkce"], True),
+        ],
+    )
+    def test_login_uses_pkce_when_the_flag_or_the_saved_setting_says_so(self, saved, args, uses_pkce):
+        from litellm.proxy.client.cli.commands.config import save_config
+
+        if saved is not None:
+            save_config({"pkce": saved})
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch(
+                "litellm.proxy.client.cli.commands.auth._start_cli_sso_flow",
+                side_effect=RuntimeError("classic sso flow"),
+            ),
+            patch("litellm.proxy.client.cli.commands.auth.save_token", return_value=SecretStored()),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            result = self.runner.invoke(login, args, obj={"base_url": PKCE_BASE_URL})
+
+        assert ("Login successful!" in result.output) is uses_pkce
+        assert ("Authentication failed: classic sso flow" in result.output) is (not uses_pkce)
+
     def test_pkce_login_saves_the_refreshable_record_and_skips_the_sso_poll(self):
         with (
             patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()) as run,
@@ -2050,7 +2078,10 @@ class TestGetStoredApiKeyRefresh:
 @pytest.mark.parametrize(
     "body, expected_detail",
     [
-        ('{"detail": "Too many CLI login attempts.", "retry": {"after": [30, null]}}', ": Too many CLI login attempts."),
+        (
+            '{"detail": "Too many CLI login attempts.", "retry": {"after": [30, null]}}',
+            ": Too many CLI login attempts.",
+        ),
         ('{"detail": 5}', ""),
         ('{"detail": ""}', ""),
         ('{"detail": {"message": "nested"}}', ""),

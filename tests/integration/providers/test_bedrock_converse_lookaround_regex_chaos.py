@@ -22,6 +22,8 @@ from integration._support.upstream import _aws_event_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _KIMI: Final = "global.moonshotai.kimi-k3"
 _NOVA: Final = "us.amazon.nova-lite-v1:0"
 _AWS: Final[dict[str, JsonValue]] = {

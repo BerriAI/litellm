@@ -9,10 +9,12 @@ from unittest.mock import Mock, patch
 import pytest
 
 import litellm
+from litellm._logging import redact_internal_details_from_client_message
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.secret_managers.main import (
     get_secret,
     normalize_nonempty_secret_str,
+    resolve_local_oidc_reference,
     secret_manager_would_be_consulted,
 )
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
@@ -322,6 +324,15 @@ def test_oidc_file_success(tmp_path, monkeypatch):
     assert result == "file_token"
 
 
+def test_oidc_file_reads_a_token_under_a_directory_named_oidc(tmp_path, monkeypatch):
+    token_dir: Final = tmp_path / "oidc"
+    token_dir.mkdir()
+    (token_dir / "token").write_text("nested_token")
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+
+    assert get_secret(f"oidc/file/{token_dir}/token") == "nested_token"
+
+
 def test_oidc_file_rejects_path_outside_allowlist(tmp_path, monkeypatch):
     outside_file = tmp_path / "outside.txt"
     outside_file.write_text("should_not_read")
@@ -334,10 +345,12 @@ def test_oidc_file_rejects_path_outside_allowlist(tmp_path, monkeypatch):
         get_secret(f"oidc/file/{outside_file}")
 
 
-def test_oidc_file_rejects_relative_path(tmp_path, monkeypatch):
+def test_oidc_file_rejects_relative_path_with_a_hint_client_redaction_leaves_whole(tmp_path, monkeypatch):
     monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
-    with pytest.raises(ValueError, match="must be absolute"):
+    with pytest.raises(ValueError, match="must be absolute") as excinfo:
         get_secret("oidc/file/relative/path/token")
+    hint: Final = str(excinfo.value)
+    assert redact_internal_details_from_client_message(hint) == hint
 
 
 def test_oidc_env_success(mock_env):
@@ -474,3 +487,15 @@ def test_get_secret_turns_only_boolean_literals_from_the_secret_manager_into_boo
 
     assert secret == expected
     assert type(secret) is type(expected)
+
+
+def test_an_unresolvable_reference_cannot_forge_a_server_log_line(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.delenv("LIT_UNSET_SA_TOKEN", raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        resolve_local_oidc_reference("oidc/env/LIT_UNSET_SA_TOKEN\nFORGED ENTRY")
+
+    assert "LIT_UNSET_SA_TOKEN" in caplog.text
+    assert "\nFORGED" not in caplog.text

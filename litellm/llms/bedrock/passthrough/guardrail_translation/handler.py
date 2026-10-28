@@ -5,10 +5,12 @@ import struct
 from binascii import crc32
 from collections.abc import AsyncGenerator, AsyncIterable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial, reduce
+from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias, TypeVar
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import InstanceOf, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -19,10 +21,31 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     StreamTransformSink,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
+    scoped_structured_message_indices,
+    unappliable_request_rewrite,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.chat.converse_to_openai import (
+    ConverseRow,
+    JsonPath,
+    as_json_array,
+    as_json_object,
+    converse_rows,
+    converse_tools,
+    parse_converse_request,
+)
+from litellm.llms.bedrock.passthrough.guardrail_translation.structured_edits import (
+    Edit,
+    ReplacedTools,
+    ReturnedTool,
+    ToolResultText,
+    structured_edits,
+    tool_edits,
+)
+from litellm.proxy.guardrails.auto_router_compression import is_compression_guardrail
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -62,7 +85,32 @@ def _generic_passthrough_handler() -> "PassThroughEndpointHandler":
     return PassThroughEndpointHandler()
 
 
+def _reads_flat_texts_only(guardrail: "CustomGuardrail") -> bool:
+    """Whether `guardrail` gets only the flat texts on Converse, without rows or tools."""
+    return is_compression_guardrail(guardrail) or not guardrail.supports_structured_messages()
+
+
 _StringHolder = tuple[Any, str | int]
+_LeafIdentity: TypeAlias = tuple[int, str | int]
+
+
+@dataclass(frozen=True, slots=True)
+class _Assign:
+    holder: _StringHolder
+    value: object
+
+
+@dataclass(frozen=True, slots=True)
+class _Remove:
+    holder: _StringHolder
+
+
+_Write: TypeAlias = _Assign
+_ContentHolder: TypeAlias = tuple[object, str]
+_BlankDrop: TypeAlias = tuple[_ContentHolder, frozenset[int]]
+_BODY_BY_REFERENCE: Final = TypeAdapter(InstanceOf[dict[str, object]])
+_OBJECT_BY_REFERENCE: Final = TypeAdapter(InstanceOf[Mapping[str, object]])
+_ARRAY_BY_REFERENCE: Final = TypeAdapter(InstanceOf[list[object]])
 
 
 def _collect_strings(node: object, holders: list[_StringHolder]) -> None:
@@ -98,10 +146,17 @@ def _collect_block_text(block: dict, holders: list[_StringHolder]) -> None:
         holders.append((block, "text"))
 
 
+def _request_field_holders(body: Mapping[str, object]) -> tuple[_StringHolder, ...]:
+    holders: Final = list[_StringHolder]()
+    _collect_strings(body.get("additionalModelRequestFields"), holders)
+    return tuple(holders)
+
+
 def _extract_converse_texts(
     body: dict,
     skip_system: bool,
     skip_tool: bool,
+    scan_only_tool_results: bool = False,
 ) -> tuple[list[str], list[_StringHolder]]:
     """
     Walk a Bedrock Converse request body and collect text content.
@@ -121,22 +176,25 @@ def _extract_converse_texts(
     inflating guardrail usage for a request whose only prompt is one user
     message. No other guardrail translation handler puts tool definitions in
     ``texts``; the chat and messages handlers carry them in the structured
-    ``tools`` input instead, which this handler does not populate because a
-    Bedrock ``toolSpec`` is not the OpenAI tool shape those consumers expect.
+    ``tools`` input instead, which this handler also populates by converting
+    each Bedrock ``toolSpec`` to the OpenAI tool shape.
 
     ``additionalModelRequestFields`` is treated differently on purpose. Bedrock
     gives ``toolConfig.tools`` a fixed schema whose contents are tool metadata by
     contract, while ``additionalModelRequestFields`` is free-form and defined by
     the target model, so what it carries cannot be classified without knowing
-    that model. Scanning it stays the fail-closed default.
+    that model. Scanning it stays the fail-closed default. Its strings come
+    last, in the same order as they follow the latest user message in the rows.
     """
-    holders: Final[list[_StringHolder]] = []
-
-    if not skip_system:
+    system_holders: Final = list[_StringHolder]()
+    if not skip_system and not scan_only_tool_results:
         for block in body.get("system") or []:
             if isinstance(block, dict):
-                _collect_block_text(block, holders)
+                _collect_block_text(block, system_holders)
 
+    request_field_holders: Final = () if scan_only_tool_results else _request_field_holders(body)
+
+    message_holders: Final = list[_StringHolder]()
     for message in body.get("messages") or []:
         if not isinstance(message, dict):
             continue
@@ -145,21 +203,271 @@ def _extract_converse_texts(
                 continue
             if skip_tool and ("toolUse" in block or "toolResult" in block):
                 continue
-            _collect_block_text(block, holders)
+            if scan_only_tool_results and "toolResult" not in block:
+                continue
+            _collect_block_text(block, message_holders)
             tool_use = block.get("toolUse")
             if isinstance(tool_use, dict):
-                _collect_strings(tool_use.get("input"), holders)
+                _collect_strings(tool_use.get("input"), message_holders)
             tool_result = block.get("toolResult")
             if isinstance(tool_result, dict):
                 for inner in tool_result.get("content") or []:
                     if isinstance(inner, dict):
-                        _collect_block_text(inner, holders)
-                        _collect_strings(inner.get("json"), holders)
+                        _collect_block_text(inner, message_holders)
+                        _collect_strings(inner.get("json"), message_holders)
 
-    _collect_strings(body.get("additionalModelRequestFields"), holders)
-
+    holders: Final = [*system_holders, *message_holders, *request_field_holders]
     texts: Final = [container[key] for container, key in holders]
     return texts, holders
+
+
+@dataclass(frozen=True, slots=True)
+class _Scope:
+    skip_system: bool
+    skip_tool: bool
+    scan_only_tool_results: bool
+
+
+def _texts_applied_rows(body: Mapping[str, object], texts: Sequence[str], scope: _Scope) -> tuple[ConverseRow, ...]:
+    rewritten: Final = _BODY_BY_REFERENCE.validate_python(json.loads(json.dumps(body)))
+    _, holders = _extract_converse_texts(rewritten, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results)
+    _write_back_texts(texts, holders)
+    request: Final = parse_converse_request(rewritten)
+    return converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
+
+
+def _texts_follow_rows(
+    body: Mapping[str, object],
+    rows: Sequence[ConverseRow],
+    texts: Sequence[str],
+    guardrailed_texts: Sequence[str],
+    changed_rows: frozenset[int],
+    scope: _Scope,
+) -> bool:
+    """Whether the returned texts sit in the flat layout and only touch rows the vendor also changed."""
+    if len(guardrailed_texts) != len(texts):
+        return False
+    view: Final = _texts_applied_rows(body, guardrailed_texts, scope)
+    if len(view) != len(rows):
+        return False
+    rows_changed_by_texts: Final = frozenset(
+        index for index, (row, viewed) in enumerate(zip(rows, view)) if row.message != viewed.message
+    )
+    return rows_changed_by_texts <= changed_rows
+
+
+def _child(node: object, key: str | int) -> object:
+    try:
+        match key:
+            case str():
+                return _OBJECT_BY_REFERENCE.validate_python(node).get(key)
+            case int():
+                items: Final = _ARRAY_BY_REFERENCE.validate_python(node)
+                return items[key] if 0 <= key < len(items) else None
+    except ValidationError:
+        return None
+
+
+def _holder(body: object, path: JsonPath) -> _StringHolder | None:
+    container: Final = reduce(_child, path[:-1], body)
+    return (container, path[-1]) if isinstance(_child(container, path[-1]), str) else None
+
+
+def _leaf_identity(holder: _StringHolder) -> _LeafIdentity:
+    container, key = holder
+    return id(container), key
+
+
+def _changed_leaves(
+    holders: Sequence[_StringHolder], texts: Sequence[str], guardrailed_texts: Sequence[str]
+) -> frozenset[_LeafIdentity]:
+    return frozenset(
+        _leaf_identity(holder) for holder, before, after in zip(holders, texts, guardrailed_texts) if after != before
+    )
+
+
+def _tool_result_write(body: Mapping[str, object], edit: ToolResultText) -> _Write | None:
+    container: Final = reduce(_child, edit.content[:-1], body)
+    blocks: Final = as_json_array(_child(container, edit.content[-1]))
+    if blocks is None:
+        return None
+    dropped: Final = frozenset(edit.indices[1:])
+    return _Assign(
+        (container, edit.content[-1]),
+        [
+            {"text": edit.text} if index == edit.indices[0] else block
+            for index, block in enumerate(blocks)
+            if index not in dropped
+        ],
+    )
+
+
+def _is_cache_point(entry: object) -> bool:
+    fields: Final = as_json_object(entry)
+    return fields is not None and "cachePoint" in fields
+
+
+def _tool_name(entry: object) -> object:
+    return _child(_child(entry, "toolSpec"), "name")
+
+
+def _entries_after(unsent: Sequence[tuple[int, object]], anchor: int) -> tuple[object, ...]:
+    return tuple(entry for at, entry in unsent if at == anchor)
+
+
+def _sent_anchor(sent: frozenset[int], anchor: int, index: int) -> int:
+    return index if index in sent else anchor
+
+
+def _replaced(entry: ReturnedTool) -> int | None:
+    return entry if isinstance(entry, int) else entry.replaces
+
+
+def _replaced_tools_write(body: Mapping[str, object], edit: ReplacedTools) -> _Write | None:
+    """
+    Rebuild ``toolConfig.tools`` in the order the guardrail returned. Entries it was never sent (cache points, system
+    tools) stay right after the tool they followed, and a cache point goes away with its tool. Refuses when
+    ``toolChoice`` names a tool that is no longer there, and creates ``toolConfig`` when the request had none. A
+    ``toolConfig`` left with no tool stays until the request is sent, so later guardrails still see the tool history.
+    """
+    tool_config: Final = _child(body, "toolConfig")
+    tools: Final = () if tool_config is None else as_json_array(_child(tool_config, "tools"))
+    if tools is None:
+        return None
+    anchors: Final = tuple(accumulate(range(len(tools)), partial(_sent_anchor, edit.sent), initial=-1))[1:]
+    unsent: Final = tuple(
+        (anchor, tool) for index, (anchor, tool) in enumerate(zip(anchors, tools)) if index not in edit.sent
+    )
+    replaced: Final = frozenset(_replaced(entry) for entry in edit.tools)
+    placed: Final = chain.from_iterable(
+        (tools[entry], *_entries_after(unsent, entry))
+        if isinstance(entry, int)
+        else (*entry.blocks, *(() if entry.replaces is None else _entries_after(unsent, entry.replaces)))
+        for entry in edit.tools
+    )
+    orphans: Final = tuple(tool for at, tool in unsent if at not in replaced and at >= 0 and not _is_cache_point(tool))
+    rebuilt: Final = [*_entries_after(unsent, -1), *placed, *orphans]
+    chosen: Final = _child(_child(_child(tool_config, "toolChoice"), "tool"), "name")
+    if isinstance(chosen, str) and all(_tool_name(tool) != chosen for tool in rebuilt):
+        return None
+    if tool_config is None:
+        return None if all(map(_is_cache_point, rebuilt)) else _Assign((body, "toolConfig"), {"tools": rebuilt})
+    return _Assign((tool_config, "tools"), rebuilt)
+
+
+def _resolved(body: Mapping[str, object], edit: Edit) -> _Write | None:
+    match edit:
+        case ToolResultText():
+            return _tool_result_write(body, edit)
+        case ReplacedTools():
+            return _replaced_tools_write(body, edit)
+        case (path, text):
+            holder: Final = _holder(body, path)
+            return None if holder is None else _Assign(holder, text)
+
+
+def _kept_write(write: _Write, flat_changes: frozenset[_LeafIdentity]) -> bool:
+    return _leaf_identity(write.holder) not in flat_changes
+
+
+def _holder_edits(
+    body: Mapping[str, object], edits: Sequence[Edit], flat_changes: frozenset[_LeafIdentity]
+) -> tuple[_Write, ...] | None:
+    resolved: Final = tuple(_resolved(body, edit) for edit in edits)
+    if any(write is None for write in resolved):
+        return None
+    return tuple(write for write in resolved if write is not None and _kept_write(write, flat_changes))
+
+
+def _apply(writes: Sequence[_Assign | _Remove]) -> None:
+    for write in writes:
+        match write:
+            case _Assign(holder=(container, key), value=value):
+                container[key] = value
+            case _Remove(holder=(container, key)):
+                del container[key]
+
+
+def _block_text_holder(block: object) -> _ContentHolder | None:
+    if isinstance(_child(block, "text"), str):
+        return block, "text"
+    guarded: Final = _child(_child(block, "guardContent"), "text")
+    return (guarded, "text") if isinstance(_child(guarded, "text"), str) else None
+
+
+def _final_texts(
+    holders: Sequence[_StringHolder], applied_texts: Sequence[str], writes: Sequence[_Write]
+) -> Mapping[_LeafIdentity, object]:
+    flat: Final = {_leaf_identity(holder): text for holder, text in zip(holders, applied_texts)}
+    structured: Final = {_leaf_identity(write.holder): write.value for write in writes}
+    return MappingProxyType({**flat, **structured})
+
+
+def _blanked(final: Mapping[_LeafIdentity, object], block: object) -> bool:
+    holder: Final = _block_text_holder(block)
+    if holder is None:
+        return False
+    container, key = holder
+    value: Final = final.get((id(container), key))
+    return isinstance(value, str) and value != _child(container, key) and not value.strip()
+
+
+def _blank_blocks(final: Mapping[_LeafIdentity, object], holder: _ContentHolder) -> frozenset[int]:
+    container, key = holder
+    return frozenset(id(block) for block in as_json_array(_child(container, key)) or () if _blanked(final, block))
+
+
+def _empties_turn(drop: _BlankDrop) -> bool:
+    (container, key), dropped = drop
+    blocks: Final = as_json_array(_child(container, key)) or ()
+    return bool(dropped) and all(id(block) in dropped or _is_cache_point(block) for block in blocks)
+
+
+def _turn_drop(final: Mapping[_LeafIdentity, object], message: object) -> _BlankDrop:
+    return (message, "content"), _blank_blocks(final, (message, "content"))
+
+
+def _blank_drops(body: Mapping[str, object], final: Mapping[_LeafIdentity, object]) -> tuple[_BlankDrop, ...]:
+    """The system and message text blocks the guardrail left blank, except in a turn they would leave empty."""
+    turns: Final = (_turn_drop(final, message) for message in as_json_array(body.get("messages")) or ())
+    system: Final = ((body, "system"), _blank_blocks(final, (body, "system")))
+    return tuple(drop for drop in (system, *(turn for turn in turns if not _empties_turn(turn))) if drop[1])
+
+
+def _blank_drop_write(drop: _BlankDrop) -> _Assign | _Remove:
+    holder, dropped = drop
+    container, key = holder
+    kept: Final = [block for block in as_json_array(_child(container, key)) or () if id(block) not in dropped]
+    return _Assign(holder, kept) if not all(map(_is_cache_point, kept)) else _Remove(holder)
+
+
+def _edits_drop_a_text_change(
+    body: Mapping[str, object],
+    edits: Sequence[Edit],
+    texts: Sequence[str],
+    guardrailed_texts: Sequence[str],
+    scope: _Scope,
+) -> bool:
+    """
+    Whether the row and tool edits alone leave out a change the guardrail made in its returned texts. Texts of the
+    length that was sent are read position by position, so a changed string whose field the edits leave at its
+    original value is dropped. Texts of another length cannot be placed, so what they mask cannot be checked either,
+    while an empty list leaves every text as it was.
+    """
+    if not guardrailed_texts:
+        return False
+    if len(guardrailed_texts) != len(texts):
+        return True
+    rewritten: Final = _BODY_BY_REFERENCE.validate_python(json.loads(json.dumps(body)))
+    _, holders = _extract_converse_texts(rewritten, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results)
+    writes: Final = _holder_edits(rewritten, edits, frozenset())
+    if writes is None:
+        return True
+    _apply(writes)
+    edited: Final = [container[key] for container, key in holders]
+    return any(
+        returned != before and after == before for before, returned, after in zip(texts, guardrailed_texts, edited)
+    )
 
 
 def _extract_converse_output_texts(
@@ -196,8 +504,8 @@ def _extract_converse_output_texts(
 
 
 def _write_back_texts(
-    guardrailed_texts: list[str],
-    holders: list[_StringHolder],
+    guardrailed_texts: Sequence[str],
+    holders: Sequence[_StringHolder],
 ) -> None:
     if len(guardrailed_texts) < len(holders):
         verbose_proxy_logger.warning(
@@ -236,7 +544,7 @@ class _StreamFrame(TypedDict):
 
 
 def _unpack_uint32(buffer: bytes) -> int:
-    return struct.unpack("!I", buffer)[0]
+    return int.from_bytes(buffer, "big")
 
 
 def _collect_stream_delta_text_holders(delta: object) -> list[_DeltaHolder]:
@@ -947,7 +1255,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             headers_bytes = frame_raw[12 : 12 + orig_hdrs_len]
 
             try:
-                payload_dict = json.loads(frame_raw[12 + orig_hdrs_len : orig_total - 4])
+                payload_dict = _BODY_BY_REFERENCE.validate_python(
+                    json.loads(frame_raw[12 + orig_hdrs_len : orig_total - 4])
+                )
                 for local_idx, (_, container, key) in enumerate(
                     _collect_stream_delta_text_holders(payload_dict.get("delta"))
                 ):
@@ -982,16 +1292,39 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
             return data
+        request_body: Final = _BODY_BY_REFERENCE.validate_python(body)
 
-        skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
-        skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        reads_rows: Final = not _reads_flat_texts_only(guardrail_to_apply)
+        scope: Final = _Scope(
+            skip_system=effective_skip_system_message_for_guardrail(guardrail_to_apply),
+            skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
+            scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(guardrail_to_apply),
+        )
+        texts, holders = _extract_converse_texts(
+            request_body,
+            scope.skip_system,
+            scope.skip_tool,
+            scope.scan_only_tool_results,
+        )
+        request: Final = parse_converse_request(request_body) if reads_rows else None
+        rows: Final = converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
+        scoped_indices: Final = scoped_structured_message_indices(
+            tuple(row.message for row in rows),
+            scan_only_tool_results=scope.scan_only_tool_results,
+            skip_system=scope.skip_system,
+            skip_tool=scope.skip_tool,
+        )
 
-        texts, holders = _extract_converse_texts(body, skip_system, skip_tool)
-
-        if not texts:
+        if not texts and not scoped_indices:
             return data
 
-        inputs: Final = GenericGuardrailAPIInputs(texts=texts)
+        sent_messages: Final = [rows[index].message for index in scoped_indices]
+        inputs: Final = GenericGuardrailAPIInputs(texts=list(texts))
+        if sent_messages:
+            inputs["structured_messages"] = json.loads(json.dumps(sent_messages))
+        tools: Final = converse_tools(request) if request and not scope.scan_only_tool_results else ()
+        if tools:
+            inputs["tools"] = copy.deepcopy([tool.param for tool in tools])
         model: Final = data.get("model")
         if model:
             inputs["model"] = model
@@ -1004,8 +1337,60 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         )
 
         guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
-        if guardrailed_texts:
-            _write_back_texts(guardrailed_texts, holders)
+        guardrailed_messages: Final = guardrailed_inputs.get("structured_messages")
+        rewritten_rows: Final = (
+            guardrailed_messages
+            if sent_messages and isinstance(guardrailed_messages, list) and guardrailed_messages != sent_messages
+            else None
+        )
+        changed_rows: Final[frozenset[int]] = (
+            frozenset()
+            if rewritten_rows is None
+            else frozenset(
+                index
+                for index, sent, returned in zip(scoped_indices, sent_messages, rewritten_rows)
+                if sent != returned
+            )
+        )
+        texts_follow_rows: Final = rewritten_rows is None or _texts_follow_rows(
+            request_body, rows, texts, guardrailed_texts, changed_rows, scope
+        )
+        applied_texts: Final = guardrailed_texts if texts_follow_rows else texts
+        row_edits: Final = (
+            ()
+            if rewritten_rows is None
+            else structured_edits(
+                rows, scoped_indices, rewritten_rows, partial(_texts_applied_rows, request_body, applied_texts, scope)
+            )
+        )
+        returned_tools: Final = guardrailed_inputs.get("tools")
+        tool_changes: Final = (
+            ()
+            if returned_tools is None or not reads_rows
+            else tool_edits(tools, returned_tools, model if isinstance(model, str) else None)
+        )
+        holder_edits: Final = (
+            None
+            if row_edits is None
+            or tool_changes is None
+            or (
+                not texts_follow_rows
+                and _edits_drop_a_text_change(
+                    request_body, (*row_edits, *tool_changes), texts, guardrailed_texts, scope
+                )
+            )
+            else _holder_edits(
+                request_body, (*row_edits, *tool_changes), _changed_leaves(holders, texts, applied_texts)
+            )
+        )
+        if holder_edits is None:
+            raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
+        if holder_edits or (applied_texts and list(applied_texts) != texts):
+            blank_drops: Final = _blank_drops(request_body, _final_texts(holders, applied_texts, holder_edits))
+            if applied_texts:
+                _write_back_texts(applied_texts, holders)
+            _apply(holder_edits)
+            _apply(tuple(_blank_drop_write(drop) for drop in blank_drops))
 
         return data
 

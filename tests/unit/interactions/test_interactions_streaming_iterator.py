@@ -5,7 +5,10 @@ async_success_handler (cross-thread pydantic mutation segfaults pydantic-core).
 """
 
 import asyncio
+import json
 import time
+from datetime import datetime
+from typing import Final
 
 import httpx
 import pytest
@@ -16,6 +19,7 @@ from litellm.interactions import streaming_iterator as interactions_streaming_it
 from litellm.interactions.streaming_iterator import InteractionsAPIStreamingIterator
 from litellm.litellm_core_utils import thread_pool_executor as thread_pool_executor_module
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig
 from litellm.types.interactions import InteractionsAPIStreamingResponse
 
 
@@ -97,3 +101,50 @@ async def test_custom_logger_only_never_submits_sync_success_handler(monkeypatch
 
     assert recorder.async_hook_fired is True
     assert recording_executor.submitted_for(logging_obj) == []
+
+
+class _SuccessRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.logged: list[tuple[datetime, object]] = []
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.logged.append((start_time, kwargs.get("completion_start_time")))
+
+
+@pytest.mark.asyncio
+async def test_stream_logs_its_first_event_time_measured_from_the_call_start():
+    call_start: Final = datetime(2026, 10, 9, 12, 0, 0)
+    recorder: Final = _SuccessRecorder()
+    logging_obj: Final = LitellmLogging(
+        model="gemini/gemini-3-pro-preview",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="ainteraction",
+        start_time=call_start,
+        litellm_call_id="interactions-stream",
+        function_id="interactions-stream",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    events: Final = (
+        {"event_type": "step.delta", "id": "interaction-1"},
+        {"event_type": "interaction.completed", "id": "interaction-1", "status": "completed"},
+    )
+    response: Final = httpx.Response(200, content="".join(f"data: {json.dumps(e)}\n\n" for e in events).encode())
+    iterator: Final = InteractionsAPIStreamingIterator(
+        response=response,
+        model="gemini/gemini-3-pro-preview",
+        interactions_api_config=GoogleAIStudioInteractionsConfig(),
+        logging_obj=logging_obj,
+    )
+    tasks_before: Final = asyncio.all_tasks()
+
+    _ = await iterator.__anext__()
+    first_event_at: Final = logging_obj.completion_start_time
+    _ = [event async for event in iterator]
+    await asyncio.gather(*(asyncio.all_tasks() - tasks_before))
+
+    assert first_event_at is not None
+    assert recorder.logged == [(call_start, first_event_at)]

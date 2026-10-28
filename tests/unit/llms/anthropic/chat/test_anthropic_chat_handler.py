@@ -3108,6 +3108,92 @@ def test_streamed_json_mode_answer_with_a_foreign_name_matches_the_non_streamed_
     assert unwrap_response_format_envelope(answer, schema, RESPONSE_FORMAT_TOOL_NAME) == answer
 
 
+def test_streamed_json_mode_tool_name_envelope_around_an_input_wrapper_is_unwrapped_to_the_answer():
+    envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": {"input": _STREAMED_RISK_OBJECT}})
+
+    contents = _streamed_json_mode_contents((envelope[:9], envelope[9:40], envelope[40:]))
+
+    assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
+
+
+def test_streamed_json_mode_unwrapped_answer_keeps_non_ascii_text():
+    answer = {"tier": 3, "summary": "Hôtel Lutetia, 東京"}
+    envelope = json.dumps({"input": answer}, ensure_ascii=False)
+
+    contents = _streamed_json_mode_contents((envelope[:9], envelope[9:30], envelope[30:]))
+
+    assert "Hôtel Lutetia, 東京" in "".join(contents)
+    assert json.loads("".join(contents)) == answer
+
+
+def test_streamed_json_mode_unwrapped_answer_with_a_lone_surrogate_stays_utf8_encodable():
+    answer = {"tier": 3, "summary": "smile \ud83d end"}
+    envelope = json.dumps({"input": answer})
+
+    contents = _streamed_json_mode_contents((envelope[:9], envelope[9:30], envelope[30:]))
+
+    assert json.loads("".join(contents).encode("utf-8")) == answer
+
+
+_CUT_STREAM_FRAGMENTS: Final = (
+    pytest.param(
+        json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_RISK_OBJECT})[:-1],
+        id="held_envelope",
+    ),
+    pytest.param(json.dumps(_STREAMED_RISK_OBJECT), id="streamed_answer"),
+)
+
+
+def _cut_stream_lines(sent: str) -> tuple[bytes, ...]:
+    events: Final = _json_tool_events((sent[:9], sent[9:30], sent[30:]))
+    return tuple(f"data: {json.dumps(event)}\n".encode() for event in events[:-2])
+
+
+def _cut_stream_iterator(sync_stream: bool, streaming_response: object) -> ModelResponseIterator:
+    return ModelResponseIterator(
+        streaming_response=streaming_response,
+        sync_stream=sync_stream,
+        json_mode=True,
+        response_format_schema=response_format_schema(_STREAMED_RISK_SCHEMA),
+    )
+
+
+@pytest.mark.parametrize("sent", _CUT_STREAM_FRAGMENTS)
+def test_streamed_json_mode_text_is_delivered_when_the_stream_ends_before_the_block_stops(sent: str):
+    iterator = _cut_stream_iterator(True, iter(_cut_stream_lines(sent)))
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in iterator) == sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sent", _CUT_STREAM_FRAGMENTS)
+async def test_async_streamed_json_mode_text_is_delivered_when_the_stream_ends_before_the_block_stops(sent: str):
+    async def lines():
+        for line in _cut_stream_lines(sent):
+            yield line
+
+    iterator = _cut_stream_iterator(False, lines())
+
+    assert "".join([chunk.choices[0].delta.content or "" async for chunk in iterator]) == sent
+
+
+def test_streamed_json_mode_complete_envelope_is_unwrapped_when_the_stream_ends_before_the_block_stops():
+    envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_RISK_OBJECT})
+
+    iterator = _cut_stream_iterator(True, iter(_cut_stream_lines(envelope)))
+
+    assert json.loads("".join(chunk.choices[0].delta.content or "" for chunk in iterator)) == _STREAMED_RISK_OBJECT
+
+
+def test_streamed_json_mode_answer_keyed_by_a_required_only_name_is_kept_whole():
+    required_only_schema = {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["payload"]}
+    encoded = json.dumps({"payload": {"id": "abc", "rows": 3}})
+
+    contents = _streamed_json_mode_contents((encoded[:12], encoded[12:24], encoded[24:]), required_only_schema)
+
+    assert "".join(contents) == encoded
+
+
 def _json_tool_block_events(index: int, encoded: str) -> tuple[dict[str, object], ...]:
     return (
         {
@@ -3200,6 +3286,30 @@ def test_streamed_json_mode_answer_split_into_one_partial_object_per_field_arriv
 
     assert json.loads("".join(contents)) == answer
     assert contents[3] == blocks[0][:-1]
+
+
+@pytest.mark.parametrize(
+    "blocks",
+    [
+        pytest.param((_STREAMED_TIER_FIELD, _STREAMED_SUMMARY_FIELD), id="one_block_per_field"),
+        pytest.param(
+            tuple(json.dumps({name: value}) for name, value in _STREAMED_RISK_OBJECT.items()),
+            id="one_partial_object_per_field",
+        ),
+    ],
+)
+def test_streamed_json_mode_split_answer_arrives_as_one_object_when_the_stream_ends_in_its_last_block(
+    blocks: tuple[str, ...],
+):
+    message_start, *_ = _json_tool_events(())
+    events = (
+        message_start,
+        *chain.from_iterable(_json_tool_block_events(index, encoded) for index, encoded in enumerate(blocks)),
+    )[:-1]
+
+    iterator = _cut_stream_iterator(True, iter(tuple(f"data: {json.dumps(event)}\n".encode() for event in events)))
+
+    assert json.loads("".join(chunk.choices[0].delta.content or "" for chunk in iterator)) == _STREAMED_RISK_OBJECT
 
 
 def test_streamed_json_mode_empty_object_then_field_blocks_arrives_as_one_object():

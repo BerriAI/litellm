@@ -73,7 +73,7 @@ def test_an_end_users_allowed_region_pins_every_call_to_that_regions_deployment(
         candidate.post("/end_user/new", {"user_id": end_user, "allowed_model_region": region})
         scenario.cleanups.callback(candidate.post, "/end_user/delete", {"user_ids": [end_user]})
         key: Final = scenario.key(models=[MODEL])
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         responses: Final = tuple(
             candidate.request(
                 "POST",
@@ -134,7 +134,7 @@ def test_an_uncountable_prompt_still_pins_an_end_user_to_their_region(
         candidate.post("/end_user/new", {"user_id": end_user, "allowed_model_region": PINNED_REGION})
         scenario.cleanups.callback(candidate.post, "/end_user/delete", {"user_ids": [end_user]})
         key: Final = scenario.key(models=[UNCOUNTABLE_MODEL])
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         requests: Final = tuple(build(uuid.uuid4().hex, end_user) for _ in range(CALLS))
         responses: Final = tuple(candidate.request("POST", path, body, key=key) for path, body in requests)
         assert [response.status_code for response in responses] == [200] * CALLS, [r.text for r in responses]

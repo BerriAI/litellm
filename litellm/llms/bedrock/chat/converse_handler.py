@@ -10,6 +10,7 @@ from litellm.anthropic_beta_headers_manager import (
 )
 from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm import base_model_iterator
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -42,14 +43,22 @@ def make_sync_call(
     if client is None:
         client = get_httpx_client()  # Create a new client if none provided
 
-    response: Final = client.post(
-        api_base,
-        headers=headers,
-        data=data,
-        stream=not fake_stream,
-        logging_obj=logging_obj,
-        timeout=timeout,
-    )
+    try:
+        response: Final = client.post(
+            api_base,
+            headers=headers,
+            data=data,
+            stream=not fake_stream,
+            logging_obj=logging_obj,
+            timeout=timeout,
+        )
+    except httpx.HTTPStatusError as err:
+        raise BedrockError(
+            status_code=err.response.status_code,
+            message=error_response_text(err.response),
+            headers=err.response.headers,
+            response=err.response,
+        ) from err
 
     if response.status_code != 200:
         raise BedrockError(
@@ -355,11 +364,11 @@ class BedrockConverseLLM(BaseAWSLLM):
             aws_region_name=aws_region_name,
         )
         if (stream is not None and stream is True) and not fake_stream:
-            endpoint_url = f"{endpoint_url}/model/{modelId}/converse-stream"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/converse-stream"
+            endpoint_url = join_api_base(endpoint_url, f"model/{modelId}/converse-stream")
+            proxy_endpoint_url = join_api_base(proxy_endpoint_url, f"model/{modelId}/converse-stream")
         else:
-            endpoint_url = f"{endpoint_url}/model/{modelId}/converse"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/converse"
+            endpoint_url = join_api_base(endpoint_url, f"model/{modelId}/converse")
+            proxy_endpoint_url = join_api_base(proxy_endpoint_url, f"model/{modelId}/converse")
 
         ## COMPLETION CALL
         headers = {"Content-Type": "application/json"}

@@ -20,6 +20,7 @@ from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
     LiteLLM_ManagedVectorStoreIndex,
 )
+from litellm.types.utils import CredentialItem
 from litellm.vector_stores.main import search
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry, VectorStoreRegistry
 
@@ -190,6 +191,125 @@ def test_search_uses_registry_credentials():
             assert getattr(called_params, "aws_region_name") == "us-east-1"
     finally:
         litellm.vector_store_registry = original_registry
+
+
+@pytest.fixture
+def registry_with_an_oidc_env_credential(monkeypatch):
+    monkeypatch.setenv("VS_PROJECTED_TOKEN", "projected-token-1")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="openai-sa",
+                credential_values={"api_key": "oidc/env/VS_PROJECTED_TOKEN", "api_base": "https://api.openai.com/v1"},
+                credential_info={"custom_llm_provider": "openai"},
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            [
+                LiteLLM_ManagedVectorStore(
+                    vector_store_id="vs1",
+                    custom_llm_provider="openai",
+                    litellm_credential_name="openai-sa",
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            ]
+        ),
+    )
+
+
+_SEARCH_PAGE: Final = {
+    "object": "vector_store.search_results.page",
+    "search_query": ["test"],
+    "data": [],
+    "has_more": False,
+    "next_page": None,
+}
+_VECTOR_STORE_FILE: Final = {
+    "id": "file-1",
+    "object": "vector_store.file",
+    "created_at": 0,
+    "vector_store_id": "vs1",
+    "status": "completed",
+    "usage_bytes": 0,
+    "last_error": None,
+}
+
+
+def _search_vs1(**params: str) -> None:
+    search(vector_store_id="vs1", query="test", custom_llm_provider="openai", **params)
+
+
+def _create_vs1_file(**params: str) -> None:
+    import litellm.vector_store_files.main as vector_store_files_main
+
+    vector_store_files_main.create(vector_store_id="vs1", file_id="file-1", **params)
+
+
+def _sent_by(call, **params: str) -> Sequence[httpx.Request]:
+    with respx.mock(assert_all_called=False) as provider:
+        provider.post(url__regex=r"/vector_stores/vs1/search$").respond(200, json=_SEARCH_PAGE)
+        provider.post(url__regex=r"/vector_stores/vs1/files$").respond(200, json=_VECTOR_STORE_FILE)
+        call(**params)
+        return tuple(sent.request for sent in provider.calls)
+
+
+@pytest.mark.parametrize("call", [_search_vs1, _create_vs1_file], ids=["search", "file_create"])
+def test_a_registry_credentials_oidc_api_key_reaches_the_provider_as_the_token_it_names(
+    registry_with_an_oidc_env_credential, monkeypatch, call
+):
+    (first,) = _sent_by(call)
+    monkeypatch.setenv("VS_PROJECTED_TOKEN", "projected-token-2")
+    (second,) = _sent_by(call)
+
+    assert (first.headers["authorization"], second.headers["authorization"]) == (
+        "Bearer projected-token-1",
+        "Bearer projected-token-2",
+    )
+    assert litellm.credential_list[0].credential_values["api_key"] == "oidc/env/VS_PROJECTED_TOKEN"
+
+
+@pytest.mark.parametrize("call", [_search_vs1, _create_vs1_file], ids=["search", "file_create"])
+def test_a_caller_api_base_never_redirects_a_registry_credential_that_sets_its_own(
+    registry_with_an_oidc_env_credential, call
+):
+    (sent,) = _sent_by(call, api_base="https://caller.example/v1")
+
+    assert (sent.url.host, sent.headers["authorization"]) == ("api.openai.com", "Bearer projected-token-1")
+
+
+@pytest.mark.parametrize("call", [_search_vs1, _create_vs1_file], ids=["search", "file_create"])
+def test_a_registry_credential_without_an_api_base_never_sends_its_oidc_token_to_a_caller_api_base(
+    registry_with_an_oidc_env_credential, monkeypatch, call
+):
+    credential: Final = litellm.credential_list[0]
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [credential.model_copy(update={"credential_values": {"api_key": "oidc/env/VS_PROJECTED_TOKEN"}})],
+    )
+
+    with respx.mock(assert_all_called=False) as provider:
+        provider.route().respond(200, json=_SEARCH_PAGE)
+        with pytest.raises(litellm.AuthenticationError, match="sends it only to that credential's own api_base"):
+            call(api_base="https://caller.example/v1")
+        assert provider.calls.call_count == 0
+
+
+@pytest.mark.parametrize("call", [_search_vs1, _create_vs1_file], ids=["search", "file_create"])
+def test_an_unresolvable_registry_credential_reference_never_reaches_the_provider(
+    registry_with_an_oidc_env_credential, monkeypatch, call
+):
+    monkeypatch.delenv("VS_PROJECTED_TOKEN")
+
+    with pytest.raises(litellm.AuthenticationError, match="oidc/env secret reference could not be resolved"):
+        _sent_by(call)
 
 
 def _config_registry(vector_store_id: str = "vs_from_config") -> VectorStoreRegistry:

@@ -1,5 +1,7 @@
 """Tests for litellm_core_utils.core_helpers module."""
 
+import datetime
+import json
 import logging
 import threading
 from collections.abc import Iterator, Mapping
@@ -7,6 +9,7 @@ from typing import Final
 
 import httpx
 import pytest
+from openai.types.chat import ChatCompletionChunk
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
@@ -16,11 +19,12 @@ from litellm.litellm_core_utils.core_helpers import (
     drop_params_env_flag,
     drop_params_flag,
     get_litellm_metadata_from_kwargs,
-    get_parent_otel_span_from_kwargs,
     get_or_create_metadata_bucket,
+    get_parent_otel_span_from_kwargs,
     get_provider_response_headers_from_hidden_params,
     map_finish_reason,
     normalize_drop_params,
+    preserve_upstream_non_openai_attributes,
     process_response_headers,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
@@ -28,7 +32,7 @@ from litellm.litellm_core_utils.core_helpers import (
     unbind_budget_reservation_from_callbacks,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import ImageResponse, TranscriptionResponse
+from litellm.types.utils import Delta, ImageResponse, ModelResponseStream, StreamingChoices, TranscriptionResponse
 
 
 def test_parent_otel_span_reads_dict_like_metadata_by_index():
@@ -55,6 +59,46 @@ def test_native_request_id_survives_stream_header_processing(header: str) -> Non
 
     assert processed["request-id"] == "req_native"
     assert processed[header if header.startswith("llm_provider-") else "llm_provider-" + header] == "req_native"
+
+
+def test_preserve_upstream_non_openai_attributes_keeps_scalar_and_structured_values() -> None:
+    original_chunk: Final = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content="hello"))],
+        scalar_attribute="scalar",
+        structured_attribute={"items": ["value"]},
+    )
+    model_response: Final = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content="hello"))]
+    )
+
+    preserve_upstream_non_openai_attributes(model_response, original_chunk)
+
+    assert model_response.scalar_attribute == "scalar"
+    assert model_response.structured_attribute == {"items": ["value"]}
+
+
+@pytest.mark.parametrize("last_extra_value", [9, {"nested": 9}], ids=["all_scalar", "one_structured"])
+def test_preserve_upstream_non_openai_attributes_keeps_upstream_key_order(last_extra_value: object) -> None:
+    extra_names: Final = ("zeta", "alpha", "mid", "beta", "omega", "delta", "kappa", "gamma", "theta", "iota")
+    extras: Final = {
+        **{f"extra_{name}": index for index, name in enumerate(extra_names[:-1])},
+        f"extra_{extra_names[-1]}": last_extra_value,
+    }
+    original_chunk: Final = ChatCompletionChunk(
+        id="chatcmpl-1",
+        created=0,
+        model="gpt-x",
+        object="chat.completion.chunk",
+        choices=[],
+        service_tier="default",
+        **extras,
+    )
+    model_response: Final = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="hello"))])
+
+    preserve_upstream_non_openai_attributes(model_response, original_chunk)
+
+    serialized_keys: Final = tuple(json.loads(model_response.model_dump_json(exclude_none=True, exclude_unset=True)))
+    assert serialized_keys[-len(extras) - 1 :] == ("service_tier", *extras)
 
 
 class TestBudgetReservationBinding:
@@ -642,3 +686,36 @@ def test_spend_metadata_merge_reads_request_metadata_that_is_a_read_only_mapping
     )
 
     assert merged == {"user_api_key_hash": "hash", "model_group": "claude"}
+
+
+class TestReceiveStampSurvivesASecondMetadataBucket:
+    """A guardrail hook can plant ``litellm_metadata`` on a chat request after the proxy stamped
+    ``litellm_received_at`` into ``metadata``. The resolved bucket must still carry the stamp, or
+    ``x-litellm-overhead-duration-ms`` starts at the router call and hides every pre-call cost."""
+
+    def test_receive_stamp_is_carried_into_litellm_metadata(self):
+        received_at = datetime.datetime(2026, 10, 21, 5, 0, tzinfo=datetime.timezone.utc)
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"litellm_received_at": received_at, "user_api_key_user_id": "user-1"},
+                "litellm_metadata": {"applied_guardrails": ["perf-pre"]},
+            }
+        }
+
+        resolved = get_litellm_metadata_from_kwargs(kwargs)
+
+        assert resolved is kwargs["litellm_params"]["litellm_metadata"]
+        assert resolved["litellm_received_at"] is received_at
+        assert resolved["user_api_key_user_id"] == "user-1"
+
+    def test_litellm_metadata_keeps_its_own_receive_stamp(self):
+        own = datetime.datetime(2026, 10, 21, 5, 0, tzinfo=datetime.timezone.utc)
+        other = datetime.datetime(2026, 10, 21, 5, 1, tzinfo=datetime.timezone.utc)
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"litellm_received_at": other},
+                "litellm_metadata": {"litellm_received_at": own},
+            }
+        }
+
+        assert get_litellm_metadata_from_kwargs(kwargs)["litellm_received_at"] is own
