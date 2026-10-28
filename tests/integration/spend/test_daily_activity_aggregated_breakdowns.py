@@ -275,9 +275,6 @@ def _day_breakdown(gateway: Gateway, day: str, **params: str) -> dict[str, JsonV
 
 @pytest.mark.asyncio
 async def test_get_daily_activity_aggregated_breaks_down_guardrail_spend(gateway: Gateway) -> None:
-    """Guardrail cost per guardrail and key follows the request's user, model and api_key_limit scope.
-    orphan-key has guardrail cost but no spend row on the day, so no user scope reaches it. Model spend
-    keeps the guardrail cost it already carries."""
     day: Final = _unique_day()
     _seed(
         day,

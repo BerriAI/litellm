@@ -1042,7 +1042,6 @@ def _day_with_guardrails(day: DailySpendData, rows: Sequence[GuardrailSpendRow])
 def _with_guardrail_breakdown(
     results: Sequence[DailySpendData], rows: Sequence[GuardrailSpendRow]
 ) -> tuple[DailySpendData, ...]:
-    """API keys outside the top api_key_limit stay in each guardrail's spend but not in its api_key_breakdown."""
     rows_by_date: Final = MappingProxyType(
         {day: tuple(group) for day, group in groupby(sorted(rows, key=lambda row: row.date), key=lambda row: row.date)}
     )
@@ -1112,10 +1111,13 @@ async def get_daily_activity_aggregated(
                 api_key_metadata=entity_key_metadata,
                 entity_metadata_field=entity_metadata_field,
             )
-        return SpendAnalyticsPaginatedResponse(
-            results=list(_with_guardrail_breakdown(aggregated["results"], guardrail_rows))
+        results: Final = (
+            list(await asyncio.to_thread(_with_guardrail_breakdown, aggregated["results"], guardrail_rows))
             if guardrail_rows
-            else aggregated["results"],
+            else aggregated["results"]
+        )
+        return SpendAnalyticsPaginatedResponse(
+            results=results,
             metadata=DailySpendMetadata(
                 total_spend=aggregated["totals"].spend,
                 total_flat_cost=aggregated["totals"].flat_cost,
