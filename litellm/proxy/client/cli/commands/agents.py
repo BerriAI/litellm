@@ -34,7 +34,7 @@ from .claude_settings import (
     load_json_or_empty,
 )
 from .cmd_quoting import quote_for_cmd
-from .config import claude_subscription_default
+from .config import subscription_default
 from .pi import (
     LITELLM_PROXY_API_KEY_ENV,
     PI_PROVIDER_NAME,
@@ -83,9 +83,11 @@ _INSTALL_DOCS: Final[dict[str, str]] = {
 }
 
 _HIDDEN_AGENTS: Final = frozenset({"pi"})
-_SUBSCRIPTION_AGENTS: Final = frozenset({"claude"})
+_SUBSCRIPTION_LOGINS: Final = MappingProxyType({"claude": "claude.ai", "codex": "ChatGPT"})
+_SUBSCRIPTION_AGENTS: Final = frozenset(_SUBSCRIPTION_LOGINS)
 
 CODEX_PROXY_PROVIDER: Final = "litellm"
+CODEX_SUBSCRIPTION_PROVIDER: Final = "litellm_subscription"
 CODEX_HOME_ENV: Final = "CODEX_HOME"
 CODEX_MODEL_CATALOG_FILENAME: Final = "litellm-models.json"
 _CODEX_PREFLIGHT_TIMEOUT_SECONDS: Final = 10.0
@@ -143,6 +145,9 @@ def build_agent_env(
     travels in the x-litellm-api-key header through ANTHROPIC_CUSTOM_HEADERS, and no
     ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY is left in the environment, since either one makes
     Claude Code stop using the subscription (and its connectors).
+    With subscription=True the OpenAI profile keeps Codex on its ChatGPT login: the key goes to
+    LITELLM_PROXY_API_KEY, which Codex sends in the x-litellm-api-key header, and OPENAI_API_KEY is
+    left exactly as the caller had it, so the key is never offered to Codex as an OpenAI credential.
     """
     env: Final = dict(base_env)
     root: Final = base_url.rstrip("/")
@@ -162,20 +167,23 @@ def build_agent_env(
             env[ENABLE_GATEWAY_MODEL_DISCOVERY_ENV] = ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE
     if PROFILE_OPENAI in profiles:
         env[OPENAI_BASE_URL_ENV] = root + "/v1"
-        env[OPENAI_API_KEY_ENV] = api_key
+        if subscription:
+            env[LITELLM_PROXY_API_KEY_ENV] = api_key
+        else:
+            env[OPENAI_API_KEY_ENV] = api_key
     if PROFILE_LITELLM in profiles:
         env[LITELLM_PROXY_API_KEY_ENV] = api_key
     return env
 
 
-def codex_proxy_provider(base_url: str) -> Mapping[str, str | bool]:
+def codex_proxy_provider(base_url: str, *, subscription: bool = False) -> Mapping[str, str | bool]:
     return MappingProxyType(
         {
             "name": "LiteLLM proxy",
             "base_url": base_url.rstrip("/") + "/v1",
             "wire_api": "responses",
             "supports_websockets": False,
-            "requires_openai_auth": False,
+            "requires_openai_auth": subscription,
         }
     )
 
@@ -304,7 +312,7 @@ def subscription_launch_args(
     return (_SETTINGS_FLAG, str(overlay)), rest
 
 
-def _codex_proxy_args(base_url: str) -> list[str]:
+def _codex_proxy_args(base_url: str, subscription: bool) -> list[str]:
     """Codex `-c` overrides that point it at the proxy.
 
     Codex ignores OPENAI_BASE_URL (it always dials api.openai.com), so the env
@@ -312,24 +320,34 @@ def _codex_proxy_args(base_url: str) -> list[str]:
     inline; supports_websockets=false forces the HTTP/SSE Responses transport
     because the proxy does not speak the Responses WebSocket protocol. The key is
     read from OPENAI_API_KEY, which build_agent_env already exports.
+    With subscription=True the provider is `litellm_subscription` with requires_openai_auth, so Codex
+    signs in with its own ChatGPT login, and the key travels in the x-litellm-api-key header from
+    LITELLM_PROXY_API_KEY. It sets no env_key, which would win over the login, and its own id keeps the
+    static Authorization header that `lite configure codex` writes under `litellm` out of the request.
     """
-    provider: Final = f"model_providers.{CODEX_PROXY_PROVIDER}"
+    provider_id: Final = CODEX_SUBSCRIPTION_PROVIDER if subscription else CODEX_PROXY_PROVIDER
+    provider: Final = f"model_providers.{provider_id}"
+    credential: Final = (
+        f"{provider}.env_http_headers={{{json.dumps(LITELLM_KEY_HEADER)}={json.dumps(LITELLM_PROXY_API_KEY_ENV)}}}"
+        if subscription
+        else f'{provider}.env_key="{OPENAI_API_KEY_ENV}"'
+    )
     return [
         "-c",
-        f'model_provider="{CODEX_PROXY_PROVIDER}"',
+        f'model_provider="{provider_id}"',
         *(
             argument
-            for key, value in codex_proxy_provider(base_url).items()
+            for key, value in codex_proxy_provider(base_url, subscription=subscription).items()
             for argument in ("-c", f"{provider}.{key}={json.dumps(value)}")
         ),
         "-c",
-        f'{provider}.env_key="{OPENAI_API_KEY_ENV}"',
+        credential,
         "-c",
         f"{provider}.http_headers={{}}",
     ]
 
 
-_PROXY_ARGS: Final[dict[str, Callable[[str], list[str]]]] = {
+_PROXY_ARGS: Final[dict[str, Callable[[str, bool], list[str]]]] = {
     "codex": _codex_proxy_args,
 }
 
@@ -410,14 +428,14 @@ _Preparer: TypeAlias = Callable[[str, str, Mapping[str, str]], Sequence[str]]
 _PREPARERS: Final[Mapping[str, _Preparer]] = MappingProxyType({"pi": prepare_pi, "codex": prepare_codex})
 
 
-def agent_launch_args(command: str, base_url: str) -> list[str]:
+def agent_launch_args(command: str, base_url: str, *, subscription: bool = False) -> list[str]:
     """Extra CLI args an agent needs to actually honor the proxy.
 
     Claude Code and OpenCode respect the exported env vars, so they get nothing
     here; Codex needs its provider pointed via config overrides.
     """
     builder: Final = _PROXY_ARGS.get(os.path.basename(command))
-    return builder(base_url) if builder else []
+    return builder(base_url, subscription) if builder else []
 
 
 class ListedModel(LiteLLMBaseModel):
@@ -903,7 +921,11 @@ def run_agent(
         }
     )
     synced_args: Final = synced.args if isinstance(synced, ModelSyncArgs) else ()
-    extra_args: Final = (*agent_launch_args(command[0], base_url), *synced_args, *prepared_args)
+    extra_args: Final = (
+        *agent_launch_args(command[0], base_url, subscription=subscription),
+        *synced_args,
+        *prepared_args,
+    )
     settings_args, forwarded = (
         subscription_launch_args(
             command,
@@ -914,7 +936,7 @@ def run_agent(
             ),
             write_overlay,
         )
-        if subscription and os.path.basename(command[0]) in _SUBSCRIPTION_AGENTS
+        if subscription and os.path.basename(command[0]) == "claude"
         else ((), tuple(command[1:]))
     )
     if reattach_terminal is not None:
@@ -948,10 +970,19 @@ def resolve_api_key(ctx: click.Context) -> str:
 
 
 _SKIP_VERIFY_HELP: Final = "Skip the pre-launch key check against the proxy."
-_SUBSCRIPTION_HELP: Final = (
-    "Keep using your claude.ai login (and its connectors). The LiteLLM key is sent in the "
-    "x-litellm-api-key header instead of replacing Claude Code's own credential. "
-    "Make it the default with `lite config set claude_subscription true`."
+_SUBSCRIPTION_HELP: Final = MappingProxyType(
+    {
+        "claude": (
+            "Keep using your claude.ai login (and its connectors). The LiteLLM key is sent in the "
+            "x-litellm-api-key header instead of replacing Claude Code's own credential. "
+            "Make it the default with `lite config set claude_subscription true`."
+        ),
+        "codex": (
+            "Keep using your ChatGPT login. The LiteLLM key is sent in the "
+            "x-litellm-api-key header instead of replacing Codex's own credential. "
+            "Make it the default with `lite config set codex_subscription true`."
+        ),
+    }
 )
 
 
@@ -964,10 +995,8 @@ def _launch(
     api_key: Final = resolve_api_key(ctx)
 
     display_name, _profiles = agent_profile(binary)
-    use_subscription: Final = (
-        subscription if subscription is not None else binary in _SUBSCRIPTION_AGENTS and claude_subscription_default()
-    )
-    login_note: Final = " (keeping your claude.ai login)" if use_subscription else ""
+    use_subscription: Final = subscription if subscription is not None else subscription_default(binary)
+    login_note: Final = f" (keeping your {_SUBSCRIPTION_LOGINS[binary]} login)" if use_subscription else ""
     click.echo(f"litellm: routing {display_name} through proxy at {base_url.rstrip('/')}{login_note}")
 
     try:
@@ -989,7 +1018,7 @@ _Decorated: Final = TypeVar("_Decorated", bound=Callable[..., object] | click.Co
 def _subscription_option(binary: str) -> Callable[[_Decorated], _Decorated]:
     if binary not in _SUBSCRIPTION_AGENTS:
         return lambda func: func
-    return click.option("--subscription/--no-subscription", default=None, help=_SUBSCRIPTION_HELP)
+    return click.option("--subscription/--no-subscription", default=None, help=_SUBSCRIPTION_HELP[binary])
 
 
 def _make_agent_command(binary: str, display_name: str) -> click.Command:

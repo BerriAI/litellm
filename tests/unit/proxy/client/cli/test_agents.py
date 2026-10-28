@@ -4,6 +4,7 @@ import os
 import stat
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -31,6 +32,7 @@ from litellm.proxy.client.cli.commands.agents import (
     verify_subscription_key,
 )
 from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsError
+from litellm.proxy.client.cli.commands.config import save_config
 from litellm.proxy.client.cli.main import cli as lite
 
 AGENTS_MODULE = "litellm.proxy.client.cli.commands.agents"
@@ -189,6 +191,11 @@ def _overlay(args):
     return json.loads(Path(args[2]).read_text())
 
 
+def _codex_config(args):
+    assert set(args[0::2]) == {"-c"}
+    return tomllib.loads("\n".join(args[1::2]))
+
+
 class TestAgentProfile:
     def test_claude_is_anthropic(self):
         name, profiles = agent_profile("claude")
@@ -254,6 +261,7 @@ class TestBuildAgentEnv:
         env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"openai"}))
         assert env["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert env["OPENAI_API_KEY"] == "sk-key"
+        assert "LITELLM_PROXY_API_KEY" not in env
         assert "ANTHROPIC_BASE_URL" not in env
         assert "ENABLE_TOOL_SEARCH" not in env
         assert "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY" not in env
@@ -317,10 +325,19 @@ class TestBuildAgentEnv:
         )
         assert env["ANTHROPIC_CUSTOM_HEADERS"].splitlines() == ["x-team: blue", "x-litellm-api-key: Bearer sk-new"]
 
-    def test_subscription_leaves_openai_agents_on_the_bearer_key(self):
-        env = build_agent_env({}, "http://localhost:4000", "sk-key", frozenset({"openai"}), subscription=True)
-        assert env["OPENAI_API_KEY"] == "sk-key"
+    def test_subscription_routes_openai_agents_without_offering_the_key_as_an_openai_credential(self):
+        env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"openai"}), subscription=True)
+        assert env["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
+        assert env["LITELLM_PROXY_API_KEY"] == "sk-key"
+        assert "OPENAI_API_KEY" not in env
         assert "ANTHROPIC_CUSTOM_HEADERS" not in env
+
+    def test_subscription_leaves_the_users_own_openai_key_as_it_was(self):
+        base = {"OPENAI_API_KEY": "sk-users-openai"}
+        env = build_agent_env(base, "http://localhost:4000", "sk-key", frozenset({"openai"}), subscription=True)
+        assert env["OPENAI_API_KEY"] == "sk-users-openai"
+        assert env["LITELLM_PROXY_API_KEY"] == "sk-key"
+        assert base == {"OPENAI_API_KEY": "sk-users-openai"}
 
     def test_default_mode_does_not_touch_custom_headers(self):
         env = build_agent_env(
@@ -353,6 +370,44 @@ class TestAgentLaunchArgs:
         assert agent_launch_args("/usr/local/bin/codex", "http://localhost:4000") == (
             agent_launch_args("codex", "http://localhost:4000")
         )
+
+    def test_codex_default_provider_reads_the_key_from_openai_api_key(self):
+        assert _codex_config(agent_launch_args("codex", "http://localhost:4000/")) == {
+            "model_provider": "litellm",
+            "model_providers": {
+                "litellm": {
+                    "name": "LiteLLM proxy",
+                    "base_url": "http://localhost:4000/v1",
+                    "wire_api": "responses",
+                    "supports_websockets": False,
+                    "requires_openai_auth": False,
+                    "env_key": "OPENAI_API_KEY",
+                    "http_headers": {},
+                }
+            },
+        }
+
+    def test_codex_subscription_provider_keeps_the_chatgpt_login_and_sends_the_key_in_the_litellm_header(self):
+        assert _codex_config(
+            agent_launch_args("/usr/local/bin/codex", "http://localhost:4000/", subscription=True)
+        ) == {
+            "model_provider": "litellm_subscription",
+            "model_providers": {
+                "litellm_subscription": {
+                    "name": "LiteLLM proxy",
+                    "base_url": "http://localhost:4000/v1",
+                    "wire_api": "responses",
+                    "supports_websockets": False,
+                    "requires_openai_auth": True,
+                    "env_http_headers": {"x-litellm-api-key": "LITELLM_PROXY_API_KEY"},
+                    "http_headers": {},
+                }
+            },
+        }
+
+    @pytest.mark.parametrize("agent", ["claude", "opencode", "pi", "mytool"])
+    def test_subscription_adds_no_args_for_agents_without_a_proxy_provider(self, agent):
+        assert agent_launch_args(agent, "http://localhost:4000", subscription=True) == []
 
     def test_pi_gets_no_static_args(self):
         assert agent_launch_args("pi", "http://localhost:4000") == []
@@ -1574,6 +1629,34 @@ class TestRunAgent:
                 read_settings=lambda path: {},
             )
 
+    def test_codex_subscription_launch_keeps_the_chatgpt_login_and_needs_no_settings_overlay(self):
+        probed = []
+        overlays = []
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["codex", "exec", "--settings", "kept"],
+            subscription=True,
+            base_env={"PATH": "/usr/bin"},
+            which=lambda name: "/usr/local/bin/codex",
+            verify=lambda *a: probed.append(("bearer", a)),
+            verify_subscription=lambda *a: probed.append(("header", a)),
+            sync_models=lambda *a: {},
+            preparers={},
+            write_overlay=lambda text, environ: overlays.append(text),
+            launcher=lambda p, a, e: launched.update(path=p, args=tuple(a), env=dict(e)),
+        )
+        assert probed == [("header", ("http://localhost:4000", "sk-key"))]
+        assert overlays == []
+        assert launched["path"] == "/usr/local/bin/codex"
+        assert launched["args"][0] == "codex"
+        assert launched["args"][-3:] == ("exec", "--settings", "kept")
+        assert _codex_config(launched["args"][1:-3])["model_provider"] == "litellm_subscription"
+        assert launched["env"]["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
+        assert launched["env"]["LITELLM_PROXY_API_KEY"] == "sk-key"
+        assert "OPENAI_API_KEY" not in launched["env"]
+
     def test_default_launch_still_probes_with_the_bearer(self):
         probed = []
         run_agent(
@@ -1964,7 +2047,11 @@ class TestAgentCommands:
         assert captured["command"] == ["opencode"]
         assert "routing OpenCode through proxy at http://localhost:4000" in result.output
 
-    def test_claude_subscription_flag_reaches_run_agent_and_is_not_forwarded(self):
+    @pytest.mark.parametrize(
+        ("agent", "user_args", "login"),
+        [("claude", ["--resume"], "claude.ai"), ("codex", ["exec", "hi"], "ChatGPT")],
+    )
+    def test_subscription_flag_reaches_run_agent_and_is_not_forwarded(self, agent, user_args, login):
         captured = {}
 
         def fake_run_agent(base_url, api_key, command, **kwargs):
@@ -1973,61 +2060,85 @@ class TestAgentCommands:
 
         with patch(f"{AGENTS_MODULE}.run_agent", side_effect=fake_run_agent):
             result = self.runner.invoke(
-                _agent_command("claude"),
-                ["--subscription", "--resume"],
+                _agent_command(agent),
+                ["--subscription", *user_args],
                 obj={"base_url": "http://localhost:4000", "api_key": "sk-key"},
             )
 
         assert result.exit_code == 0, result.output
         assert captured["subscription"] is True
-        assert captured["command"] == ["claude", "--resume"]
-        assert "keeping your claude.ai login" in result.output
+        assert captured["command"] == [agent, *user_args]
+        assert f"keeping your {login} login" in result.output
 
+    @pytest.mark.parametrize(("agent", "login"), [("claude", "claude.ai"), ("codex", "ChatGPT")])
     @pytest.mark.parametrize(
-        ("configured", "args", "expected"),
+        ("saved", "args", "expected"),
         [
-            (False, [], False),
-            (True, [], True),
-            (True, ["--no-subscription"], False),
-            (False, ["--subscription"], True),
+            (None, [], False),
+            ("false", [], False),
+            ("true", [], True),
+            ("true", ["--no-subscription"], False),
+            ("false", ["--subscription"], True),
         ],
     )
-    def test_subscription_comes_from_the_flag_else_the_saved_setting(self, configured, args, expected):
+    def test_subscription_comes_from_the_flag_else_the_saved_setting(self, agent, login, saved, args, expected):
+        if saved is not None:
+            save_config({f"{agent}_subscription": saved})
         captured = {}
-        with (
-            patch(f"{AGENTS_MODULE}.claude_subscription_default", return_value=configured),
-            patch(
-                f"{AGENTS_MODULE}.run_agent",
-                side_effect=lambda b, k, c, **kw: captured.update(sub=kw.get("subscription"), command=list(c)),
-            ),
+        with patch(
+            f"{AGENTS_MODULE}.run_agent",
+            side_effect=lambda b, k, c, **kw: captured.update(sub=kw.get("subscription"), command=list(c)),
         ):
             result = self.runner.invoke(
-                _agent_command("claude"), args, obj={"base_url": "http://localhost:4000", "api_key": "sk-key"}
+                _agent_command(agent), args, obj={"base_url": "http://localhost:4000", "api_key": "sk-key"}
             )
         assert result.exit_code == 0, result.output
         assert captured["sub"] is expected
-        assert captured["command"] == ["claude"]
-        assert ("keeping your claude.ai login" in result.output) is expected
+        assert captured["command"] == [agent]
+        assert (f"keeping your {login} login" in result.output) is expected
 
-    @pytest.mark.parametrize("agent", ["codex", "opencode"])
-    def test_the_saved_claude_setting_does_not_change_other_agents(self, agent):
+    @pytest.mark.parametrize(
+        ("saved_key", "agent"),
+        [
+            ("claude_subscription", "codex"),
+            ("claude_subscription", "opencode"),
+            ("codex_subscription", "claude"),
+            ("codex_subscription", "opencode"),
+        ],
+    )
+    def test_a_saved_subscription_setting_only_changes_its_own_agent(self, saved_key, agent):
+        save_config({saved_key: "true"})
         captured = {}
-        with (
-            patch(f"{AGENTS_MODULE}.claude_subscription_default", return_value=True),
-            patch(
-                f"{AGENTS_MODULE}.run_agent",
-                side_effect=lambda b, k, c, **kw: captured.update(sub=kw.get("subscription")),
-            ),
+        with patch(
+            f"{AGENTS_MODULE}.run_agent",
+            side_effect=lambda b, k, c, **kw: captured.update(sub=kw.get("subscription")),
         ):
             result = self.runner.invoke(
                 _agent_command(agent), [], obj={"base_url": "http://localhost:4000", "api_key": "sk-key"}
             )
         assert result.exit_code == 0, result.output
         assert captured["sub"] is False
+        assert "keeping your" not in result.output
 
-    @pytest.mark.parametrize("agent", ["codex", "opencode", "pi"])
-    def test_only_claude_offers_the_subscription_flag(self, agent):
-        assert "--subscription" not in {opt for param in _agent_command(agent).params for opt in param.opts}
+    def test_only_claude_and_codex_offer_the_subscription_flag(self):
+        offering = {
+            command.name
+            for command in agent_commands()
+            if "--subscription" in {opt for param in command.params for opt in param.opts}
+        }
+        assert offering == {"claude", "codex"}
+
+    @pytest.mark.parametrize(
+        ("agent", "login", "own_credential"),
+        [("claude", "claude.ai", "Claude Code's"), ("codex", "ChatGPT", "Codex's")],
+    )
+    def test_subscription_help_names_the_agents_own_login_and_its_setting(self, agent, login, own_credential):
+        result = self.runner.invoke(lite, [agent, "--help"], prog_name="lite")
+        assert result.exit_code == 0, result.output
+        text = " ".join(result.output.split())
+        assert f"Keep using your {login} login" in text
+        assert f"instead of replacing {own_credential} own credential" in text
+        assert f"lite config set {agent}_subscription true" in text
 
     def test_skip_verify_is_consumed_not_forwarded(self):
         captured = {}
