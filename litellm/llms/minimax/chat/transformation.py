@@ -5,6 +5,7 @@ MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's 
 from typing import Final
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -55,17 +56,14 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         Override to ensure we use MiniMax's endpoint.
         """
         # Get the base URL (either provided or default MiniMax endpoint)
-        base_url: Final = self.get_api_base(api_base=api_base)
+        base_url: Final = self.get_api_base(api_base=api_base).rstrip("/")
 
         # Ensure it ends with /chat/completions
         if base_url.endswith("/chat/completions"):
             return base_url
-        elif base_url.endswith("/v1"):
-            return f"{base_url}/chat/completions"
-        elif base_url.endswith("/"):
-            return f"{base_url}v1/chat/completions"
-        else:
-            return f"{base_url}/v1/chat/completions"
+        if base_url.endswith("/v1"):
+            return join_api_base(base_url, "chat/completions")
+        return join_api_base(base_url, "v1/chat/completions")
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,

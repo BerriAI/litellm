@@ -239,8 +239,18 @@ class VoiceConfig(TypedDict):
     prebuiltVoiceConfig: PrebuiltVoiceConfig
 
 
+class SpeakerVoiceConfig(TypedDict):
+    speaker: ReadOnly[str]
+    voiceConfig: ReadOnly[VoiceConfig]
+
+
+class MultiSpeakerVoiceConfig(TypedDict):
+    speakerVoiceConfigs: ReadOnly[Sequence[SpeakerVoiceConfig]]
+
+
 class SpeechConfig(TypedDict, total=False):
     voiceConfig: VoiceConfig
+    multiSpeakerVoiceConfig: ReadOnly[MultiSpeakerVoiceConfig]
     languageCode: str
 
 
