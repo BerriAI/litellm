@@ -64,6 +64,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
     bedrock_native_output_is_opt_in,
+    bedrock_serves_service_tier,
     bedrock_supports_tool_search,
     deployment_model_info,
     requests_output_config_format,
@@ -1210,7 +1211,7 @@ class AmazonConverseConfig(BaseConfig):
             if param == "requestMetadata":
                 self._map_request_metadata_param(value, optional_params, drop_params)
             if param == "service_tier" and isinstance(value, str):
-                self._map_service_tier_param(value, optional_params)
+                self._map_service_tier_param(value, optional_params, model=model, drop_params=drop_params)
 
             if param == "web_search_options" and isinstance(value, dict):
                 # Note: we use `isinstance(value, dict)` instead of `value and isinstance(value, dict)`
@@ -1264,17 +1265,27 @@ class AmazonConverseConfig(BaseConfig):
         if mapped is not None:
             optional_params["context_management"] = mapped
 
-    def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
+    def _map_service_tier_param(self, value: str, optional_params: dict, model: str, drop_params: bool) -> None:
         """Map OpenAI service_tier (string) to Bedrock serviceTier (object).
 
         OpenAI values: "auto", "default", "flex", "priority"
         Bedrock values: "default", "flex", "priority" (no "auto")
         """
-        bedrock_tier = value
-        if value == "auto":
-            bedrock_tier = "default"  # Bedrock doesn't support "auto"
-        if bedrock_tier in ("default", "flex", "priority"):
-            optional_params["serviceTier"] = {"type": bedrock_tier}
+        bedrock_tier: Final = "default" if value == "auto" else value
+        if bedrock_tier not in ("default", "flex", "priority"):
+            return
+        if not bedrock_serves_service_tier(model, bedrock_tier):
+            if not (litellm.drop_params or drop_params):
+                raise litellm.utils.UnsupportedParamsError(
+                    message=(
+                        f"{model} does not support service_tier={value!r} on Bedrock. "
+                        "To drop unsupported params, set `litellm.drop_params = True`."
+                    ),
+                    status_code=400,
+                )
+            verbose_logger.debug("Dropping unsupported `service_tier=%s` for Bedrock model=%s.", value, model)
+            return
+        optional_params["serviceTier"] = {"type": bedrock_tier}
 
     def _translate_response_format_param(
         self,

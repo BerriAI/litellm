@@ -1314,6 +1314,28 @@ def _mantle_api_base_from_env() -> str | None:
     return next((base[: -len(suffix)] for suffix in _MANTLE_OPENAI_BASE_SUFFIXES if base.endswith(suffix)), base)
 
 
+def bedrock_serves_service_tier(model: str, service_tier: str) -> bool:
+    """Whether AWS sells this Bedrock model at the requested ``service_tier``.
+
+    AWS enables priority and flex per model, not per provider (Nova 2, gpt-oss and Kimi serve
+    them, every Claude and GPT 5.6 Terra answer ``The provided service tier is not supported for
+    this model``, checked live on 2026-10-27). The price map carries a ``*_cost_per_token_<tier>``
+    row for exactly the models that serve a tier, so a non-null price is the capability signal (the
+    proxy normalizes every row to the full ModelInfo shape, so key presence alone means nothing). ``default``
+    and ``auto`` are always served, and a model absent from the price map has no signal and is
+    forwarded as before.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_service_tier_cost_key
+
+    cost_key: Final = get_service_tier_cost_key("input_cost_per_token", service_tier)
+    if cost_key == "input_cost_per_token":
+        return True
+    entries: Final = tuple(entry for entry in _bedrock_price_map_entries(model) if entry is not None)
+    if not entries:
+        return True
+    return any(entry.get(cost_key) is not None for entry in entries)
+
+
 def bedrock_reasoning_effort_disabled(model: str, effort: str) -> bool:
     from litellm.utils import is_explicitly_disabled_factory
 

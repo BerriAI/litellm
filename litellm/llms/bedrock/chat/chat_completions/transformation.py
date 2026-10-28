@@ -41,6 +41,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_model_is_openai_gpt,
     bedrock_rejects_stop_sequences,
     bedrock_runtime_chat_completions_serves_reasoning_inline,
+    bedrock_serves_service_tier,
     split_bedrock_region_path,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
@@ -309,6 +310,13 @@ def with_max_completion_tokens(params: Mapping[str, object]) -> Mapping[str, obj
     )
 
 
+def _unsupported_service_tier(model: str, raw_params: Mapping[str, object]) -> frozenset[str]:
+    service_tier: Final = raw_params.get("service_tier")
+    if not isinstance(service_tier, str) or bedrock_serves_service_tier(model, service_tier):
+        return frozenset()
+    return frozenset(("service_tier",))
+
+
 class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
     def __init__(self, aws_signer: BaseAWSLLM | None = None) -> None:
         super().__init__()
@@ -446,11 +454,22 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
                 status_code=400,
             )
         rejected_stop: Final = frozenset(("stop",)) if bedrock_rejects_stop_sequences(model) else frozenset[str]()
+        unsupported_tier: Final = _unsupported_service_tier(model, raw_params)
+        if unsupported_tier and not (litellm.drop_params or drop_params):
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} does not support service_tier={raw_params['service_tier']!r} on Bedrock. "
+                    "To drop unsupported params, set `litellm.drop_params = True`."
+                ),
+                status_code=400,
+            )
         return dict(
             without_refused_reasoning_effort(
                 model,
                 with_max_completion_tokens(
-                    _without_params(mapped, refused_while_reasoning | malformed_effort | rejected_stop)
+                    _without_params(
+                        mapped, refused_while_reasoning | malformed_effort | rejected_stop | unsupported_tier
+                    )
                 ),
             )
         )

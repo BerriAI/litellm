@@ -1704,3 +1704,47 @@ def test_positional_tool_call_ids_are_minted_for_gpt_too(local_cost_map, fake_aw
     ids = [tool_call.id for tool_call in response.choices[0].message.tool_calls]
     assert len(set(ids)) == 2
     assert all(re.fullmatch(r"call_[0-9a-f]{32}", tool_call_id) for tool_call_id in ids)
+
+
+def test_native_chat_completions_drops_service_tier_the_model_does_not_sell(local_cost_map, monkeypatch):
+    """GPT 5.6 Terra on Bedrock answers priority/flex with `'priority' is not supported for
+    'service_tier' on this model`, so under drop_params the tier is dropped before the call."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonBedrockRuntimeChatCompletionsConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"service_tier": "priority", "max_tokens": 5},
+        optional_params={},
+        model="us.openai.gpt-5.6-terra",
+        drop_params=True,
+    )
+
+    assert "service_tier" not in result
+    assert result["max_completion_tokens"] == 5
+
+
+def test_native_chat_completions_raises_on_service_tier_the_model_does_not_sell(local_cost_map, monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonBedrockRuntimeChatCompletionsConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="service_tier='priority'"):
+        config.map_openai_params(
+            non_default_params={"service_tier": "priority"},
+            optional_params={},
+            model="us.openai.gpt-5.6-terra",
+            drop_params=False,
+        )
+
+
+def test_native_chat_completions_keeps_default_service_tier(local_cost_map, monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonBedrockRuntimeChatCompletionsConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"service_tier": "default"},
+        optional_params={},
+        model="us.openai.gpt-5.6-terra",
+        drop_params=False,
+    )
+
+    assert result["service_tier"] == "default"

@@ -10789,3 +10789,61 @@ def test_a_deployment_with_a_batch_control_plane_endpoint_keeps_it_out_of_chat_r
 
     assert response.choices[0].message.content == "ok"
     assert "aws_bedrock_control_plane_endpoint" not in route.calls[0].request.content.decode()
+
+
+def test_converse_service_tier_dropped_on_models_without_that_tier_under_drop_params():
+    """Bedrock sells priority/flex per model. Claude has neither, so with drop_params the tier must
+    be dropped instead of forwarded to AWS's `The provided service tier is not supported` 400."""
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"service_tier": "priority"},
+        optional_params={},
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        drop_params=True,
+    )
+
+    assert "serviceTier" not in result
+
+
+def test_converse_service_tier_raises_on_models_without_that_tier_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="service_tier='flex'"):
+        config.map_openai_params(
+            non_default_params={"service_tier": "flex"},
+            optional_params={},
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize("service_tier", ["priority", "flex"])
+def test_converse_service_tier_forwarded_on_models_that_sell_it(monkeypatch, service_tier):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"service_tier": service_tier},
+        optional_params={},
+        model="us.amazon.nova-2-lite-v1:0",
+        drop_params=False,
+    )
+
+    assert result["serviceTier"] == {"type": service_tier}
+
+
+@pytest.mark.parametrize("service_tier", ["default", "auto"])
+def test_converse_default_and_auto_service_tier_always_forwarded(monkeypatch, service_tier):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"service_tier": service_tier},
+        optional_params={},
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        drop_params=False,
+    )
+
+    assert result["serviceTier"] == {"type": "default"}

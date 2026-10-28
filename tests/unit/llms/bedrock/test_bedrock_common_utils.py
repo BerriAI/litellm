@@ -1,13 +1,21 @@
 
-import asyncio, importlib, litellm, litellm.litellm_core_utils.get_model_cost_map as bedrock_govcloud_model_cost_map, pytest
+import asyncio
+import importlib
+from collections.abc import Iterator
 from typing import Final
+from unittest.mock import Mock, patch
 
+import pytest
 
-from litellm.llms.bedrock.common_utils import(
+import litellm
+import litellm.litellm_core_utils.get_model_cost_map as bedrock_govcloud_model_cost_map
+from litellm import completion
+from litellm.llms.bedrock.common_utils import (
     AmazonBedrockGlobalConfig,
     BedrockModelInfo,
     NativeOutputFallback,
     bedrock_native_output_is_opt_in,
+    bedrock_serves_service_tier,
     bedrock_strict_tools_fallback,
     deployment_model_info,
     extract_model_name_from_bedrock_arn,
@@ -18,11 +26,8 @@ from litellm.llms.bedrock.common_utils import(
     strip_bedrock_throughput_suffix,
     without_bedrock_native_output_opt_in,
 )
-from collections.abc import Iterator
-from litellm import completion
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from unittest.mock import Mock, patch
 
 # --------------------------------------------------------------------------- #
 # get_bedrock_response_stream_shape lazy-load tests                           #
@@ -2036,6 +2041,7 @@ class TestBedrockGovCloudSupport:
 @pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
 def test_event_decoder_reports_only_missing_aws_dependency(missing):
     from unittest.mock import patch
+
     from litellm.llms.bedrock.common_utils import BedrockEventStreamDecoderBase
 
     failure = ModuleNotFoundError("missing dependency", name=missing)
@@ -2229,3 +2235,38 @@ def test_bedrock_strict_tools_fallback_retries_only_when_the_request_sent_strict
     fallback: Final = bedrock_strict_tools_fallback(model, {"tools": tools}, litellm_params)
 
     assert (fallback is not None) == sent_strict
+
+
+@pytest.mark.parametrize(
+    ("model", "service_tier", "expected"),
+    [
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", "priority", False),
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", "default", True),
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", "auto", True),
+        ("us.amazon.nova-2-lite-v1:0", "flex", True),
+        ("bedrock/us-west-2/moonshotai.kimi-k2.5", "flex", True),
+        ("a-model-the-price-map-has-never-heard-of", "priority", True),
+    ],
+)
+def test_bedrock_serves_service_tier_follows_price_map_tier_rows(model, service_tier, expected):
+    """A Bedrock model serves a tier exactly when its price-map row carries that tier's pricing.
+    Unknown models have no signal and keep being forwarded."""
+    assert bedrock_serves_service_tier(model, service_tier) is expected
+
+
+def test_bedrock_serves_service_tier_ignores_null_tier_prices_from_normalized_rows(monkeypatch):
+    """The proxy expands every price-map row to the full ModelInfo shape, so a Claude row carries
+    `input_cost_per_token_priority: None`. A null price is no signal that AWS sells the tier."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "normalized.claude-row",
+        {"litellm_provider": "bedrock_converse", "input_cost_per_token": 1e-6, "input_cost_per_token_priority": None},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "normalized.nova-row",
+        {"litellm_provider": "bedrock_converse", "input_cost_per_token": 1e-6, "input_cost_per_token_priority": 2e-6},
+    )
+
+    assert bedrock_serves_service_tier("normalized.claude-row", "priority") is False
+    assert bedrock_serves_service_tier("normalized.nova-row", "priority") is True
