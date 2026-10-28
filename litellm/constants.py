@@ -480,6 +480,7 @@ REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_end_user_sp
 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_tag_spend_update_buffer"
 REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_window_spend_update_buffer"
+REDIS_TOOL_DISCOVERY_BUFFER_KEY: Final = "litellm_tool_discovery_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT: Final = get_env_int("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100)
 REDIS_SPEND_LOGS_BUFFER_KEY: Final = "litellm_spend_logs_buffer"
 REDIS_SPEND_LOGS_BUFFER_MAX_ROWS: Final = 100000
@@ -626,7 +627,7 @@ BEDROCK_MIN_THINKING_BUDGET_TOKENS: Final = get_env_int("BEDROCK_MIN_THINKING_BU
 # Anthropic's Messages API rejects thinking.budget_tokens < 1024.
 ANTHROPIC_MIN_THINKING_BUDGET_TOKENS: Final = 1024
 REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_float("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
-DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS: Final = get_env_int("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 4096)
+DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS: Final = get_env_int("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 128000)
 DEFAULT_OCI_CHAT_MAX_TOKENS: Final = 4096
 TOGETHER_AI_4_B: Final = get_env_int("TOGETHER_AI_4_B", 4)
 TOGETHER_AI_8_B: Final = get_env_int("TOGETHER_AI_8_B", 8)
@@ -736,6 +737,7 @@ DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE: Final = os.getenv(
 )
 
 LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED: Final = 499
+LITELLM_CLIENT_DISCONNECT_DETAIL: Final = "Client disconnected the request"
 
 EMAIL_BUDGET_ALERT_TTL: Final = get_env_int("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60)  # 24 hours in seconds
 EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE: Final = get_env_float(
@@ -861,6 +863,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "heroku",
     "oci",
     "morph",
+    "opencode_go",
     "lambda_ai",
     "inception",
     "vercel_ai_gateway",
@@ -1032,6 +1035,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api-inference.modelscope.cn/v1",
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
+    "https://api.aiand.com/v1",
     "https://api.synthetic.new/openai/v1",
     "https://serverless.tensormesh.ai/v1",
     "https://api.stima.tech/v1",
@@ -1098,6 +1102,7 @@ openai_compatible_providers: Final[list[str]] = [
     "novita",
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
+    "aiand",  # ai& - JSON-configured provider
     "synthetic",  # Synthetic - JSON-configured provider
     "tensormesh",  # Tensormesh - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider
@@ -1117,6 +1122,7 @@ openai_compatible_providers: Final[list[str]] = [
     "v0",
     "helicone",
     "morph",
+    "opencode_go",
     "lambda_ai",
     "inception",
     "hyperbolic",
@@ -1844,6 +1850,7 @@ LITELLM_UI_SESSION_DURATION: Final = os.getenv("LITELLM_UI_SESSION_DURATION", "2
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME: Final = "db_spend_update_job"
+TOOL_DISCOVERY_COMMIT_JOB_NAME: Final = "tool_discovery_commit_job"
 DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME: Final = "db_daily_tag_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME: Final = "prometheus_emit_budget_metrics"
 CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME: Final = "cloudzero_export_usage_data"

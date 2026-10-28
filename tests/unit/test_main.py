@@ -14,13 +14,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
-from openai import APITimeoutError, AsyncOpenAI
+from openai import APITimeoutError, AsyncOpenAI, OpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
 from pydantic import TypeAdapter
@@ -44,12 +44,13 @@ from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kw
 from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
 from tests.unit.llms.bedrock.slow_upstream import (
+    CONVERSE_ANSWER,
     STREAM_TIMEOUT_SECONDS,
     UPSTREAM_FIRST_BYTE_SECONDS,
     slow_upstream_sync_client,
@@ -93,6 +94,142 @@ def preserve_litellm_completion_state(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 WHITE_PNG: Final = (Path(__file__).parents[1] / "white_100x100.png").read_bytes()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    ("client_base", "explicit_header", "expected_session"),
+    [
+        ("https://opencode.ai/zen/go/v1", None, "conversation-123"),
+        ("https://opencode.ai/zen/go/v1", "caller-override", "caller-override"),
+        ("https://other.example/v1", None, None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_completion_sends_session_only_to_the_actual_opencode_destination(
+    asynchronous: bool,
+    stream: bool,
+    client_base: str,
+    explicit_header: str | None,
+    expected_session: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://opencode.ai/zen/go/v1")
+    monkeypatch.setenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1")
+    monkeypatch.setattr(litellm, "api_base", "https://opencode.ai/zen/go/v1")
+    requests: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        payload: Final = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk" if stream else "chat.completion",
+            "created": 1,
+            "model": "session-test",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta" if stream else "message": {"role": "assistant", "content": "OK"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+        return (
+            httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=f"data: {json.dumps(payload)}\n\ndata: [DONE]\n\n",
+            )
+            if stream
+            else httpx.Response(200, json=payload)
+        )
+
+    args: Final = {
+        "model": "openai/session-test",
+        "api_base": "https://opencode.ai/zen/go/v1",
+        "messages": [{"role": "user", "content": "hello"}],
+        "litellm_session_id": "conversation-123",
+        "extra_headers": {"X-OpenCode-Session": explicit_header} if explicit_header else {"x-existing": "unchanged"},
+        "stream": stream,
+    }
+    if asynchronous:
+        async with AsyncOpenAI(
+            api_key="test-key",
+            base_url=client_base,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+        ) as async_client:
+            response: Final = await acompletion(**args, client=async_client)
+            content: Final = (
+                "".join([chunk.choices[0].delta.content or "" async for chunk in response])
+                if stream
+                else response.choices[0].message.content
+            )
+            assert content == "OK"
+    else:
+        with OpenAI(
+            api_key="test-key", base_url=client_base, http_client=httpx.Client(transport=httpx.MockTransport(respond))
+        ) as sync_client:
+            result: Final = completion(**args, client=sync_client)
+            text: Final = (
+                "".join(chunk.choices[0].delta.content or "" for chunk in result)
+                if stream
+                else result.choices[0].message.content
+            )
+            assert text == "OK"
+    sent: Final = requests.get_nowait()
+    assert str(sent.url) == f"{client_base}/chat/completions"
+    assert sent.headers.get("x-opencode-session") == expected_session
+    assert sent.headers["authorization"] == "Bearer test-key"
+    assert json.loads(sent.content) == {
+        "model": "session-test",
+        "messages": args["messages"],
+        **({"stream": True} if stream else {}),
+    }
+    assert requests.empty()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("source", ["OPENAI_BASE_URL", "OPENAI_API_BASE", "litellm.api_base"])
+@pytest.mark.parametrize("explicit_base", [None, "https://other.example/v1"])
+@pytest.mark.asyncio
+async def test_completion_opencode_session_uses_effective_destination(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    asynchronous: bool,
+    source: str,
+    explicit_base: str | None,
+) -> None:
+    default_base: Final = "https://opencode.ai/inference/go/openai/v1"
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", default_base if source == "litellm.api_base" else None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    if source != "litellm.api_base":
+        monkeypatch.setenv(source, default_base)
+    endpoint: Final = respx_mock.post(f"{explicit_base or default_base}/chat/completions").respond(
+        json={
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "session-test",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+        }
+    )
+    args: Final = {
+        "model": "openai/session-test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "api_base": explicit_base,
+        "api_key": "test-key",
+        "litellm_session_id": "conversation-123",
+    }
+    response: Final = await litellm.acompletion(**args) if asynchronous else litellm.completion(**args)
+    assert response.choices[0].message.content == "OK"
+    assert endpoint.call_count == 1
+    sent: Final = endpoint.calls[0].request
+    assert sent.headers.get("x-opencode-session") == (None if explicit_base else "conversation-123")
+    assert sent.headers["authorization"] == "Bearer test-key"
+    assert json.loads(sent.content) == {"model": "session-test", "messages": args["messages"]}
 
 
 @pytest.fixture
@@ -9814,3 +9951,126 @@ async def test_converse_fallback_prices_the_current_attempt(
     else:
         client.close()
     configuration.reset_rust_configuration()
+
+
+_LOOKUP_FUNCTION: Final = {
+    "name": "lookup_record",
+    "description": "Look up a record",
+    "parameters": {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+        "additionalProperties": False,
+    },
+}
+_STRICT_LOOKUP_TOOL: Final = {"type": "function", "function": {**_LOOKUP_FUNCTION, "strict": True}}
+# Bedrock's 400 for a request past Claude's strict tool limits, seen live on us.anthropic.claude-sonnet-4-6 on 2026-10-20
+_TOO_MANY_STRICT_TOOLS: Final = (
+    "The model returned the following errors: Too many strict tools (21). The maximum number of strict tools "
+    "supported is 20. Try reducing the number of tools marked as strict."
+)
+
+
+@dataclass(slots=True)
+class _StrictToolsLimitRejectionFirst:
+    stream: Literal["off", "fake", "real"]
+    sent: tuple[tuple[str, dict[str, object]], ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.sent = (*self.sent, (request.url.path.rsplit("/", 1)[-1], json.loads(request.content)))
+        if len(self.sent) == 1:
+            return httpx.Response(400, json={"message": _TOO_MANY_STRICT_TOOLS})
+        return httpx.Response(200, content=b"" if self.stream == "real" else CONVERSE_ANSWER)
+
+
+async def _converse_with_a_strict_tools_limit_rejection_first(
+    asynchronous: bool,
+    stream: Literal["off", "fake", "real"],
+    drop_params: bool | None,
+    tool: Mapping[str, object] = _STRICT_LOOKUP_TOOL,
+) -> tuple[tuple[tuple[str, dict[str, object]], ...], litellm.BadRequestError | None]:
+    respond: Final = _StrictToolsLimitRejectionFirst(stream)
+    kwargs: Final = {
+        "model": "bedrock/us.anthropic.claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "Find invoice 42"}],
+        "tools": [tool],
+        "aws_access_key_id": "AKIASTRICTTOOLS",
+        "aws_secret_access_key": "strict-tools-secret",
+        "aws_region_name": "us-east-1",
+        "num_retries": 0,
+        "drop_params": drop_params,
+        "stream": stream != "off",
+        "fake_stream": stream == "fake",
+    }
+    try:
+        chunks: Final = (
+            await _acompletion_chunks(AsyncHTTPHandler(transport=httpx.MockTransport(respond)), kwargs, stream)
+            if asynchronous
+            else _completion_chunks(
+                HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))), kwargs, stream
+            )
+        )
+    except litellm.BadRequestError as error:
+        return respond.sent, error
+    assert chunks
+    return respond.sent, None
+
+
+async def _acompletion_chunks(
+    client: AsyncHTTPHandler, kwargs: Mapping[str, object], stream: Literal["off", "fake", "real"]
+) -> tuple[object, ...]:
+    response: Final = await litellm.acompletion(client=client, **kwargs)
+    return tuple([chunk async for chunk in response]) if stream == "fake" else (response,)
+
+
+def _completion_chunks(
+    client: HTTPHandler, kwargs: Mapping[str, object], stream: Literal["off", "fake", "real"]
+) -> tuple[object, ...]:
+    response: Final = litellm.completion(client=client, **kwargs)
+    return tuple(response) if stream == "fake" else (response,)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("stream", ["off", "fake", "real"], ids=["completion", "fake_stream", "stream"])
+async def test_bedrock_strict_tools_limit_rejection_is_sent_again_without_strict_under_drop_params(
+    asynchronous: bool, stream: Literal["off", "fake", "real"], local_model_cost_map: None
+) -> None:
+    sent, error = await _converse_with_a_strict_tools_limit_rejection_first(asynchronous, stream, drop_params=True)
+
+    assert error is None
+    (first_path, first_body), (second_path, second_body) = sent
+    first_tool_spec: Final = first_body["toolConfig"]["tools"][0]["toolSpec"]
+    assert first_tool_spec["strict"] is True
+    assert first_path == second_path == ("converse-stream" if stream == "real" else "converse")
+    assert second_body == {
+        **first_body,
+        "toolConfig": {
+            **first_body["toolConfig"],
+            "tools": [{"toolSpec": {key: value for key, value in first_tool_spec.items() if key != "strict"}}],
+        },
+    }
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_bedrock_strict_tools_limit_rejection_reaches_the_caller_without_drop_params(
+    asynchronous: bool, local_model_cost_map: None
+) -> None:
+    sent, error = await _converse_with_a_strict_tools_limit_rejection_first(asynchronous, stream="off", drop_params=None)
+
+    assert error is not None and "Too many strict tools" in str(error)
+    assert len(sent) == 1
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_bedrock_strict_tools_limit_rejection_is_not_sent_again_when_no_tool_sent_strict(
+    asynchronous: bool, local_model_cost_map: None
+) -> None:
+    sent, error = await _converse_with_a_strict_tools_limit_rejection_first(
+        asynchronous,
+        stream="off",
+        drop_params=True,
+        tool={"type": "function", "function": {**_LOOKUP_FUNCTION, "strict": False}},
+    )
+
+    assert error is not None and "Too many strict tools" in str(error)
+    assert len(sent) == 1

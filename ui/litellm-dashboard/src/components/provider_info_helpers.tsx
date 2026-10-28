@@ -14,6 +14,7 @@ import cursorLogo from "../../public/assets/logos/cursor.svg";
 import databricksLogo from "../../public/assets/logos/databricks.svg";
 import deepgramLogo from "../../public/assets/logos/deepgram.png";
 import deepinfraLogo from "../../public/assets/logos/deepinfra.png";
+import opencodeLogo from "../../public/assets/moyai/logos/opencode.svg";
 import deepseekLogo from "../../public/assets/logos/deepseek.svg";
 import edenaiLogo from "../../public/assets/logos/edenai.svg";
 import elevenlabsLogo from "../../public/assets/logos/elevenlabs.png";
@@ -131,6 +132,7 @@ export enum Providers {
   HOSTINGER_ROUTER = "Hostinger Router",
   Infinity = "Infinity",
   JinaAI = "Jina AI",
+  OPENCODE_GO = "OpenCode Go",
   LAMBDA_AI = "Lambda Ai",
   Laya = "Laya",
   LEMONADE = "Lemonade",
@@ -258,6 +260,7 @@ export const provider_map: Record<string, string> = {
   HOSTINGER_ROUTER: "hostinger_router",
   Infinity: "infinity",
   JinaAI: "jina_ai",
+  OPENCODE_GO: "opencode_go",
   LAMBDA_AI: "lambda_ai",
   Laya: "laya",
   LEMONADE: "lemonade",
@@ -378,6 +381,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.HOSTINGER_ROUTER]: hostingerLogo.src,
   [Providers.Infinity]: infinityLogo.src,
   [Providers.JinaAI]: jinaLogo.src,
+  [Providers.OPENCODE_GO]: opencodeLogo.src,
   [Providers.LAMBDA_AI]: lambdaLogo.src,
   [Providers.LM_STUDIO]: lmstudioLogo.src,
   [Providers.LLAMA]: metaLlamaLogo.src,
