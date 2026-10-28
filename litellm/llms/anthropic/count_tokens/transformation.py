@@ -257,6 +257,7 @@ def anthropic_fields_for_chat_tool_use(
         not chat_params
         and not any(map(_is_chat_tool, counted_tools))
         and not any(map(_needs_chat_translation, messages))
+        and not any(map(_gets_placeholder_name, counted_tools))
     ):
         return None
     untranslatable: Final = _untranslatable_input(messages, counted_tools)

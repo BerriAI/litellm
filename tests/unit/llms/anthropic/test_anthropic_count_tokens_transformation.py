@@ -685,6 +685,16 @@ _CHAT_WEATHER_TOOL: Final[dict[str, JsonValue]] = {
             [{"type": "mcp", "server_label": "wiki", "server_url": "https://mcp.example/mcp"}, _CHAT_WEATHER_TOOL],
             id="mcp-tool",
         ),
+        pytest.param(
+            [{"role": "user", "content": "Open the docs"}],
+            [{"type": "computer_use_preview", "display_width": 1024, "display_height": 768, "environment": "browser"}],
+            id="computer-use-preview-tool-alone",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Ask the wiki"}],
+            [{"type": "mcp", "server_label": "wiki", "server_url": "https://mcp.example/mcp"}],
+            id="mcp-tool-alone",
+        ),
     ),
 )
 async def test_counter_rejects_input_chat_translation_would_leave_out_without_calling_anthropic(
