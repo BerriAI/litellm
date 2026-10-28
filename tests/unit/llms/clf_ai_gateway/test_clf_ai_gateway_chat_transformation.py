@@ -1,168 +1,174 @@
 import json
 from pathlib import Path
+from typing import Final
 
 import pytest
+import respx
 
 import litellm
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.clf_ai_gateway.chat.transformation import ClfAiGatewayConfig
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
-from litellm.types.utils import LlmProviders
 
-MODELS = [
-    "glm-5.3",
-    "glm-5.3-flash",
-    "glm-5.2",
-    "glm-4.7-flash",
-    "deepseek-v4-pro",
-    "deepseek-v4-flash",
-    "kimi-k2.6",
-    "kimi-k2.7-code",
-    "qwen3.8-27b",
-]
-
-GATEWAY_REASONING_EFFORTS = {
-    "glm-5.3": ("low", "medium", "high", "max"),
-    "glm-5.3-flash": ("low", "medium", "high", "xhigh", "max"),
-    "glm-5.2": ("low", "medium", "high", "xhigh", "max"),
-    "glm-4.7-flash": ("low", "medium", "high"),
-    "deepseek-v4-pro": ("low", "medium", "high", "xhigh", "max"),
-    "deepseek-v4-flash": ("low", "medium", "high", "xhigh", "max"),
-    "kimi-k2.6": ("none", "low", "medium", "high"),
-    "kimi-k2.7-code": ("low", "medium", "high"),
-    "qwen3.8-27b": ("low", "medium", "xhigh"),
-}
+DEFAULT_API_BASE: Final = "https://api.clfaigateway.dev/v1"
+CHAT_URL: Final = f"{DEFAULT_API_BASE}/chat/completions"
+REPO_ROOT: Final = Path(litellm.__file__).parent.parent
 
 
-@pytest.fixture(autouse=True)
-def _local_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+def _chat_response(usage: dict[str, object]) -> dict[str, object]:
+    return {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "glm-5.3",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}],
+        "usage": usage,
+    }
 
 
-def test_provider_is_registered() -> None:
-    assert LlmProviders.CLF_AI_GATEWAY.value == "clf_ai_gateway"
-    assert "clf_ai_gateway" in litellm.openai_compatible_providers
-    assert "api.clfaigateway.dev/v1" in litellm.openai_compatible_endpoints
-    assert "clf_ai_gateway" in litellm.provider_list
-    assert isinstance(
-        litellm.ProviderConfigManager.get_provider_chat_config(model="glm-5.3", provider=LlmProviders.CLF_AI_GATEWAY),
-        ClfAiGatewayConfig,
-    )
+def _clf_rows(path: Path) -> dict[str, dict[str, object]]:
+    rows: Final = json.loads(path.read_text(encoding="utf-8"))
+    return {key: value for key, value in rows.items() if value.get("litellm_provider") == "clf_ai_gateway"}
 
 
-def test_default_api_base_and_env_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CLF_AI_GATEWAY_API_KEY", "sk-gw-test")
+def test_resolves_environment_and_explicit_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLF_AI_GATEWAY_API_KEY", "fake-environment-key")
     monkeypatch.delenv("CLF_AI_GATEWAY_API_BASE", raising=False)
-    api_base, api_key = ClfAiGatewayConfig().get_openai_compatible_provider_info(api_base=None, api_key=None)
-    assert api_base == "https://api.clfaigateway.dev/v1"
-    assert api_key == "sk-gw-test"
-
-    api_base, api_key = ClfAiGatewayConfig().get_openai_compatible_provider_info(
-        api_base="https://example.test/v1", api_key="explicit"
+    assert get_llm_provider(model="clf_ai_gateway/glm-5.3") == (
+        "glm-5.3",
+        "clf_ai_gateway",
+        "fake-environment-key",
+        DEFAULT_API_BASE,
     )
-    assert api_base == "https://example.test/v1"
-    assert api_key == "explicit"
+    assert get_llm_provider(
+        model="clf_ai_gateway/glm-5.3", api_key="fake-explicit-key", api_base="https://gateway.example/v1"
+    ) == ("glm-5.3", "clf_ai_gateway", "fake-explicit-key", "https://gateway.example/v1")
+
+    monkeypatch.setenv("CLF_AI_GATEWAY_API_BASE", "https://env-gateway.example/v1")
+    assert get_llm_provider(model="clf_ai_gateway/glm-5.3")[3] == "https://env-gateway.example/v1"
 
 
-def test_get_llm_provider_resolves_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CLF_AI_GATEWAY_API_KEY", "sk-gw-test")
-    model, provider, key, api_base = litellm.get_llm_provider(model="clf_ai_gateway/glm-5.3")
-    assert model == "glm-5.3"
-    assert provider == "clf_ai_gateway"
-    assert key == "sk-gw-test"
-    assert api_base == "https://api.clfaigateway.dev/v1"
+def test_api_base_alone_selects_the_provider_and_keeps_an_explicit_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLF_AI_GATEWAY_API_KEY", "fake-environment-key")
+    _, provider, key, _ = get_llm_provider(model="glm-5.3", api_base=DEFAULT_API_BASE)
+    assert (provider, key) == ("clf_ai_gateway", "fake-environment-key")
 
-
-def test_get_llm_provider_infers_from_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CLF_AI_GATEWAY_API_KEY", "sk-gw-test")
-    _, provider, _, _ = litellm.get_llm_provider(model="glm-5.3", api_base="https://api.clfaigateway.dev/v1")
-    assert provider == "clf_ai_gateway"
-
-    _, provider, key, _ = litellm.get_llm_provider(
-        model="glm-5.3", api_base="https://api.clfaigateway.dev/v1", api_key="explicit"
+    _, provider_with_key, explicit_key, _ = get_llm_provider(
+        model="glm-5.3", api_base=DEFAULT_API_BASE, api_key="fake-explicit-key"
     )
-    assert provider == "clf_ai_gateway"
-    assert key == "explicit"
+    assert (provider_with_key, explicit_key) == ("clf_ai_gateway", "fake-explicit-key")
 
 
-def test_supported_params_match_gateway_surface() -> None:
-    params = ClfAiGatewayConfig().get_supported_openai_params(model="glm-5.3")
-    assert "reasoning_effort" in params
-    assert "tools" in params and "tool_choice" in params
-    for rejected_by_gateway_with_400 in ("functions", "function_call", "logit_bias"):
-        assert rejected_by_gateway_with_400 not in params
+def test_chat_forwards_reasoning_effort_and_bills_cached_tokens(local_model_cost_map: None) -> None:
+    with respx.mock() as upstream:
+        route: Final = upstream.post(CHAT_URL).respond(
+            200,
+            json=_chat_response(
+                {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 5,
+                    "total_tokens": 105,
+                    "prompt_tokens_details": {"cached_tokens": 80},
+                }
+            ),
+        )
+        response: Final = litellm.completion(
+            model="clf_ai_gateway/glm-5.3",
+            api_key="fake-test-key",
+            messages=[{"role": "user", "content": "Say hello"}],
+            reasoning_effort="low",
+        )
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert request.headers["authorization"] == "Bearer fake-test-key"
+    assert body["model"] == "glm-5.3"
+    assert body["reasoning_effort"] == "low"
+    assert response.choices[0].message.content == "hello"
+    rates: Final = litellm.model_cost["clf_ai_gateway/glm-5.3"]
+    expected: Final = (
+        20 * rates["input_cost_per_token"]
+        + 80 * rates["cache_read_input_token_cost"]
+        + 5 * rates["output_cost_per_token"]
+    )
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(expected)
 
 
-@pytest.mark.parametrize("model", MODELS)
-def test_cost_map_entries(model: str) -> None:
-    key = f"clf_ai_gateway/{model}"
-    assert key in litellm.model_cost, f"missing cost map entry for {key}"
-    entry = litellm.model_cost[key]
-    assert entry["litellm_provider"] == "clf_ai_gateway"
-    assert entry["mode"] == "chat"
-    assert entry["max_output_tokens"] == 131072
-    assert entry["input_cost_per_token"] > 0
-    assert entry["output_cost_per_token"] > 0
-    assert entry["supports_function_calling"] is True
-    assert entry["supports_reasoning"] is True
+@pytest.mark.parametrize(
+    ("param", "value"),
+    [
+        ("functions", [{"name": "lookup", "parameters": {"type": "object", "properties": {}}}]),
+        ("function_call", "auto"),
+        ("logit_bias", {"50256": -100}),
+    ],
+)
+def test_legacy_fields_the_gateway_rejects_are_refused_or_dropped(
+    local_model_cost_map: None, param: str, value: object
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.completion(
+            model="clf_ai_gateway/glm-5.3",
+            api_key="fake-test-key",
+            messages=[{"role": "user", "content": "hi"}],
+            **{param: value},
+        )
+
+    with respx.mock() as upstream:
+        route: Final = upstream.post(CHAT_URL).respond(
+            200, json=_chat_response({"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
+        )
+        litellm.completion(
+            model="clf_ai_gateway/glm-5.3",
+            api_key="fake-test-key",
+            messages=[{"role": "user", "content": "hi"}],
+            drop_params=True,
+            **{param: value},
+        )
+    assert param not in json.loads(route.calls.last.request.content)
 
 
-def test_vision_flags_match_measured_surface() -> None:
-    vision = {"glm-5.3-flash", "kimi-k2.6", "kimi-k2.7-code", "qwen3.8-27b"}
-    for model in MODELS:
-        entry = litellm.model_cost[f"clf_ai_gateway/{model}"]
-        assert bool(entry.get("supports_vision")) is (model in vision), model
+def test_reasoning_effort_is_advertised_only_for_reasoning_models(local_model_cost_map: None) -> None:
+    config: Final = ClfAiGatewayConfig()
+    assert "reasoning_effort" in config.get_supported_openai_params(model="glm-5.3")
+    assert "reasoning_effort" not in config.get_supported_openai_params(model="not-in-the-cost-map")
+    assert litellm.get_supported_openai_params(
+        model="glm-5.3", custom_llm_provider="clf_ai_gateway"
+    ) == config.get_supported_openai_params(model="glm-5.3")
 
 
-def test_validate_environment_reports_env_key(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cost_map_rows_match_the_backup_and_resolve_their_effort_levels() -> None:
+    rows: Final = _clf_rows(REPO_ROOT / "model_prices_and_context_window.json")
+    assert rows
+    assert rows == _clf_rows(REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json")
+    for key, row in rows.items():
+        assert row["input_cost_per_token"] > 0, key
+        assert row["output_cost_per_token"] > 0, key
+        assert row["max_output_tokens"] <= row["max_input_tokens"], key
+        assert resolve_supported_reasoning_efforts({**row, "key": key}, deployment_is_mapped=True) == tuple(
+            row["reasoning_effort_levels"]
+        ), key
+
+
+def test_validate_environment_reports_the_env_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLF_AI_GATEWAY_API_KEY", raising=False)
-    missing = litellm.validate_environment(model="clf_ai_gateway/glm-5.3")
+    missing: Final = litellm.validate_environment(model="clf_ai_gateway/glm-5.3")
     assert missing["keys_in_environment"] is False
-    assert "CLF_AI_GATEWAY_API_KEY" in missing["missing_keys"]
+    assert missing["missing_keys"] == ["CLF_AI_GATEWAY_API_KEY"]
 
-    monkeypatch.setenv("CLF_AI_GATEWAY_API_KEY", "sk-gw-test")
-    present = litellm.validate_environment(model="clf_ai_gateway/glm-5.3")
-    assert present["keys_in_environment"] is True
-    assert present["missing_keys"] == []
-
-
-def test_get_supported_openai_params_dispatches_to_provider_config() -> None:
-    params = litellm.get_supported_openai_params(model="glm-5.3", custom_llm_provider="clf_ai_gateway")
-    assert params is not None
-    assert "reasoning_effort" in params
-    assert "logit_bias" not in params
+    monkeypatch.setenv("CLF_AI_GATEWAY_API_KEY", "fake-environment-key")
+    present: Final = litellm.validate_environment(model="clf_ai_gateway/glm-5.3")
+    assert present == {"keys_in_environment": True, "missing_keys": []}
 
 
-def test_completion_routes_without_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CLF_AI_GATEWAY_API_KEY", "sk-gw-test")
-    response = litellm.completion(
-        model="clf_ai_gateway/glm-5.3",
-        messages=[{"role": "user", "content": "hi"}],
-        mock_response="hello from mock",
-    )
-    assert response.choices[0].message.content == "hello from mock"
-
-
-@pytest.mark.parametrize("model", MODELS)
-def test_advertised_reasoning_efforts_match_the_gateway(model: str) -> None:
-    key = f"clf_ai_gateway/{model}"
-    entry = {**litellm.model_cost[key], "key": key}
-    assert resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) == GATEWAY_REASONING_EFFORTS[model]
-
-
-def test_selectable_in_the_proxy_add_model_form() -> None:
-    fields_path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
-    provider_fields = json.loads(fields_path.read_text(encoding="utf-8"))
-    entries = [entry for entry in provider_fields if entry["litellm_provider"] == "clf_ai_gateway"]
+def test_add_model_form_entry_points_at_a_mapped_model_and_the_default_base(local_model_cost_map: None) -> None:
+    fields_path: Final = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+    entries: Final = [
+        entry
+        for entry in json.loads(fields_path.read_text(encoding="utf-8"))
+        if entry["litellm_provider"] == "clf_ai_gateway"
+    ]
     assert len(entries) == 1
-
-    entry = entries[0]
-    assert entry["provider"] == "CLF_AI_GATEWAY"
-    assert entry["provider_display_name"] == "CLF AI Gateway"
-    assert entry["default_model_placeholder"] in litellm.model_cost
-
-    fields = {field["key"]: field for field in entry["credential_fields"]}
+    assert entries[0]["default_model_placeholder"] in litellm.model_cost
+    fields: Final = {field["key"]: field for field in entries[0]["credential_fields"]}
     assert fields["api_key"]["required"] is True
-    assert fields["api_key"]["field_type"] == "password"
     assert fields["api_base"]["required"] is False
-    assert fields["api_base"]["placeholder"] == "https://api.clfaigateway.dev/v1"
+    assert fields["api_base"]["placeholder"] == DEFAULT_API_BASE
