@@ -319,6 +319,27 @@ describe("AddAutoRouterTab", () => {
     },
   );
 
+  it("carries Responses model choices from simple setup into Advanced tiers", async () => {
+    const models = ["gpt-6-luna", "gpt-6-astra"];
+    mockFetchAvailableModels.mockResolvedValue(models.map((model_group) => ({ model_group, mode: "responses" })));
+    mockFetchAllModelDeployments.mockResolvedValue(
+      models.map((model_name) => ({
+        model_name,
+        litellm_params: { model: `chatgpt/${model_name}` },
+        model_info: { mode: "responses" },
+      })),
+    );
+    renderWithProviders(<Harness />);
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("gpt-6-luna"),
+    );
+    expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("gpt-6-astra");
+    expect(screen.queryByText(/Two deployed models are needed/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Advanced configuration", exact: true }));
+    expectTierModel("Simple", "gpt-6-luna");
+    expectTierModel("Reasoning", "gpt-6-astra");
+  });
+
   it("keeps manual solver choices on goal changes and carries them into Advanced", async () => {
     mockFetchAvailableModels.mockResolvedValue(
       ["claude-haiku-5-5", "custom-fast", "claude-opus-5-5"].map((model_group) => ({
