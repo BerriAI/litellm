@@ -6757,7 +6757,7 @@ class StandardLoggingPayloadSetup:
             model_cost_information = StandardLoggingModelInformation(model_map_key="", model_map_value=None)
         else:
             try:
-                _model_cost_information: Final = litellm.get_model_info(
+                _model_cost_information = litellm.get_model_info(
                     model=pricing_model_name or model_cost_name,
                     custom_llm_provider=custom_llm_provider,
                     api_base=api_base,
@@ -6767,13 +6767,30 @@ class StandardLoggingPayloadSetup:
                     model_map_value=_model_cost_information,
                 )
             except Exception:
-                verbose_logger.debug(  # keep in debug otherwise it will trigger on every call
-                    "Model=%s is not mapped in model cost map. Defaulting to None model_cost_information for standard_logging_payload",
-                    model_cost_name,
-                )
-                model_cost_information = StandardLoggingModelInformation(
-                    model_map_key=model_cost_name, model_map_value=None
-                )
+                # Fallback: if provider mismatch lookup fails, try bare model name
+                _model_cost_information = None
+                if custom_llm_provider is not None:
+                    try:
+                        _model_cost_information = litellm.get_model_info(
+                            model=pricing_model_name or model_cost_name,
+                            api_base=api_base,
+                        )
+                    except Exception:
+                        _model_cost_information = None
+
+                if _model_cost_information is not None:
+                    model_cost_information = StandardLoggingModelInformation(
+                        model_map_key=model_cost_name,
+                        model_map_value=_model_cost_information,
+                    )
+                else:
+                    verbose_logger.debug(  # keep in debug otherwise it will trigger on every call
+                        "Model=%s is not mapped in model cost map. Defaulting to None model_cost_information for standard_logging_payload",
+                        model_cost_name,
+                    )
+                    model_cost_information = StandardLoggingModelInformation(
+                        model_map_key=model_cost_name, model_map_value=None
+                    )
         return model_cost_information
 
     @staticmethod
