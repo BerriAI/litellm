@@ -35,6 +35,7 @@ from litellm.router_utils.auto_router_model_naming import (
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
@@ -7455,35 +7456,14 @@ class TestSessionAffinity:
         assert simple.model == "gpt-4o-mini"
 
     @pytest.mark.asyncio
-    async def test_respects_ttl_seconds(self, mock_router_instance, basic_config):
-        cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
-        cache.async_get_cache = AsyncMock(return_value=None)
+    @pytest.mark.parametrize("preexisting", [False, True])
+    async def test_session_pin_ttl_slides_on_replay(
+        self, mock_router_instance: MagicMock, basic_config: dict[str, object], preexisting: bool
+    ) -> None:
+        clock: Final = MagicMock(return_value=100.0)
+        cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
         mock_router_instance.cache = cache
-        router = ComplexityRouter(
-            model_name="test-router",
-            litellm_router_instance=mock_router_instance,
-            complexity_router_config={
-                **basic_config,
-                "session_affinity": True,
-                "session_affinity_ttl_seconds": 120,
-            },
-        )
-        await router.async_pre_routing_hook(
-            model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.SIMPLE_MESSAGE
-        )
-        cache.async_set_cache.assert_called_once()
-        call_kwargs = cache.async_set_cache.call_args.kwargs
-        assert call_kwargs["ttl"] == 120
-        assert call_kwargs["value"] == {"model": "gpt-4o-mini", "tier": "SIMPLE"}
-
-    @pytest.mark.asyncio
-    async def test_ttl_refreshed_on_cache_hit(self, mock_router_instance, basic_config):
-        """Regression: a pinned turn must refresh the TTL, not just the first write --
-        otherwise a session outliving session_affinity_ttl_seconds silently loses its pin."""
-        cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
-        cache.async_get_cache = AsyncMock(return_value="o1-preview")
-        mock_router_instance.cache = cache
-        router = ComplexityRouter(
+        router: Final = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
@@ -7492,14 +7472,153 @@ class TestSessionAffinity:
                 "session_affinity_ttl_seconds": 90,
             },
         )
-        result = await router.async_pre_routing_hook(
-            model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.SIMPLE_MESSAGE
+        request_kwargs: Final = self._request_kwargs("session-1")
+        key: Final = router._get_session_affinity_cache_key("session-1", request_kwargs)
+        if preexisting:
+            cache.in_memory_cache.set_cache(key, "o1-preview", ttl=90)
+        first: Final = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
         )
-        assert result.model == "o1-preview"
-        cache.async_set_cache.assert_called_once()
-        call_kwargs = cache.async_set_cache.call_args.kwargs
-        assert call_kwargs["value"] == {"model": "o1-preview", "tier": "REASONING"}
-        assert call_kwargs["ttl"] == 90
+        assert first.model == ("o1-preview" if preexisting else "gpt-4o-mini")
+        clock.return_value = 180.0
+        replay: Final = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert replay.model == first.model
+        clock.return_value = 200.0
+        assert cache.in_memory_cache.get_cache(key) == (
+            "o1-preview" if preexisting else {"model": "gpt-4o-mini", "tier": "SIMPLE"}
+        )
+        clock.return_value = 271.0
+        assert cache.in_memory_cache.get_cache(key) is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("batch_pending", [False, True])
+    @pytest.mark.parametrize("remote_state", ["latest", "interleaved", "outage"])
+    async def test_continuation_follows_redis_and_never_republishes_a_stale_pin(
+        self, mock_router_instance: MagicMock, basic_config: dict[str, object], remote_state: str, batch_pending: bool
+    ) -> None:
+        from fakeredis import FakeRedis
+        from redis.asyncio import BlockingConnectionPool, Connection, Redis
+        from redis.asyncio.retry import Retry
+        from redis.backoff import NoBackoff
+
+        from litellm.caching.redis_batch import request_redis_batch_scope
+
+        clock: Final = MagicMock(return_value=100.0)
+        simple: Final = {"model": "gpt-4o-mini", "tier": "SIMPLE"}
+        latest: Final = {"model": "o1-preview", "tier": "REASONING"}
+        stored: Final = {"pin": json.dumps(simple if remote_state == "interleaved" else latest)}
+        available: Final = asyncio.Event()
+        read_started: Final = asyncio.Event()
+        release_read: Final = asyncio.Event()
+        if remote_state != "outage":
+            available.set()
+        if remote_state != "interleaved":
+            release_read.set()
+
+        async def execute(*args: object, **kwargs: object) -> object:
+            if args[0] in ("EVALSHA", "GET", "MGET"):
+                if not available.is_set():
+                    raise ConnectionError("Redis unavailable")
+                if args[0] == "MGET":
+                    return [json.dumps("other-value")]
+                observed: Final = stored["pin"]
+                read_started.set()
+                await release_read.wait()
+                return observed
+            if args[0] == "SET":
+                stored["pin"] = str(args[2])
+            return b"PONG" if args[0] == "PING" else b"OK"
+
+        pack_commands: Final = MagicMock(side_effect=tuple)
+
+        async def connection() -> MagicMock:
+            replies: Final[asyncio.Queue[object]] = asyncio.Queue()
+
+            async def send_command(*args: object) -> None:
+                await replies.put(await execute(*args))
+
+            async def send_packed_command(commands: Sequence[Sequence[object]]) -> None:
+                for command in commands:
+                    await send_command(*command)
+
+            return MagicMock(
+                spec=Connection,
+                retry=Retry(NoBackoff(), 0),
+                send_command=AsyncMock(side_effect=send_command),
+                pack_commands=pack_commands,
+                send_packed_command=AsyncMock(side_effect=send_packed_command),
+                read_response=AsyncMock(side_effect=replies.get),
+            )
+
+        sync_client: Final = FakeRedis()
+        pool: Final = MagicMock(
+            spec=BlockingConnectionPool,
+            connection_kwargs={"protocol": 2},
+            get_encoder=sync_client.get_encoder,
+            get_connection=AsyncMock(side_effect=connection),
+            release=AsyncMock(),
+        )
+        client: Final = Redis(connection_pool=pool)
+        redis_cache: Final = RedisCache(host="tier-pin-fixture", connection_pool=sync_client.connection_pool)
+        client_key: Final = redis_cache._get_async_client_cache_key()
+        litellm.in_memory_llm_clients_cache.set_cache(key=client_key, value=client)
+        try:
+            cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=redis_cache)
+            mock_router_instance.cache = cache
+            router: Final = ComplexityRouter(
+                model_name="test-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={
+                    **basic_config,
+                    "classification_mode": "user_turn",
+                    "deployment_affinity": False,
+                    "session_affinity_ttl_seconds": 10,
+                },
+            )
+            request: Final = self._request_kwargs("shared-session")
+            key: Final = router._get_session_affinity_cache_key("shared-session", request)
+            cache.in_memory_cache.set_cache(key, simple, ttl=10)
+            clock.return_value = 105.0
+            messages: Final = [*self.SIMPLE_MESSAGE, {"role": "tool", "content": "done"}]
+            with request_redis_batch_scope() as scope:
+                batch: Final = scope.batch(redis_cache)
+                unrelated: Final = batch.mget(("other",)) if batch_pending else None
+                pending: Final = asyncio.create_task(router.async_pre_routing_hook("m", request, messages))
+                if remote_state == "interleaved":
+                    await asyncio.wait_for(read_started.wait(), timeout=1)
+                    stored["pin"] = json.dumps(latest)
+                    release_read.set()
+                result: Final = await pending
+                if unrelated is not None:
+                    if remote_state == "outage":
+                        with pytest.raises(ConnectionError, match="Redis unavailable"):
+                            await unrelated
+                    else:
+                        assert await unrelated == {"other": "other-value"}
+                assert result.model == (latest["model"] if remote_state == "latest" else simple["model"])
+                assert result.routing_decision["cause"] == "user_turn_continuation"
+                assert json.loads(stored["pin"]) == latest
+                clock.return_value = 111.0
+                assert cache.in_memory_cache.get_cache(key) is not None
+                available.set()
+                recovery_read: Final = batch.mget(("other",)) if batch_pending else None
+                recovered: Final = await router.async_pre_routing_hook("m", request, messages)
+                if recovery_read is not None:
+                    assert await recovery_read == {"other": "other-value"}
+                assert recovered.model == latest["model"]
+                assert cache.in_memory_cache.get_cache(key) == latest
+                assert read_started.is_set()
+                assert tuple(
+                    tuple(args[0] for args in sent.args[0]) for sent in pack_commands.call_args_list
+                ) == (("MGET", "EVALSHA"),) * (2 if batch_pending else 0)
+        finally:
+            for cached_key in tuple(litellm.in_memory_llm_clients_cache.cache_dict):
+                if client_key in cached_key:
+                    litellm.in_memory_llm_clients_cache.delete_cache(cached_key)
+            await client.aclose()
+            sync_client.close()
 
     @pytest.mark.asyncio
     async def test_different_api_keys_do_not_share_pin(self, mock_router_instance, session_affinity_config):
@@ -13870,8 +13989,7 @@ async def test_session_pin_uses_recorded_tier_when_model_is_in_multiple_tiers(mo
 
 @pytest.mark.asyncio
 async def test_session_pin_survives_json_list_round_trip(mock_router_instance):
-    cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
-    cache.async_get_cache = AsyncMock(return_value=["shared", "SIMPLE"])
+    cache: Final = DualCache()
     mock_router_instance.cache = cache
     router = ComplexityRouter(
         model_name="test-router",
@@ -13885,6 +14003,8 @@ async def test_session_pin_survives_json_list_round_trip(mock_router_instance):
         },
     )
     request_kwargs = {"metadata": {"session_id": "json-round-trip-session"}}
+    key: Final = router._get_session_affinity_cache_key("json-round-trip-session", request_kwargs)
+    cache.in_memory_cache.set_cache(key, ["shared", "SIMPLE"])
 
     response = await router.async_pre_routing_hook(
         model="test-router",
@@ -13895,7 +14015,7 @@ async def test_session_pin_survives_json_list_round_trip(mock_router_instance):
     assert response is not None
     assert response.model == "shared"
     assert response.litellm_params == {"reasoning_effort": "low"}
-    assert cache.async_set_cache.call_args.kwargs["value"] == {"model": "shared", "tier": "SIMPLE"}
+    assert cache.in_memory_cache.get_cache(key) == ["shared", "SIMPLE"]
 
 
 HEURISTIC_FIRST_TIERS: dict[str, str] = {
@@ -15024,8 +15144,7 @@ class TestModalityRouting:
                 {"role": "user", "content": [{"type": "text", "text": "quick lookup: what is this?"}, IMG_PART]}
             ]
         elif path.startswith(("pin_kept", "pin_replacement", "pin_override")):
-            cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
-            cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
+            cache: Final = DualCache()
             mock_router_instance.cache = cache
             config["session_affinity"] = True
             request_kwargs = {"metadata": {"session_id": "s1"}}
@@ -15047,6 +15166,11 @@ class TestModalityRouting:
             mock_router_instance.model_list = []
             _answer_deployments_named(mock_router_instance)
         router = self._router(mock_router_instance, config, vision)
+        if path.startswith(("pin_kept", "pin_replacement", "pin_override")):
+            mock_router_instance.cache.in_memory_cache.set_cache(
+                router._get_session_affinity_cache_key("s1", request_kwargs),
+                {"model": "text-cheap", "tier": "SIMPLE"},
+            )
         result = await router.async_pre_routing_hook(model="m", request_kwargs=request_kwargs, messages=messages)
         assert result.model == expected_model
         assert result.routing_decision["cause"] == expected_cause
@@ -15214,8 +15338,7 @@ class TestModalityRouting:
     @pytest.mark.asyncio
     async def test_pin_override_serves_the_image_turn_without_repinning(self, mock_router_instance):
         """The override is for one request: the session keeps the model it was pinned to."""
-        cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
-        cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
+        cache: Final = DualCache()
         mock_router_instance.cache = cache
         router = self._router(
             mock_router_instance,
@@ -15228,6 +15351,8 @@ class TestModalityRouting:
             dict(self.BASE_VISION),
         )
         request_kwargs = {"metadata": {"session_id": "s1"}}
+        key: Final = router._get_session_affinity_cache_key("s1", request_kwargs)
+        cache.in_memory_cache.set_cache(key, {"model": "text-cheap", "tier": "SIMPLE"})
 
         image_turn = await router.async_pre_routing_hook(
             model="m", request_kwargs=request_kwargs, messages=self.IMAGE_MESSAGE
@@ -15236,7 +15361,7 @@ class TestModalityRouting:
         assert image_turn.routing_decision["cause"] == "modality_pin_override"
         assert "modality_escalated_from:SIMPLE" in image_turn.routing_decision["signals"]
 
-        assert cache.async_set_cache.await_args.kwargs["value"] == {"model": "text-cheap", "tier": "SIMPLE"}
+        assert cache.in_memory_cache.get_cache(key) == {"model": "text-cheap", "tier": "SIMPLE"}
 
         text_turn = await router.async_pre_routing_hook(
             model="m", request_kwargs={"metadata": {"session_id": "s1"}}, messages=[{"role": "user", "content": "hi"}]
@@ -15247,8 +15372,7 @@ class TestModalityRouting:
     @pytest.mark.asyncio
     async def test_pin_override_with_no_capable_model_rejects_and_keeps_the_pin(self, mock_router_instance):
         """The clear 400 replaces the provider's, and a rejected turn must not cost the session its pin."""
-        cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
-        cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
+        cache: Final = DualCache()
         mock_router_instance.cache = cache
         router = self._router(
             mock_router_instance,
@@ -15260,11 +15384,13 @@ class TestModalityRouting:
             },
             {"text-cheap": False, "text-big": False},
         )
+        key: Final = router._get_session_affinity_cache_key("s1", {"metadata": {"session_id": "s1"}})
+        cache.in_memory_cache.set_cache(key, {"model": "text-cheap", "tier": "SIMPLE"})
         with pytest.raises(litellm.BadRequestError, match="no model"):
             await router.async_pre_routing_hook(
                 model="m", request_kwargs={"metadata": {"session_id": "s1"}}, messages=self.IMAGE_MESSAGE
             )
-        assert cache.async_set_cache.await_args.kwargs["value"] == {"model": "text-cheap", "tier": "SIMPLE"}
+        assert cache.in_memory_cache.get_cache(key) == {"model": "text-cheap", "tier": "SIMPLE"}
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
