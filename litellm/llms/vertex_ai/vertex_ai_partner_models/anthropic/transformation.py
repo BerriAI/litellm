@@ -1,5 +1,7 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
+import base64
+import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
@@ -23,6 +25,20 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_VERTEX_LABELS_HEADER: Final = "X-Vertex-AI-Labels"
+_LABELS: Final = TypeAdapter(Mapping[object, object])
+
+
+def _vertex_labels_header(labels: object, header_names: Mapping[str, object]) -> str | None:
+    if not isinstance(labels, dict) or any(name.lower() == _VERTEX_LABELS_HEADER.lower() for name in header_names):
+        return None
+    string_labels: Final = {
+        key: value
+        for key, value in _LABELS.validate_python(labels).items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+    return base64.b64encode(json.dumps(string_labels).encode()).decode() if string_labels else None
+
 
 _BETA_VALUE: Final[TypeAdapter[str | tuple[str, ...] | None]] = TypeAdapter(str | tuple[str, ...] | None)
 
@@ -131,6 +147,12 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        params: Final = _NON_DEFAULT_PARAMS.validate_python(optional_params)
+        labels_header: Final = _vertex_labels_header(params.get("labels"), _NON_DEFAULT_PARAMS.validate_python(headers))
+        if "labels" in params:
+            del optional_params["labels"]  # rebind-ok: labels travel in the X-Vertex-AI-Labels header, not the body
+        if labels_header is not None:
+            headers[_VERTEX_LABELS_HEADER] = labels_header  # rebind-ok: outbound headers are returned by mutation
         data: Final = super().transform_request(
             model=model,
             messages=messages,
@@ -167,14 +189,16 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         if context_management:
             self._add_context_management_beta_headers(beta_set, context_management)
 
-        params: Final = _NON_DEFAULT_PARAMS.validate_python(optional_params)
+        request_params: Final = _NON_DEFAULT_PARAMS.validate_python(optional_params)
         compaction_betas: Final = (
             frozenset({ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value})
-            if requires_native_compaction_beta("vertex_ai", params, _REQUEST_MESSAGES.validate_python(data["messages"]))
+            if requires_native_compaction_beta(
+                "vertex_ai", request_params, _REQUEST_MESSAGES.validate_python(data["messages"])
+            )
             else frozenset[str]()
         )
         drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
-        extra_headers: Final = _NON_DEFAULT_PARAMS.validate_python(params.get("extra_headers") or {})
+        extra_headers: Final = _NON_DEFAULT_PARAMS.validate_python(request_params.get("extra_headers") or {})
         data.pop("extra_headers", None)
         injected_betas: Final = frozenset(beta_set) | _client_betas(
             extra_headers.get("anthropic-beta"), "The anthropic-beta header", drop_params

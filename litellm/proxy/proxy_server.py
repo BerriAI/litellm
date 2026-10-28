@@ -14628,6 +14628,7 @@ async def run_thread(
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
+from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
@@ -14647,6 +14648,14 @@ from litellm.responses.litellm_completion_transformation.count_request import (
     chat_count_request,
     with_provider_file_ids,
 )
+
+
+def _with_client_oauth_token(
+    counter: BaseTokenCounter | None, client_oauth_token: str | None
+) -> BaseTokenCounter | None:
+    if client_oauth_token is None or not isinstance(counter, AnthropicTokenCounter):
+        return counter
+    return AnthropicTokenCounter(client_oauth_token=client_oauth_token)
 
 
 def _get_provider_token_counter(
@@ -15264,6 +15273,7 @@ async def count_request_tokens(
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
     responses_request: Mapping[str, object] | None = None,
+    client_oauth_token: str | None = None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -15321,7 +15331,8 @@ async def count_request_tokens(
     custom_llm_provider: str | None = None
     if call_endpoint is True and deployment is not None:
         # Auto-route to the correct provider based on model
-        provider_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
+        routed_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
+        provider_counter = _with_client_oauth_token(routed_counter, client_oauth_token)
         if _model is not None:
             model_to_use = _model
 
