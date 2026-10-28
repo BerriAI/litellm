@@ -2455,6 +2455,70 @@ async def test_malformed_vector_store_ids_are_rejected_as_bad_request(
     )
 
 
+_MALFORMED_TOP_LEVEL_IDS: Final = pytest.mark.parametrize(
+    "vector_store_ids",
+    ["KBSTOREA", {"KBSTOREB": True}, ["KBSTOREA", {"id": "KBSTOREB"}]],
+    ids=["string-top-level-ids", "object-top-level-ids", "object-top-level-id"],
+)
+
+
+async def _team_key_query_with_top_level_ids(
+    key_vector_stores: list[str] | None,
+    team_vector_stores: list[str] | None,
+    vector_store_ids: object,
+    vector_store_registry: VectorStoreRegistry | None,
+) -> bool:
+    return await _common_checks_for_rag_query(
+        {},
+        _virtual_key(object_permission_id=None if key_vector_stores is None else "key-permission", team_id="team-1"),
+        None if key_vector_stores is None else SimpleNamespace(vector_stores=key_vector_stores),
+        LiteLLM_TeamTable(
+            team_id="team-1", object_permission_id=None if team_vector_stores is None else "team-permission"
+        ),
+        None if team_vector_stores is None else SimpleNamespace(vector_stores=team_vector_stores),
+        request_body={"model": "gpt-4o-mini", "input": "what is in this KB?", "vector_store_ids": vector_store_ids},
+        vector_store_registry=vector_store_registry,
+        llm_router=_gpt_4o_mini_router({}),
+    )
+
+
+@pytest.mark.asyncio
+@_MALFORMED_TOP_LEVEL_IDS
+@pytest.mark.parametrize(
+    ("key_vector_stores", "team_vector_stores"),
+    [(None, None), ([], [])],
+    ids=["no-permission-rows", "empty-allowlists"],
+)
+@pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
+async def test_legacy_mode_passes_malformed_vector_store_ids_through_without_an_allowlist(
+    vector_store_ids: object,
+    key_vector_stores: list[str] | None,
+    team_vector_stores: list[str] | None,
+    vector_store_registry: VectorStoreRegistry | None,
+):
+    assert (
+        await _team_key_query_with_top_level_ids(
+            key_vector_stores, team_vector_stores, vector_store_ids, vector_store_registry
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+@_MALFORMED_TOP_LEVEL_IDS
+@pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
+async def test_legacy_mode_rejects_malformed_vector_store_ids_under_a_team_allowlist(
+    vector_store_ids: object, vector_store_registry: VectorStoreRegistry | None
+):
+    with pytest.raises(ProxyException) as exc_info:
+        await _team_key_query_with_top_level_ids(None, ["KBSTOREA"], vector_store_ids, vector_store_registry)
+    assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
+        "invalid_request_error",
+        "vector_store_ids",
+        "400",
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("request_body", "denied_by"),

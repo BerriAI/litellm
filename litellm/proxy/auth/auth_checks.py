@@ -7979,32 +7979,44 @@ def _strict_requested_vector_store_ids(request_body: Mapping[str, object]) -> tu
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _UnreadableVectorStoreIds:
+    pass
+
+
 def _top_level_vector_store_ids(
     vector_store_ids: object, drop_policies: Callable[[], tuple[DropPolicy, ...]]
-) -> tuple[str, ...]:
+) -> tuple[str, ...] | _UnreadableVectorStoreIds:
     listed: Final = listed_vector_store_ids(vector_store_ids)
     if vector_store_ids is None or vector_store_ids == [*listed]:
         return listed
     if any(policy.drops("vector_store_ids") for policy in drop_policies()):
         return listed
-    raise _malformed_vector_store_ids()
+    return _UnreadableVectorStoreIds()
 
 
 def _legacy_requested_vector_store_ids(
     request_body: Mapping[str, object], drop_policies: Callable[[], tuple[DropPolicy, ...]]
-) -> tuple[str, ...]:
+) -> tuple[str, ...] | _UnreadableVectorStoreIds:
     """
     Reads tools the way VectorStoreRegistry does and leaves a malformed tool to the proxy's tool
-    validation. A top-level vector_store_ids that is not a list of strings is a 400 unless a drop policy
-    the request can resolve to drops it, and then only the string entries of a list name stores, as in
-    registry retrieval.
+    validation. A top-level vector_store_ids that is not a list of strings names no readable stores
+    unless a drop policy the request can resolve to drops it, and then only the string entries of a list
+    name stores, as in registry retrieval.
     """
+    top_level: Final = _top_level_vector_store_ids(request_body.get("vector_store_ids"), drop_policies)
+    if isinstance(top_level, _UnreadableVectorStoreIds):
+        return top_level
     return tuple(
         chain(
-            _top_level_vector_store_ids(request_body.get("vector_store_ids"), drop_policies),
+            top_level,
             chain.from_iterable(vector_store_ids_in_tool(tool) for tool in _tools(request_body.get("tools"))),
         )
     )
+
+
+def _restricts_vector_stores(grants: Sequence[tuple[GrantLayer, LiteLLM_ObjectPermissionTable | None]]) -> bool:
+    return any(grant is not None and bool(grant.vector_stores) for _, grant in grants)
 
 
 def _request_drop_policies(
@@ -8072,8 +8084,8 @@ async def vector_store_access_check(
     `object_permission.vector_stores`.
 
     Both modes read the same request fields, with or without a vector store registry, and answer 400
-    when the top-level `vector_store_ids` is not a list of strings. Legacy mode skips that value
-    instead when the request, `litellm_settings`, the router defaults or a deployment of the requested
+    when the top-level `vector_store_ids` is not a list of strings, which legacy mode does only when the
+    key or team has an allowlist. Legacy mode skips that value instead when the request, `litellm_settings`, the router defaults or a deployment of the requested
     model drops it (`drop_params`, or `additional_drop_params` naming it), the same settings the proxy's
     tool validation reads, and reads tools the way the registry does, where strict mode answers 400 on a
     malformed one.
@@ -8095,7 +8107,7 @@ async def vector_store_access_check(
 
     Raises ProxyException (401, `{key,team,user}_vector_store_access_denied`) on the first identity
     that does not grant a requested store, and ProxyException (400, `invalid_request_error`) on a
-    malformed `vector_store_ids` the request does not drop.
+    malformed `vector_store_ids` the request does not drop and, in legacy mode, an allowlist applies to.
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -8114,6 +8126,12 @@ async def vector_store_access_check(
             typed_request_body, lambda: _request_drop_policies(typed_request_body, llm_router, valid_token)
         )
     )
+    if isinstance(requested_ids, _UnreadableVectorStoreIds):
+        if _restricts_vector_stores(
+            await _identity_grants(valid_token, team_object, None, prisma_client, user_api_key_cache)
+        ):
+            raise _malformed_vector_store_ids()
+        return True
     rag_vector_store_id: Final = _get_rag_query_vector_store_id(typed_request_body)
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
     vector_store_ids_to_run: Final = tuple(dict.fromkeys((*requested_ids, *rag_ids)))
