@@ -30,8 +30,26 @@ describe("connectFlowReducer", () => {
     expect(started()).toEqual(expected);
   });
 
-  it("never links anywhere but github.com", () => {
+  it("falls back for an untrusted verification host", () => {
     const state = started("https://evil.example/login/device");
+    expect(state.kind === "awaiting" && state.verificationUri).toBe("https://github.com/login/device");
+  });
+
+  it("preserves a single-label GHE.com verification URL", () => {
+    const uri = "https://octo.ghe.com/login/device";
+    const state = started(uri);
+    expect(state.kind === "awaiting" && state.verificationUri).toBe(uri);
+  });
+
+  it.each([
+    "http://octo.ghe.com/login/device",
+    "https://a.b.ghe.com/login/device",
+    "https://octo.ghe.com.evil.example/login/device",
+    "https://user@octo.ghe.com/login/device",
+    "https://octo.ghe.com:8443/login/device",
+    "not a url",
+  ])("falls back for unsafe verification URL %s", (uri) => {
+    const state = started(uri);
     expect(state.kind === "awaiting" && state.verificationUri).toBe("https://github.com/login/device");
   });
 

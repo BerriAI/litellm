@@ -2,6 +2,8 @@
 Anthropic Token Counter implementation using the CountTokens API.
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 from pydantic import JsonValue
@@ -10,6 +12,11 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
+from litellm.llms.anthropic.count_tokens.transformation import (
+    AnthropicCountFields,
+    ChatCountTranslationError,
+    anthropic_count_fields,
+)
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
@@ -19,6 +26,9 @@ anthropic_count_tokens_handler: Final = AnthropicCountTokensHandler()
 
 class AnthropicTokenCounter(BaseTokenCounter):
     """Token counter implementation for Anthropic provider using the CountTokens API."""
+
+    def __init__(self, client_oauth_token: str | None = None) -> None:
+        self.client_oauth_token: Final = client_oauth_token
 
     def should_use_token_counting_api(
         self,
@@ -38,6 +48,8 @@ class AnthropicTokenCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat = "anthropic",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         """
         Count tokens using Anthropic's CountTokens API.
@@ -57,16 +69,45 @@ class AnthropicTokenCounter(BaseTokenCounter):
         if not messages:
             return None
 
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        match translated := await anthropic_count_fields(
+            model_to_use, messages, system, tools, messages_format, AnthropicConfig(), chat_params
+        ):
+            case ChatCountTranslationError():
+                return translated.response(request_model, model_to_use, "anthropic_api")
+            case AnthropicCountFields():
+                return await self.count_tokens(
+                    model_to_use=model_to_use,
+                    messages=[dict(message) for message in translated.messages],
+                    contents=contents,
+                    deployment=deployment,
+                    request_model=request_model,
+                    tools=[dict(tool) for tool in translated.tools] if translated.tools is not None else None,
+                    system=translated.system,
+                    messages_format="anthropic",
+                    output_format=output_format,
+                    context_management=context_management,
+                    count_options=translated.options,
+                )
+            case None:
+                pass
+
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
         api_base: Final = litellm_params.get("api_base")
 
         try:
-            auth_header: Final = await AnthropicModelInfo.aget_auth_header(
+            configured_auth_header: Final = await AnthropicModelInfo.aget_auth_header(
                 api_key=litellm_params.get("api_key") or litellm.anthropic_key or litellm.api_key,
                 api_base=api_base,
                 litellm_params=litellm_params,
                 allow_workload_identity=True,
+            )
+            auth_header: Final = (
+                configured_auth_header
+                if configured_auth_header is not None or self.client_oauth_token is None
+                else AnthropicModelInfo.get_auth_header(api_key=self.client_oauth_token, api_base=api_base)
             )
             if auth_header is None:
                 return TokenCountResponse(
@@ -89,6 +130,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 api_base=api_base,
                 tools=tools,
                 system=system,
+                optional_params=count_options,
             )
 
             if result is not None:

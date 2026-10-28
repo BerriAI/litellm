@@ -8,6 +8,7 @@ from typing import Any, Final, Generic, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 
@@ -131,4 +132,4 @@ def is_unique_violation(exc: BaseException) -> bool:
         return "P2002" in str(exc) or "unique constraint" in str(exc).lower()
     if isinstance(exc, UniqueViolationError):
         return True
-    return getattr(exc, "code", None) == "P2002"
+    return attribute_or_none(exc, "code") == "P2002"

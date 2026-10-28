@@ -1,7 +1,10 @@
 """Postgres and Redis work the gateway did during the traffic phase, split into what a request waits on and
 what runs after the response. Both come from the servers' own accounting, so nothing here depends on how the
 gateway talks to them: Postgres statement counts from `pg_stat_statements` (read before and after the run) and
-Redis commands from a `MONITOR` connection held open for the run. `DATABASE_URL` and `REDIS_HOST` are the
+Redis commands from a `MONITOR` connection held open for the run, Postgres execution time per statement from the
+same `pg_stat_statements` rows (`postgres_active_sessions`, the average-active-sessions number RDS Performance
+Insights calls DB load, and the slowest statement's mean) and the connection count from `pg_stat_activity` sampled
+once a second (`postgres_peak_connections`). `DATABASE_URL` and `REDIS_HOST` are the
 runner's own env, as in the other suites; without them the counters are None and any Limit on them reports as
 missing. `E2E_DATABASE_ADMIN_URL`, when set, is used once to create the `pg_stat_statements` extension. Only the
 runtime user's own statements are read: other users' rows come back with a NULL queryid and hidden text."""
@@ -19,6 +22,8 @@ from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import TypeAdapter
 
+from setup.series import Recorder, Series
+
 if TYPE_CHECKING:
     import redis
 
@@ -26,13 +31,18 @@ Bucket = Literal["awaited", "background", "plumbing", "unclassified"]
 
 _COMMITS_QUERY: Final = "SELECT xact_commit FROM pg_stat_database WHERE datname = current_database()"
 _STATEMENTS_QUERY: Final = (
-    "SELECT queryid, calls, query FROM pg_stat_statements "
+    "SELECT queryid, calls, query, total_exec_time FROM pg_stat_statements "
     "WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database()) "
     "AND userid = (SELECT usesysid FROM pg_user WHERE usename = current_user) AND queryid IS NOT NULL"
 )
 _CREATE_EXTENSION: Final = "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"
+_CONNECTIONS_QUERY: Final = (
+    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+    "AND backend_type = 'client backend' AND pid <> pg_backend_pid()"
+)
+_CONNECTIONS_SAMPLE_SECONDS: Final = 1.0
 _COMMITS_ROW: Final = TypeAdapter(tuple[int])
-_STATEMENT_ROWS: Final = TypeAdapter(list[tuple[int, int, str]])
+_STATEMENT_ROWS: Final = TypeAdapter(list[tuple[int, int, str, float]])
 _INFO: Final = TypeAdapter(dict[str, object])
 _INT: Final = TypeAdapter(int)
 _MONITOR_LINE: Final = TypeAdapter(dict[str, object])
@@ -64,6 +74,11 @@ class StatementCalls:
     queryid: int
     query: str
     calls: int
+    total_exec_ms: float = 0.0
+
+    @property
+    def mean_exec_seconds(self) -> float | None:
+        return self.total_exec_ms / 1000 / self.calls if self.calls > 0 else None
 
     @property
     def bucket(self) -> Bucket:
@@ -136,14 +151,93 @@ def statement_deltas(before: DbCounters | None, after: DbCounters | None) -> tup
     """Calls per statement during the run: `after` minus `before` by queryid, new statements whole."""
     if before is None or after is None or before.statements is None or after.statements is None:
         return None
-    earlier: Final = {statement.queryid: statement.calls for statement in before.statements}
+    earlier: Final = {statement.queryid: statement for statement in before.statements}
     return tuple(
-        StatementCalls(
-            queryid=statement.queryid, query=statement.query, calls=statement.calls - earlier.get(statement.queryid, 0)
-        )
+        _statement_delta(statement, earlier.get(statement.queryid))
         for statement in after.statements
-        if statement.calls > earlier.get(statement.queryid, 0)
+        if statement.calls > (0 if statement.queryid not in earlier else earlier[statement.queryid].calls)
     )
+
+
+def _statement_delta(statement: StatementCalls, earlier: StatementCalls | None) -> StatementCalls:
+    return StatementCalls(
+        queryid=statement.queryid,
+        query=statement.query,
+        calls=statement.calls - (earlier.calls if earlier is not None else 0),
+        total_exec_ms=statement.total_exec_ms - (earlier.total_exec_ms if earlier is not None else 0.0),
+    )
+
+
+def active_sessions(statements: tuple[StatementCalls, ...] | None, wall_seconds: float) -> float | None:
+    """Seconds Postgres spent executing the run's statements per second of wall time, the average active
+    sessions figure RDS Performance Insights reports as DB load."""
+    if statements is None or wall_seconds <= 0:
+        return None
+    return sum(statement.total_exec_ms for statement in statements) / 1000 / wall_seconds
+
+
+def slowest_statement(statements: tuple[StatementCalls, ...] | None) -> StatementCalls | None:
+    """The run's statement with the highest mean execution time."""
+    timed: Final = tuple(statement for statement in statements or () if statement.mean_exec_seconds is not None)
+    return max(timed, key=lambda statement: statement.mean_exec_seconds or 0.0, default=None)
+
+
+class ConnectionsSampler:
+    """`pg_stat_activity` client backends on the gateway's database once a second on a background thread, minus
+    this sampler's own connection, so the peak is what the gateway (and the test's own reads) held open.
+    `series` keeps every count with its time for a ramped run's per-step peaks."""
+
+    def __init__(self, url: str) -> None:
+        self._url: Final = url
+        self._stop: Final = threading.Event()
+        self._thread: Final = threading.Thread(target=self._run, name="postgres-connections", daemon=True)
+        self._counts: Final[Recorder[int]] = Recorder()
+
+    @property
+    def peak(self) -> int | None:
+        return max((sample.value for sample in self._counts.series.samples), default=None)
+
+    @property
+    def series(self) -> Series[int]:
+        return self._counts.series
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=10)
+
+    def _run(self) -> None:
+        import psycopg
+
+        with psycopg.connect(self._url, autocommit=True) as conn:
+            while not self._stop.is_set():
+                (count,) = _COMMITS_ROW.validate_python(conn.execute(_CONNECTIONS_QUERY).fetchone())
+                self._counts.record(count)
+                _ = self._stop.wait(_CONNECTIONS_SAMPLE_SECONDS)
+
+
+class NoConnectionsSampler:
+    peak: None = None
+    series: None = None
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
+
+
+@contextmanager
+def connections_sampler() -> Generator[ConnectionsSampler | NoConnectionsSampler]:
+    url: Final = os.environ.get("DATABASE_URL")
+    sampler: Final = ConnectionsSampler(url) if url is not None else NoConnectionsSampler()
+    sampler.start()
+    try:
+        yield sampler
+    finally:
+        sampler.stop()
 
 
 def calls_in(bucket: Bucket, items: tuple[StatementCalls, ...] | tuple[RedisCommand, ...] | None) -> int | None:
@@ -171,7 +265,10 @@ def read_db_counters() -> DbCounters | None:
             return DbCounters(commits=commits, statements=None)
     return DbCounters(
         commits=commits,
-        statements=tuple(StatementCalls(queryid=queryid, query=query, calls=calls) for queryid, calls, query in rows),
+        statements=tuple(
+            StatementCalls(queryid=queryid, query=query, calls=calls, total_exec_ms=total_ms)
+            for queryid, calls, query, total_ms in rows
+        ),
     )
 
 

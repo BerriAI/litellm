@@ -21,6 +21,8 @@ from integration._support.process import graceful_stop_seconds, owned_proxy_proc
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _BACKEND: Final = "gemini-2.5-flash"
 _API_KEY: Final = "synthetic-gemini-key"
 _CONFIG_MODEL: Final = "gemini-tool-result-part-reference-chaos"

@@ -604,6 +604,31 @@ def test_audio_transcription_consumes_bracketed_form_metadata_tags(gateway: Gate
         ) == (tag,), rows
 
 
+@pytest.mark.parametrize(
+    "identity_param", ("openai_identity_provider_id", "openai_service_account_id", "openai_identity_token_file")
+)
+def test_audio_transcription_refuses_a_bracketed_identity_form_key_before_the_upstream(
+    gateway: Gateway, identity_param: str
+) -> None:
+    wav: Final = _WAV_BYTES + uuid.uuid4().bytes
+
+    def respond(request: Request) -> Reply:
+        return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/whisper-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        response: Final = gateway.request_multipart(
+            "/v1/audio/transcriptions",
+            {"model": model, "response_format": "json", f"{identity_param}[]": "caller-chosen-" + uuid.uuid4().hex},
+            {"file": ("a.wav", wav, _WAV_CONTENT_TYPE)},
+        )
+        assert response.status_code == 401, response.text
+        assert identity_param in response.text, response.text
+        assert wire.drain() == ()
+
+
 def test_audio_transcription_preserves_the_client_file_content_type(gateway: Gateway) -> None:
     pytest.skip(
         "BUG: the proxy discards the client's file part content type and re-derives it from the filename, "
@@ -635,10 +660,6 @@ def test_audio_transcription_preserves_the_client_file_content_type(gateway: Gat
 def test_audio_transcription_bills_audio_tokens_at_the_input_rate_when_no_audio_rate_is_set(
     gateway: Gateway,
 ) -> None:
-    pytest.skip(
-        "BUG: with only input_cost_per_token set, transcription audio tokens are billed at 0, so "
-        "x-litellm-response-cost is 1e-05 instead of 2e-05 for 10 audio, 2 text and 4 output tokens"
-    )
     wav: Final = _WAV_BYTES + uuid.uuid4().bytes
 
     def respond(request: Request) -> Reply:
