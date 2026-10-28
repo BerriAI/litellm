@@ -1026,10 +1026,9 @@ def _count_anthropic_content(
         except Exception as e:
             if default_token_count is not None:
                 return default_token_count
-            error_type: Final = (
-                UnsupportedContentTypeError if isinstance(e, UnsupportedContentTypeError) else ValueError
+            raise (UnsupportedContentTypeError if isinstance(e, UnsupportedContentTypeError) else ValueError)(
+                f"Error counting field '{field_name}': {e}"
             )
-            raise error_type(f"Error counting field '{field_name}': {e}")
     return tokens
 
 
