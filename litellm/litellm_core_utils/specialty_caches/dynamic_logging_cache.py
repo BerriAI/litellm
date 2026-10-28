@@ -1,0 +1,74 @@
+"""
+This is a cache for LangfuseLoggers.
+
+This ensures we do
+1. Release the initialized-client slot a LangfuseLogger holds when it expires.
+2. Re-use created langfuse clients.
+"""
+
+import hashlib
+import json
+from typing import Any, Final
+
+import litellm
+from litellm._logging import verbose_logger
+from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+
+from ...caching import InMemoryCache
+
+
+class LangfuseInMemoryCache(InMemoryCache):
+    """
+    Decrements ``litellm.initialized_langfuse_clients`` when a LangFuseLogger entry expires.
+
+    The counter is a soft budget: loggers built concurrently for one credential set before the
+    first lands in the cache each take a slot, and only the cached one gives it back on expiry.
+    The logger's ``stop()`` below hands its shared export channel back
+    (https://github.com/BerriAI/litellm/issues/11169).
+    """
+
+    def _remove_key(self, key: str) -> None:
+        from litellm.integrations.langfuse.langfuse import LangFuseLogger
+
+        evicted: Final = self.cache_dict.pop(key, None)
+        self.ttl_dict.pop(key, None)
+        if evicted is None:
+            return
+
+        if isinstance(evicted, LangFuseLogger):
+            litellm.initialized_langfuse_clients -= 1
+
+        # Loggers with a periodic flush task (e.g. NewRelicMetricsLogger) expose
+        # stop() so eviction actually ends the task instead of leaking it.
+        _evicted_stop: Final = getattr(evicted, "stop", None)
+        if not callable(_evicted_stop):
+            return
+        try:
+            _evicted_stop()
+        except Exception:  # noqa: BLE001  # a failing stop() must not block eviction
+            verbose_logger.debug("DynamicLoggingCache: stop() raised during eviction", exc_info=True)
+
+
+class DynamicLoggingCache:
+    """
+    Prevent memory leaks caused by initializing new logging clients on each request.
+
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/5695
+    """
+
+    def __init__(self) -> None:
+        self.cache = LangfuseInMemoryCache(default_ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS)
+
+    def get_cache_key(self, args: dict) -> str:
+        args_str: Final = json.dumps(args, sort_keys=True)
+        cache_key: Final = hashlib.sha256(args_str.encode("utf-8")).hexdigest()
+        return cache_key
+
+    def get_cache(self, credentials: dict, service_name: str) -> Any | None:
+        key_name: Final = self.get_cache_key(args={**credentials, "service_name": service_name})
+        response: Final = self.cache.get_cache(key=key_name)
+        return response
+
+    def set_cache(self, credentials: dict, service_name: str, logging_obj: object) -> None:
+        key_name: Final = self.get_cache_key(args={**credentials, "service_name": service_name})
+        self.cache.set_cache(key=key_name, value=logging_obj)

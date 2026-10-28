@@ -1,0 +1,42 @@
+import ssl
+from enum import Enum
+from typing import Final, Union
+
+
+class httpxSpecialProvider(str, Enum):
+    """
+    Httpx Clients can be created for these litellm internal providers
+
+    Example:
+    - langsmith logging would need a custom async httpx client
+    - pass through endpoint would need a custom async httpx client
+    """
+
+    LoggingCallback = "logging_callback"
+    GuardrailCallback = "guardrail_callback"
+    Caching = "caching"
+    Oauth2Check = "oauth2_check"
+    Oauth2Register = "oauth2_register"
+    SecretManager = "secret_manager"
+    PassThroughEndpoint = "pass_through_endpoint"
+    PromptFactory = "prompt_factory"
+    SSO_HANDLER = "sso_handler"
+    Search = "search"
+    MCP = "mcp"
+    RAG = "rag"
+    ProviderBilling = "provider_billing"
+    A2AProvider = "a2a_provider"
+    AgentHealthCheck = "agent_health_check"
+    AgentKillSwitch = "agent_kill_switch"
+    A2A = "a2a"
+    PromptManagement = "prompt_management"
+    UI = "ui"
+    ROICalculator = "roi_calculator"
+    Sandbox = "sandbox"
+    ModelCostMap = "model_cost_map"
+    PasswordBreachCheck = "password_breach_check"
+    ASGI = "asgi"
+    AgentHarness = "agent_harness"
+
+
+VerifyTypes = str | bool | ssl.SSLContext

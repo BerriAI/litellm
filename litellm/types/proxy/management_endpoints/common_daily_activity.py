@@ -1,0 +1,228 @@
+from collections.abc import Mapping, Sequence
+from datetime import date
+from enum import Enum
+
+from pydantic import ConfigDict, Field
+from typing_extensions import TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
+
+
+class GroupByDimension(str, Enum):
+    DATE = "date"
+    MODEL = "model"
+    API_KEY = "api_key"
+    TEAM = "team"
+    ORGANIZATION = "organization"
+    MODEL_GROUP = "model_group"
+    PROVIDER = "custom_llm_provider"
+
+
+class SpendMetrics(LiteLLMBaseModel):
+    spend: float = Field(default=0.0)
+    flat_cost: float = Field(default=0.0)
+    ptu_hours: float = Field(default=0.0)
+    prompt_tokens: int = Field(default=0)
+    completion_tokens: int = Field(default=0)
+    cache_read_input_tokens: int = Field(default=0)
+    cache_creation_input_tokens: int = Field(default=0)
+    compression_saved_tokens: int = Field(default=0)
+    compression_savings_spend: float = Field(default=0.0)
+    prompt_caching_savings_spend: float = Field(default=0.0)
+    gateway_injected_caching_savings_spend: float = Field(default=0.0)
+    autorouter_savings_spend: float = Field(default=0.0)
+    total_tokens: int = Field(default=0)
+    successful_requests: int = Field(default=0)
+    failed_requests: int = Field(default=0)
+    api_requests: int = Field(default=0)
+    total_response_time_ms: int = Field(default=0)
+    timed_requests: int = Field(default=0)
+
+
+class MetricBase(LiteLLMBaseModel):
+    metrics: SpendMetrics
+
+
+class KeyMetadata(LiteLLMBaseModel):
+    """Metadata for a key"""
+
+    key_alias: str | None = None
+    team_id: str | None = None
+    user_id: str | None = None
+    user_email: str | None = None
+    key_exists: bool | None = None
+
+
+class KeyMetricWithMetadata(MetricBase):
+    """Base class for metrics with additional metadata"""
+
+    metadata: KeyMetadata = Field(default_factory=KeyMetadata)
+
+
+class MetricWithMetadata(MetricBase):
+    metadata: Mapping[str, object] = Field(default_factory=dict)
+    # API key breakdown for this metric (e.g., which API keys are using this MCP server)
+    api_key_breakdown: dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
+
+
+class BreakdownMetrics(LiteLLMBaseModel):
+    """Breakdown of spend by different dimensions"""
+
+    mcp_servers: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # mcp_server -> {metrics, metadata}
+    models: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # model -> {metrics, metadata}
+    model_groups: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # model_group -> {metrics, metadata}
+    providers: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # provider -> {metrics, metadata}
+    endpoints: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # endpoint -> {metrics, metadata}
+    api_keys: dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
+    entities: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # entity -> {metrics, metadata}
+
+
+class DailySpendData(LiteLLMBaseModel):
+    date: date
+    metrics: SpendMetrics
+    breakdown: BreakdownMetrics = Field(default_factory=BreakdownMetrics)
+
+
+class DailySpendMetadata(LiteLLMBaseModel):
+    total_spend: float = Field(default=0.0)
+    total_flat_cost: float = Field(default=0.0)
+    total_ptu_hours: float = Field(default=0.0)
+    total_prompt_tokens: int = Field(default=0)
+    total_completion_tokens: int = Field(default=0)
+    total_tokens: int = Field(default=0)
+    total_api_requests: int = Field(default=0)
+    total_successful_requests: int = Field(default=0)
+    total_failed_requests: int = Field(default=0)
+    total_cache_read_input_tokens: int = Field(default=0)
+    total_cache_creation_input_tokens: int = Field(default=0)
+    total_compression_saved_tokens: int = Field(default=0)
+    total_compression_savings_spend: float = Field(default=0.0)
+    total_prompt_caching_savings_spend: float = Field(default=0.0)
+    total_gateway_injected_caching_savings_spend: float = Field(default=0.0)
+    total_autorouter_savings_spend: float = Field(default=0.0)
+    total_response_time_ms: int = Field(default=0)
+    total_timed_requests: int = Field(default=0)
+    page: int = Field(default=1)
+    total_pages: int = Field(default=1)
+    has_more: bool = Field(default=False)
+    api_key_limit: int | None = Field(
+        default=None,
+        description="When set, api_keys and every api_key_breakdown list at most this many keys, "
+        "ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.",
+    )
+    total_api_keys: int | None = Field(
+        default=None,
+        description="Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key "
+        "lists are truncated to the highest-spend keys.",
+    )
+    entity_total_api_keys: dict[str, int] | None = Field(
+        default=None,
+        description="Distinct API keys per entity over the requested range, set when the entity breakdown is "
+        "included. When an entity's count exceeds api_key_limit, its api_key_breakdown lists only its keys "
+        "among the top api_key_limit keys overall.",
+    )
+
+
+class SpendAnalyticsPaginatedResponse(LiteLLMBaseModel):
+    results: list[DailySpendData]
+    metadata: DailySpendMetadata = Field(default_factory=DailySpendMetadata)
+
+
+class KeyActivityRow(LiteLLMBaseModel):
+    api_key: str
+    metrics: SpendMetrics
+    metadata: KeyMetadata
+
+
+class KeySpendMetrics(LiteLLMBaseModel):
+    spend: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    api_requests: int = 0
+    successful_requests: int = 0
+    failed_requests: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+
+
+class KeySpendActivityRow(LiteLLMBaseModel):
+    api_key: str
+    metrics: KeySpendMetrics
+    metadata: KeyMetadata
+
+
+class DailyActivityKeySearchResponse(LiteLLMBaseModel):
+    api_keys: list[KeyActivityRow]
+
+
+class DailyActivityKeyPageResponse(LiteLLMBaseModel):
+    api_keys: list[KeySpendActivityRow]
+    total_api_keys: int
+    offset: int
+    limit: int
+
+
+class UserActivityRow(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str | None = None
+    user_email: str | None = None
+    user_alias: str | None = None
+    spend: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    api_requests: int = 0
+    successful_requests: int = 0
+    failed_requests: int = 0
+
+
+class DailyActivityUserPageResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    users: Sequence[UserActivityRow]
+    total_users: int
+    offset: int
+    limit: int
+
+
+class ModelTopKeysResponse(LiteLLMBaseModel):
+    model: str
+    by_model_group: bool
+    api_keys: list[KeySpendActivityRow]
+
+
+class CacheLeakageKeysResponse(LiteLLMBaseModel):
+    api_keys: list[KeySpendActivityRow]
+
+
+class LiteLLM_DailyUserSpend(LiteLLMBaseModel):
+    id: str
+    user_id: str
+    date: str
+    api_key: str
+    mcp_server_id: str | None = None
+    model: str | None = None
+    model_group: str | None = None
+    custom_llm_provider: str | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    compression_saved_tokens: int = 0
+    compression_savings_spend: float = 0.0
+    prompt_caching_savings_spend: float = 0.0
+    gateway_injected_caching_savings_spend: float = 0.0
+    autorouter_savings_spend: float = 0.0
+    spend: float = 0.0
+    api_requests: int = 0
+    successful_requests: int = 0
+    failed_requests: int = 0
+    total_response_time_ms: int = 0
+    timed_requests: int = 0
+
+
+class GroupedData(TypedDict):
+    metrics: SpendMetrics
+    breakdown: BreakdownMetrics

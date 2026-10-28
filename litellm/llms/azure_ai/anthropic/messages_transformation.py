@@ -1,0 +1,150 @@
+"""
+Azure Anthropic messages transformation config - extends AnthropicMessagesConfig with Azure authentication
+"""
+
+from collections.abc import Sequence
+from typing import Any, Final
+
+from litellm.llms.anthropic.messages.native.transformation import (
+    AnthropicMessagesConfig,
+)
+from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
+from litellm.types.router import GenericLiteLLMParams
+
+
+class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
+    """
+    Azure Anthropic messages configuration that extends AnthropicMessagesConfig.
+    The only difference is authentication - Azure uses x-api-key header (not api-key)
+    and Azure endpoint format.
+    """
+
+    @property
+    def custom_llm_provider(self) -> str | None:
+        return "azure_ai"
+
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
+    def validate_anthropic_messages_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: Sequence[object],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:
+        """
+        Validate environment and set up Azure authentication headers for /v1/messages endpoint.
+        Azure Anthropic uses x-api-key header (not api-key).
+        """
+        # Convert dict to GenericLiteLLMParams if needed
+        if isinstance(litellm_params, dict):
+            if api_key and "api_key" not in litellm_params:
+                litellm_params = {**litellm_params, "api_key": api_key}
+            litellm_params_obj = GenericLiteLLMParams(**litellm_params)
+        else:
+            litellm_params_obj = litellm_params or GenericLiteLLMParams()
+            if api_key and not litellm_params_obj.api_key:
+                litellm_params_obj.api_key = api_key
+
+        # Use Azure authentication logic
+        headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+
+        # Azure Anthropic uses x-api-key header (not api-key)
+        # Convert api-key to x-api-key if present
+        if "api-key" in headers and "x-api-key" not in headers:
+            headers["x-api-key"] = headers.pop("api-key")
+
+        # Set anthropic-version header
+        if "anthropic-version" not in headers:
+            headers["anthropic-version"] = "2023-06-01"
+
+        # Set content-type header
+        if "content-type" not in headers:
+            headers["content-type"] = "application/json"
+
+        headers = self._update_headers_with_anthropic_beta(
+            headers=headers,
+            optional_params=optional_params,
+            messages=messages,
+        )
+
+        return headers, api_base
+
+    def get_complete_url(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: bool | None = None,
+    ) -> str:
+        """
+        Get the complete URL for Azure Anthropic /v1/messages endpoint.
+        Azure Foundry endpoint format: https://<resource-name>.services.ai.azure.com/anthropic/v1/messages
+        """
+        from litellm.secret_managers.main import get_secret_str
+
+        api_base = api_base or get_secret_str("AZURE_API_BASE")
+        if api_base is None:
+            raise ValueError(
+                "Missing Azure API Base - Please set `api_base` or `AZURE_API_BASE` environment variable. "
+                "Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
+            )
+
+        return azure_anthropic_messages_url(api_base)
+
+    def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:
+        """
+        Remove `scope` field from cache_control for Azure AI Foundry.
+
+        Azure AI Foundry's Anthropic endpoint does not support the `scope` field
+        (e.g., "global" for cross-request caching). Only `type` and `ttl` are supported.
+
+        Processes both `system` and `messages` content blocks.
+        """
+
+        def _sanitize(cache_control: Any) -> None:
+            if isinstance(cache_control, dict):
+                cache_control.pop("scope", None)
+
+        def _process_content_list(content: list) -> None:
+            for item in content:
+                if isinstance(item, dict) and "cache_control" in item:
+                    _sanitize(item["cache_control"])
+
+        if "system" in anthropic_messages_request:
+            system: Final = anthropic_messages_request["system"]
+            if isinstance(system, list):
+                _process_content_list(system)
+
+        if "messages" in anthropic_messages_request:
+            for message in anthropic_messages_request["messages"]:
+                if isinstance(message, dict) and "content" in message:
+                    content = message["content"]
+                    if isinstance(content, list):
+                        _process_content_list(content)
+
+    def transform_anthropic_messages_request(
+        self,
+        model: str,
+        messages: list[dict],
+        anthropic_messages_optional_request_params: dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> dict:
+        anthropic_messages_request: Final = super().transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        self._normalize_system_role_messages(anthropic_messages_request, model=model)
+        self._remove_scope_from_cache_control(anthropic_messages_request)
+        return anthropic_messages_request

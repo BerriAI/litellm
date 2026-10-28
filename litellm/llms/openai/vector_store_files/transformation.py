@@ -1,0 +1,256 @@
+from collections.abc import Mapping
+from typing import Final, cast
+
+import httpx
+
+import litellm
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
+from litellm.llms.base_llm.vector_store_files.transformation import (
+    BaseVectorStoreFilesConfig,
+)
+from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.router import GenericLiteLLMParams
+from litellm.types.vector_store_files import (
+    VectorStoreFileAuthCredentials,
+    VectorStoreFileContentResponse,
+    VectorStoreFileCreateRequest,
+    VectorStoreFileDeleteResponse,
+    VectorStoreFileListQueryParams,
+    VectorStoreFileListResponse,
+    VectorStoreFileObject,
+    VectorStoreFileUpdateRequest,
+)
+
+
+def _clean_dict(source: Mapping[str, object]) -> dict[str, object]:
+    return {k: v for k, v in source.items() if v is not None}
+
+
+def _visible_attributes(attributes: Mapping[str, object]) -> Mapping[str, str]:
+    """The caller's string attributes, all of them, so the provider enforces its own key limit."""
+    return {str(k): v for k, v in attributes.items() if k != "hidden_params" and isinstance(v, str)}
+
+
+class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
+    ASSISTANTS_HEADER_KEY = "OpenAI-Beta"
+    ASSISTANTS_HEADER_VALUE = "assistants=v2"
+
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> VectorStoreFileAuthCredentials:
+        api_key: Final = litellm_params.get("api_key")
+        if api_key is None:
+            raise ValueError("api_key is required")
+        return {
+            "headers": {
+                "Authorization": f"Bearer {api_key}",
+            }
+        }
+
+    def get_vector_store_file_endpoints_by_type(
+        self,
+    ) -> dict[str, tuple[tuple[str, str], ...]]:
+        return {
+            "read": (
+                ("GET", "/vector_stores/{vector_store_id}/files"),
+                ("GET", "/vector_stores/{vector_store_id}/files/{file_id}"),
+                (
+                    "GET",
+                    "/vector_stores/{vector_store_id}/files/{file_id}/content",
+                ),
+            ),
+            "write": (
+                ("POST", "/vector_stores/{vector_store_id}/files"),
+                ("POST", "/vector_stores/{vector_store_id}/files/{file_id}"),
+                ("DELETE", "/vector_stores/{vector_store_id}/files/{file_id}"),
+            ),
+        }
+
+    def validate_environment(
+        self,
+        *,
+        headers: dict[str, str],
+        litellm_params: GenericLiteLLMParams | None,
+    ) -> dict[str, str]:
+        params: Final = litellm_params or GenericLiteLLMParams()
+        bearer_token: Final = resolve_openai_bearer_token(
+            api_key=params.api_key, api_base=params.api_base, litellm_params=params.model_dump(exclude_none=True)
+        )
+        headers.update(
+            {
+                "Authorization": f"Bearer {bearer_token}",
+                "Content-Type": "application/json",
+            }
+        )
+        if self.ASSISTANTS_HEADER_KEY not in headers:
+            headers[self.ASSISTANTS_HEADER_KEY] = self.ASSISTANTS_HEADER_VALUE
+        return headers
+
+    def get_complete_url(
+        self,
+        *,
+        api_base: str | None,
+        vector_store_id: str,
+        litellm_params: Mapping[str, object],
+    ) -> str:
+        base_url: Final = (
+            api_base
+            or litellm.api_base
+            or get_secret_str("OPENAI_BASE_URL")
+            or get_secret_str("OPENAI_API_BASE")
+            or "https://api.openai.com/v1"
+        )
+        encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
+        return join_api_base(base_url, f"vector_stores/{encoded_vector_store_id}/files")
+
+    def transform_create_vector_store_file_request(
+        self,
+        *,
+        vector_store_id: str,
+        create_request: VectorStoreFileCreateRequest,
+        api_base: str,
+    ) -> tuple[str, dict[str, object]]:
+        payload: Final[dict[str, object]] = _clean_dict(dict(create_request))
+        attributes: Final = payload.get("attributes")
+        if isinstance(attributes, dict):
+            payload["attributes"] = _visible_attributes(attributes)
+        url: Final = api_base
+        return url, payload
+
+    def transform_create_vector_store_file_response(
+        self,
+        *,
+        response: httpx.Response,
+    ) -> VectorStoreFileObject:
+        try:
+            return cast(VectorStoreFileObject, response.json())
+        except Exception as exc:  # noqa: BLE001
+            raise self.get_error_class(
+                error_message=str(exc),
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+
+    def transform_list_vector_store_files_request(
+        self,
+        *,
+        vector_store_id: str,
+        query_params: VectorStoreFileListQueryParams,
+        api_base: str,
+    ) -> tuple[str, dict[str, object]]:
+        params: Final = _clean_dict(dict(query_params))
+        return api_base, params
+
+    def transform_list_vector_store_files_response(
+        self,
+        *,
+        response: httpx.Response,
+    ) -> VectorStoreFileListResponse:
+        try:
+            return cast(VectorStoreFileListResponse, response.json())
+        except Exception as exc:  # noqa: BLE001
+            raise self.get_error_class(
+                error_message=str(exc),
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+
+    def transform_retrieve_vector_store_file_request(
+        self,
+        *,
+        vector_store_id: str,
+        file_id: str,
+        api_base: str,
+    ) -> tuple[str, dict[str, object]]:
+        encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
+        return f"{api_base}/{encoded_file_id}", {}
+
+    def transform_retrieve_vector_store_file_response(
+        self,
+        *,
+        response: httpx.Response,
+    ) -> VectorStoreFileObject:
+        try:
+            return cast(VectorStoreFileObject, response.json())
+        except Exception as exc:  # noqa: BLE001
+            raise self.get_error_class(
+                error_message=str(exc),
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+
+    def transform_retrieve_vector_store_file_content_request(
+        self,
+        *,
+        vector_store_id: str,
+        file_id: str,
+        api_base: str,
+    ) -> tuple[str, dict[str, object]]:
+        encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
+        return join_api_base(api_base, f"{encoded_file_id}/content"), {}
+
+    def transform_retrieve_vector_store_file_content_response(
+        self,
+        *,
+        response: httpx.Response,
+    ) -> VectorStoreFileContentResponse:
+        try:
+            return cast(VectorStoreFileContentResponse, response.json())
+        except Exception as exc:  # noqa: BLE001
+            raise self.get_error_class(
+                error_message=str(exc),
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+
+    def transform_update_vector_store_file_request(
+        self,
+        *,
+        vector_store_id: str,
+        file_id: str,
+        update_request: VectorStoreFileUpdateRequest,
+        api_base: str,
+    ) -> tuple[str, dict[str, object]]:
+        payload: Final[dict[str, object]] = dict(update_request)
+        attributes: Final = payload.get("attributes")
+        if isinstance(attributes, dict):
+            payload["attributes"] = _visible_attributes(attributes)
+        encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
+        return f"{api_base}/{encoded_file_id}", payload
+
+    def transform_update_vector_store_file_response(
+        self,
+        *,
+        response: httpx.Response,
+    ) -> VectorStoreFileObject:
+        try:
+            return cast(VectorStoreFileObject, response.json())
+        except Exception as exc:  # noqa: BLE001
+            raise self.get_error_class(
+                error_message=str(exc),
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+
+    def transform_delete_vector_store_file_request(
+        self,
+        *,
+        vector_store_id: str,
+        file_id: str,
+        api_base: str,
+    ) -> tuple[str, dict[str, object]]:
+        encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
+        return f"{api_base}/{encoded_file_id}", {}
+
+    def transform_delete_vector_store_file_response(
+        self,
+        *,
+        response: httpx.Response,
+    ) -> VectorStoreFileDeleteResponse:
+        try:
+            return cast(VectorStoreFileDeleteResponse, response.json())
+        except Exception as exc:  # noqa: BLE001
+            raise self.get_error_class(
+                error_message=str(exc),
+                status_code=response.status_code,
+                headers=response.headers,
+            )

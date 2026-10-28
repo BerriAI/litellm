@@ -1,0 +1,727 @@
+{{/*
+Common naming + label helpers shared by gateway, backend, and ui templates.
+*/}}
+
+{{- define "litellm.name" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "litellm.fullname" -}}
+{{- if .Values.fullnameOverride -}}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $name := default .Chart.Name .Values.nameOverride -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.gateway.fullname" -}}
+{{- printf "%s-gateway" (include "litellm.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "litellm.backend.fullname" -}}
+{{- printf "%s-backend" (include "litellm.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "litellm.ui.fullname" -}}
+{{- printf "%s-ui" (include "litellm.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "litellm.ui.publicOrigin" -}}
+{{- $origin := .Values.ui.publicUrl | trim | trimSuffix "/" -}}
+{{- if not (regexMatch "^https?://[^/\\s]+$" $origin) -}}
+{{- fail "ui.publicUrl must be an origin like https://ui.example.com, without a path" -}}
+{{- end -}}
+{{- $origin -}}
+{{- end -}}
+
+{{- define "litellm.ui.backendOrigin" -}}
+{{- $origin := .Values.ui.backendUrl | trim | trimSuffix "/" -}}
+{{- if not (regexMatch "^https?://[^/\\s]+$" $origin) -}}
+{{- fail "ui.backendUrl must be an origin like https://backend.example.com, without a path, when ingress.componentHosts is set" -}}
+{{- end -}}
+{{- $origin -}}
+{{- end -}}
+
+{{- define "litellm.backend.gatewayOrigin" -}}
+{{- $origin := .Values.backend.gatewayUrl | trim | trimSuffix "/" -}}
+{{- if not (regexMatch "^https?://[^/\\s]+$" $origin) -}}
+{{- fail "backend.gatewayUrl must be an origin like https://gateway.example.com, without a path, when ingress.componentHosts is set" -}}
+{{- end -}}
+{{- $origin -}}
+{{- end -}}
+
+{{- define "litellm.commonLabels" -}}
+app.kubernetes.io/name: {{ include "litellm.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
+{{- end -}}
+
+{{/*
+Enterprise billable-request metering. Wired into gateway and backend, not the
+migrations job. The gateway serves nearly all billable traffic, but the backend
+keeps the named-server MCP transport (/{mcp_server_name}/mcp), which writes a
+SpendLogs row, so metering only the gateway would silently drop that traffic.
+The client certificate identifies the deployment to LiteLLM's collector, so it is
+mounted read-only from an existing Secret rather than passed through the
+environment.
+*/}}
+{{- define "litellm.billingMetrics.certDir" -}}/etc/litellm/billing-mtls{{- end -}}
+{{- define "litellm.billingMetrics.caDir" -}}/etc/litellm/billing-mtls-ca{{- end -}}
+
+{{- define "litellm.billingMetricsEnv" -}}
+- name: LITELLM_BILLING_METRICS_ENDPOINT
+  value: {{ required "billingMetrics.endpoint is required when billingMetrics.enabled is true" .Values.billingMetrics.endpoint | quote }}
+- name: LITELLM_BILLING_METRICS_CLIENT_CERT
+  value: {{ printf "%s/tls.crt" (include "litellm.billingMetrics.certDir" .) | quote }}
+- name: LITELLM_BILLING_METRICS_CLIENT_KEY
+  value: {{ printf "%s/tls.key" (include "litellm.billingMetrics.certDir" .) | quote }}
+{{- if .Values.billingMetrics.caSecretName }}
+- name: LITELLM_BILLING_METRICS_CA_CERT
+  value: {{ printf "%s/ca.crt" (include "litellm.billingMetrics.caDir" .) | quote }}
+{{- end }}
+{{- with .Values.billingMetrics.exportIntervalMs }}
+- name: LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS
+  value: {{ . | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.billingMetricsVolumes" -}}
+- name: billing-metrics-mtls
+  secret:
+    secretName: {{ required "billingMetrics.secretName is required when billingMetrics.enabled is true (an existing Secret with tls.crt and tls.key)" .Values.billingMetrics.secretName }}
+{{- if .Values.billingMetrics.caSecretName }}
+- name: billing-metrics-mtls-ca
+  secret:
+    secretName: {{ .Values.billingMetrics.caSecretName }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.billingMetricsVolumeMounts" -}}
+- name: billing-metrics-mtls
+  mountPath: {{ include "litellm.billingMetrics.certDir" . }}
+  readOnly: true
+{{- if .Values.billingMetrics.caSecretName }}
+- name: billing-metrics-mtls-ca
+  mountPath: {{ include "litellm.billingMetrics.caDir" . }}
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{/*
+Per-component selector labels — used in both Service selectors and Deployment matchLabels.
+*/}}
+{{- define "litellm.gateway.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "litellm.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: gateway
+{{- end -}}
+
+{{- define "litellm.backend.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "litellm.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: backend
+{{- end -}}
+
+{{- define "litellm.ui.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "litellm.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: ui
+{{- end -}}
+
+{{/*
+Per-component ServiceAccount name helpers.
+
+Each component (gateway, backend, ui) has its own SA config under
+.Values.serviceAccounts.<component>. When `create` is true and `name` is
+empty the chart defaults to "<release>-litellm-<component>". When `create`
+is false the chart uses the provided name, or the namespace `default` SA.
+*/}}
+{{- define "litellm.gateway.serviceAccountName" -}}
+{{- if .Values.serviceAccounts.gateway.create -}}
+{{ default (include "litellm.gateway.fullname" .) .Values.serviceAccounts.gateway.name }}
+{{- else -}}
+{{ default "default" .Values.serviceAccounts.gateway.name }}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.backend.serviceAccountName" -}}
+{{- if .Values.serviceAccounts.backend.create -}}
+{{ default (include "litellm.backend.fullname" .) .Values.serviceAccounts.backend.name }}
+{{- else -}}
+{{ default "default" .Values.serviceAccounts.backend.name }}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.ui.serviceAccountName" -}}
+{{- if .Values.serviceAccounts.ui.create -}}
+{{ default (include "litellm.ui.fullname" .) .Values.serviceAccounts.ui.name }}
+{{- else -}}
+{{ default "default" .Values.serviceAccounts.ui.name }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+ServiceAccount name for the migrations Job.
+
+The Job is a pre-install / pre-upgrade hook, so it is created before the
+chart's ordinary resources. A ServiceAccount the chart creates is one of
+those ordinary resources, which makes borrowing the backend name a cycle:
+the hook pod is rejected because the account does not exist yet. So when
+`serviceAccounts.backend.create` is true the Job falls back to the namespace
+`default` account unless the operator names one that already exists. With
+`create` false the backend name is either an operator-supplied existing
+account or `default`, both of which are safe for the hook, so the Job keeps
+sharing it.
+
+`migrationJob.serviceAccountName` always wins when set, which is how a Job
+that needs credentials of its own (IRSA / Workload Identity for IAM database
+auth) gets them.
+*/}}
+{{- define "litellm.migrations.serviceAccountName" -}}
+{{- if .Values.migrationJob.serviceAccountName -}}
+{{ .Values.migrationJob.serviceAccountName }}
+{{- else if .Values.serviceAccounts.backend.create -}}
+default
+{{- else -}}
+{{ include "litellm.backend.serviceAccountName" . }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Extra pod labels for a component's Deployment, validated against its selector.
+
+Invoke with a dict:
+  (dict "podLabels" .Values.gateway.podLabels "componentName" "gateway")
+
+The three selector keys are also emitted on the pod template, so a podLabels
+entry reusing one renders a duplicate YAML key whose later value wins. That
+leaves the pod template no longer matching the (immutable) selector and the
+apiserver rejects the Deployment. Fail at template time naming the key
+instead, so the operator gets the reason here rather than an opaque
+`selector does not match template labels` from the apiserver.
+
+The migrations Job takes podLabels unvalidated: a Job's selector is generated
+by the controller rather than declared, so nothing there can collide.
+*/}}
+{{- define "litellm.podLabels" -}}
+{{- $componentName := .componentName -}}
+{{- range $key, $value := .podLabels }}
+{{- if has $key (list "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/component") }}
+{{- fail (printf "%s.podLabels cannot set %s: it is part of the Deployment's immutable selector" $componentName $key) }}
+{{- end }}
+{{- end }}
+{{- toYaml .podLabels }}
+{{- end -}}
+
+{{/*
+Master-key + database + redis env block — shared by gateway, backend, and the
+migrations Job.
+
+Invoke with a dict: `(dict "root" $ "component" .Values.gateway)`. `root` is
+the chart context (needed for .Values), `component` selects which component's
+`extraEnv` / `logLevel` to render.
+
+Sensitive values (master key, DB username + password, Redis password) come
+only from referenced Secrets; the chart never accepts inline values for them.
+
+The chart never assembles DATABASE_URL itself. When
+database.writer.passwordSecret.urlKey is set, the chart passes the operator's
+URL through from the Secret. Otherwise it emits only the discrete
+DATABASE_HOST/PORT/USER/NAME/SCHEMA (+ DATABASE_PASSWORD for password auth)
+vars; the proxy's entrypoint (DatabaseURLSettings in
+litellm/proxy/db/db_url_settings.py) builds the URL from them and
+percent-encodes the credentials. Assembling the URL here via Kubernetes
+`$(VAR)` substitution would embed the raw secret value, corrupting the URL
+whenever the password contains a URL-reserved character (@, /, ?, %, +,
+...) — as AWS RDS auto-generated passwords routinely do.
+
+When `database.writer.useIAMAuth: true`, the chart injects
+IAM_TOKEN_DB_AUTH=true and omits DATABASE_PASSWORD — the entrypoint mints
+the URL from DATABASE_HOST/PORT/USER/NAME plus a short-lived AWS RDS IAM
+token instead of a static password. `database.writer.useAzureEntraAuth: true`
+does the same with AZURE_POSTGRESQL_AUTH=true and a Microsoft Entra ID token,
+for Azure Database for PostgreSQL. The two are mutually exclusive.
+
+The read replica is opt-in via `database.reader.host`, `hostKey`, or `urlKey`.
+The chart emits DATABASE_URL_READ_REPLICA alone for urlKey, or discrete
+DATABASE_*_READ_REPLICA vars for host and hostKey configurations, plus
+DATABASE_USER_READ_REPLICA / DATABASE_PASSWORD_READ_REPLICA for password auth.
+When `database.reader.useIAMAuth: true` (or
+`database.reader.useAzureEntraAuth: true`) it omits
+DATABASE_PASSWORD_READ_REPLICA and the entrypoint mints the reader URL the
+same way. Reader token auth only takes effect when the writer uses the same
+token source, since the proxy gates URL minting on the single global
+IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
+*/}}
+{{- define "litellm.serverEnv" -}}
+{{- $root := .root -}}
+{{- $component := .component -}}
+- name: LITELLM_MASTER_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "masterKey.secretName is required (the chart no longer accepts an inline master key)" $root.Values.masterKey.secretName }}
+      key: {{ $root.Values.masterKey.secretKey | default "master-key" }}
+{{- if $component.logLevel }}
+- name: LITELLM_LOG
+  value: {{ $component.logLevel | quote }}
+{{- end }}
+{{- with $root.Values.database.writer }}
+{{- $hostKey := .passwordSecret.hostKey }}
+{{- $urlKey := .passwordSecret.urlKey }}
+{{- if and .host $hostKey }}
+{{- fail "database.writer.host and database.writer.passwordSecret.hostKey cannot both be set" }}
+{{- end }}
+{{- if and $urlKey (or .host $hostKey .dbname .schema .sslMode .sslRootCert .useIAMAuth .useAzureEntraAuth) }}
+{{- fail "database.writer.passwordSecret.urlKey cannot be combined with host, hostKey, dbname, schema, sslMode, sslRootCert, useIAMAuth, or useAzureEntraAuth" }}
+{{- end }}
+{{- if and (not .host) (not $hostKey) (not $urlKey) }}
+{{- fail "one of database.writer.host, database.writer.passwordSecret.hostKey, or database.writer.passwordSecret.urlKey is required" }}
+{{- end }}
+{{- if and (or $hostKey $urlKey) (not .passwordSecret.name) }}
+{{- fail "database.writer.passwordSecret.name is required when hostKey or urlKey is set" }}
+{{- end }}
+{{- if $urlKey }}
+- name: DATABASE_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ .passwordSecret.name | quote }}
+      key: {{ $urlKey | quote }}
+{{- else }}
+- name: DATABASE_HOST
+  {{- if $hostKey }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ .passwordSecret.name | quote }}
+      key: {{ $hostKey | quote }}
+  {{- else }}
+  value: {{ .host | quote }}
+  {{- end }}
+- name: DATABASE_PORT
+  value: {{ .port | default 5432 | quote }}
+- name: DATABASE_USER
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "database.writer.passwordSecret.name is required" .passwordSecret.name }}
+      key: {{ .passwordSecret.usernameKey | default "username" }}
+- name: DATABASE_NAME
+  value: {{ required "database.writer.dbname is required" .dbname | quote }}
+{{- if .schema }}
+- name: DATABASE_SCHEMA
+  value: {{ .schema | quote }}
+{{- end }}
+{{- if .sslMode }}
+- name: DATABASE_SSLMODE
+  value: {{ .sslMode | quote }}
+{{- end }}
+{{- if .sslRootCert }}
+- name: DATABASE_SSLROOTCERT
+  value: {{ .sslRootCert | quote }}
+{{- end }}
+{{- if and .useIAMAuth .useAzureEntraAuth }}
+{{- fail "database.writer.useIAMAuth and database.writer.useAzureEntraAuth are mutually exclusive: the database password can only come from one token source" }}
+{{- end }}
+{{- if .useIAMAuth }}
+- name: IAM_TOKEN_DB_AUTH
+  value: "true"
+{{- else if .useAzureEntraAuth }}
+- name: AZURE_POSTGRESQL_AUTH
+  value: "true"
+{{- else }}
+- name: DATABASE_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .passwordSecret.name }}
+      key: {{ .passwordSecret.passwordKey | default "password" }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- with $root.Values.database.reader }}
+{{- $readerSecret := .passwordSecret | default dict }}
+{{- $hostKey := $readerSecret.hostKey }}
+{{- $urlKey := $readerSecret.urlKey }}
+{{- $readerEnabled := or .host $hostKey $urlKey }}
+{{- if and .host $hostKey }}
+{{- fail "database.reader.host and database.reader.passwordSecret.hostKey cannot both be set" }}
+{{- end }}
+{{- if and $urlKey (or .host $hostKey .dbname .schema .useIAMAuth .useAzureEntraAuth) }}
+{{- fail "database.reader.passwordSecret.urlKey cannot be combined with host, hostKey, dbname, schema, useIAMAuth, or useAzureEntraAuth" }}
+{{- end }}
+{{- if and (or $hostKey $urlKey) (not $readerSecret.name) }}
+{{- fail "database.reader.passwordSecret.name is required when hostKey or urlKey is set" }}
+{{- end }}
+{{- if $readerEnabled }}
+{{- if $urlKey }}
+- name: DATABASE_URL_READ_REPLICA
+  valueFrom:
+    secretKeyRef:
+      name: {{ $readerSecret.name | quote }}
+      key: {{ $urlKey | quote }}
+{{- else }}
+{{- if and .useIAMAuth (not $root.Values.database.writer.useIAMAuth) }}
+{{- fail "database.reader.useIAMAuth requires database.writer.useIAMAuth: true (the proxy gates IAM URL minting on IAM_TOKEN_DB_AUTH, which is only set by the writer)" }}
+{{- end }}
+{{- if and .useAzureEntraAuth (not $root.Values.database.writer.useAzureEntraAuth) }}
+{{- fail "database.reader.useAzureEntraAuth requires database.writer.useAzureEntraAuth: true (the proxy gates Entra URL minting on AZURE_POSTGRESQL_AUTH, which is only set by the writer)" }}
+{{- end }}
+- name: DATABASE_HOST_READ_REPLICA
+  {{- if $hostKey }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $readerSecret.name | quote }}
+      key: {{ $hostKey | quote }}
+  {{- else }}
+  value: {{ .host | quote }}
+  {{- end }}
+- name: DATABASE_PORT_READ_REPLICA
+  value: {{ .port | default 5432 | quote }}
+- name: DATABASE_NAME_READ_REPLICA
+  value: {{ required "database.reader.dbname is required when database.reader.host, hostKey, or urlKey is set" .dbname | quote }}
+{{- if .schema }}
+- name: DATABASE_SCHEMA_READ_REPLICA
+  value: {{ .schema | quote }}
+{{- end }}
+{{- if or .useIAMAuth .useAzureEntraAuth }}
+{{- if .passwordSecret.name }}
+- name: DATABASE_USER_READ_REPLICA
+  valueFrom:
+    secretKeyRef:
+      name: {{ .passwordSecret.name }}
+      key: {{ .passwordSecret.usernameKey | default "username" }}
+{{- end }}
+{{- else }}
+{{- if not .passwordSecret.name }}
+{{- fail "database.reader.passwordSecret.name is required when database.reader.host is set" }}
+{{- end }}
+- name: DATABASE_USER_READ_REPLICA
+  valueFrom:
+    secretKeyRef:
+      name: {{ .passwordSecret.name }}
+      key: {{ .passwordSecret.usernameKey | default "username" }}
+- name: DATABASE_PASSWORD_READ_REPLICA
+  valueFrom:
+    secretKeyRef:
+      name: {{ .passwordSecret.name }}
+      key: {{ .passwordSecret.passwordKey | default "password" }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{/*
+The migrations Job (helm.sh/hook: pre-upgrade) is the single owner of
+`prisma migrate deploy`. Without this, every gateway/backend pod also runs
+Prisma schema-update on startup and contends with the Job — and with each
+other — for Prisma's Postgres advisory lock on the writer, which makes the
+Job's `migrate deploy` intermittently block until its per-attempt timeout
+and retry-exhaust. The Job's entrypoint (migrations/run.py) does not import
+proxy_server and never reads DISABLE_SCHEMA_UPDATE, so emitting it here is a
+harmless no-op for the Job and authoritative for the app pods.
+*/}}
+- name: DISABLE_SCHEMA_UPDATE
+  value: "true"
+{{/* These feed the proxy's coordination Redis (cross-pod rate limits, spend
+     tracking, pod lock manager) via its REDIS_* env fallback. An explicit
+     `general_settings.coordination_redis` block in proxy_config takes
+     precedence over anything emitted here. */}}
+{{- $redisSecret := $root.Values.redis.passwordSecret | default dict }}
+{{- $hostKey := $redisSecret.hostKey }}
+{{- $urlKey := $redisSecret.urlKey }}
+{{- if and $root.Values.redis.host $hostKey }}
+{{- fail "redis.host and redis.passwordSecret.hostKey cannot both be set" }}
+{{- end }}
+{{- if and $urlKey (or $root.Values.redis.host $hostKey $root.Values.redis.cluster) }}
+{{- fail "redis.passwordSecret.urlKey cannot be combined with host, hostKey, or cluster" }}
+{{- end }}
+{{- if and (or $hostKey $urlKey) (not $redisSecret.name) }}
+{{- fail "redis.passwordSecret.name is required when hostKey or urlKey is set" }}
+{{- end }}
+{{- if $urlKey }}
+- name: REDIS_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ $redisSecret.name | quote }}
+      key: {{ $urlKey | quote }}
+{{- else if or $root.Values.redis.host $hostKey }}
+- name: REDIS_HOST
+  {{- if $hostKey }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $redisSecret.name | quote }}
+      key: {{ $hostKey | quote }}
+  {{- else }}
+  value: {{ $root.Values.redis.host | quote }}
+  {{- end }}
+- name: REDIS_PORT
+  value: {{ $root.Values.redis.port | quote }}
+{{- if $root.Values.redis.passwordSecret.name }}
+- name: REDIS_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ $root.Values.redis.passwordSecret.name }}
+      key: {{ $root.Values.redis.passwordSecret.passwordKey | default "password" }}
+{{- end }}
+{{- if $root.Values.redis.cluster }}
+{{/* The proxy falls back to REDIS_CLUSTER_NODES (JSON) to build a cluster-mode
+     coordination client when `general_settings.coordination_redis` is absent
+     and no plain-Redis response cache is configured. We seed with the single
+     configured endpoint; the cluster client discovers the remaining nodes from
+     CLUSTER SLOTS at startup. */}}
+- name: REDIS_CLUSTER_NODES
+  {{- if $hostKey }}
+  value: {{ printf "[{\"host\":\"$(REDIS_HOST)\",\"port\":%v}]" (int $root.Values.redis.port) | quote }}
+  {{- else }}
+  value: {{ printf "[{\"host\":%q,\"port\":%v}]" $root.Values.redis.host (int $root.Values.redis.port) | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- $sslCertReqs := $root.Values.redis.sslCertReqs }}
+{{- if and $sslCertReqs (not (has $sslCertReqs (list "none" "optional" "required"))) }}
+{{- fail (printf "redis.sslCertReqs must be one of none, optional, required (got %q)" $sslCertReqs) }}
+{{- end }}
+{{- if and $urlKey (or $root.Values.redis.ssl $sslCertReqs $root.Values.redis.sslCaCerts) }}
+{{- fail "redis.ssl, redis.sslCertReqs and redis.sslCaCerts cannot be combined with redis.passwordSecret.urlKey, use a rediss:// URL with ssl_cert_reqs / ssl_ca_certs query parameters instead" }}
+{{- end }}
+{{- if or $root.Values.redis.host $hostKey }}
+{{- if $root.Values.redis.ssl }}
+- name: REDIS_SSL
+  value: "true"
+{{- end }}
+{{- if $sslCertReqs }}
+- name: REDIS_SSL_CERT_REQS
+  value: {{ $sslCertReqs | quote }}
+{{- end }}
+{{- if $root.Values.redis.sslCaCerts }}
+- name: REDIS_SSL_CA_CERTS
+  value: {{ $root.Values.redis.sslCaCerts | quote }}
+{{- end }}
+{{- end }}
+{{- with $component.extraEnv }}
+{{ toYaml . }}
+{{- end }}
+{{- end -}}
+
+{{/*
+In-container PgBouncer env for the gateway container. Under IAM or Entra auth the pooler mints and renews the database token itself.
+*/}}
+{{- define "litellm.connectionPoolEnv" -}}
+{{- with .Values.database.connectionPool -}}
+- name: LITELLM_PGBOUNCER_ENABLED
+  value: "true"
+- name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+  value: {{ required "database.connectionPool.maxDbConnections is required when the pool is enabled" .maxDbConnections | quote }}
+- name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+  value: {{ required "database.connectionPool.maxClientConn is required when the pool is enabled" .maxClientConn | quote }}
+{{- end }}
+{{- end -}}
+
+{{/*
+PodDisruptionBudget shared by gateway, backend, and ui.
+
+Invoke with a dict:
+  (dict "root" $ "component" .Values.gateway "componentName" "gateway"
+        "fullname" (include "litellm.gateway.fullname" .)
+        "selectorLabels" (include "litellm.gateway.selectorLabels" .))
+
+Renders nothing unless both the component and its `pdb.enabled` are on.
+Only one of minAvailable / maxUnavailable should be set; if both are,
+minAvailable wins. If neither is set, falls back to `maxUnavailable: 1` so
+an enabled-but-unconfigured PDB still permits node drains.
+
+"Set" means non-nil and non-empty-string, so an explicit 0 (e.g.
+`maxUnavailable: 0` to forbid all voluntary disruptions) is honored rather
+than silently replaced by the fallback.
+*/}}
+{{- define "litellm.pdb" -}}
+{{- $root := .root -}}
+{{- $component := .component -}}
+{{- $min := $component.pdb.minAvailable -}}
+{{- $max := $component.pdb.maxUnavailable -}}
+{{- $minSet := not (or (kindIs "invalid" $min) (eq (printf "%v" $min) "")) -}}
+{{- $maxSet := not (or (kindIs "invalid" $max) (eq (printf "%v" $max) "")) -}}
+{{- if and $component.enabled $component.pdb $component.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .fullname }}
+  labels:
+    {{- include "litellm.commonLabels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ .componentName }}
+spec:
+  selector:
+    matchLabels:
+      {{- .selectorLabels | nindent 6 }}
+  {{- if $minSet }}
+  minAvailable: {{ $min }}
+  {{- else if $maxSet }}
+  maxUnavailable: {{ $max }}
+  {{- else }}
+  maxUnavailable: 1
+  {{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Renders `envFrom:` block for a component's `envConfigMaps` / `envSecrets`
+lists. Each entry is a resource name; the chart wires the whole ConfigMap /
+Secret into the container's env via configMapRef / secretRef.
+
+Invoke with just the component dict, e.g. `.Values.gateway`. Emits nothing
+when both lists are empty so the container spec stays clean.
+*/}}
+{{- define "litellm.envFrom" -}}
+{{- $component := . -}}
+{{- if or $component.envConfigMaps $component.envSecrets }}
+envFrom:
+{{- range $component.envConfigMaps }}
+  - configMapRef:
+      name: {{ . }}
+{{- end }}
+{{- range $component.envSecrets }}
+  - secretRef:
+      name: {{ . }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
+ingress-nginx's admission webhook rejects a dot in an Exact or Prefix path
+(strict-validate-path-type) and serves ImplementationSpecific as a plain
+prefix location, so a dotted path takes that type there.
+*/}}
+{{- define "litellm.ingress.pathType" -}}
+{{- if and (eq .controller "nginx") (contains "." .path) -}}
+ImplementationSpecific
+{{- else -}}
+{{- .pathType -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.gateway.prometheusMultiprocDir" -}}/tmp/litellm_prometheus_multiproc{{- end -}}
+
+{{/*
+Directory of the collector's unix socket, shared by the gateway and
+collector containers through an emptyDir. Empty when the sidecar is off
+or gateway.collector.address is a tcp://127.0.0.1:<port> address.
+*/}}
+{{- define "litellm.lensWorker.image" -}}
+{{- include "lens.image" (dict "Values" .Values.lensWorker "Chart" .Subcharts.lens.Chart) -}}
+{{- end -}}
+
+{{- define "litellm.gateway.collectorSocketDir" -}}
+{{- if and .Values.gateway.collector.enabled (hasPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- dir (trimPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+LITELLM_COLLECTOR_* env shared by the producer (gateway container) and the
+consumer (collector container), so both agree on the transport and the
+shutdown drain window.
+*/}}
+{{- define "litellm.gateway.collectorEnv" -}}
+{{- with .Values.gateway.collector }}
+- name: LITELLM_COLLECTOR_ENABLED
+  value: "true"
+- name: LITELLM_COLLECTOR_ADDRESS
+  value: {{ .address | quote }}
+- name: LITELLM_COLLECTOR_BUFFER_SIZE
+  value: {{ .bufferSize | quote }}
+- name: LITELLM_COLLECTOR_ON_UNAVAILABLE
+  value: {{ .onUnavailable | quote }}
+- name: LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS
+  value: {{ .drainTimeoutSeconds | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.lensConnectionEnv" -}}
+{{- $mode := include "litellm.lens.mode" . -}}
+{{- if ne $mode "disabled" }}
+{{- if and (eq $mode "external") (not .Values.lensWorker.serviceTokenSecret.name) -}}
+{{- fail "lensWorker.serviceTokenSecret.name is required for external Lens" -}}
+{{- end }}
+{{- if and (eq $mode "external") (not .Values.lensWorker.gateway.secretName) -}}
+{{- fail "lensWorker.gateway.secretName is required for external Lens" -}}
+{{- end -}}
+- name: LITELLM_LENS_URL
+  value: {{ if eq $mode "external" }}{{ required "lensWorker.externalUrl is required for external Lens" .Values.lensWorker.externalUrl | quote }}{{ else }}{{ printf "http://%s-lens-worker:%v" (include "litellm.fullname" .) .Values.lensWorker.service.port | quote }}{{ end }}
+- name: LITELLM_LENS_PUBLIC_URL
+  value: {{ include "litellm.lensWorker.publicUrl" . | quote }}
+- name: LENS_GATEWAY_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "litellm.lensWorker.gatewaySecretName" . | quote }}
+      key: {{ .Values.lensWorker.gateway.secretKey | quote }}
+- name: LITELLM_LENS_SERVICE_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "litellm.lensWorker.serviceTokenSecretName" . | quote }}
+      key: {{ .Values.lensWorker.serviceTokenSecret.key | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.lensWorker.labels" -}}
+{{- $labels := include "litellm.commonLabels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (printf "%s-lens-worker" (include "litellm.name" . | trunc 51 | trimSuffix "-")) -}}
+{{- toYaml $labels -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.serviceTokenSecretName" -}}
+{{- .Values.lensWorker.serviceTokenSecret.name | default (printf "%s-lens-service" (include "litellm.fullname" .)) -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.gatewaySecretName" -}}
+{{- .Values.lensWorker.gateway.secretName | default (printf "%s-lens-gateway" (include "litellm.fullname" . | trunc 50 | trimSuffix "-")) -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.bundledClickhouse" -}}
+{{- if and (eq (include "litellm.lens.mode" .) "bundled") .Values.lensWorker.clickhouse.enabled (not .Values.lensWorker.clickhouseSecret.name) -}}true{{- end -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.publicUrl" -}}
+{{- if .Values.lensWorker.publicUrl -}}
+{{- .Values.lensWorker.publicUrl -}}
+{{- else if eq (include "litellm.lens.mode" .) "external" -}}
+{{- fail "lensWorker.publicUrl is required for external Lens" -}}
+{{- else if .Values.lensWorker.ingress.enabled -}}
+{{- $tls := or (not (empty .Values.lensWorker.ingress.tls)) (hasKey .Values.lensWorker.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
+{{- printf "%s://%s" (ternary "https" "http" $tls) (required "lensWorker.ingress.host is required" .Values.lensWorker.ingress.host) -}}
+{{- else if and .Values.ingress.enabled .Values.ingress.host -}}
+{{- $tls := or (not (empty .Values.ingress.tls)) (hasKey .Values.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
+{{- printf "%s://%s/lens-ingest" (ternary "https" "http" $tls) .Values.ingress.host -}}
+{{- else -}}
+{{- fail "lensWorker.publicUrl is required when there is no single ingress hostname" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.clickhouseName" -}}
+{{- printf "%s-lens-clickhouse" (include "litellm.fullname" . | trunc 47 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "litellm.lens.mode" -}}
+{{- $mode := .Values.lensWorker.mode | default (ternary "bundled" "disabled" .Values.lensWorker.enabled) -}}
+{{- if not (has $mode (list "bundled" "external" "disabled")) -}}
+{{- fail "lensWorker.mode must be bundled, external or disabled" -}}
+{{- end -}}
+{{- $mode -}}
+{{- end -}}
+
+{{- define "litellm.lens.render" -}}
+{{- $root := .root -}}
+{{- $values := mergeOverwrite (deepCopy $root.Subcharts.lens.Values) (deepCopy $root.Values.lensWorker) -}}
+{{- $_ := set $values "fullnameOverride" (printf "%s-lens-worker" (include "litellm.fullname" $root)) -}}
+{{- $_ := set $values "component" "lens-worker" -}}
+{{- $_ := set $values "nameOverride" (printf "%s-lens-worker" (include "litellm.name" $root | trunc 51 | trimSuffix "-")) -}}
+{{- $_ := set $values "imagePullSecrets" $root.Values.imagePullSecrets -}}
+{{- $_ := set $values.gateway "enabled" true -}}
+{{- $_ := set $values.gateway "generatedName" (include "litellm.lensWorker.gatewaySecretName" $root) -}}
+{{- $_ := set $values.clickhouse "nameOverride" (include "litellm.lensWorker.clickhouseName" $root) -}}
+{{- $_ := set $values.serviceTokenSecret "generatedName" (include "litellm.lensWorker.serviceTokenSecretName" $root) -}}
+{{- $_ := set $values "publicUrl" ($root.Values.lensWorker.standaloneUrl | default $root.Subcharts.lens.Values.publicUrl) -}}
+{{- if and (eq .resource "deployment") (or $root.Values.lensWorker.publicUrl $root.Values.lensWorker.ingress.enabled $root.Values.ingress.enabled) -}}
+{{- $ingestion := include "litellm.lensWorker.publicUrl" $root -}}
+{{- $_ := set $values "ingestionUrl" $ingestion -}}
+{{- $_ := set $values "publicUrl" ($root.Values.lensWorker.standaloneUrl | default (trimSuffix "/lens-ingest" $ingestion)) -}}
+{{- end -}}
+{{- include (printf "lens.%s" .resource) (dict "Values" $values "Release" $root.Release "Chart" $root.Subcharts.lens.Chart "Capabilities" $root.Capabilities) -}}
+{{- end -}}

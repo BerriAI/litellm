@@ -1,0 +1,1002 @@
+"""
+RAG Endpoints for LiteLLM Proxy.
+
+Provides:
+- /rag/ingest: All-in-one document ingestion pipeline (Upload -> Chunk -> Embed -> Vector Store)
+- /rag/query: RAG query pipeline (Search -> Rerank -> LLM Completion)
+"""
+
+import base64
+import json
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final
+
+import orjson
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import ORJSONResponse, StreamingResponse
+from pydantic import TypeAdapter
+from starlette.datastructures import UploadFile
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+    LiteLLM_ManagedVectorStore,
+)
+from litellm.proxy._types import *
+from litellm.proxy.auth.auth_utils import is_request_body_safe
+from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    open_sse_before_first_byte,
+    ttft_keepalive_interval,
+)
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    get_form_data,
+    read_request_body,
+    safe_get_request_headers,
+)
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    EXPLICIT_CREDENTIAL_KEYS,
+    explicit_request_credentials,
+    get_team_provider_credentials,
+)
+from litellm.proxy.rag_endpoints.upload_security import (
+    MAX_UPLOAD_SIZE_BYTES,
+    EicarTestMalwareScanner,
+    MalwareScanner,
+    RejectedUpload,
+    validate_upload,
+)
+from litellm.proxy.vector_store_endpoints.endpoints import (
+    build_request_data_from_managed_vector_store,
+    reject_caller_embedding_selection_params,
+)
+from litellm.proxy.vector_store_endpoints.utils import (
+    assert_user_can_access_vector_store_id,
+)
+from litellm.rag.main import get_ingestion_class
+from litellm.repositories.table_repositories import ManagedVectorStoresRepository
+from litellm.types.utils import ModelResponse
+
+if TYPE_CHECKING:
+    from litellm import Router
+    from litellm.proxy.utils import PrismaClient
+
+router: Final = APIRouter()
+_TEAM_PROVIDER_CREDENTIALS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_EMPTY_TEAM_PROVIDER_CREDENTIALS: Final[Mapping[str, object]] = MappingProxyType({})
+_TEAM_CREDENTIAL_PROVIDER: Final = "openai"
+
+
+def _as_string_keyed_mapping(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
+def _response_attr(source: object, name: str) -> object:
+    return getattr(source, name, None)
+
+
+def _upstream_status_code(error: Exception) -> int:
+    code: Final = getattr(error, "status_code", None)
+    return code if isinstance(code, int) else 500
+
+
+def _raise_vector_store_scan_depth_exceeded() -> None:
+    raise HTTPException(
+        status_code=400,
+        detail={"error": f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while scanning vector_store_id values"},
+    )
+
+
+def _append_payload_to_scan_stack(
+    payload_stack: list[tuple[object, int]],
+    value: object,
+    next_depth: int,
+) -> None:
+    if isinstance(value, dict):
+        if next_depth > DEFAULT_MAX_RECURSE_DEPTH:
+            _raise_vector_store_scan_depth_exceeded()
+        payload_stack.append((value, next_depth))
+    elif isinstance(value, list):
+        if next_depth > DEFAULT_MAX_RECURSE_DEPTH:
+            if any(isinstance(item, (dict, list)) for item in value):
+                _raise_vector_store_scan_depth_exceeded()
+            return
+        payload_stack.append((value, next_depth))
+
+
+def _collect_vector_store_ids_from_payload(payload: object) -> set[str]:
+    vector_store_ids: Final[set[str]] = set()
+    payload_stack: Final = [(payload, 0)]
+
+    while payload_stack:
+        current_payload, depth = payload_stack.pop()
+        if depth > DEFAULT_MAX_RECURSE_DEPTH:
+            _raise_vector_store_scan_depth_exceeded()
+
+        if isinstance(current_payload, dict):
+            for key, value in current_payload.items():
+                if key == "vector_store_id":
+                    if not isinstance(value, str) or not value:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={"error": "vector_store_id must be a non-empty string"},
+                        )
+                    vector_store_ids.add(value)
+                    continue
+                if isinstance(value, (dict, list)):
+                    _append_payload_to_scan_stack(
+                        payload_stack=payload_stack,
+                        value=value,
+                        next_depth=depth + 1,
+                    )
+        elif isinstance(current_payload, list):
+            for item in current_payload:
+                _append_payload_to_scan_stack(
+                    payload_stack=payload_stack,
+                    value=item,
+                    next_depth=depth + 1,
+                )
+
+    return vector_store_ids
+
+
+async def _authorize_nested_vector_store_ids(
+    payload: object,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Mapping[str, LiteLLM_ManagedVectorStore]:
+    """Authorize every nested vector store id and return the managed stores it resolved."""
+    return MappingProxyType(
+        {
+            vector_store_id: store
+            for vector_store_id in sorted(_collect_vector_store_ids_from_payload(payload))
+            if (
+                store := await assert_user_can_access_vector_store_id(
+                    vector_store_id=vector_store_id,
+                    user_api_key_dict=user_api_key_dict,
+                )
+            )
+            is not None
+        }
+    )
+
+
+def _ingest_provider_error(vector_store_config: Mapping[str, object]) -> str | None:
+    provider: Final = vector_store_config.get("custom_llm_provider", "openai")
+    if not isinstance(provider, str):
+        return "custom_llm_provider must be a string"
+    try:
+        get_ingestion_class(provider)
+    except ValueError as error:
+        return str(error)
+    return None
+
+
+_MANAGED_STORE_CALLER_OPTIONS: Final = frozenset(
+    {
+        "vector_store_id",
+        "data_source_id",
+        "wait_for_ingestion",
+        "ingestion_timeout",
+        "custom_metadata",
+        "file_description",
+        "max_embedding_requests_per_min",
+    }
+)
+
+
+def _caller_vector_store_options(
+    request_vector_store_config: Mapping[str, object],
+    managed_store: LiteLLM_ManagedVectorStore | None,
+) -> Mapping[str, object]:
+    if managed_store is None:
+        return _without_blank_credentials(request_vector_store_config)
+    return MappingProxyType(
+        {key: value for key, value in request_vector_store_config.items() if key in _MANAGED_STORE_CALLER_OPTIONS}
+    )
+
+
+def _is_blank(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _without_blank_credentials(config: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {key: value for key, value in config.items() if key not in EXPLICIT_CREDENTIAL_KEYS or not _is_blank(value)}
+    )
+
+
+def _store_provider(config: Mapping[str, object]) -> object:
+    provider: Final = config.get("custom_llm_provider")
+    return _TEAM_CREDENTIAL_PROVIDER if provider is None else provider
+
+
+def _managed_store_overrides(managed_store: LiteLLM_ManagedVectorStore | None) -> Mapping[str, object]:
+    if managed_store is None:
+        return MappingProxyType({})
+    stored: Final = build_request_data_from_managed_vector_store(managed_store)
+    return _without_blank_credentials({key: value for key, value in stored.items() if value is not None})
+
+
+def _forwarded_store_credentials(
+    vector_store_config: Mapping[str, object], request_data: Mapping[str, object]
+) -> Mapping[str, object]:
+    if _store_provider(vector_store_config) != _TEAM_CREDENTIAL_PROVIDER:
+        return _EMPTY_TEAM_PROVIDER_CREDENTIALS
+    return explicit_request_credentials(request_data)
+
+
+def _with_body_drop_params(request_data: Mapping[str, object], body: Mapping[str, object]) -> Mapping[str, object]:
+    if body.get("drop_params") is not True:
+        return request_data
+    return MappingProxyType({**request_data, "drop_params": True})
+
+
+async def _rag_ingest_body(request: Request) -> Mapping[str, object]:
+    body: Final = _TEAM_PROVIDER_CREDENTIALS_ADAPTER.validate_python(await read_request_body(request))
+    if "multipart/form-data" not in request.headers.get("content-type", ""):
+        return body
+    form_request: Final = body.get("request")
+    parsed: Final[object] = (
+        orjson.loads(form_request) if isinstance(form_request, (str, bytes)) and form_request else None
+    )
+    return (
+        _TEAM_PROVIDER_CREDENTIALS_ADAPTER.validate_python(parsed) if isinstance(parsed, dict) else MappingProxyType({})
+    )
+
+
+def _with_request_credentials(
+    team_credentials: Mapping[str, object], request_data: Mapping[str, object]
+) -> Mapping[str, object]:
+    if not team_credentials:
+        return team_credentials
+    return MappingProxyType({**team_credentials, **explicit_request_credentials(request_data)})
+
+
+def _team_provider_credentials(
+    effective_config: Mapping[str, object],
+    llm_router: "Router | None",
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Mapping[str, object]:
+    if not EXPLICIT_CREDENTIAL_KEYS.isdisjoint(effective_config):
+        return _EMPTY_TEAM_PROVIDER_CREDENTIALS
+
+    if _store_provider(effective_config) != _TEAM_CREDENTIAL_PROVIDER:
+        return _EMPTY_TEAM_PROVIDER_CREDENTIALS
+
+    validated_credentials: Final = _TEAM_PROVIDER_CREDENTIALS_ADAPTER.validate_python(
+        get_team_provider_credentials(
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider=_TEAM_CREDENTIAL_PROVIDER,
+            include_accessible_deployments=False,
+        )
+        or {}
+    )
+    return MappingProxyType(
+        {key: value for key, value in validated_credentials.items() if key not in {"custom_llm_provider", "model"}}
+    )
+
+
+def _build_file_metadata_entry(
+    response: object,
+    file_data: tuple[str, bytes, str] | None = None,
+    file_url: str | None = None,
+) -> Mapping[str, str | int | None]:
+    """
+    Build a file metadata entry for storing in vector_store_metadata.
+
+    Args:
+        response: The response from litellm.aingest containing file_id
+        file_data: Optional tuple of (filename, content, content_type)
+        file_url: Optional URL if file was ingested from URL
+
+    Returns:
+        Dictionary with file metadata (file_id, filename, file_url, ingested_at, etc.)
+    """
+    from datetime import datetime, timezone
+
+    # Extract file_id from response
+    mapping_response: Final = _as_string_keyed_mapping(response)
+    raw_file_id: Final = (
+        mapping_response.get("file_id") if mapping_response is not None else _response_attr(response, "file_id")
+    )
+    file_id: Final = raw_file_id if isinstance(raw_file_id, str) else None
+
+    # Extract file information from file_data tuple
+    filename = None
+    file_size = None
+    content_type = None
+
+    if file_data:
+        filename = file_data[0]
+        file_size = len(file_data[1]) if len(file_data) > 1 else None
+        content_type = file_data[2] if len(file_data) > 2 else None
+
+    # Build file metadata entry
+    file_entry: Final[dict[str, str | int | None]] = {
+        "file_id": file_id,
+        "filename": filename,
+        "file_url": file_url,
+        "ingested_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Add optional fields if available
+    if file_size is not None:
+        file_entry["file_size"] = file_size
+    if content_type is not None:
+        file_entry["content_type"] = content_type
+
+    return file_entry
+
+
+async def _save_vector_store_to_db_from_rag_ingest(
+    response: object,
+    ingest_options: Mapping[str, dict[str, str | None]],
+    prisma_client: "PrismaClient",
+    user_api_key_dict: UserAPIKeyAuth,
+    file_data: tuple[str, bytes, str] | None = None,
+    file_url: str | None = None,
+    *,
+    store_is_managed: bool = False,
+) -> None:
+    """
+    Helper function to save a newly created vector store from RAG ingest to the database.
+
+    This function:
+    - Extracts vector store ID and config from the ingest response
+    - Checks if the vector store already exists in the database
+    - Creates a new database entry if it doesn't exist and the store is not registry-managed
+    - Adds the vector store to the registry
+    - Tracks team_id and user_id for access control
+
+    Args:
+        response: The response from litellm.aingest()
+        ingest_options: The ingest options containing vector store config
+        prisma_client: The Prisma database client
+        user_api_key_dict: User API key authentication info
+        store_is_managed: True when the requested id resolved to a managed store, so a missing row means
+            the store is config-registered and must not get a database row
+    """
+    from litellm.proxy.vector_store_endpoints.management_endpoints import (
+        create_vector_store_in_db,
+    )
+
+    # Handle both dict and object responses
+    mapping_response: Final = _as_string_keyed_mapping(response)
+    if mapping_response is not None:
+        vector_store_id = mapping_response.get("vector_store_id")
+    elif hasattr(response, "vector_store_id"):
+        vector_store_id = _response_attr(response, "vector_store_id")
+    else:
+        verbose_proxy_logger.warning("Unable to extract vector_store_id from response type: %s", type(response))
+        return
+
+    if vector_store_id is None or not isinstance(vector_store_id, str):
+        verbose_proxy_logger.warning("Vector store ID is None or not a string, skipping database save")
+        return
+
+    vector_store_config: Final = ingest_options.get("vector_store", {})
+    custom_llm_provider: Final = vector_store_config.get("custom_llm_provider")
+
+    # Extract litellm_vector_store_params for custom name and description
+    litellm_vector_store_params: Final = ingest_options.get("litellm_vector_store_params", {})
+    custom_vector_store_name: Final = litellm_vector_store_params.get("vector_store_name")
+    custom_vector_store_description: Final = litellm_vector_store_params.get("vector_store_description")
+
+    # Extract provider-specific params from vector_store_config to save as litellm_params
+    # This ensures params like aws_region_name, embedding_model, etc. are available for search
+    provider_specific_params: Final = {}
+    excluded_keys: Final = {"custom_llm_provider", "vector_store_id"}
+    for key, value in vector_store_config.items():
+        if key not in excluded_keys and value is not None:
+            provider_specific_params[key] = value
+
+    # Build file metadata entry using helper
+    file_entry: Final = _build_file_metadata_entry(
+        response=response,
+        file_data=file_data,
+        file_url=file_url,
+    )
+
+    try:
+        # Check if vector store already exists in database
+        existing_vector_store: Final = await ManagedVectorStoresRepository(prisma_client).table.find_unique(
+            where={"vector_store_id": vector_store_id}
+        )
+
+        if existing_vector_store is None and store_is_managed:
+            verbose_proxy_logger.info("Vector store %s is config-registered, skipping database save", vector_store_id)
+            return
+
+        # Only create if it doesn't exist
+        if existing_vector_store is None:
+            verbose_proxy_logger.info("Saving newly created vector store %s to database", vector_store_id)
+
+            # Initialize metadata with first file
+            initial_metadata: Final = {"ingested_files": [file_entry]}
+
+            # Use custom name if provided, otherwise default
+            vector_store_name: Final = custom_vector_store_name or f"RAG Vector Store - {vector_store_id[:8]}"
+            vector_store_description: Final = custom_vector_store_description or "Created via RAG ingest endpoint"
+
+            await create_vector_store_in_db(
+                vector_store_id=vector_store_id,
+                custom_llm_provider=custom_llm_provider or "openai",
+                prisma_client=prisma_client,
+                vector_store_name=vector_store_name,
+                vector_store_description=vector_store_description,
+                vector_store_metadata=initial_metadata,
+                litellm_params=(provider_specific_params if provider_specific_params else None),
+                team_id=user_api_key_dict.team_id,
+                user_id=user_api_key_dict.user_id,
+            )
+
+            verbose_proxy_logger.info("Vector store %s saved to database successfully", vector_store_id)
+        else:
+            verbose_proxy_logger.info("Vector store %s already exists, appending file to metadata", vector_store_id)
+
+            # Update existing vector store with new file
+            stored_metadata: Final = existing_vector_store.vector_store_metadata or {}
+            existing_metadata: dict[str, object] = (
+                json.loads(stored_metadata) if isinstance(stored_metadata, str) else stored_metadata
+            )
+
+            previous_files: Final = existing_metadata.get("ingested_files", [])
+            ingested_files: Final = [*previous_files, file_entry] if isinstance(previous_files, list) else [file_entry]
+            existing_metadata["ingested_files"] = ingested_files
+
+            # Update the vector store
+            from litellm.proxy.utils import safe_dumps
+
+            await ManagedVectorStoresRepository(prisma_client).table.update(
+                where={"vector_store_id": vector_store_id},
+                data={"vector_store_metadata": safe_dumps(existing_metadata)},
+            )
+
+            verbose_proxy_logger.info(
+                "Added file %s to vector store %s metadata",
+                file_entry.get("filename") or file_entry.get("file_url", "Unknown"),
+                vector_store_id,
+            )
+    except Exception as db_error:
+        # Log the error but don't fail the request since ingestion succeeded
+        verbose_proxy_logger.exception("Failed to save vector store %s to database: %s", vector_store_id, db_error)
+
+
+def _secure_uploaded_file(
+    file_data: tuple[str, bytes, str],
+    scanner: MalwareScanner,
+) -> tuple[str, bytes, str]:
+    validation: Final = validate_upload(content=file_data[1], scanner=scanner)
+    if isinstance(validation, RejectedUpload):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": validation.message, "reason": validation.reason.value},
+        )
+    return validation.safe_filename, file_data[1], validation.content_type
+
+
+async def parse_rag_ingest_request(
+    request: Request,
+    scanner: MalwareScanner,
+) -> tuple[dict[str, Any], tuple[str, bytes, str] | None, str | None, str | None]:
+    """
+    Parse RAG ingest request.
+
+    Supports:
+    - Form: file + request JSON in form field
+    - JSON body for URL-based ingestion
+
+    Uploaded file bytes are validated against the vector-store upload controls
+    (size limit, format allowlist with content inspection, archive rejection,
+    and the injected malware scanner) and given a server-generated filename
+    before they are returned.
+
+    Returns:
+        Tuple of (ingest_options, file_data, file_url, file_id)
+    """
+    headers: Final = safe_get_request_headers(request)
+    content_type = headers.get("content-type", "")
+
+    file_data: tuple[str, bytes, str] | None = None
+    file_url: str | None = None
+    file_id: str | None = None
+    ingest_options: dict[str, object] = {}
+
+    if "multipart/form-data" in content_type:
+        # Form upload
+        form_data: Final = await get_form_data(request)
+
+        # Get file
+        file_obj = form_data.get("file")
+        if isinstance(file_obj, UploadFile):
+            file_content = await file_obj.read(MAX_UPLOAD_SIZE_BYTES + 1)
+            file_data = (file_obj.filename or "", file_content, file_obj.content_type or "")
+
+        # Parse JSON from 'request' form field (contains full request body as JSON)
+        request_json_str: Final[str | bytes | None] = form_data.get("request")
+        if request_json_str:
+            request_data: Final = orjson.loads(request_json_str)
+            ingest_options = request_data.get("ingest_options", {})
+            file_url = request_data.get("file_url")
+            file_id = request_data.get("file_id")
+
+    else:
+        # JSON body
+        data: Final = await read_request_body(request)
+        ingest_options = data.get("ingest_options", {})
+        file_url = data.get("file_url")
+        file_id = data.get("file_id")
+
+        # Handle base64-encoded file in JSON body
+        file_obj = data.get("file")
+        if file_obj and isinstance(file_obj, dict):
+            filename: Final = file_obj.get("filename")
+            content_b64: Final = file_obj.get("content")
+            content_type = file_obj.get("content_type", "application/octet-stream")
+
+            if filename and content_b64:
+                try:
+                    file_content = base64.b64decode(content_b64)
+                    file_data = (filename, file_content, content_type)
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={"error": f"Invalid base64 content: {e}"},
+                    )
+
+    # Validate
+    if file_data is None and file_url is None and file_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Must provide file, file_url, or file_id"},
+        )
+
+    secured_file_data: Final[tuple[str, bytes, str] | None] = (
+        _secure_uploaded_file(file_data, scanner) if file_data is not None else None
+    )
+
+    if "vector_store" not in ingest_options:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "ingest_options must contain 'vector_store' configuration"},
+        )
+
+    # Credential fields must come from server configuration, not user requests.
+    # Accepting user-supplied credentials (e.g. vertex_credentials with
+    # type=external_account + credential_source.file=/proc/1/environ) allows
+    # any authenticated user to exfiltrate host secrets via SSRF through
+    # google-auth's identity_pool credential refresh.
+    # api_base is also blocked: a user-controlled base URL causes the server
+    # to send its configured provider credentials to an attacker endpoint.
+    _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS: Final = {
+        "vertex_credentials",
+        "vertex_ai_credentials",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_web_identity_token",
+        "aws_role_name",
+        "aws_session_name",
+        "aws_profile_name",
+        "aws_sts_endpoint",
+        "aws_external_id",
+        "azure_ad_token",
+        "api_key",
+        "api_base",
+    }
+    vector_store_opts: Final[object] = ingest_options.get("vector_store", {})
+    if isinstance(vector_store_opts, dict):
+        for field in _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS:
+            if field in vector_store_opts:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"'{field}' cannot be set in ingest_options.vector_store. "
+                        "Credentials must be configured server-side."
+                    },
+                )
+
+    return ingest_options, secured_file_data, file_url, file_id
+
+
+@router.post(
+    "/v1/rag/ingest",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["rag"],
+)
+@router.post(
+    "/rag/ingest",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["rag"],
+)
+async def rag_ingest(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    RAG Ingest endpoint - all-in-one document ingestion pipeline.
+
+    Supports form upload (for files) or JSON body (for URLs).
+
+    ## Form upload (for files):
+    ```bash
+    curl -X POST "http://localhost:4000/v1/rag/ingest" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
+        -F file="@document.pdf" \\
+        -F 'ingest_options={"vector_store": {"custom_llm_provider": "openai"}}'
+    ```
+
+    ## JSON body (for URLs):
+    ```bash
+    curl -X POST "http://localhost:4000/v1/rag/ingest" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "file_url": "https://example.com/document.pdf",
+            "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}}
+        }'
+    ```
+
+    ## Bedrock:
+    ```bash
+    curl -X POST "http://localhost:4000/v1/rag/ingest" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
+        -F file="@document.pdf" \\
+        -F 'ingest_options={"vector_store": {"custom_llm_provider": "bedrock"}}'
+    ```
+    """
+    from litellm.proxy.proxy_server import (
+        add_litellm_data_to_request,
+        general_settings,
+        llm_router,
+        prisma_client,
+        proxy_config,
+        version,
+    )
+
+    try:
+        # Parse request
+        ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(
+            request, scanner=EicarTestMalwareScanner()
+        )
+
+        resolved_stores: Final = await _authorize_nested_vector_store_ids(
+            payload=ingest_options,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        request_vector_store_config: Final = ingest_options.get("vector_store", {})
+        try:
+            is_request_body_safe(
+                request_body=request_vector_store_config,
+                general_settings=general_settings,
+                llm_router=llm_router,
+                model="",
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail={"error": str(e)})
+
+        managed_store: Final = resolved_stores.get(request_vector_store_config.get("vector_store_id"))
+        base: Final = {
+            **_caller_vector_store_options(request_vector_store_config, managed_store),
+            **_managed_store_overrides(managed_store),
+        }
+        request_data: Final[dict[str, Any]] = await add_litellm_data_to_request(
+            data={},
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
+        forwarded_credentials: Final = _forwarded_store_credentials(
+            base, _with_body_drop_params(request_data, await _rag_ingest_body(request))
+        )
+        merged_vector_store_config: Final = {
+            **_team_provider_credentials(base, llm_router, user_api_key_dict),
+            **forwarded_credentials,
+            **base,
+        }
+        merged_ingest_options: Final = {
+            **ingest_options,
+            "vector_store": merged_vector_store_config,
+        }
+
+        provider_error: Final = _ingest_provider_error(merged_vector_store_config)
+        if provider_error is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": provider_error},
+            )
+
+        verbose_proxy_logger.debug(
+            "RAG Ingest - options: %s, custom_llm_provider: %s",
+            ingest_options,
+            merged_vector_store_config.get("custom_llm_provider", "openai"),
+        )
+
+        # Call ingest
+        response: Final = await litellm.aingest(
+            ingest_options=merged_ingest_options,
+            file_data=file_data,
+            file_url=file_url,
+            file_id=file_id,
+            router=llm_router,
+            **request_data,
+        )
+        if response.get("status") == "failed":
+            raise HTTPException(
+                status_code=response.get("error_status_code") or 500,
+                detail={"id": response.get("id"), "status": "failed", "error": response.get("error")},
+            )
+
+        # Save vector store to database if it was newly created and prisma_client is available
+        verbose_proxy_logger.debug(
+            "RAG Ingest - Checking database save conditions: prisma_client=%s, response=%s, response_type=%s",
+            prisma_client is not None,
+            response is not None,
+            type(response),
+        )
+
+        if prisma_client is not None and response is not None:
+            await _save_vector_store_to_db_from_rag_ingest(
+                response=response,
+                ingest_options=ingest_options,
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+                file_data=file_data,
+                file_url=file_url,
+                store_is_managed=managed_store is not None,
+            )
+        else:
+            verbose_proxy_logger.warning(
+                "Skipping database save: prisma_client=%s, response=%s", prisma_client is not None, response is not None
+            )
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception("RAG Ingest failed: %s", e)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": str(e)},
+        )
+
+
+@router.post(
+    "/v1/rag/query",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["rag"],
+)
+@router.post(
+    "/rag/query",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["rag"],
+)
+async def rag_query(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    RAG Query endpoint - search vector store, optionally rerank, and generate LLM response.
+
+    This endpoint:
+    1. Extracts the query from the last user message
+    2. Searches the vector store for relevant context
+    3. Optionally reranks the results
+    4. Generates an LLM response with the retrieved context
+
+    ## Example Request:
+    ```bash
+    curl -X POST "http://localhost:4000/v1/rag/query" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is LiteLLM?"}],
+            "retrieval_config": {
+                "vector_store_id": "vs_abc123",
+                "custom_llm_provider": "openai",
+                "top_k": 5
+            }
+        }'
+    ```
+
+    ## With Reranking:
+    ```bash
+    curl -X POST "http://localhost:4000/v1/rag/query" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is LiteLLM?"}],
+            "retrieval_config": {
+                "vector_store_id": "vs_abc123",
+                "custom_llm_provider": "openai",
+                "top_k": 10
+            },
+            "rerank": {
+                "enabled": true,
+                "model": "cohere/rerank-english-v3.0",
+                "top_n": 3
+            }
+        }'
+    ```
+    """
+    from litellm.proxy.proxy_server import (
+        add_litellm_data_to_request,
+        general_settings,
+        llm_router,
+        proxy_config,
+        select_data_generator,
+        version,
+    )
+
+    try:
+        # Parse request body
+        data: Final = await read_request_body(request)
+
+        # Extract required fields
+        model: Final = data.get("model")
+        messages: Final = data.get("messages")
+        raw_retrieval_config: Final = data.get("retrieval_config")
+        rerank: Final = data.get("rerank")
+        stream: Final = data.get("stream", False)
+
+        # Validate required fields
+        if not model:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "model is required"},
+            )
+        if not messages:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "messages is required"},
+            )
+        if not raw_retrieval_config:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "retrieval_config is required"},
+            )
+        if not isinstance(raw_retrieval_config, dict):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "retrieval_config must be an object"},
+            )
+        retrieval_config: Final = _TEAM_PROVIDER_CREDENTIALS_ADAPTER.validate_python(raw_retrieval_config)
+        if "vector_store_id" not in retrieval_config:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "retrieval_config must contain 'vector_store_id'"},
+            )
+        vector_store_id: Final = retrieval_config.get("vector_store_id")
+        if not isinstance(vector_store_id, str):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "vector_store_id must be a non-empty string"},
+            )
+        reject_caller_embedding_selection_params(payload=retrieval_config, source="retrieval_config")
+        resolved_stores: Final = await _authorize_nested_vector_store_ids(
+            payload=retrieval_config,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # Merge litellm-managed vector store params (provider, region, embedding
+        # model, credentials, ...) from the registry: the same source the direct
+        # /vector_stores/{id}/search endpoint uses. Store-managed keys win on
+        # conflict so callers cannot override the store's provider or credentials.
+        managed_store: Final = resolved_stores.get(vector_store_id)
+        store_data: Final[Mapping[str, object]] = (
+            build_request_data_from_managed_vector_store(managed_store)
+            if managed_store is not None
+            else _EMPTY_TEAM_PROVIDER_CREDENTIALS
+        )
+        managed_store_params: Final = _managed_store_overrides(managed_store)
+        merged_retrieval_config: Final = {
+            **retrieval_config,
+            **store_data,
+        }
+        effective_vector_store_config: Final = (
+            managed_store_params
+            if managed_store is not None
+            else MappingProxyType(
+                {key: value for key, value in retrieval_config.items() if key not in EXPLICIT_CREDENTIAL_KEYS}
+            )
+        )
+        request_data: Final[dict[str, object]] = await add_litellm_data_to_request(
+            data={},
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
+        team_credentials: Final = _with_request_credentials(
+            _team_provider_credentials(effective_vector_store_config, llm_router, user_api_key_dict),
+            _with_body_drop_params(request_data, data),
+        )
+        vector_store_params: Final = (
+            {**team_credentials, **managed_store_params} if managed_store is not None else team_credentials
+        )
+
+        verbose_proxy_logger.debug(
+            "RAG Query - model: %s, vector_store_id: %s, custom_llm_provider: %s",
+            model,
+            retrieval_config["vector_store_id"],
+            merged_retrieval_config.get("custom_llm_provider"),
+        )
+
+        async def query() -> ModelResponse:
+            return await litellm.aquery(
+                model=model,
+                messages=messages,
+                retrieval_config=merged_retrieval_config,
+                vector_store_params=vector_store_params,
+                rerank=rerank,
+                stream=stream,
+                router=llm_router,
+                **request_data,
+            )
+
+        def custom_headers_for(response: ModelResponse) -> Mapping[str, str]:
+            hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+            return ProxyBaseLLMRequestProcessing.get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
+                call_id=hidden_params.get("litellm_call_id", None) or "",
+                model_id=hidden_params.get("model_id", None) or "",
+                cache_key=hidden_params.get("cache_key", None) or "",
+                api_base=hidden_params.get("api_base", None) or "",
+                version=version,
+                response_cost=hidden_params.get("response_cost", None),
+                request_data=request_data,
+            )
+
+        if stream:
+
+            async def produce_stream() -> StreamingResponse:
+                response: Final = await query()
+                return StreamingResponse(
+                    select_data_generator(
+                        response=response,
+                        user_api_key_dict=user_api_key_dict,
+                        request_data=request_data,
+                        request=request,
+                    ),
+                    media_type="text/event-stream",
+                    headers=custom_headers_for(response),
+                )
+
+            return await open_sse_before_first_byte(
+                produce_stream(),
+                ping_interval_seconds=ttft_keepalive_interval(data, llm_router),
+            )
+
+        response: Final = await query()
+        fastapi_response.headers.update(custom_headers_for(response))
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception("RAG Query failed: %s", e)
+        raise HTTPException(
+            status_code=_upstream_status_code(e),
+            detail={"error": str(e)},
+        )

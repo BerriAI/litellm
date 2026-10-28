@@ -1,0 +1,437 @@
+import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
+import { PasswordInput } from "@/components/shared/PasswordInput";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Upload as UploadIcon } from "lucide-react";
+import React from "react";
+import { useFormContext } from "react-hook-form";
+import { requiredRule } from "../common_components/formRules";
+import {
+  MountedFormField,
+  type MountedFieldControlProps,
+  type MountedFormValues,
+} from "../common_components/MountedFormField";
+import { authTypesFor, hiddenAuthFieldKeys, inferAuthTypeId } from "./provider_auth_types";
+import { ProviderCredentialFieldMetadata } from "../networking";
+import { Providers } from "../provider_info_helpers";
+import { labelWithHint } from "@/components/shared/form/LabelWithHint";
+import type { ProviderFieldValidators } from "../model_add/credential_federation";
+
+interface ProviderSpecificFieldsProps {
+  selectedProvider: string | null;
+  hiddenFieldKeys?: readonly string[];
+  context?: "model" | "credential";
+  onCreateCredential?: (authTypeId: string) => void;
+  initialAuthTypeId?: string;
+  onAuthTypeChange?: (authTypeId: string) => void;
+  fieldValidators?: ProviderFieldValidators;
+}
+
+const readTextFile = (file: File, onLoaded: (contents: string) => void) => {
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    if (event.target) {
+      onLoaded(event.target.result as string);
+    }
+  };
+  reader.readAsText(file);
+};
+
+interface ProviderCredentialField {
+  key: string;
+  label: string;
+  placeholder?: string;
+  tooltip?: string;
+  required?: boolean;
+  type?: "text" | "password" | "select" | "upload" | "textarea";
+  options?: string[];
+  defaultValue?: string;
+}
+
+const getApiVersionFromApiBase = (apiBase: string): string | null => {
+  const queryStartIndex = apiBase.indexOf("?");
+  if (queryStartIndex === -1) {
+    return null;
+  }
+
+  const queryString = apiBase.slice(queryStartIndex + 1).split("#")[0];
+  const searchParams = new URLSearchParams(queryString);
+
+  return searchParams.get("api_version") || searchParams.get("api-version");
+};
+
+const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): ProviderCredentialField => {
+  const type: ProviderCredentialField["type"] =
+    field.field_type === "password"
+      ? "password"
+      : field.field_type === "select"
+        ? "select"
+        : field.field_type === "upload"
+          ? "upload"
+          : field.field_type === "textarea"
+            ? "textarea"
+            : "text";
+
+  return {
+    key: field.key,
+    label: field.label,
+    placeholder: field.placeholder ?? undefined,
+    tooltip: field.tooltip ?? undefined,
+    required: field.required ?? false,
+    type,
+    options: field.options ?? undefined,
+    defaultValue: field.default_value ?? undefined,
+  };
+};
+
+const providerFieldsByDisplayName: Record<string, ProviderCredentialField[]> = {};
+
+const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
+  selectedProvider,
+  hiddenFieldKeys,
+  context = "credential",
+  onCreateCredential,
+  initialAuthTypeId,
+  onAuthTypeChange,
+  fieldValidators,
+}) => {
+  const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
+  const form = useFormContext<MountedFormValues>();
+  const authTypes = authTypesFor(selectedProvider);
+  const availableAuthTypes = React.useMemo(
+    () =>
+      authTypes.filter(
+        ({ credentialOnly }) => context !== "model" || onCreateCredential !== undefined || !credentialOnly,
+      ),
+    [authTypes, context, onCreateCredential],
+  );
+  const [selectedAuthTypeId, setSelectedAuthTypeId] = React.useState(() =>
+    initialAuthTypeId && availableAuthTypes.some(({ id }) => id === initialAuthTypeId)
+      ? initialAuthTypeId
+      : inferAuthTypeId(availableAuthTypes, form.getValues()),
+  );
+  const selectedAuthType = availableAuthTypes.find(({ id }) => id === selectedAuthTypeId) ?? availableAuthTypes[0];
+  const credentialOnlySelected = context === "model" && selectedAuthType?.credentialOnly === true;
+  const authTypeSelectId = React.useId();
+  const credentialsFileRef = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    if (selectedAuthType) {
+      onAuthTypeChange?.(selectedAuthType.id);
+    }
+  }, [onAuthTypeChange, selectedAuthType]);
+  const pickCredentialsFile =
+    (onLoaded: (contents: string) => void) => (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (file?.type === "application/json") {
+        readTextFile(file, onLoaded);
+      }
+    };
+
+  const { data: providerMetadata, isLoading, error: loadError } = useProviderFields();
+
+  // Memoize the expensive cache computation
+  const cacheEntries = React.useMemo(() => {
+    if (!providerMetadata) {
+      return null;
+    }
+
+    // Compute cache entries keyed by provider display name and identifiers
+    const entries: Record<string, ProviderCredentialField[]> = {};
+    providerMetadata.forEach((providerInfo) => {
+      const displayName = providerInfo.provider_display_name;
+      const mappedFields = providerInfo.credential_fields.map(mapFieldMetadataToUiField);
+
+      // Primary key: human-readable display name
+      entries[displayName] = mappedFields;
+
+      // Also cache by backend identifiers so lookups by provider slug work
+      if (providerInfo.provider) {
+        entries[providerInfo.provider] = mappedFields;
+      }
+      if (providerInfo.litellm_provider) {
+        entries[providerInfo.litellm_provider] = mappedFields;
+      }
+    });
+    return entries;
+  }, [providerMetadata]);
+
+  // Sync memoized cache entries to module-level cache
+  React.useEffect(() => {
+    if (!cacheEntries) {
+      return;
+    }
+
+    Object.assign(providerFieldsByDisplayName, cacheEntries);
+  }, [cacheEntries]);
+
+  const providerFields = React.useMemo(() => {
+    if (selectedProvider === null) return [];
+    // First try to resolve from the in-memory cache. We support both the
+    // enum/display-name form and the raw provider slug (e.g. "petals").
+    const cachedFields =
+      providerFieldsByDisplayName[selectedProviderEnum] ?? providerFieldsByDisplayName[selectedProvider];
+    if (cachedFields) {
+      return cachedFields;
+    }
+
+    if (!providerMetadata) {
+      return [];
+    }
+
+    const providerInfo = providerMetadata.find(
+      (p) =>
+        p.provider_display_name === selectedProviderEnum ||
+        p.provider === selectedProvider ||
+        p.litellm_provider === selectedProvider,
+    );
+    if (!providerInfo) {
+      return [];
+    }
+
+    const mapped = providerInfo.credential_fields.map(mapFieldMetadataToUiField);
+    providerFieldsByDisplayName[providerInfo.provider_display_name] = mapped;
+    if (providerInfo.provider) {
+      providerFieldsByDisplayName[providerInfo.provider] = mapped;
+    }
+    if (providerInfo.litellm_provider) {
+      providerFieldsByDisplayName[providerInfo.litellm_provider] = mapped;
+    }
+    return mapped;
+  }, [selectedProviderEnum, selectedProvider, providerMetadata]);
+
+  const authTypeHiddenFieldKeys = React.useMemo(
+    () => hiddenAuthFieldKeys(authTypes, selectedAuthType?.id ?? ""),
+    [authTypes, selectedAuthType?.id],
+  );
+
+  const allFields = React.useMemo(() => {
+    if (credentialOnlySelected) {
+      return [];
+    }
+
+    if (availableAuthTypes.length === 0) {
+      return hiddenFieldKeys ? providerFields.filter((field) => !hiddenFieldKeys.includes(field.key)) : providerFields;
+    }
+
+    const fieldsToHide = [...(hiddenFieldKeys ?? []), ...authTypeHiddenFieldKeys];
+
+    return providerFields
+      .filter((field) => !fieldsToHide.includes(field.key))
+      .map((field) => (selectedAuthType?.requiredFieldKeys.includes(field.key) ? { ...field, required: true } : field));
+  }, [
+    providerFields,
+    hiddenFieldKeys,
+    availableAuthTypes,
+    authTypeHiddenFieldKeys,
+    selectedAuthType,
+    credentialOnlySelected,
+  ]);
+
+  const hasApiVersionField = React.useMemo(() => allFields.some((field) => field.key === "api_version"), [allFields]);
+  const lastInferredApiVersionRef = React.useRef<string | null>(null);
+
+  const handleApiBaseChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      if (!hasApiVersionField) {
+        return;
+      }
+
+      const apiVersion = getApiVersionFromApiBase(event.target.value);
+      if (apiVersion) {
+        lastInferredApiVersionRef.current = apiVersion;
+        form.setValue("api_version", apiVersion);
+        return;
+      }
+
+      if (form.getValues("api_version") === lastInferredApiVersionRef.current) {
+        form.setValue("api_version", "");
+      }
+      lastInferredApiVersionRef.current = null;
+    },
+    [form, hasApiVersionField],
+  );
+
+  const renderFieldControl = (field: ProviderCredentialField, control: MountedFieldControlProps) => {
+    if (field.type === "select") {
+      return (
+        <Select
+          items={(field.options ?? []).map((option) => ({ value: option, label: option }))}
+          value={(control.value as string | undefined) ?? field.defaultValue ?? null}
+          onValueChange={control.onChange}
+        >
+          <SelectTrigger id={control.id} onBlur={control.onBlur} className="w-full">
+            <SelectValue placeholder={field.placeholder} />
+          </SelectTrigger>
+          <SelectContent>
+            {field.options?.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      );
+    }
+
+    if (field.type === "upload") {
+      return (
+        <>
+          <Button type="button" variant="outline" className="w-fit" onClick={() => credentialsFileRef.current?.click()}>
+            <UploadIcon />
+            Click to Upload
+          </Button>
+          <input
+            ref={credentialsFileRef}
+            id={control.id}
+            type="file"
+            accept=".json"
+            className="sr-only"
+            onBlur={control.onBlur}
+            onChange={pickCredentialsFile(control.onChange)}
+          />
+        </>
+      );
+    }
+
+    if (field.type === "textarea") {
+      return (
+        <Textarea
+          id={control.id}
+          value={(control.value as string | undefined) ?? field.defaultValue ?? ""}
+          onChange={control.onChange}
+          onBlur={control.onBlur}
+          placeholder={field.placeholder}
+          rows={6}
+          className="font-mono text-xs"
+        />
+      );
+    }
+
+    if (field.type === "password") {
+      return (
+        <PasswordInput
+          id={control.id}
+          value={(control.value as string | undefined) ?? field.defaultValue ?? ""}
+          onChange={control.onChange}
+          onBlur={control.onBlur}
+          placeholder={field.placeholder}
+        />
+      );
+    }
+
+    return (
+      <Input
+        id={control.id}
+        value={(control.value as string | undefined) ?? field.defaultValue ?? ""}
+        onBlur={control.onBlur}
+        placeholder={field.placeholder}
+        type="text"
+        onChange={(event) => {
+          control.onChange(event);
+          if (field.key === "api_base") {
+            handleApiBaseChange(event);
+          }
+        }}
+      />
+    );
+  };
+
+  return (
+    <>
+      {availableAuthTypes.length > 0 && selectedAuthType && (
+        <div className="mb-4 flex flex-col gap-2">
+          <label htmlFor={authTypeSelectId} className="text-sm font-medium">
+            {labelWithHint("Auth Type:", "Select how LiteLLM authenticates to this provider.")}
+          </label>
+          <Select
+            items={availableAuthTypes.map(({ id, label }) => ({ value: id, label }))}
+            value={selectedAuthType.id}
+            onValueChange={(value) => setSelectedAuthTypeId(value ?? "")}
+          >
+            <SelectTrigger id={authTypeSelectId} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {availableAuthTypes.map((authType) => (
+                <SelectItem key={authType.id} value={authType.id}>
+                  {authType.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-sm text-muted-foreground">{selectedAuthType.description}</p>
+        </div>
+      )}
+      {credentialOnlySelected ? (
+        <>
+          <p className="mb-4 text-sm">This auth type is saved as an LLM credential and attached to this model.</p>
+          <Button type="button" onClick={() => onCreateCredential?.(selectedAuthType.id)}>
+            Create credential
+          </Button>
+        </>
+      ) : (
+        Object.entries(selectedAuthType?.fixedValues ?? {}).map(([fieldKey, fixedValue]) => (
+          <MountedFormField key={`${selectedProvider}:${fieldKey}`} name={fieldKey} defaultValue={fixedValue} bare>
+            {() => null}
+          </MountedFormField>
+        ))
+      )}
+      {isLoading && allFields.length === 0 && <p className="text-sm mb-2">Loading provider fields...</p>}
+      {loadError && allFields.length === 0 && (
+        <p className="text-sm mb-2 text-destructive">
+          {loadError instanceof Error ? loadError.message : "Failed to load provider credential fields"}
+        </p>
+      )}
+      {allFields.map((field) => (
+        <React.Fragment key={`${selectedProvider}:${field.key}`}>
+          <MountedFormField
+            label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
+            name={field.key}
+            required={field.required}
+            rules={{
+              validate: {
+                ...(field.required ? { required: requiredRule("Required") } : {}),
+                ...(fieldValidators?.[field.key] ? { provider: fieldValidators[field.key] } : {}),
+              },
+            }}
+            className={field.key === "vertex_credentials" ? "mb-0" : "mb-4"}
+          >
+            {(control) => renderFieldControl(field, control)}
+          </MountedFormField>
+
+          {/* Special case for Vertex Credentials help text */}
+          {field.key === "vertex_credentials" && (
+            <p className="text-sm mb-3 mt-1">Give a gcp service account(.json file)</p>
+          )}
+
+          {/* Special case for Azure Base Model help text */}
+          {field.key === "base_model" && (
+            <div className="grid grid-cols-24">
+              <p className="col-start-11 col-span-10 text-sm mb-2">
+                The actual model your azure deployment uses. Used for accurate cost tracking. Select name from{" "}
+                <a
+                  href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary underline-offset-4 hover:underline"
+                >
+                  here
+                </a>
+              </p>
+            </div>
+          )}
+        </React.Fragment>
+      ))}
+    </>
+  );
+};
+
+const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = (props) => (
+  <ProviderSpecificFieldsContent key={props.selectedProvider ?? "no-provider"} {...props} />
+);
+
+export default ProviderSpecificFields;

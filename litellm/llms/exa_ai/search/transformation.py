@@ -1,0 +1,212 @@
+"""
+Calls Exa AI's /search endpoint to search the web.
+
+Exa AI API Reference: https://docs.exa.ai/reference/search
+"""
+
+from collections.abc import Iterable, Mapping
+from typing import Final, TypedDict
+
+import httpx
+from pydantic import ConfigDict, TypeAdapter
+
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.llms.base_llm.search.transformation import (
+    BaseSearchConfig,
+    SearchResponse,
+    SearchResult,
+)
+from litellm.secret_managers.main import get_secret_str
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
+_STRS: Final = TypeAdapter(Iterable[str], config=ConfigDict(hide_input_in_errors=True))
+_RESULT_EXTRAS: Final = (("highlights", "highlights"), ("highlightScores", "highlight_scores"), ("score", "score"))
+
+
+class _ExaAISearchRequestRequired(TypedDict):
+    """Required fields for Exa AI Search API request."""
+
+    query: str  # Required - search query
+
+
+class ExaAISearchRequest(_ExaAISearchRequestRequired, total=False):
+    """
+    Exa AI Search API request format.
+    Based on: https://docs.exa.ai/reference/search
+    """
+
+    type: str  # Optional - search type ('keyword', 'neural', 'fast', 'auto'), default 'auto'
+    category: str  # Optional - data category ('company', 'research paper', 'news', 'pdf', 'github', 'tweet', 'personal site', 'linkedin profile', 'financial report')
+    userLocation: str  # Optional - two-letter ISO country code
+    numResults: int  # Optional - number of results (max 100), default 10
+    includeDomains: list[str]  # Optional - list of domains to include
+    excludeDomains: list[str]  # Optional - list of domains to exclude
+    startCrawlDate: str  # Optional - crawl date filter (ISO 8601 format)
+    endCrawlDate: str  # Optional - crawl date filter (ISO 8601 format)
+    startPublishedDate: str  # Optional - published date filter (ISO 8601 format)
+    endPublishedDate: str  # Optional - published date filter (ISO 8601 format)
+    includeText: list[str]  # Optional - strings that must be present in webpage text
+    excludeText: list[str]  # Optional - strings that must not be present in webpage text
+    context: bool | dict  # Optional - format results for LLMs
+    moderation: bool  # Optional - enable content moderation, default false
+    contents: dict  # Optional - content retrieval options
+
+
+class ExaAISearchConfig(BaseSearchConfig):
+    EXA_AI_API_BASE = "https://api.exa.ai"
+
+    @staticmethod
+    def ui_friendly_name() -> str:
+        return "Exa AI"
+
+    def validate_environment(
+        self,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        **kwargs,
+    ) -> dict:
+        """
+        Validate environment and return headers.
+        """
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("EXA_API_KEY",),
+            base_env_var="EXA_API_BASE",
+            default_api_base=self.EXA_AI_API_BASE,
+        )
+        if not api_key:
+            raise ValueError("EXA_API_KEY is not set. Set `EXA_API_KEY` environment variable.")
+        headers["x-api-key"] = api_key
+        headers["Content-Type"] = "application/json"
+        return headers
+
+    def get_complete_url(
+        self,
+        api_base: str | None,
+        optional_params: dict,
+        data: dict | list[dict] | None = None,
+        **kwargs,
+    ) -> str:
+        """
+        Get complete URL for Search endpoint.
+        """
+        return ensure_api_route(api_base or get_secret_str("EXA_API_BASE") or self.EXA_AI_API_BASE, "search")
+
+    def transform_search_request(
+        self,
+        query: str | list[str],
+        optional_params: dict,
+        **kwargs,
+    ) -> dict:
+        """
+        Transform Search request to Exa AI API format.
+
+        Transforms Perplexity unified spec parameters:
+        - query → query (same)
+        - max_results → numResults
+        - search_domain_filter → includeDomains
+        - country → userLocation
+        - max_tokens_per_page → (not applicable, ignored)
+
+        All other Exa-specific parameters are passed through as-is.
+
+        Args:
+            query: Search query (string or list of strings). Exa AI only supports single string queries.
+            optional_params: Optional parameters for the request
+
+        Returns:
+            Dict with typed request data following ExaAISearchRequest spec
+        """
+        if isinstance(query, list):
+            # Exa AI only supports single string queries, join with spaces
+            query = " ".join(query)
+
+        request_data: Final[ExaAISearchRequest] = {
+            "query": query,
+        }
+
+        # Transform Perplexity unified spec parameters to Exa format
+        if "max_results" in optional_params:
+            request_data["numResults"] = optional_params["max_results"]
+
+        if "search_domain_filter" in optional_params:
+            request_data["includeDomains"] = optional_params["search_domain_filter"]
+
+        if "country" in optional_params:
+            request_data["userLocation"] = optional_params["country"]
+
+        # Convert to dict before dynamic key assignments
+        result_data: Final = dict(request_data)
+
+        # pass through all other parameters as-is
+        for param, value in optional_params.items():
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
+                result_data[param] = value
+
+        # By default, request text content if not explicitly specified
+        # Exa AI doesn't return content/text unless explicitly requested
+        if "contents" not in result_data:
+            result_data["contents"] = {"text": True}
+
+        return result_data
+
+    def transform_search_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        **kwargs,
+    ) -> SearchResponse:
+        """
+        Transform Exa AI API response to LiteLLM unified SearchResponse format.
+
+        Exa AI → LiteLLM mappings:
+        - results[].title → SearchResult.title
+        - results[].url → SearchResult.url
+        - results[].text → SearchResult.snippet
+        - results[].highlights → SearchResult.snippet (fallback when "text" is absent)
+        - results[].summary → SearchResult.snippet (fallback when "text" and "highlights" are absent)
+        - results[].publishedDate → SearchResult.date
+        - No last_updated field in Exa AI response (set to None)
+        - results[].highlights / highlightScores / score → SearchResult.highlights / highlight_scores / score,
+          each set only when Exa returned it
+        - every top-level key except results (requestId, costDollars, ...) → SearchResponse.provider_metadata
+
+        Args:
+            raw_response: Raw httpx response from Exa AI API
+            logging_obj: Logging object for tracking
+
+        Returns:
+            SearchResponse with standardized format
+        """
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
+
+        # Transform results to SearchResult objects
+        results: Final = []
+        for raw_result in _JSON_VALUES.validate_python(response_json.get("results", [])):
+            result = _JSON_OBJECT.validate_python(raw_result)
+            search_result = SearchResult.model_validate(
+                {
+                    "title": result.get("title", ""),
+                    "url": result.get("url", ""),
+                    "snippet": result.get("text")
+                    or "\n\n".join(_STRS.validate_python(result.get("highlights") or []))
+                    or result.get("summary")
+                    or "",
+                    "date": result.get("publishedDate"),  # ISO 8601 datetime string
+                    "last_updated": None,  # Exa AI doesn't provide last_updated in response
+                    **{field: result[key] for key, field in _RESULT_EXTRAS if key in result},
+                }
+            )
+            results.append(search_result)
+
+        return SearchResponse.model_validate(
+            {
+                "results": results,
+                "object": "search",
+                "provider_metadata": {key: value for key, value in response_json.items() if key != "results"},
+            }
+        )

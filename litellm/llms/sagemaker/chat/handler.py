@@ -1,0 +1,151 @@
+import json
+from collections.abc import Callable
+from copy import deepcopy
+from typing import Final
+
+import httpx
+
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, pop_aws_auth_params
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.utils import ModelResponse, get_secret
+
+from ..common_utils import AWSEventStreamDecoder
+from .transformation import SagemakerChatConfig
+
+
+class SagemakerChatHandler(BaseAWSLLM):
+    def _load_credentials(
+        self,
+        optional_params: dict,
+    ):
+        ensure_optional_import("botocore")
+        from botocore.credentials import Credentials
+
+        auth_params: Final = pop_aws_auth_params(optional_params)
+        aws_region_name = optional_params.pop("aws_region_name", None)
+        optional_params.pop("aws_bedrock_runtime_endpoint", None)
+
+        ### SET REGION NAME ###
+        if aws_region_name is None:
+            # check env #
+            litellm_aws_region_name: Final = get_secret("AWS_REGION_NAME", None)
+
+            if litellm_aws_region_name is not None and isinstance(litellm_aws_region_name, str):
+                aws_region_name = litellm_aws_region_name
+
+            standard_aws_region_name: Final = get_secret("AWS_REGION", None)
+            if standard_aws_region_name is not None and isinstance(standard_aws_region_name, str):
+                aws_region_name = standard_aws_region_name
+
+            if aws_region_name is None:
+                aws_region_name = "us-west-2"
+
+        credentials: Final[Credentials] = self.resolve_credentials(auth_params, aws_region_name)
+        return credentials, aws_region_name
+
+    def _prepare_request(
+        self,
+        credentials,
+        model: str,
+        data: dict,
+        optional_params: dict,
+        aws_region_name: str,
+        extra_headers: dict | None = None,
+    ):
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+
+        sigv4: Final = SigV4Auth(credentials, "sagemaker", aws_region_name)
+        dns_suffix: Final = get_aws_dns_suffix(aws_region_name)
+        if optional_params.get("stream") is True:
+            api_base = f"https://runtime.sagemaker.{aws_region_name}.{dns_suffix}/endpoints/{model}/invocations-response-stream"
+        else:
+            api_base = f"https://runtime.sagemaker.{aws_region_name}.{dns_suffix}/endpoints/{model}/invocations"
+
+        sagemaker_base_url: Final = optional_params.get("sagemaker_base_url", None)
+        if sagemaker_base_url is not None:
+            api_base = sagemaker_base_url
+
+        encoded_data: Final = json.dumps(data).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if extra_headers is not None:
+            headers = {"Content-Type": "application/json", **extra_headers}
+        request: Final = AWSRequest(method="POST", url=api_base, data=encoded_data, headers=headers)
+        sigv4.add_auth(request)
+        if (
+            extra_headers is not None and "Authorization" in extra_headers
+        ):  # prevent sigv4 from overwriting the auth header
+            request.headers["Authorization"] = extra_headers["Authorization"]
+
+        prepped_request: Final = request.prepare()
+
+        return prepped_request
+
+    def completion(
+        self,
+        model: str,
+        messages: list,
+        model_response: ModelResponse,
+        print_verbose: Callable,
+        encoding,
+        logging_obj,
+        optional_params: dict,
+        litellm_params: dict,
+        timeout: float | httpx.Timeout | None = None,
+        custom_prompt_dict={},
+        logger_fn=None,
+        acompletion: bool = False,
+        headers: dict = {},
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+    ):
+        # pop streaming if it's in the optional params as 'stream' raises an error with sagemaker
+        credentials, aws_region_name = self._load_credentials(optional_params)
+        inference_params: Final = deepcopy(optional_params)
+        stream: Final = inference_params.pop("stream", None)
+
+        from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
+
+        openai_like_chat_completions: Final = OpenAILikeChatHandler()
+        inference_params["stream"] = True if stream is True else False
+        _data: Final = SagemakerChatConfig().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=inference_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        prepared_request: Final = self._prepare_request(
+            model=model,
+            data=_data,
+            optional_params=optional_params,
+            credentials=credentials,
+            aws_region_name=aws_region_name,
+        )
+
+        custom_stream_decoder: Final = AWSEventStreamDecoder(model="", is_messages_api=True)
+
+        return openai_like_chat_completions.completion(
+            model=model,
+            messages=messages,
+            api_base=prepared_request.url,
+            api_key=None,
+            custom_prompt_dict=custom_prompt_dict,
+            model_response=model_response,
+            print_verbose=print_verbose,
+            logging_obj=logging_obj,
+            optional_params=inference_params,
+            acompletion=acompletion,
+            litellm_params=litellm_params,
+            logger_fn=logger_fn,
+            timeout=timeout,
+            encoding=encoding,
+            headers=prepared_request.headers,
+            custom_endpoint=True,
+            custom_llm_provider="sagemaker_chat",
+            streaming_decoder=custom_stream_decoder,
+            client=client,
+        )

@@ -1,0 +1,79 @@
+name: Bug Report
+description: File a bug report
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened, and what did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Config
+      description: What does your config look like? Paste your config.yaml, or the SDK call if you are not running the proxy. Remove sensitive values.
+      render: yaml
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: LiteLLM Version
+      placeholder: v1.100.0
+    validations:
+      required: true
+  - type: textarea
+    id: steps-to-repro
+    attributes:
+      label: Steps to Repro
+      description: The exact request you sent and the full response you got back. For UI bugs, the page URL and a screenshot.
+      placeholder: |
+        1. curl -X POST http://localhost:4000/v1/chat/completions -H "Authorization: Bearer sk-..." -d '{"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}]}'
+        2. Response: 500 {"error": {"message": "..."}}
+        3. Expected: 200 with a chat completion
+    validations:
+      required: true
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Which part of LiteLLM is this about?
+      description: Best guess is fine, we will relabel if needed.
+      options:
+        - "Cost map: model prices and context windows"
+        - "LLM translation: a specific provider's request or response"
+        - "Routing: load balancing, fallbacks, retries, cooldowns"
+        - "Caching: response cache, Redis, semantic cache"
+        - "Proxy core: startup, config, health checks, endpoints"
+        - "Proxy auth: virtual keys, JWT, SSO, SCIM, roles"
+        - "Management: creating and editing keys, teams, users, orgs, models"
+        - "Spend tracking: spend logs, cost attribution, usage reports"
+        - "Budgets and rate limits: budgets, tpm/rpm, 429s"
+        - "Database: Prisma, migrations, Postgres"
+        - "Logging: callbacks, Langfuse, Datadog, OTel, Prometheus, alerting"
+        - "Guardrails: moderation, PII masking, policies"
+        - "MCP: servers, tools, OAuth"
+        - "Agents: A2A, agent endpoints, skills"
+        - "Vector stores: knowledge bases, RAG, search"
+        - "Passthrough: raw provider endpoints through the proxy"
+        - "Admin UI"
+        - "Python SDK: the litellm package itself"
+        - "Deploy: Docker, Helm, Terraform"
+        - "Docs"
+        - "Not sure"
+    validations:
+      required: false
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you deploying?
+      options:
+        - Docker
+        - Helm chart, monolithic
+        - Helm chart, componentized (recommended)
+        - pip / Python SDK
+        - Other
+    validations:
+      required: false

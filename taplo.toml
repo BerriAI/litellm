@@ -1,0 +1,23 @@
+[formatting]
+
+# Keep your table/key order as written (project, project.scripts, dependency-groups, tool.uv, ...)
+reorder_keys = false
+
+# Force arrays to stay multiline once expanded
+array_auto_expand = true
+array_auto_collapse = false
+
+# Keep nice spacing inside arrays and inline tables
+compact_arrays = false
+compact_inline_tables = true
+
+# Don’t align `=` vertically (matches your example)
+align_entries = true
+
+# Reasonable defaults
+align_comments = true
+trailing_newline = true
+reorder_arrays = true
+reorder_inline_tables = false
+allowed_blank_lines = 2
+crlf = false

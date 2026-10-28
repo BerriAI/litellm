@@ -1,0 +1,45 @@
+suite: "pdb enabled"
+templates:
+  - poddisruptionbudget.yaml
+tests:
+  - it: "renders a PDB with maxUnavailable=1"
+    set:
+      pdb.enabled: true
+      pdb.maxUnavailable: 1
+    asserts:
+      - hasDocuments: { count: 1 }
+      - isKind: { of: PodDisruptionBudget }
+      - equal: { path: apiVersion, value: policy/v1 }
+      - equal: { path: spec.maxUnavailable, value: 1 }
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+
+---
+suite: "pdb disabled"
+templates:
+  - poddisruptionbudget.yaml
+tests:
+  - it: "does not render when disabled"
+    set:
+      pdb.enabled: false
+    asserts:
+      - hasDocuments: { count: 0 }
+
+---
+suite: "pdb minAvailable precedence"
+templates:
+  - poddisruptionbudget.yaml
+tests:
+  - it: "uses minAvailable when both are set"
+    set:
+      pdb.enabled: true
+      pdb.minAvailable: "50%"
+      pdb.maxUnavailable: 1
+    asserts:
+      - isKind: { of: PodDisruptionBudget }
+      - equal: { path: apiVersion, value: policy/v1 }
+      - equal: { path: spec.minAvailable, value: "50%" }
+      - isNull: { path: spec.maxUnavailable }

@@ -1,0 +1,2 @@
+ollama serve &
+litellm

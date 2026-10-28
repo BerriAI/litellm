@@ -1,0 +1,384 @@
+import enum
+import os
+import time
+from collections.abc import Mapping
+from datetime import datetime as dt
+from enum import Enum
+from typing import Any, Final, Literal, Optional, Union
+
+from pydantic import Field
+from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.utils import LiteLLMPydanticObjectBase
+
+DEFAULT_DIGEST_INTERVAL: Final = 86400  # 24 hours in seconds
+
+SLACK_ALERTING_THRESHOLD_5_PERCENT: Final = 0.05
+SLACK_ALERTING_THRESHOLD_15_PERCENT: Final = 0.15
+MAX_OLDEST_HANGING_REQUESTS_TO_CHECK: Final = 20
+HANGING_ALERT_BUFFER_TIME_SECONDS: Final = 60
+
+
+class BaseOutageModel(TypedDict):
+    alerts: list[int]
+    minor_alert_sent: bool
+    major_alert_sent: bool
+    last_updated_at: float
+
+
+class OutageModel(BaseOutageModel):
+    model_id: str
+
+
+class ProviderRegionOutageModel(BaseOutageModel):
+    provider_region_id: str
+    deployment_ids: set[str]  # mutable-ok: outage state accumulates ids via .add() and round-trips the cache as a list
+
+
+# we use this for the email header, please send a test email if you change this. verify it looks good on email
+LITELLM_LOGO_URL: Final = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+LITELLM_SUPPORT_CONTACT: Final = "support@berri.ai"
+
+
+class SlackAlertingArgsEnum(Enum):
+    daily_report_frequency = 12 * 60 * 60
+    report_check_interval = 5 * 60
+    budget_alert_ttl = 24 * 60 * 60
+    outage_alert_ttl = 1 * 60
+    region_outage_alert_ttl = 1 * 60
+    minor_outage_alert_threshold = 1 * 5
+    major_outage_alert_threshold = 1 * 10
+    max_outage_alert_list_size = 1 * 10
+
+
+class SlackAlertingArgs(LiteLLMPydanticObjectBase):
+    daily_report_frequency: int = Field(
+        default=int(
+            os.getenv(
+                "SLACK_DAILY_REPORT_FREQUENCY",
+                int(SlackAlertingArgsEnum.daily_report_frequency.value),
+            )
+        ),
+        description="Frequency of receiving deployment latency/failure reports. Default is 12hours. Value is in seconds.",
+    )
+    report_check_interval: int = Field(
+        default=SlackAlertingArgsEnum.report_check_interval.value,
+        description="Frequency of checking cache if report should be sent. Background process. Default is once per hour. Value is in seconds.",
+    )  # 5 minutes
+    budget_alert_ttl: int = Field(
+        default=SlackAlertingArgsEnum.budget_alert_ttl.value,
+        description="Cache ttl for budgets alerts. Prevents spamming same alert, each time budget is crossed. Value is in seconds.",
+    )  # 24 hours
+    outage_alert_ttl: int = Field(
+        default=SlackAlertingArgsEnum.outage_alert_ttl.value,
+        description="Cache ttl for model outage alerts. Sets time-window for errors. Default is 1 minute. Value is in seconds.",
+    )  # 1 minute ttl
+    region_outage_alert_ttl: int = Field(
+        default=SlackAlertingArgsEnum.region_outage_alert_ttl.value,
+        description="Cache ttl for provider-region based outage alerts. Alert sent if 2+ models in same region report errors. Sets time-window for errors. Default is 1 minute. Value is in seconds.",
+    )  # 1 minute ttl
+    minor_outage_alert_threshold: int = Field(
+        default=SlackAlertingArgsEnum.minor_outage_alert_threshold.value,
+        description="The number of errors that count as a model/region minor outage. ('400' error code is not counted).",
+    )
+    major_outage_alert_threshold: int = Field(
+        default=SlackAlertingArgsEnum.major_outage_alert_threshold.value,
+        description="The number of errors that countas a model/region major outage. ('400' error code is not counted).",
+    )
+    max_outage_alert_list_size: int = Field(
+        default=SlackAlertingArgsEnum.max_outage_alert_list_size.value,
+        description="Maximum number of errors to store in cache. For a given model/region. Prevents memory leaks.",
+    )  # prevent memory leak
+    log_to_console: bool = Field(
+        default=False,
+        description="If true, the alerting payload will be printed to the console.",
+    )
+    daily_spend_per_user_threshold: float | None = Field(
+        default=None,
+        gt=0,
+        allow_inf_nan=False,
+        description="Alert when a user's spend for the current day (UTC) crosses this USD amount. Off by default.",
+    )
+    monthly_spend_per_user_threshold: float | None = Field(
+        default=None,
+        gt=0,
+        allow_inf_nan=False,
+        description="Alert when a user's spend for the current calendar month (UTC) crosses this USD amount. Off by default.",
+    )
+    spend_anomaly_multiplier: float = Field(
+        default=3.0,
+        gt=0,
+        allow_inf_nan=False,
+        description="Flag a user's spend as anomalous when today's spend exceeds this multiple of their trailing daily average.",
+    )
+    spend_anomaly_baseline_days: int = Field(
+        default=7,
+        ge=1,
+        description="Number of trailing days used to compute a user's daily average spend for anomaly detection.",
+    )
+    spend_anomaly_min_spend: float = Field(
+        default=10.0,
+        gt=0,
+        allow_inf_nan=False,
+        description="Minimum spend (USD) a user must reach today before an anomaly alert can fire. Reduces false positives.",
+    )
+    user_spend_check_interval: int = Field(
+        default=3600,
+        ge=60,
+        description="How often (in seconds) to check per-user spend thresholds and anomalies. Default is hourly.",
+    )
+
+
+class DeploymentMetrics(LiteLLMPydanticObjectBase):
+    """
+    Metrics per deployment, stored in cache
+
+    Used for daily reporting
+    """
+
+    id: str
+    """id of deployment in router model list"""
+
+    failed_request: bool
+    """did it fail the request?"""
+
+    latency_per_output_token: float | None
+    """latency/output token of deployment"""
+
+    updated_at: dt
+    """Current time of deployment being updated"""
+
+
+class SlackAlertingCacheKeys(Enum):
+    """
+    Enum for deployment daily metrics keys - {deployment_id}:{enum}
+    """
+
+    failed_requests_key = "failed_requests_daily_metrics"
+    latency_key = "latency_daily_metrics"
+    report_sent_key = "daily_metrics_report_sent"
+    deprecation_alert_sent_key = "model_deprecation_alert_sent"
+
+
+class AlertType(str, Enum):
+    """
+    Enum for alert types and management event types
+    """
+
+    # LLM-related alerts
+    llm_exceptions = "llm_exceptions"
+    llm_too_slow = "llm_too_slow"
+    llm_requests_hanging = "llm_requests_hanging"
+
+    # Budget and spend alerts
+    budget_alerts = "budget_alerts"
+    spend_reports = "spend_reports"
+    failed_tracking_spend = "failed_tracking_spend"
+    user_spend_thresholds = "user_spend_thresholds"
+    user_spend_anomalies = "user_spend_anomalies"
+
+    # Database alerts
+    db_exceptions = "db_exceptions"
+
+    # Report alerts
+    daily_reports = "daily_reports"
+
+    # Deployment alerts
+    cooldown_deployment = "cooldown_deployment"
+    new_model_added = "new_model_added"
+    model_deprecation_warnings = "model_deprecation_warnings"
+
+    # Outage alerts
+    outage_alerts = "outage_alerts"
+    region_outage_alerts = "region_outage_alerts"
+
+    # Fallback alerts
+    fallback_reports = "fallback_reports"
+
+    # Virtual Key Events
+    new_virtual_key_created = "new_virtual_key_created"
+    virtual_key_updated = "virtual_key_updated"
+    virtual_key_deleted = "virtual_key_deleted"
+
+    # Team Events
+    new_team_created = "new_team_created"
+    team_updated = "team_updated"
+    team_deleted = "team_deleted"
+
+    # Internal User Events
+    new_internal_user_created = "new_internal_user_created"
+    internal_user_updated = "internal_user_updated"
+    internal_user_deleted = "internal_user_deleted"
+
+    # MCP tool catalog events
+    mcp_tool_description_blocked = "mcp_tool_description_blocked"
+    mcp_pinned_tools_changed = "mcp_pinned_tools_changed"
+
+
+DEFAULT_ALERT_TYPES: Final[list[AlertType]] = [
+    # LLM related alerts
+    AlertType.llm_exceptions,
+    AlertType.llm_too_slow,
+    AlertType.llm_requests_hanging,
+    # Budget and spend alerts
+    AlertType.budget_alerts,
+    AlertType.spend_reports,
+    AlertType.failed_tracking_spend,
+    AlertType.user_spend_thresholds,
+    # Database alerts
+    AlertType.db_exceptions,
+    # Report alerts
+    AlertType.daily_reports,
+    # Deployment alerts
+    AlertType.cooldown_deployment,
+    AlertType.new_model_added,
+    AlertType.model_deprecation_warnings,
+    # Outage alerts
+    AlertType.outage_alerts,
+    AlertType.region_outage_alerts,
+    # Fallback alerts
+    AlertType.fallback_reports,
+    # MCP tool catalog alerts
+    AlertType.mcp_tool_description_blocked,
+    AlertType.mcp_pinned_tools_changed,
+]
+
+
+class AlertText(TypedDict):
+    text: ReadOnly[str]
+
+
+class AlertQueueItem(TypedDict):
+    url: ReadOnly[str]
+    headers: ReadOnly[Mapping[str, str]]
+    payload: ReadOnly[AlertText]
+    alert_type: ReadOnly[AlertType | str]
+    format: NotRequired[ReadOnly[str]]
+
+
+class HangingRequestData(LiteLLMBaseModel):
+    request_id: str
+    model: str
+    api_base: str | None = None
+    key_alias: str | None = None
+    team_alias: str | None = None
+    alerting_metadata: dict | None = None
+    created_at: float = Field(default_factory=time.time)
+    alerted: bool = False
+
+
+class AlertTypeConfig(LiteLLMPydanticObjectBase):
+    """Per-alert-type configuration, including digest mode settings."""
+
+    digest: bool = Field(
+        default=False,
+        description="Enable digest mode for this alert type. When enabled, duplicate alerts are aggregated into a single summary message.",
+    )
+    digest_interval: int = Field(
+        default=DEFAULT_DIGEST_INTERVAL,
+        description="Digest window in seconds. Alerts are aggregated within this interval. Default 24 hours.",
+    )
+
+
+class DigestEntry(TypedDict):
+    """Tracks an in-flight digest bucket for a unique (alert_type, model, api_base) combination."""
+
+    alert_type: str
+    request_model: str
+    api_base: str
+    first_message: str
+    level: str
+    count: int
+    start_time: dt
+    last_time: dt
+    webhook_url: str | list[str]
+
+
+class Litellm_EntityType(enum.Enum):
+    """
+    Enum for types of entities on litellm
+
+    This enum allows specifying the type of entity that is being tracked in the database.
+    """
+
+    KEY = "key"
+    USER = "user"
+    END_USER = "end_user"
+    TEAM = "team"
+    TEAM_MEMBER = "team_member"
+    ORGANIZATION = "organization"
+    ORGANIZATION_MEMBER = "organization_member"
+    PROJECT = "project"
+    TAG = "tag"
+    AGENT = "agent"
+    MODEL_ACCESS_GROUP = "model_access_group"
+
+    # global proxy level entity
+    PROXY = "proxy"
+
+
+class CallInfo(LiteLLMPydanticObjectBase):
+    """Used for slack budget alerting"""
+
+    spend: float
+    max_budget: float | None = None
+    soft_budget: float | None = None
+    token: str | None = Field(default=None, description="Hashed value of that key")
+    customer_id: str | None = None
+    user_id: str | None = None
+    team_id: str | None = None
+    team_alias: str | None = None
+    organization_id: str | None = None
+    user_email: str | None = None
+    key_alias: str | None = None
+    projected_exceeded_date: str | None = None
+    projected_spend: float | None = None
+    event_group: Litellm_EntityType
+    alert_emails: list[str] | None = Field(
+        default=None,
+        description="Additional email addresses to send alerts to (e.g., from team metadata)",
+    )
+    max_budget_alert_emails: dict[str, list[str]] | None = Field(
+        default=None,
+        description="Map of threshold percentage to email recipients (e.g., {'50': ['a@co.com'], '75': ['a@co.com', 'b@co.com']})",
+    )
+
+
+class WebhookEvent(CallInfo):
+    event: Literal[
+        "budget_crossed",
+        "max_budget_alert",
+        "soft_budget_crossed",
+        "threshold_crossed",
+        "projected_limit_exceeded",
+        "key_created",
+        "key_rotated",
+        "internal_user_created",
+        "spend_tracked",
+    ]
+    event_message: str  # human-readable description of event
+    event_group: Litellm_EntityType
+
+
+class InvitationNew(LiteLLMPydanticObjectBase):
+    user_id: str
+
+
+class InvitationModel(LiteLLMPydanticObjectBase):
+    id: str
+    user_id: str
+    is_accepted: bool
+    accepted_at: dt | None
+    expires_at: dt
+    created_at: dt
+    created_by: str
+    updated_at: dt
+    updated_by: str
+
+
+class VirtualKeyEvent(LiteLLMPydanticObjectBase):
+    created_by_user_id: str
+    created_by_user_role: str
+    created_by_key_alias: str | None
+    request_kwargs: dict  # pyright: ignore[reportMissingTypeArgument]  # moved verbatim from proxy/_types.py

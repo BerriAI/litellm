@@ -1,0 +1,82 @@
+"""SDK-free entrypoints for proxy-core call sites (auth, …).
+
+Proxy code may run without the OpenTelemetry SDK installed, so it must not import
+``litellm.integrations.otel.logger`` (which imports the SDK at module scope) at
+module load. These wrappers import it lazily and no-op when the SDK is absent or
+V2 is not the active logger — so a call site can wrap a request phase or seed
+identity unconditionally.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Generator, Mapping
+from contextlib import AbstractContextManager, contextmanager
+from functools import cache
+from typing import TYPE_CHECKING, Final, TypeAlias
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
+
+PhaseEventAttributes: TypeAlias = Mapping[str, str | int]
+PhaseAttributes: TypeAlias = Mapping[str, str | int | float | bool]
+
+
+@cache
+def _otel_runtime() -> (
+    tuple[
+        Callable[[str], AbstractContextManager[Span | None]],
+        Callable[..., None],
+        Callable[[str, PhaseEventAttributes | None], None],
+        Callable[[PhaseAttributes], None],
+    ]
+    | None
+):
+    """Resolve the SDK-backed hooks once and cache the outcome, absence included.
+
+    CPython never caches a failed import, so without this memoization every call
+    site re-attempts the import on each request; when the OTel SDK is not installed
+    that re-scans ``sys.path`` and contends on the import lock on the hot path.
+    """
+    try:
+        from litellm.integrations.otel import logger
+    except Exception:
+        return None
+    return (logger.phase_span, logger.seed_request_identity, logger.phase_event, logger.phase_attributes)
+
+
+@contextmanager
+def phase_span(name: str) -> Generator[Span | None]:
+    """Run a request phase inside a live active span so its DB/service calls nest.
+
+    Yields ``None`` (a plain no-op) when the OTel SDK is unavailable or V2 is not
+    the active logger.
+    """
+    runtime: Final = _otel_runtime()
+    if runtime is None:
+        yield None
+        return
+    with runtime[0](name) as span:
+        yield span
+
+
+def phase_event(name: str, attributes: PhaseEventAttributes | None = None) -> None:
+    """Mark a point in the request on its span (no-op without V2)."""
+    runtime: Final = _otel_runtime()
+    if runtime is None:
+        return
+    runtime[2](name, attributes)
+
+
+def seed_request_identity(user_api_key_dict: object, model: object = None) -> None:
+    """Seed request-identity Baggage at the auth boundary (no-op without V2)."""
+    runtime: Final = _otel_runtime()
+    if runtime is None:
+        return
+    runtime[1](user_api_key_dict, model=model)
+
+
+def phase_attributes(attributes: PhaseAttributes) -> None:
+    runtime: Final = _otel_runtime()
+    if runtime is None:
+        return
+    runtime[3](attributes)

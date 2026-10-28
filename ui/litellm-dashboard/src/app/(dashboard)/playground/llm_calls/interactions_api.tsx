@@ -1,0 +1,128 @@
+import type { ResponseHeadersListener } from "@/lib/http/observeResponseHeaders";
+import { toast } from "@/lib/toast";
+import { getGatewayBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import { streamErrorMessage } from "@/utils/streamErrorMessage";
+import {
+  buildPlaygroundHeaders,
+  type CustomHeaders,
+  withRequiredHeaders,
+} from "@/components/llm_calls/request_headers";
+
+export async function makeInteractionsRequest(
+  input: string,
+  updateUI: (text: string, model?: string) => void,
+  selectedModel: string,
+  accessToken: string,
+  tags?: string[],
+  signal?: AbortSignal,
+  customBaseUrl?: string,
+  previousInteractionId?: string,
+  customHeaders?: CustomHeaders,
+  onResponseHeaders?: ResponseHeadersListener,
+): Promise<void> {
+  if (!accessToken) {
+    throw new Error("Virtual Key is required");
+  }
+
+  const isLocal = process.env.NODE_ENV === "development";
+  if (isLocal !== true) {
+    console.log = function () {};
+  }
+
+  const proxyBaseUrl = customBaseUrl || getGatewayBaseUrl();
+  const normalizedBaseUrl = proxyBaseUrl.endsWith("/") ? proxyBaseUrl.slice(0, -1) : proxyBaseUrl;
+  const requestUrl = `${normalizedBaseUrl}/v1beta/interactions`;
+
+  const headers: Record<string, string> = withRequiredHeaders(buildPlaygroundHeaders(tags, customHeaders), {
+    "Content-Type": "application/json",
+    [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
+  });
+
+  const body: Record<string, unknown> = {
+    model: selectedModel,
+    input,
+    stream: true,
+  };
+  if (previousInteractionId) {
+    body.previous_interaction_id = previousInteractionId;
+  }
+
+  try {
+    const response = await fetch(requestUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal,
+    });
+    onResponseHeaders?.(response.headers);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || `Request failed with status ${response.status}`);
+    }
+
+    if (!response.body) {
+      throw new Error("No response body received");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let responseModel: string | undefined;
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE lines are separated by double newlines; split on single newlines and
+      // look for "data: " prefixed lines.
+      const lines = buffer.split("\n");
+      // Keep the last (potentially incomplete) line in the buffer
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+
+        const jsonStr = trimmed.slice("data:".length).trim();
+        if (!jsonStr || jsonStr === "[DONE]") continue;
+
+        let event: Record<string, unknown>;
+        try {
+          event = JSON.parse(jsonStr);
+        } catch {
+          continue;
+        }
+
+        const errorMessage = streamErrorMessage(event);
+        if (errorMessage !== null) {
+          throw new Error(errorMessage);
+        }
+
+        const eventType = event.event_type as string | undefined;
+
+        if (eventType === "interaction.created" || eventType === "interaction.completed") {
+          const interaction = event.interaction as Record<string, unknown> | undefined;
+          if (typeof interaction?.model === "string" && interaction.model) {
+            responseModel = interaction.model;
+          } else if (typeof event.model === "string" && event.model) {
+            responseModel = event.model;
+          }
+        } else if (eventType === "step.delta") {
+          const delta = event.delta as Record<string, unknown> | undefined;
+          if (typeof delta?.text === "string" && delta.text) {
+            updateUI(delta.text, responseModel ?? selectedModel);
+          }
+        }
+      }
+    }
+  } catch (error: unknown) {
+    if (signal?.aborted) {
+      throw error;
+    }
+    toast.fromError(`Error occurred while making Interactions API request. Error: ${error}`);
+    throw error;
+  }
+}

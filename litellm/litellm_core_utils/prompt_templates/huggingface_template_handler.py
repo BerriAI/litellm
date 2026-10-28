@@ -1,0 +1,179 @@
+import json
+from datetime import datetime
+from typing import Any, Final, Literal
+
+from pydantic import TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    get_httpx_client,
+)
+from litellm.types.llms.custom_http import httpxSpecialProvider
+
+_DECODED_TOKENIZER_CONFIG: Final = TypeAdapter(object)
+
+
+class _TokenizerConfigResult(TypedDict):
+    """Outcome of a tokenizer_config.json fetch, carrying the parsed document when the fetch succeeded."""
+
+    status: ReadOnly[Literal["success", "failure"]]
+    tokenizer: NotRequired[ReadOnly[object]]
+
+
+class _ChatTemplateFileResult(TypedDict):
+    """Outcome of a chat template file fetch, carrying the template body when the fetch succeeded."""
+
+    status: ReadOnly[Literal["success", "failure"]]
+    chat_template: NotRequired[ReadOnly[str]]
+
+
+def strftime_now(fmt: str) -> str:
+    """
+    Custom function for templates that need current date/time formatting (e.g., gpt-oss)
+
+    Args:
+        fmt: Format string for datetime.now().strftime()
+
+    Returns:
+        Formatted string
+    """
+    return datetime.now().strftime(fmt)
+
+
+def get_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
+    """
+    Fetch tokenizer_config.json from HuggingFace (sync)
+
+    Args:
+        hf_model_name: HuggingFace model name (e.g., 'openai/gpt-oss-120b')
+
+    Returns:
+        Dict with 'status' and optionally 'tokenizer' keys
+    """
+    try:
+        url: Final = f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
+        client: Final = get_httpx_client()
+        response: Final = client.get(url=url)
+    except Exception as e:
+        raise e
+    if response.status_code == 200:
+        tokenizer_config: Final = _DECODED_TOKENIZER_CONFIG.validate_python(json.loads(response.content))
+        return {"status": "success", "tokenizer": tokenizer_config}
+    else:
+        return {"status": "failure"}
+
+
+_get_tokenizer_config = get_tokenizer_config
+
+
+async def aget_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
+    """
+    Fetch tokenizer_config.json from HuggingFace (async)
+
+    Args:
+        hf_model_name: HuggingFace model name (e.g., 'openai/gpt-oss-120b')
+
+    Returns:
+        Dict with 'status' and optionally 'tokenizer' keys
+    """
+    try:
+        url: Final = f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
+        client: Final = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.PromptFactory,
+        )
+        response: Final = await client.get(url=url)
+    except Exception as e:
+        raise e
+    if response.status_code == 200:
+        tokenizer_config: Final = _DECODED_TOKENIZER_CONFIG.validate_python(json.loads(response.content))
+        return {"status": "success", "tokenizer": tokenizer_config}
+    else:
+        return {"status": "failure"}
+
+
+_aget_tokenizer_config = aget_tokenizer_config
+
+
+def get_chat_template_file(hf_model_name: str) -> _ChatTemplateFileResult:
+    """
+    Fetch chat template from separate .jinja file (sync)
+
+    Args:
+        hf_model_name: HuggingFace model name (e.g., 'openai/gpt-oss-120b')
+
+    Returns:
+        Dict with 'status' and optionally 'chat_template' keys
+    """
+    template_filenames: Final = ["chat_template.jinja", "chat_template.jinja2"]
+    client: Final = get_httpx_client()
+
+    for filename in template_filenames:
+        try:
+            url = f"https://huggingface.co/{hf_model_name}/raw/main/{filename}"
+            response = client.get(url=url)
+            if response.status_code == 200:
+                return {
+                    "status": "success",
+                    "chat_template": response.content.decode("utf-8"),
+                }
+        except Exception:
+            continue
+
+    return {"status": "failure"}
+
+
+_get_chat_template_file = get_chat_template_file
+
+
+async def aget_chat_template_file(hf_model_name: str) -> _ChatTemplateFileResult:
+    """
+    Fetch chat template from separate .jinja file (async)
+
+    Args:
+        hf_model_name: HuggingFace model name (e.g., 'openai/gpt-oss-120b')
+
+    Returns:
+        Dict with 'status' and optionally 'chat_template' keys
+    """
+    template_filenames: Final = ["chat_template.jinja", "chat_template.jinja2"]
+    client: Final = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.PromptFactory,
+    )
+
+    for filename in template_filenames:
+        try:
+            url = f"https://huggingface.co/{hf_model_name}/raw/main/{filename}"
+            response = await client.get(url=url)
+            if response.status_code == 200:
+                return {
+                    "status": "success",
+                    "chat_template": response.content.decode("utf-8"),
+                }
+        except Exception:
+            continue
+
+    return {"status": "failure"}
+
+
+_aget_chat_template_file = aget_chat_template_file
+
+
+def extract_token_value(token_value: None | str | dict[str, Any]) -> str:
+    """
+    Extract token string from various formats (string, dict, etc.)
+
+    Args:
+        token_value: Token value in various formats (None, str, or dict with 'content' key)
+
+    Returns:
+        Extracted token string
+    """
+    if token_value is None or isinstance(token_value, str):
+        return token_value or ""
+    if isinstance(token_value, dict):
+        return token_value.get("content", "")
+    return ""
+
+
+_extract_token_value = extract_token_value

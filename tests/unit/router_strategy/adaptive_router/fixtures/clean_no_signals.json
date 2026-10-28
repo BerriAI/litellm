@@ -1,0 +1,16 @@
+[
+  {
+    "user_content": "what is the weather today in paris france",
+    "assistant_content": "It is sunny and warm in Paris today.",
+    "tool_calls": [],
+    "tool_results": [],
+    "response_status": 200
+  },
+  {
+    "user_content": "what is the weather today in paris france tomorrow",
+    "assistant_content": "Light rain is expected throughout the day.",
+    "tool_calls": [],
+    "tool_results": [],
+    "response_status": 200
+  }
+]

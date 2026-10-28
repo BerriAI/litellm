@@ -1,0 +1,116 @@
+suite: Service Configuration Tests
+templates:
+  - service.yaml
+tests:
+  - it: should create a default ClusterIP service
+    template: service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports[0].port
+          value: 4000
+      - equal:
+          path: spec.ports[0].targetPort
+          value: http
+      - equal:
+          path: spec.ports[0].protocol
+          value: TCP
+      - equal:
+          path: spec.ports[0].name
+          value: http
+      - isNull:
+          path: spec.loadBalancerClass
+
+  - it: should create a NodePort service when specified
+    template: service.yaml
+    set:
+      service.type: NodePort
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: NodePort
+      - isNull:
+          path: spec.loadBalancerClass
+
+  - it: should create a LoadBalancer service when specified
+    template: service.yaml
+    set:
+      service.type: LoadBalancer
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - isNull:
+          path: spec.loadBalancerClass
+
+  - it: should add loadBalancerClass when specified with LoadBalancer type
+    template: service.yaml
+    set:
+      service.type: LoadBalancer
+      service.loadBalancerClass: tailscale
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - equal:
+          path: spec.loadBalancerClass
+          value: tailscale
+
+  - it: should not add loadBalancerClass when specified with ClusterIP type
+    template: service.yaml
+    set:
+      service.type: ClusterIP
+      service.loadBalancerClass: tailscale
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - isNull:
+          path: spec.loadBalancerClass
+
+  - it: should use custom port when specified
+    template: service.yaml
+    set:
+      service.port: 8080
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 8080
+
+  - it: should add service annotations when specified
+    template: service.yaml
+    set:
+      service.annotations:
+        cloud.google.com/load-balancer-type: "Internal"
+        service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.annotations
+          value:
+            cloud.google.com/load-balancer-type: "Internal"
+            service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+
+  - it: should use the correct selector labels
+    template: service.yaml
+    asserts:
+      - isNotNull:
+          path: spec.selector
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME

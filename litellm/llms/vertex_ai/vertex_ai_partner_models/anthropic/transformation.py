@@ -1,0 +1,254 @@
+# What is this?
+## Handler file for calling claude-3 on vertex ai
+import base64
+import json
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
+
+import httpx
+from pydantic import TypeAdapter
+
+import litellm
+from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, inline_remote_image_urls
+from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
+
+from ....anthropic.chat.transformation import AnthropicConfig
+from .output_params_utils import sanitize_vertex_anthropic_output_params
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_VERTEX_LABELS_HEADER: Final = "X-Vertex-AI-Labels"
+_LABELS: Final = TypeAdapter(Mapping[object, object])
+
+
+def _vertex_labels_header(labels: object, header_names: Mapping[str, object]) -> str | None:
+    if not isinstance(labels, dict) or any(name.lower() == _VERTEX_LABELS_HEADER.lower() for name in header_names):
+        return None
+    string_labels: Final = {
+        key: value
+        for key, value in _LABELS.validate_python(labels).items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+    return base64.b64encode(json.dumps(string_labels).encode()).decode() if string_labels else None
+
+
+class VertexAIError(Exception):
+    def __init__(self, status_code, message):
+        self.status_code = status_code
+        self.message = message
+        self.request = httpx.Request(method="POST", url=" https://cloud.google.com/vertex-ai/")
+        self.response = httpx.Response(status_code=status_code, request=self.request)
+        super().__init__(self.message)  # Call the base class constructor with the parameters it needs
+
+
+class VertexAIAnthropicConfig(AnthropicConfig):
+    """
+    Reference:https://docs.anthropic.com/claude/reference/messages_post
+
+    Note that the API for Claude on Vertex differs from the Anthropic API documentation in the following ways:
+
+    - `model` is not a valid parameter. The model is instead specified in the Google Cloud endpoint URL.
+    - `anthropic_version` is a required parameter and must be set to "vertex-2023-10-16".
+
+    The class `VertexAIAnthropicConfig` provides configuration for the VertexAI's Anthropic API interface. Below are the parameters:
+
+    - `max_tokens` Required (integer) max tokens,
+    - `anthropic_version` Required (string) version of anthropic for bedrock - e.g. "bedrock-2023-05-31"
+    - `system` Optional (string) the system prompt, conversion from openai format to this is handled in factory.py
+    - `temperature` Optional (float) The amount of randomness injected into the response
+    - `top_p` Optional (float) Use nucleus sampling.
+    - `top_k` Optional (int) Only sample from the top K options for each subsequent token
+    - `stop_sequences` Optional (List[str]) Custom text sequences that cause the model to stop generating
+
+    Note: Please make sure to modify the default parameters as required for your use case.
+    """
+
+    @property
+    def custom_llm_provider(self) -> str | None:
+        return "vertex_ai"
+
+    def inlines_remote_media(self, media: RemoteMedia) -> bool:
+        return inline_remote_image_urls(media)
+
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
+    def _add_context_management_beta_headers(self, beta_set: set, context_management: dict) -> None:
+        """
+        Add context_management beta headers to the beta_set.
+
+        - If any edit has type "compact_20260112", add compact-2026-01-12 header
+        - For all other edits, add context-management-2025-06-27 header
+
+        Args:
+            beta_set: Set of beta headers to modify in-place
+            context_management: The context_management dict from optional_params
+        """
+        from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+
+        edits: Final = context_management.get("edits", [])
+        has_compact = False
+        has_other = False
+
+        for edit in edits:
+            edit_type = edit.get("type", "")
+            if edit_type == "compact_20260112":
+                has_compact = True
+            else:
+                has_other = True
+
+        # Add compact header if any compact edits exist
+        if has_compact:
+            beta_set.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
+
+        # Add context management header if any other edits exist
+        if has_other:
+            beta_set.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        params: Final = _NON_DEFAULT_PARAMS.validate_python(optional_params)
+        labels_header: Final = _vertex_labels_header(params.get("labels"), _NON_DEFAULT_PARAMS.validate_python(headers))
+        if "labels" in params:
+            del optional_params["labels"]  # rebind-ok: labels travel in the X-Vertex-AI-Labels header, not the body
+        if labels_header is not None:
+            headers[_VERTEX_LABELS_HEADER] = labels_header  # rebind-ok: outbound headers are returned by mutation
+        data: Final = super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
+
+        sanitize_vertex_anthropic_output_params(data, model)
+
+        tools: Final = optional_params.get("tools")
+        tool_search_used: Final = self.is_tool_search_used(tools)
+        auto_betas: Final = self.get_anthropic_beta_list(
+            model=model,
+            optional_params=optional_params,
+            computer_tool_used=self.is_computer_tool_used(tools),
+            prompt_caching_set=self.is_cache_control_set(messages),
+            file_id_used=self.is_file_id_used(messages),
+            mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
+            custom_llm_provider="vertex_ai",
+        )
+
+        beta_set: Final = set(auto_betas)
+        if tool_search_used:
+            beta_set.add("tool-search-tool-2025-10-19")  # Vertex requires this header for tool search
+
+        # Add context_management beta headers (compact and/or context-management)
+        context_management: Final = optional_params.get("context_management")
+        if context_management:
+            self._add_context_management_beta_headers(beta_set, context_management)
+
+        extra_headers: Final = optional_params.get("extra_headers") or {}
+        anthropic_beta_value: Final = extra_headers.get("anthropic-beta", "")
+        if isinstance(anthropic_beta_value, str) and anthropic_beta_value:
+            for beta in anthropic_beta_value.split(","):
+                beta = beta.strip()
+                if beta:
+                    beta_set.add(beta)
+        elif isinstance(anthropic_beta_value, list):
+            beta_set.update(anthropic_beta_value)
+
+        data.pop("extra_headers", None)
+
+        if beta_set:
+            data["anthropic_beta"] = list(beta_set)
+            headers["anthropic-beta"] = ",".join(beta_set)
+
+        return data
+
+    def uses_native_structured_output(self, model: str) -> bool:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        return (
+            AnthropicModelInfo._get_provider_resolved_capability(
+                model, "supports_native_structured_output", "vertex_ai"
+            )
+            is True
+        )
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        mapped_params: Final = super().map_openai_params(
+            non_default_params={
+                **non_default_params,
+                **self._tools_param_with_openai_tool_search_mapped(
+                    _NON_DEFAULT_PARAMS.validate_python(non_default_params), model, drop_params
+                ),
+            },
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
+
+        AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+            model=model, optional_params=mapped_params, custom_llm_provider="vertex_ai", drop_params=drop_params
+        )
+
+        return mapped_params
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ModelResponse:
+        response: Final = super().transform_response(
+            model,
+            raw_response,
+            model_response,
+            logging_obj,
+            request_data,
+            messages,
+            optional_params,
+            litellm_params,
+            encoding,
+            api_key,
+            json_mode,
+        )
+        response.model = model
+
+        return response
+
+    @classmethod
+    def is_supported_model(cls, model: str, custom_llm_provider: str) -> bool:
+        """
+        Check if the model is supported by the VertexAI Anthropic API.
+        """
+        if custom_llm_provider != "vertex_ai" and custom_llm_provider != "vertex_ai_beta":
+            return False
+        if "claude" in model.lower() or model in litellm.vertex_anthropic_models:
+            return True
+        return False

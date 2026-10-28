@@ -1,0 +1,44 @@
+Resources:
+  LiteLLMServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      AvailabilityZone: us-east-1a
+      ImageId: ami-0f403e3180720dd7e
+      InstanceType: t2.micro
+
+  LiteLLMServerAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AvailabilityZones:
+        - us-east-1a
+      LaunchConfigurationName: !Ref LiteLLMServerLaunchConfig
+      MinSize: 1
+      MaxSize: 3
+      DesiredCapacity: 1
+      HealthCheckGracePeriod: 300
+
+  LiteLLMServerLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: ami-0f403e3180720dd7e  # Replace with your desired AMI ID
+      InstanceType: t2.micro
+
+  LiteLLMServerScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref LiteLLMServerAutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 60.0
+
+  LiteLLMDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: 20
+      Engine: postgres
+      MasterUsername: litellmAdmin
+      MasterUserPassword: litellmPassword
+      DBInstanceClass: db.t3.micro
+      AvailabilityZone: us-east-1a

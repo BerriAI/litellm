@@ -1,0 +1,405 @@
+import asyncio
+import os
+import time
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
+from functools import cache
+from typing import Final
+from urllib.parse import unquote
+
+from litellm._logging import verbose_logger
+from litellm._uuid import uuid
+from litellm.constants import (
+    _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    AZURE_STORAGE_DEFAULT_ENDPOINT_SUFFIX,
+    AZURE_STORAGE_MSFT_VERSION,
+)
+from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.azure.common_utils import get_azure_ad_token_from_entra_id
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
+from litellm.secret_managers.get_azure_ad_token_provider import (
+    get_azure_ad_token_provider,
+)
+from litellm.types.secret_managers.get_azure_ad_token_provider import (
+    AzureCredentialType,
+)
+from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
+
+AZURE_STORAGE_TOKEN_SCOPE: Final = "https://storage.azure.com/.default"
+_ADLS_SAFE_NAME: Final = str.maketrans("/", "_", "=")
+_DOT_OR_EMPTY_SEGMENTS: Final = frozenset(("", ".", ".."))
+
+
+def adls_safe_file_name(payload_id: str | None) -> str:
+    """A Responses API id is base64 behind `resp_`, and the Data Lake service rejects its `=` padding and `/`, so
+    that name drops the padding and maps `/` to `_`. Standard base64 has no `_` and its padding is fixed by the
+    length, so those ids stay distinct. Every other id, including a caller's `x-litellm-call-id`, is used as is
+    unless it has an empty, `.` or `..` path segment, which gets the same rewrite so the file keeps its own name in
+    the log directory"""
+    name: Final = payload_id or str(uuid.uuid4())
+    if not name.startswith("resp_") and _DOT_OR_EMPTY_SEGMENTS.isdisjoint(unquote(name).split("/")):
+        return f"{name}.json"
+    return f"{name.translate(_ADLS_SAFE_NAME)}.json"
+
+
+@cache
+def _cached_credential_chain_token_provider() -> Callable[[], str]:
+    return get_azure_ad_token_provider(
+        azure_scope=AZURE_STORAGE_TOKEN_SCOPE,
+        azure_credential=AzureCredentialType.DeploymentIdentityCredential,
+    )
+
+
+class AzureBlobStorageLogger(CustomBatchLogger):
+    def __init__(
+        self,
+        build_credential_chain_token_provider: Callable[
+            [], Callable[[], str]
+        ] = _cached_credential_chain_token_provider,
+        clock: Callable[[], float] = time.time,
+        **kwargs,
+    ):
+        try:
+            verbose_logger.debug("AzureBlobStorageLogger: in init azure blob storage logger")
+
+            # Env Variables used for Azure Storage Authentication
+            self.tenant_id = os.getenv("AZURE_STORAGE_TENANT_ID") or None
+            self.client_id = os.getenv("AZURE_STORAGE_CLIENT_ID") or None
+            self.client_secret = os.getenv("AZURE_STORAGE_CLIENT_SECRET") or None
+            self.azure_storage_account_key: str | None = os.getenv("AZURE_STORAGE_ACCOUNT_KEY")
+
+            # Required Env Variables for Azure Storage
+            _azure_storage_account_name: Final = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
+            if not _azure_storage_account_name:
+                raise ValueError("Missing required environment variable: AZURE_STORAGE_ACCOUNT_NAME")
+            self.azure_storage_account_name: str = _azure_storage_account_name
+            _azure_storage_file_system: Final = os.getenv("AZURE_STORAGE_FILE_SYSTEM")
+            if not _azure_storage_file_system:
+                raise ValueError("Missing required environment variable: AZURE_STORAGE_FILE_SYSTEM")
+            self.azure_storage_file_system: str = _azure_storage_file_system
+            self.azure_storage_endpoint_suffix: str = (
+                os.getenv("AZURE_STORAGE_ENDPOINT_SUFFIX") or AZURE_STORAGE_DEFAULT_ENDPOINT_SUFFIX
+            )
+            self._clock: Callable[[], float] = clock
+            self._service_client = None
+            # Time that the azure service client expires, in order to reset the connection pool and keep it fresh
+            self._service_client_timeout: float | None = None
+
+            # Internal variables used for Token based authentication
+            self.azure_auth_token: str | None = None  # the Azure AD token to use for Azure Storage API requests
+            self.token_expiry: datetime | None = None  # the expiry time of the currentAzure AD token
+            self._build_credential_chain_token_provider: Callable[[], Callable[[], str]] = (
+                build_credential_chain_token_provider
+            )
+
+            asyncio.create_task(self.periodic_flush())
+            self.flush_lock = asyncio.Lock()
+            self.log_queue: list[StandardLoggingPayload] = []
+            super().__init__(**kwargs, flush_lock=self.flush_lock)
+        except Exception as e:
+            verbose_logger.exception(
+                "AzureBlobStorageLogger: Got exception on init AzureBlobStorageLogger client %s", e
+            )
+            raise e
+
+    @property
+    def azure_storage_dfs_endpoint(self) -> str:
+        return f"https://{self.azure_storage_account_name}.dfs.{self.azure_storage_endpoint_suffix}"
+
+    @property
+    def azure_storage_blob_endpoint(self) -> str:
+        return f"https://{self.azure_storage_account_name}.blob.{self.azure_storage_endpoint_suffix}"
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Async Log success events to Azure Blob Storage
+
+        Raises:
+            Raises a NON Blocking verbose_logger.exception if an error occurs
+        """
+        try:
+            self._premium_user_check()
+            verbose_logger.debug(
+                "AzureBlobStorageLogger: Logging - Enters logging function for model %s",
+                kwargs,
+            )
+            standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
+
+            if standard_logging_payload is None:
+                raise ValueError("standard_logging_payload is not set")
+
+            self.log_queue.append(standard_logging_payload)
+
+        except Exception as e:
+            verbose_logger.exception("AzureBlobStorageLogger Layer Error - %s", e)
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Async Log failure events to Azure Blob Storage
+
+        Raises:
+            Raises a NON Blocking verbose_logger.exception if an error occurs
+        """
+        try:
+            self._premium_user_check()
+            verbose_logger.debug(
+                "AzureBlobStorageLogger: Logging - Enters logging function for model %s",
+                kwargs,
+            )
+            standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
+
+            if standard_logging_payload is None:
+                raise ValueError("standard_logging_payload is not set")
+
+            self.log_queue.append(standard_logging_payload)
+        except Exception as e:
+            verbose_logger.exception("AzureBlobStorageLogger Layer Error - %s", e)
+
+    async def async_log_audit_log_event(self, audit_log: StandardAuditLogPayload) -> None:
+        now: Final = datetime.now(timezone.utc)
+        file_path: Final = f"audit_logs/{now.strftime('%Y-%m-%d')}/{now.strftime('%H-%M-%S')}_{audit_log['id']}.json"
+        await self._upload_json_to_file_path(file_path=file_path, json_payload=safe_dumps(audit_log))
+
+    async def _upload_json_to_file_path(self, file_path: str, json_payload: str) -> None:
+        payload_bytes: Final = json_payload.encode("utf-8")
+        if self.azure_storage_account_key:
+            await self._upload_bytes_with_account_key(file_path=file_path, content=payload_bytes)
+            return
+
+        await self.set_valid_azure_ad_token()
+        async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        base_url: Final = f"{self.azure_storage_dfs_endpoint}/{self.azure_storage_file_system}/{file_path}"
+        await self._create_file(async_client, base_url)
+        await self._append_data(async_client, base_url, json_payload)
+        await self._flush_data(async_client, base_url, len(payload_bytes))
+
+    async def async_send_batch(self):
+        """
+        Sends the in memory logs queue to Azure Blob Storage
+
+        Raises:
+            Raises a NON Blocking verbose_logger.exception if an error occurs
+        """
+        try:
+            if not self.log_queue:
+                verbose_logger.exception("Datadog: log_queue does not exist")
+                return
+
+            verbose_logger.debug(
+                "AzureBlobStorageLogger - about to flush %s events",
+                len(self.log_queue),
+            )
+
+            for payload in self.log_queue:
+                await self.async_upload_payload_to_azure_blob_storage(payload=payload)
+
+        except Exception as e:
+            verbose_logger.exception("AzureBlobStorageLogger Error sending batch API - %s", e)
+
+    async def async_upload_payload_to_azure_blob_storage(self, payload: StandardLoggingPayload):
+        """
+        Uploads the payload to Azure Blob Storage using a 3-step process:
+        1. Create file resource
+        2. Append data
+        3. Flush the data
+        """
+        try:
+            if self.azure_storage_account_key:
+                await self.upload_to_azure_data_lake_with_azure_account_key(payload=payload)
+            else:
+                # Get a valid token instead of always requesting a new one
+                await self.set_valid_azure_ad_token()
+                async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+                json_payload: Final = safe_dumps(payload) + "\n"  # Add newline for each log entry
+                payload_bytes: Final = json_payload.encode("utf-8")
+                filename: Final = adls_safe_file_name(payload.get("id"))
+                base_url = f"{self.azure_storage_dfs_endpoint}/{self.azure_storage_file_system}/{filename}"
+
+                # Execute the 3-step upload process
+                await self._create_file(async_client, base_url)
+                await self._append_data(async_client, base_url, json_payload)
+                await self._flush_data(async_client, base_url, len(payload_bytes))
+
+                verbose_logger.debug("Successfully uploaded log to Azure Blob Storage: %s", filename)
+
+        except Exception as e:
+            verbose_logger.exception("Error uploading to Azure Blob Storage: %s", e)
+            raise e
+
+    async def _create_file(self, client: AsyncHTTPHandler, base_url: str):
+        """Helper method to create the file resource"""
+        try:
+            verbose_logger.debug("Creating file resource at: %s", base_url)
+            headers: Final = {
+                "x-ms-version": AZURE_STORAGE_MSFT_VERSION,
+                "Content-Length": "0",
+                "Authorization": f"Bearer {self.azure_auth_token}",
+            }
+            response: Final = await client.put(f"{base_url}?resource=file", headers=headers)
+            response.raise_for_status()
+            verbose_logger.debug("Successfully created file resource")
+        except Exception as e:
+            verbose_logger.exception("Error creating file resource: %s", e)
+            raise
+
+    async def _append_data(self, client: AsyncHTTPHandler, base_url: str, json_payload: str):
+        """Helper method to append data to the file"""
+        try:
+            verbose_logger.debug("Appending data to file: %s", base_url)
+            headers: Final = {
+                "x-ms-version": AZURE_STORAGE_MSFT_VERSION,
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.azure_auth_token}",
+            }
+            response: Final = await client.patch(
+                f"{base_url}?action=append&position=0",
+                headers=headers,
+                data=json_payload,
+            )
+            response.raise_for_status()
+            verbose_logger.debug("Successfully appended data")
+        except Exception as e:
+            verbose_logger.exception("Error appending data: %s", e)
+            raise
+
+    async def _flush_data(self, client: AsyncHTTPHandler, base_url: str, position: int):
+        """Helper method to flush the data"""
+        try:
+            verbose_logger.debug("Flushing data at position %s", position)
+            headers: Final = {
+                "x-ms-version": AZURE_STORAGE_MSFT_VERSION,
+                "Content-Length": "0",
+                "Authorization": f"Bearer {self.azure_auth_token}",
+            }
+            response: Final = await client.patch(f"{base_url}?action=flush&position={position}", headers=headers)
+            response.raise_for_status()
+            verbose_logger.debug("Successfully flushed data")
+        except Exception as e:
+            verbose_logger.exception("Error flushing data: %s", e)
+            raise
+
+    ####### Helper methods to managing Authentication to Azure Storage #######
+    ##########################################################################
+
+    async def set_valid_azure_ad_token(self):
+        """
+        Wrapper to set self.azure_auth_token to a valid Azure AD token, refreshing if necessary
+
+        Without a service principal configured, the credential chain provider is read every
+        time; it caches internally and refreshes against the token's real expiry. The read runs
+        in a worker thread because the chain walk (IMDS probe, CLI subprocess) is blocking
+        """
+        if self.tenant_id is None and self.client_id is None and self.client_secret is None:
+            token_provider: Final = self._build_credential_chain_token_provider()
+            self.azure_auth_token = await asyncio.to_thread(token_provider)
+            return
+
+        # Check if token needs refresh
+        if self._azure_ad_token_is_expired() or self.azure_auth_token is None:
+            verbose_logger.debug("Azure AD token needs refresh")
+            self.azure_auth_token = self.get_azure_ad_token_from_azure_storage(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            # Token typically expires in 1 hour
+            self.token_expiry = datetime.now() + timedelta(hours=1)
+            verbose_logger.debug("New token will expire at %s", self.token_expiry)
+
+    def get_azure_ad_token_from_azure_storage(
+        self,
+        tenant_id: str | None,
+        client_id: str | None,
+        client_secret: str | None,
+    ) -> str:
+        """
+        Gets Azure AD token to use for Azure Storage API requests
+        """
+        verbose_logger.debug(
+            "Getting Azure AD Token from Azure Storage, tenant_id=%s, client_id=%s, client_secret=[set=%s]",
+            tenant_id,
+            client_id,
+            client_secret is not None,
+        )
+        if tenant_id is None:
+            raise ValueError("Missing required environment variable: AZURE_STORAGE_TENANT_ID")
+        if client_id is None:
+            raise ValueError("Missing required environment variable: AZURE_STORAGE_CLIENT_ID")
+        if client_secret is None:
+            raise ValueError("Missing required environment variable: AZURE_STORAGE_CLIENT_SECRET")
+
+        token_provider: Final = get_azure_ad_token_from_entra_id(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
+            scope=AZURE_STORAGE_TOKEN_SCOPE,
+        )
+        return token_provider()
+
+    def _azure_ad_token_is_expired(self):
+        """
+        Returns True if Azure AD token is expired, False otherwise
+        """
+        if self.azure_auth_token and self.token_expiry:
+            if datetime.now() + timedelta(minutes=5) >= self.token_expiry:
+                verbose_logger.debug("Azure AD token is expired. Requesting new token")
+                return True
+        return False
+
+    def _premium_user_check(self):
+        """
+        Checks if the user is a premium user, raises an error if not
+        """
+        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
+
+        if premium_user is not True:
+            raise ValueError(
+                f"AzureBlobStorageLogger is only available for premium users. {CommonProxyErrors.not_premium_user}"
+            )
+
+    async def get_service_client(self):
+        from azure.storage.filedatalake.aio import DataLakeServiceClient
+
+        # expire old clients to recover from connection issues
+        if self._service_client_timeout and self._service_client and self._service_client_timeout <= self._clock():
+            await self._service_client.close()
+            self._service_client = None
+        if not self._service_client:
+            self._service_client = DataLakeServiceClient(
+                account_url=self.azure_storage_dfs_endpoint,
+                credential=self.azure_storage_account_key,
+            )
+            self._service_client_timeout = self._clock() + _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+        return self._service_client
+
+    async def upload_to_azure_data_lake_with_azure_account_key(self, payload: StandardLoggingPayload):
+        """
+        Uploads the payload to Azure Data Lake using the Azure SDK
+
+        This is used when Azure Storage Account Key is set - Azure Storage Account Key does not work directly with Azure Rest API
+        """
+
+        try:
+            today: Final = datetime.now().strftime("%Y-%m-%d")
+            file_name: Final = adls_safe_file_name(payload.get("id"))
+            await self._upload_bytes_with_account_key(
+                file_path=f"{today}/{file_name}", content=safe_dumps(payload).encode("utf-8")
+            )
+            verbose_logger.debug("Successfully uploaded and wrote to %s/%s", today, file_name)
+
+        except Exception as e:
+            verbose_logger.exception("Error occurred: %s", e)
+
+    async def _upload_bytes_with_account_key(self, file_path: str, content: bytes) -> None:
+        service_client: Final = await self.get_service_client()
+        file_client: Final = service_client.get_file_system_client(
+            file_system=self.azure_storage_file_system
+        ).get_file_client(file_path)
+        await file_client.create_file()
+        await file_client.append_data(data=content, offset=0, length=len(content))
+        await file_client.flush_data(position=len(content), offset=0)

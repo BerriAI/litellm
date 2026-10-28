@@ -1,0 +1,17 @@
+# Unbounded memory growth – data structures without a clear max limit
+# Can lead to OOM under load.
+
+rules:
+  - id: unbounded-asyncio-queue
+    message: asyncio.Queue() with no maxsize can grow unbounded. Use asyncio.Queue(maxsize=N) for integrations (e.g. log queues).
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: asyncio.Queue()
+      - pattern: asyncio.Queue(maxsize=0)
+    metadata:
+      category: reliability
+      cwe: "CWE-400: Uncontrolled Resource Consumption"
+      tags: [python, reliability]
+      confidence: HIGH
+      source: https://docs.python.org/3/library/asyncio-queue.html

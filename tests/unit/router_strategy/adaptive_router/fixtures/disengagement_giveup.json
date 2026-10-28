@@ -1,0 +1,16 @@
+[
+  {
+    "user_content": "how do I install this package",
+    "assistant_content": "Run pip install <package_name>.",
+    "tool_calls": [],
+    "tool_results": [],
+    "response_status": 200
+  },
+  {
+    "user_content": "forget it, I'll do it myself",
+    "assistant_content": "Okay, let me know if you need anything else.",
+    "tool_calls": [],
+    "tool_results": [],
+    "response_status": 200
+  }
+]

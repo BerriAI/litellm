@@ -1,0 +1,4 @@
+from typing import Final
+
+ASSEMBLY_AI_POLLING_INTERVAL: Final = 10
+ASSEMBLY_AI_MAX_POLLING_ATTEMPTS: Final = 180

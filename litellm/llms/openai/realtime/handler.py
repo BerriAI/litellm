@@ -1,0 +1,213 @@
+"""
+This file contains the calling OpenAI's `/v1/realtime` endpoint.
+
+This requires websockets, and is currently only supported on LiteLLM Proxy.
+"""
+
+import ssl
+from typing import Any, Final, cast
+
+from litellm._logging import redact_string, verbose_logger
+from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.types.realtime import RealtimeQueryParams
+
+from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from ....litellm_core_utils.realtime_errors import close_after_upstream_handshake_refusal
+from ....litellm_core_utils.realtime_streaming import (
+    RealtimeEventNormalizer,
+    RealTimeStreaming,
+    RealtimeUsageMeter,
+    client_sent_openai_beta_realtime_header,
+)
+from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
+from ..common_utils import is_openai_backed_api_base
+from ..openai import OpenAIChatCompletion
+
+
+class OpenAIRealtime(OpenAIChatCompletion):
+    """
+    Base handler for OpenAI-compatible realtime WebSocket connections.
+
+    Subclasses can override template methods to customize:
+    - _get_default_api_base(): Default API base URL
+    - _get_additional_headers(): Extra headers beyond Authorization
+    - _get_ssl_config(): SSL configuration for WebSocket connection
+    """
+
+    def _get_default_api_base(self) -> str:
+        """
+        Get the default API base URL for this provider.
+        Override this in subclasses to set provider-specific defaults.
+        """
+        return "https://api.openai.com/"
+
+    def _get_additional_headers(
+        self,
+        api_key: str,
+        *,
+        openai_beta_realtime: bool = False,
+    ) -> dict[str, str]:
+        """
+        Headers for the upstream OpenAI Realtime WebSocket.
+
+        When the client sent ``OpenAI-Beta: realtime=v1`` on the proxy WebSocket,
+        ``openai_beta_realtime`` is True and the same header is forwarded upstream
+        so the legacy beta API is used. GA clients omit that header on the client
+        connection and must send GA-shaped ``session.update`` payloads.
+        """
+        headers: Final[dict[str, str]] = {"Authorization": f"Bearer {api_key}"}
+        if openai_beta_realtime:
+            headers["OpenAI-Beta"] = "realtime=v1"
+        return headers
+
+    def _get_ssl_config(self, url: str) -> bool | str | ssl.SSLContext | None:
+        """
+        Get SSL configuration for WebSocket connection.
+        Override this in subclasses to customize SSL behavior.
+
+        Args:
+            url: WebSocket URL (ws:// or wss://)
+
+        Returns:
+            SSL configuration (None, True, or SSLContext)
+        """
+        if url.startswith("ws://"):
+            return None
+
+        # Use the shared SSL context which respects custom CA certs and SSL settings
+        ssl_config: Final = get_shared_realtime_ssl_context()
+
+        # If ssl_config is False (ssl_verify=False), websockets library needs True instead
+        # to establish connection without verification (False would fail)
+        if ssl_config is False:
+            return True
+
+        return ssl_config
+
+    def _construct_url(self, api_base: str, query_params: RealtimeQueryParams) -> str:
+        """
+        Construct the backend websocket URL with the client's query parameters.
+
+        `model` is left out for `intent=transcription` on OpenAI's own hosts: OpenAI
+        reads `?model=` as selecting a conversation session and rejects transcription
+        sessions with `invalid_model`. The transcription model is applied to the session
+        instead (see `force_transcription_model`), mirroring the Azure GA handler. Any
+        other `api_base` keeps `model`, since an OpenAI-compatible gateway may route on it.
+        """
+        from httpx import URL
+
+        drops_model: Final = query_params.get("intent") == "transcription" and is_openai_backed_api_base(api_base)
+        api_base = api_base.replace("https://", "wss://")
+        api_base = api_base.replace("http://", "ws://")
+        url = URL(api_base)
+        # Set the correct path
+        url = url.copy_with(path="/v1/realtime")
+        upstream_params: Final = tuple(
+            (key, value) for key, value in query_params.items() if not (drops_model and key == "model")
+        )
+        if upstream_params:
+            url = url.copy_with(params=upstream_params)
+        return str(url)
+
+    def construct_url(
+        self,
+        api_base: str,
+        query_params: RealtimeQueryParams,
+    ) -> str:
+        return self._construct_url(api_base, query_params)
+
+    def _make_event_normalizer(self) -> RealtimeEventNormalizer | None:
+        """Return a per-session GA event normalizer, or None for passthrough.
+
+        Subclasses (e.g. XAIRealtime) override this to supply a provider-specific
+        normalizer instance.
+        """
+        return None
+
+    def _make_usage_meter(self) -> RealtimeUsageMeter | None:
+        """Return a per-session usage meter, or None when billing needs no metering."""
+        return None
+
+    async def async_realtime(
+        self,
+        model: str,
+        websocket: Any,
+        logging_obj: LiteLLMLogging,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        client: object | None = None,
+        timeout: float | None = None,
+        query_params: RealtimeQueryParams | None = None,
+        user_api_key_dict: object | None = None,
+        litellm_metadata: dict | None = None,
+        **kwargs: object,
+    ):
+        import websockets
+        from websockets.asyncio.client import ClientConnection
+
+        if api_base is None:
+            api_base = self._get_default_api_base()
+        if api_key is None:
+            raise ValueError("api_key is required for OpenAI realtime calls")
+
+        # Use all query params if provided, else fallback to just model
+        if query_params is None:
+            query_params = {"model": model}
+        url: Final = self._construct_url(api_base, query_params)
+
+        try:
+            # Get provider-specific SSL configuration
+            ssl_config: Final = self._get_ssl_config(url)
+
+            openai_beta_realtime: Final = client_sent_openai_beta_realtime_header(websocket)
+            if not openai_beta_realtime:
+                verbose_logger.debug(
+                    "OpenAI Realtime: connecting with GA protocol (no OpenAI-Beta header). "
+                    "If your client expects beta event names, add 'OpenAI-Beta: realtime=v1' "
+                    "to the WebSocket headers sent to the LiteLLM proxy."
+                )
+            headers: Final = self._get_additional_headers(api_key, openai_beta_realtime=openai_beta_realtime)
+
+            # Log a masked request preview consistent with other endpoints.
+            logging_obj.pre_call(
+                input=None,
+                api_key=api_key,
+                additional_args={
+                    "api_base": url,
+                    "headers": headers,
+                    "complete_input_dict": {"query_params": query_params},
+                },
+            )
+            async with websockets.connect(
+                url,
+                additional_headers=headers,
+                max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                ssl=ssl_config,
+            ) as backend_ws:
+                realtime_streaming: Final = RealTimeStreaming(
+                    websocket,
+                    cast(ClientConnection, backend_ws),
+                    logging_obj,
+                    model=model,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data={"litellm_metadata": litellm_metadata or {}},
+                    force_transcription_model=(
+                        model if (query_params or {}).get("intent") == "transcription" else None
+                    ),
+                    event_normalizer=self._make_event_normalizer(),
+                    usage_meter=self._make_usage_meter(),
+                )
+                await realtime_streaming.bidirectional_forward()
+
+        except websockets.exceptions.InvalidStatus as e:
+            await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
+        except Exception as e:
+            try:
+                await websocket.close(code=1011, reason=redact_string(f"Internal server error: {e}"))
+            except RuntimeError as close_error:
+                if "already completed" in str(close_error) or "websocket.close" in str(close_error):
+                    # The WebSocket is already closed or the response is completed, so we can ignore this error
+                    pass
+                else:
+                    # If it's a different RuntimeError, we might want to log it or handle it differently
+                    raise Exception(f"Unexpected error while closing WebSocket: {close_error}")

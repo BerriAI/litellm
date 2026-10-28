@@ -1,0 +1,2459 @@
+[
+  {
+    "id": "abx-air",
+    "match": "abx air|gb",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "aegean-airlines",
+    "match": "aegean airlines|a3",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "aer-lingus",
+    "match": "aer lingus|ei",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "aero-mongolia",
+    "match": "aero mongolia|m0",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "aero-republica",
+    "match": "aero republica|p5",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "aeroflot",
+    "match": "aeroflot|su",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "aeroitalia",
+    "match": "aeroitalia|xz",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "aerolineas-argentinas",
+    "match": "aerolineas argentinas|ar",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "aeromexico",
+    "match": "aeromexico|am",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "africa-world-airlines",
+    "match": "africa world airlines|aw",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-algerie",
+    "match": "air algérie|ah",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-arabia",
+    "match": "air arabia|g9",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-astana",
+    "match": "air astana|kc",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-astra",
+    "match": "air astra|2a",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-atlanta-icelandic",
+    "match": "air atlanta icelandic|cc",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-austral",
+    "match": "air austral|uu",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-baltic",
+    "match": "air baltic|bt",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-botswana",
+    "match": "air botswana|bp",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-cairo",
+    "match": "air cairo|sm",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-caledonie",
+    "match": "air caledonie|ty",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-cambodia",
+    "match": "air cambodia|k6",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-canada",
+    "match": "air canada|ac",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-caraibes",
+    "match": "air caraibes|tx",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-changan",
+    "match": "air changan|9h",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-china",
+    "match": "air china|ca",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-corsica",
+    "match": "air corsica|xk",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-dolomiti",
+    "match": "air dolomiti|en",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-europa",
+    "match": "air europa|ux",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-france",
+    "match": "air france|af",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-guilin",
+    "match": "air guilin|gt",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-hong-kong",
+    "match": "air hong kong|ld",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-india",
+    "match": "air india|ai",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-india-express",
+    "match": "air india express|ix",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-koryo",
+    "match": "air koryo|js",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-macau",
+    "match": "air macau|nx",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-mauritius",
+    "match": "air mauritius|mk",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-montenegro",
+    "match": "air montenegro|4o",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-new-zealand",
+    "match": "air new zealand|nz",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-niugini",
+    "match": "air niugini|px",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-nostrum",
+    "match": "air nostrum|yw",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-peace",
+    "match": "air peace|p4",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-premia",
+    "match": "air premia|yp",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-senegal",
+    "match": "air senegal|hc",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-serbia",
+    "match": "air serbia|ju",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-seychelles",
+    "match": "air seychelles|hm",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-tahiti",
+    "match": "air tahiti|vt",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-tahiti-nui",
+    "match": "air tahiti nui|tn",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-tanzania",
+    "match": "air tanzania|tc",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-transat",
+    "match": "air transat|ts",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "air-vanuatu",
+    "match": "air vanuatu|nf",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "aircalin",
+    "match": "aircalin|sb",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "airhub-airlines",
+    "match": "airhub airlines|re",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "airline-geo-sky",
+    "match": "airline geo sky|d4",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "airlink",
+    "match": "airlink|4z",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "airzeta",
+    "match": "airzeta|kj",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "ajet",
+    "match": "ajet|vf",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "akasa-air",
+    "match": "akasa air|qp",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "alaska-airlines",
+    "match": "alaska airlines|as",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "albastar",
+    "match": "albastar|ap",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "almasria-universal-airlines",
+    "match": "almasria universal airlines|uj",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "amelia",
+    "match": "amelia|8r",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "american-airlines",
+    "match": "american airlines|aa",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "ana",
+    "match": "ana|nh",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "apg-airlines",
+    "match": "apg airlines|gp",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "arajet",
+    "match": "arajet|dm",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "arkia-israeli-airlines",
+    "match": "arkia israeli airlines|iz",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "asiana-airlines",
+    "match": "asiana airlines|oz",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "asky",
+    "match": "asky|kp",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "asl-airlines-belgium",
+    "match": "asl airlines belgium|3v",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "asl-airlines-france",
+    "match": "asl airlines france|5o",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "asl-airlines-ireland",
+    "match": "asl airlines ireland|5h",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "atlantic-airways",
+    "match": "atlantic airways|rc",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "atlas-air",
+    "match": "atlas air|5y",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "austrian",
+    "match": "austrian|os",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "avianca",
+    "match": "avianca|av",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "avianca-costa-rica",
+    "match": "avianca costa rica|lr",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "avianca-ecuador",
+    "match": "avianca ecuador|2k",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "avion-express",
+    "match": "avion express|x9",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "avion-express-malta",
+    "match": "avion express malta|4x",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "azerbaijan-airlines",
+    "match": "azerbaijan airlines|j2",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "azores-airlines",
+    "match": "azores airlines|s4",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "azul-brazilian-airlines",
+    "match": "azul brazilian airlines|ad",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "badr-airlines",
+    "match": "badr airlines|j4",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "bahamasair",
+    "match": "bahamasair|up",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "bamboo-airways",
+    "match": "bamboo airways|qh",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "bangkok-airways",
+    "match": "bangkok airways|pg",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "batik-air",
+    "match": "batik air|id",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "batik-air-malaysia",
+    "match": "batik air malaysia|od",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "bbn-airlines",
+    "match": "bbn airlines|b5",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "belavia-belarusian-airlines",
+    "match": "belavia belarusian airlines|b2",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "biman-bangladesh-airlines",
+    "match": "biman bangladesh airlines|bg",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "binter-canarias",
+    "match": "binter canarias|nt",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "blue-bird-airways",
+    "match": "blue bird airways|bz",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "boa-boliviana-de-aviacion",
+    "match": "boa boliviana de aviacion|ob",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "british-airways",
+    "match": "british airways|ba",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "brussels-airlines",
+    "match": "brussels airlines|sn",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "bulgaria-air",
+    "match": "bulgaria air|fb",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "camair-co",
+    "match": "camair-co|qc",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "capital-airlines",
+    "match": "capital airlines|jd",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "cargojet-airways",
+    "match": "cargojet airways|w8",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "cargolux",
+    "match": "cargolux|cv",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "caribbean-airlines",
+    "match": "caribbean airlines|bw",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "carpatair",
+    "match": "carpatair|v3",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "cathay-pacific",
+    "match": "cathay pacific|cx",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "cebu-pacific",
+    "match": "cebu pacific|5j",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "cemair",
+    "match": "cemair|5z",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "chair-airlines",
+    "match": "chair airlines|cs",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "chalair",
+    "match": "chalair|ce",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "challenge-airlines-be",
+    "match": "challenge airlines (be)|x7",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "challenge-airlines-il",
+    "match": "challenge airlines (il)|5c",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "china-airlines",
+    "match": "china airlines|ci",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "china-cargo-airlines",
+    "match": "china cargo airlines|ck",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "china-eastern",
+    "match": "china eastern|mu",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "china-express-airlines",
+    "match": "china express airlines|g5",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "china-postal-airlines",
+    "match": "china postal airlines|cf",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "china-southern-airlines",
+    "match": "china southern airlines|cz",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "china-united-airlines",
+    "match": "china united airlines|kn",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "citilink",
+    "match": "citilink|qg",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "cityjet",
+    "match": "cityjet|wx",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "clic-air",
+    "match": "clic air|ve",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "condor",
+    "match": "condor|de",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "copa-airlines",
+    "match": "copa airlines|cm",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "corendon-airlines",
+    "match": "corendon airlines|xc",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "corsair-international",
+    "match": "corsair international|ss",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "croatia-airlines",
+    "match": "croatia airlines|ou",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "cubana",
+    "match": "cubana|cu",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "cyprus-airways",
+    "match": "cyprus airways|cy",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "dan-air",
+    "match": "dan air|dn",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "delta-air-lines",
+    "match": "delta air lines|dl",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "dhl-air",
+    "match": "dhl air|d0",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "discover-airlines",
+    "match": "discover airlines|4y",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "edelweiss-air",
+    "match": "edelweiss air|wk",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "egyptair",
+    "match": "egyptair|ms",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "el-al",
+    "match": "el al|ly",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "electra-airways",
+    "match": "electra airways|3e",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "emirates",
+    "match": "emirates|ek",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "estafeta-cargo",
+    "match": "estafeta cargo|e7",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "ethiopian-airlines",
+    "match": "ethiopian airlines|et",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "etihad-airways",
+    "match": "etihad airways|ey",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "euroatlantic-airways",
+    "match": "euroatlantic airways|yu",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "european-air-transport",
+    "match": "european air transport|qy",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "eurowings",
+    "match": "eurowings|ew",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "eva-air",
+    "match": "eva air|br",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "eznis-airways",
+    "match": "eznis airways|mg",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "fastjet-zimbabwe",
+    "match": "fastjet zimbabwe|fn",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "fedex-express",
+    "match": "fedex express|fx",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "fiji-airways",
+    "match": "fiji airways|fj",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "finnair",
+    "match": "finnair|ay",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "flexflight",
+    "match": "flexflight|w2",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "fly-baghdad",
+    "match": "fly baghdad|if",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "fly-namibia",
+    "match": "fly namibia|wv",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "flyadeal",
+    "match": "flyadeal|f3",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "flydubai",
+    "match": "flydubai|fz",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "flygabon",
+    "match": "flygabon|j7",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "flynas",
+    "match": "flynas|xy",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "flyone",
+    "match": "flyone|5f",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "freebird-airlines",
+    "match": "freebird airlines|fh",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "french-bee",
+    "match": "french bee|bf",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "fuzhou-airlines",
+    "match": "fuzhou airlines|fu",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "garuda-indonesia",
+    "match": "garuda indonesia|ga",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "georgian-airways",
+    "match": "georgian airways|a9",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "german-airways",
+    "match": "german airways|zq",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "global-airways-and-lift",
+    "match": "global airways and lift|ge",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "globalx",
+    "match": "globalx|g6",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "gol-linhas-aereas",
+    "match": "gol linhas aereas|g3",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "greater-bay-airlines",
+    "match": "greater bay airlines|hb",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "gulf-air",
+    "match": "gulf air|gf",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "gx-airlines",
+    "match": "gx airlines|gx",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "hainan-airlines",
+    "match": "hainan airlines|hu",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "hawaiian-airlines",
+    "match": "hawaiian airlines|ha",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "hebei-airlines",
+    "match": "hebei airlines|ns",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "hello-jets",
+    "match": "hello jets|h3",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "himalaya-airlines",
+    "match": "himalaya airlines|h9",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "hong-kong-air-cargo",
+    "match": "hong kong air cargo|rh",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "hong-kong-airlines",
+    "match": "hong kong airlines|hx",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "hong-kong-express-airways",
+    "match": "hong kong express airways|uo",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "iberia",
+    "match": "iberia|ib",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "iberojet",
+    "match": "iberojet|6o",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "iberojet-airlines",
+    "match": "iberojet airlines|e9",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "ibom-air",
+    "match": "ibom air|qi",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "icelandair",
+    "match": "icelandair|fi",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "ikar",
+    "match": "ikar|eo",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "indigo",
+    "match": "indigo|6e",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "iran-air",
+    "match": "iran air|ir",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "iran-airtour-airline",
+    "match": "iran airtour airline|b9",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "iran-aseman-airlines",
+    "match": "iran aseman airlines|ep",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "israir",
+    "match": "israir|6h",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "ita-airways",
+    "match": "ita airways|az",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "japan-airlines",
+    "match": "japan airlines|jl",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "japan-transocean-air",
+    "match": "japan transocean air|nu",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "jazeera-airways",
+    "match": "jazeera airways|j9",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "jd-airlines",
+    "match": "jd airlines|jg",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "jeju-air",
+    "match": "jeju air|7c",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "jetblue",
+    "match": "jetblue|b6",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "jin-air",
+    "match": "jin air|lj",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "jordan-aviation",
+    "match": "jordan aviation|r5",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "juneyao-airlines",
+    "match": "juneyao airlines|ho",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "kam-air",
+    "match": "kam air|rq",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "kenya-airways",
+    "match": "kenya airways|kq",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "klm",
+    "match": "klm|kl",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "km-malta-airlines",
+    "match": "km malta airlines|km",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "korean-air",
+    "match": "korean air|ke",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "kunming-airlines",
+    "match": "kunming airlines|ky",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "kuwait-airways",
+    "match": "kuwait airways|ku",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "la-compagnie",
+    "match": "la compagnie|b0",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "lam",
+    "match": "lam|tm",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "lao-airlines",
+    "match": "lao airlines|qv",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "latam-airlines-brasil",
+    "match": "latam airlines brasil|jj",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "latam-airlines-colombia",
+    "match": "latam airlines colombia|4c",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "latam-airlines-ecuador",
+    "match": "latam airlines ecuador|xl",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "latam-airlines-group",
+    "match": "latam airlines group|la",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "latam-airlines-paraguay",
+    "match": "latam airlines paraguay|pz",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "latam-airlines-peru",
+    "match": "latam airlines peru|lp",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "latam-cargo-brasil",
+    "match": "latam cargo brasil|m3",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "latam-cargo-chile",
+    "match": "latam cargo chile|uc",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "link-airways",
+    "match": "link airways|fc",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "lion-air",
+    "match": "lion air|jt",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "loganair",
+    "match": "loganair|lm",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "loong-air",
+    "match": "loong air|gj",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "lot-polish-airlines",
+    "match": "lot polish airlines|lo",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "lucky-air",
+    "match": "lucky air|8l",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "lufthansa",
+    "match": "lufthansa|lh",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "lufthansa-cargo",
+    "match": "lufthansa cargo|lh",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "lufthansa-cityline",
+    "match": "lufthansa cityline|cl",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "luxair",
+    "match": "luxair|lg",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "madagascar-airlines",
+    "match": "madagascar airlines|md",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "malaysia-airlines",
+    "match": "malaysia airlines|mh",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "mandarin-airlines",
+    "match": "mandarin airlines|ae",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "martinair-cargo",
+    "match": "martinair cargo|mp",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "masair",
+    "match": "masair|m7",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "mauritania-airlines-international",
+    "match": "mauritania airlines international|l6",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "mavi-gok-airlines-mga",
+    "match": "mavi gök airlines (mga)|4m",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "mea",
+    "match": "mea|me",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "miat-mongolian-airlines",
+    "match": "miat mongolian airlines|om",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "mng-airlines",
+    "match": "mng airlines|mb",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "myanmar-airways-international",
+    "match": "myanmar airways international|8m",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "myanmar-national-airlines",
+    "match": "myanmar national airlines|ub",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "national-airlines",
+    "match": "national airlines|n8",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "nauru-airlines",
+    "match": "nauru airlines|on",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "neos",
+    "match": "neos|no",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "nesma-airlines",
+    "match": "nesma airlines|ne",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "new-pacific-airlines",
+    "match": "new pacific airlines|7h",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "nile-air",
+    "match": "nile air|np",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "nippon-cargo-airlines",
+    "match": "nippon cargo airlines|kz",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "nok-air",
+    "match": "nok air|dd",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "nordstar",
+    "match": "nordstar|y7",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "nordwind-airlines",
+    "match": "nordwind airlines|n4",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "norra",
+    "match": "norra|n7",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "nouvelair",
+    "match": "nouvelair|bj",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "okay-airways",
+    "match": "okay airways|bk",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "olympic-air",
+    "match": "olympic air|oa",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "oman-air",
+    "match": "oman air|wy",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "overland-airways",
+    "match": "overland airways|of",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "pakistan-international-airlines",
+    "match": "pakistan international airlines|pk",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "pal-express",
+    "match": "pal express|2p",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "paranair",
+    "match": "paranair|zp",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "pegasus-airlines",
+    "match": "pegasus airlines|pc",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "petroleum-air-services",
+    "match": "petroleum air services|uf",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "philippine-airlines",
+    "match": "philippine airlines|pr",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "plus-ultra",
+    "match": "plus ultra|pu",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "polar-air-cargo",
+    "match": "polar air cargo|po",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "populair",
+    "match": "populair|hp",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "poste-air-cargo",
+    "match": "poste air cargo|m4",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "precision-air",
+    "match": "precision air|pw",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "privilege-style",
+    "match": "privilege style|p6",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "proflight-zambia",
+    "match": "proflight zambia|p0",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "qantas",
+    "match": "qantas|qf",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "qatar-airways",
+    "match": "qatar airways|qr",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "qazaq-air",
+    "match": "qazaq air|iq",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "qingdao-airlines",
+    "match": "qingdao airlines|qw",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "red-sea-airlines",
+    "match": "red sea airlines|4s",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "rossiya-airlines",
+    "match": "rossiya airlines|fv",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "royal-air-maroc",
+    "match": "royal air maroc|at",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "royal-brunei",
+    "match": "royal brunei|bi",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "royal-jordanian",
+    "match": "royal jordanian|rj",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "ruili-airlines",
+    "match": "ruili airlines|dr",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "rusline",
+    "match": "rusline|7r",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "rwandair",
+    "match": "rwandair|wb",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "s7-airlines",
+    "match": "s7 airlines|s7",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "safair",
+    "match": "safair|fa",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "salam-air",
+    "match": "salam air|ov",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "sas",
+    "match": "sas|sk",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "sata-air-acores",
+    "match": "sata  air acores|sp",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "saudi-arabian-airlines",
+    "match": "saudi arabian airlines|sv",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "scat-airlines",
+    "match": "scat airlines|dv",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "scoot",
+    "match": "scoot|tr",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "sf-airlines",
+    "match": "sf airlines|o3",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "shandong-airlines",
+    "match": "shandong airlines|sc",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "shanghai-airlines",
+    "match": "shanghai airlines|fm",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "shenzhen-airlines",
+    "match": "shenzhen airlines|zh",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "sichuan-airlines",
+    "match": "sichuan airlines|3u",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "silk-way-west-airlines",
+    "match": "silk way west airlines|7l",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "singapore-airlines",
+    "match": "singapore airlines|sq",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "sky-airline",
+    "match": "sky airline|h2",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "sky-express",
+    "match": "sky express|gq",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "skyup-airlines",
+    "match": "skyup airlines|pq",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "smartavia",
+    "match": "smartavia|5n",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "smartwings",
+    "match": "smartwings|qs",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "solomon-airlines",
+    "match": "solomon airlines|ie",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "somon-air",
+    "match": "somon air|sz",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "south-african-airways",
+    "match": "south african airways|sa",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "southwest-airlines",
+    "match": "southwest airlines|wn",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "southwind-airlines",
+    "match": "southwind airlines|2s",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "spicejet",
+    "match": "spicejet|sg",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "srilankan-airlines",
+    "match": "srilankan airlines|ul",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "starlux-airlines",
+    "match": "starlux airlines|jx",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "sun-country-airlines",
+    "match": "sun country airlines|sy",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "sunexpress",
+    "match": "sunexpress|xq",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "suparna-airlines",
+    "match": "suparna airlines|y8",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "swiftair",
+    "match": "swiftair|wt",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "swiss",
+    "match": "swiss|lx",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "syrianair",
+    "match": "syrianair|rb",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "tway-air",
+    "match": "t'way air|tw",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "taag-angola-airlines",
+    "match": "taag angola airlines|dt",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "taca",
+    "match": "taca|ta",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "tag-airlines",
+    "match": "tag airlines|5u",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "tap-air-portugal",
+    "match": "tap air portugal|tp",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "tarom",
+    "match": "tarom|ro",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "tassili-airlines",
+    "match": "tassili airlines|sf",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "thai-airways-international",
+    "match": "thai airways international|tg",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "thai-lion-air",
+    "match": "thai lion air|sl",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "tianjin-airlines",
+    "match": "tianjin airlines|gs",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "tibet-airlines",
+    "match": "tibet airlines|tv",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "tuifly",
+    "match": "tuifly|x3",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "tunisair",
+    "match": "tunisair|tu",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "turkish-airlines",
+    "match": "turkish airlines|tk",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "tus-airways",
+    "match": "tus airways|u8",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "uni-air",
+    "match": "uni air|b7",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "united-airlines",
+    "match": "united airlines|ua",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "united-nigeria-airlines",
+    "match": "united nigeria airlines|un",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "ups-airlines",
+    "match": "ups airlines|5x",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "ural-airlines",
+    "match": "ural airlines|u6",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "urumqi-air",
+    "match": "urumqi air|uq",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "us-bangla-airlines",
+    "match": "us-bangla airlines|bs",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "utair",
+    "match": "utair|ut",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "uzbekistan-airways",
+    "match": "uzbekistan airways|hy",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "vietjet",
+    "match": "vietjet|vj",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "vietnam-airlines",
+    "match": "vietnam airlines|vn",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "virgin-atlantic",
+    "match": "virgin atlantic|vs",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "virgin-australia",
+    "match": "virgin australia|va",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "volaris",
+    "match": "volaris|y4",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "volotea",
+    "match": "volotea|v7",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "vueling",
+    "match": "vueling|vy",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "wamos-air",
+    "match": "wamos air|eb",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "west-air",
+    "match": "west air|pn",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "westjet",
+    "match": "westjet|ws",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "white-coloured-by-you",
+    "match": "white coloured by you|wi",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "wideroe",
+    "match": "wideroe|wf",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "world2fly",
+    "match": "world2fly|2w",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "xiamen-airlines",
+    "match": "xiamen airlines|mf",
+    "tags": [
+      "airline"
+    ]
+  },
+  {
+    "id": "yto-cargo-airlines",
+    "match": "yto cargo airlines|yg",
+    "tags": [
+      "airline"
+    ]
+  }
+]

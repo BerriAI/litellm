@@ -1,0 +1,1076 @@
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from itertools import chain
+from pathlib import Path
+from types import MappingProxyType
+from typing import Final, TypeAlias, TypeVar
+
+import click
+import requests
+from pydantic import JsonValue, TypeAdapter, ValidationError
+
+from litellm.proxy.common_utils.codex_model_catalog import (
+    CODEX_BASE_INSTRUCTIONS_PATH,
+    CodexCatalogRow,
+    CodexStockCatalog,
+    CodexStockModel,
+    codex_models_response_json,
+)
+from litellm.types.llms.base_model import LiteLLMBaseModel
+
+from .auth import cli_context_obj, context_secret_vault, get_stored_api_key, login
+from .claude_settings import (
+    ENV_KEY,
+    ClaudeSettingsError,
+    claude_settings_path,
+    install_statusline_script,
+    load_json_or_empty,
+)
+from .cmd_quoting import quote_for_cmd
+from .config import subscription_default
+from .pi import (
+    LITELLM_PROXY_API_KEY_ENV,
+    PI_PROVIDER_NAME,
+    ListingFailure,
+    PiSyncError,
+    fetch_model_ids,
+    fetch_model_limits,
+    models_json_path,
+    sync_models_json,
+)
+
+ANTHROPIC_BASE_URL_ENV: Final = "ANTHROPIC_BASE_URL"
+ANTHROPIC_AUTH_TOKEN_ENV: Final = "ANTHROPIC_AUTH_TOKEN"
+ANTHROPIC_API_KEY_ENV: Final = "ANTHROPIC_API_KEY"
+ANTHROPIC_CUSTOM_HEADERS_ENV: Final = "ANTHROPIC_CUSTOM_HEADERS"
+LITELLM_KEY_HEADER: Final = "x-litellm-api-key"
+ENABLE_TOOL_SEARCH_ENV: Final = "ENABLE_TOOL_SEARCH"
+ENABLE_TOOL_SEARCH_VALUE: Final = "true"
+ENABLE_GATEWAY_MODEL_DISCOVERY_ENV: Final = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
+ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE: Final = "1"
+OPENAI_BASE_URL_ENV: Final = "OPENAI_BASE_URL"
+OPENAI_API_KEY_ENV: Final = "OPENAI_API_KEY"
+OPENCODE_CONFIG_CONTENT_ENV: Final = "OPENCODE_CONFIG_CONTENT"
+OPENCODE_PROVIDER_ID: Final = "litellm"
+OPENCODE_PROVIDER_NAME: Final = "LiteLLM"
+OPENCODE_PROVIDER_NPM: Final = "@ai-sdk/openai-compatible"
+
+_SKIP_VERIFY_FLAG: Final = "--skip-verify"
+
+PROFILE_ANTHROPIC: Final = "anthropic"
+PROFILE_OPENAI: Final = "openai"
+PROFILE_LITELLM: Final = "litellm"
+
+_KNOWN_AGENTS: Final[dict[str, tuple[str, frozenset[str]]]] = {
+    "claude": ("Claude Code", frozenset({PROFILE_ANTHROPIC})),
+    "codex": ("Codex", frozenset({PROFILE_OPENAI})),
+    "opencode": ("OpenCode", frozenset({PROFILE_OPENAI})),
+    "pi": ("pi", frozenset({PROFILE_LITELLM})),
+}
+
+_INSTALL_DOCS: Final[dict[str, str]] = {
+    "claude": "https://docs.claude.com/en/docs/claude-code/setup",
+    "codex": "https://developers.openai.com/codex/cli",
+    "opencode": "https://opencode.ai/docs",
+    "pi": "https://pi.dev",
+}
+
+_HIDDEN_AGENTS: Final = frozenset({"pi"})
+_SUBSCRIPTION_LOGINS: Final = MappingProxyType({"claude": "claude.ai", "codex": "ChatGPT"})
+_SUBSCRIPTION_AGENTS: Final = frozenset(_SUBSCRIPTION_LOGINS)
+
+CODEX_PROXY_PROVIDER: Final = "litellm"
+CODEX_SUBSCRIPTION_PROVIDER: Final = "lite_subscription"
+CODEX_HOME_ENV: Final = "CODEX_HOME"
+CODEX_MODEL_CATALOG_FILENAME: Final = "litellm-models.json"
+_CODEX_PREFLIGHT_TIMEOUT_SECONDS: Final = 10.0
+
+
+class AgentRunError(Exception):
+    """Raised for any user-actionable failure while preparing to run an agent."""
+
+
+def agent_profile(command: str) -> tuple[str, frozenset[str]]:
+    """Return the (display name, env profiles) for a wrapped command.
+
+    Known agents map to the API family they speak. Anything else gets both
+    families so it works regardless of which env vars the tool reads.
+    """
+    base: Final = os.path.basename(command)
+    if base in _KNOWN_AGENTS:
+        return _KNOWN_AGENTS[base]
+    return base, frozenset({PROFILE_ANTHROPIC, PROFILE_OPENAI})
+
+
+def _custom_headers_with_litellm_key(existing: str, api_key: str) -> str:
+    kept: Final = tuple(
+        line for line in existing.splitlines() if line.strip() and not _is_header_line(line, LITELLM_KEY_HEADER)
+    )
+    return "\n".join((*kept, f"{LITELLM_KEY_HEADER}: Bearer {api_key}"))
+
+
+def _is_header_line(line: str, name: str) -> bool:
+    return line.partition(":")[0].strip().lower() == name
+
+
+def build_agent_env(
+    base_env: Mapping[str, str],
+    base_url: str,
+    api_key: str,
+    profiles: frozenset[str],
+    *,
+    subscription: bool = False,
+) -> dict[str, str]:
+    """Return a copy of base_env wired to route the agent through the proxy.
+
+    Anthropic clients (Claude Code) append /v1/messages to ANTHROPIC_BASE_URL,
+    so it stays the bare proxy root; OpenAI clients (Codex, OpenCode) expect the
+    /v1 suffix on OPENAI_BASE_URL. ANTHROPIC_API_KEY is dropped so a stray
+    Anthropic key cannot win over the bearer token we set. ENABLE_TOOL_SEARCH
+    defaults to true because Claude Code turns tool search off when
+    ANTHROPIC_BASE_URL is not a first-party Anthropic host; a value already in
+    the environment is left alone. CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY
+    defaults to 1 so Claude Code (v2.1.129+) fills its /model picker from the
+    proxy's /v1/models; likewise left alone when already set.
+    pi ignores both base URL variables and instead resolves $LITELLM_PROXY_API_KEY
+    from its synced models.json provider entry.
+    With subscription=True the Anthropic profile keeps Claude Code on its claude.ai login: the key
+    travels in the x-litellm-api-key header through ANTHROPIC_CUSTOM_HEADERS, and no
+    ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY is left in the environment, since either one makes
+    Claude Code stop using the subscription (and its connectors).
+    With subscription=True the OpenAI profile keeps Codex on its ChatGPT login: the key goes to
+    LITELLM_PROXY_API_KEY, which Codex sends in the x-litellm-api-key header, and OPENAI_API_KEY and
+    OPENAI_BASE_URL are left exactly as the caller had them, so the key is never offered to Codex as an
+    OpenAI credential and a child process never pairs the caller's own OpenAI key with the proxy URL.
+    """
+    env: Final = dict(base_env)
+    root: Final = base_url.rstrip("/")
+    if PROFILE_ANTHROPIC in profiles:
+        env[ANTHROPIC_BASE_URL_ENV] = root
+        if subscription:
+            env[ANTHROPIC_CUSTOM_HEADERS_ENV] = _custom_headers_with_litellm_key(
+                env.get(ANTHROPIC_CUSTOM_HEADERS_ENV, ""), api_key
+            )
+            env.pop(ANTHROPIC_AUTH_TOKEN_ENV, None)
+        else:
+            env[ANTHROPIC_AUTH_TOKEN_ENV] = api_key
+        env.pop(ANTHROPIC_API_KEY_ENV, None)
+        if ENABLE_TOOL_SEARCH_ENV not in env:
+            env[ENABLE_TOOL_SEARCH_ENV] = ENABLE_TOOL_SEARCH_VALUE
+        if ENABLE_GATEWAY_MODEL_DISCOVERY_ENV not in env:
+            env[ENABLE_GATEWAY_MODEL_DISCOVERY_ENV] = ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE
+    if PROFILE_OPENAI in profiles:
+        if subscription:
+            env[LITELLM_PROXY_API_KEY_ENV] = api_key
+        else:
+            env[OPENAI_BASE_URL_ENV] = root + "/v1"
+            env[OPENAI_API_KEY_ENV] = api_key
+    if PROFILE_LITELLM in profiles:
+        env[LITELLM_PROXY_API_KEY_ENV] = api_key
+    return env
+
+
+def codex_proxy_provider(base_url: str, *, subscription: bool = False) -> Mapping[str, str | bool]:
+    return MappingProxyType(
+        {
+            "name": "LiteLLM proxy",
+            "base_url": base_url.rstrip("/") + "/v1",
+            "wire_api": "responses",
+            "supports_websockets": False,
+            "requires_openai_auth": subscription,
+        }
+    )
+
+
+_SETTINGS_FLAG: Final = "--settings"
+_SUBSCRIPTION_SETTINGS_ENV: Final = MappingProxyType({ANTHROPIC_AUTH_TOKEN_ENV: "", ANTHROPIC_API_KEY_ENV: ""})
+_SETTINGS_OVERRIDE_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _settings_flag_spans(args: Sequence[str]) -> tuple[tuple[int, int, str], ...]:
+    """(start, end, value) of every `--settings X` or `--settings=X` in args, in order."""
+    return tuple(
+        (i, i + 1, arg.partition("=")[2]) if arg != _SETTINGS_FLAG else (i, i + 2, "".join(args[i + 1 : i + 2]))
+        for i, arg in enumerate(args)
+        if arg == _SETTINGS_FLAG or arg.startswith(_SETTINGS_FLAG + "=")
+    )
+
+
+def _split_settings_flags(args: Sequence[str]) -> tuple[str | None, tuple[str, ...]]:
+    """The value of the last `--settings` the user passed (the one Claude Code would keep), and args without any."""
+    spans: Final = _settings_flag_spans(args)
+    covered: Final = frozenset(chain.from_iterable(range(start, end) for start, end, _ in spans))
+    rest: Final = tuple(arg for i, arg in enumerate(args) if i not in covered)
+    return (spans[-1][2] if spans else None), rest
+
+
+def _load_settings_override(value: str) -> Mapping[str, JsonValue]:
+    """The user's `--settings` value: inline JSON when it starts with `{`, else a settings file that must exist."""
+    if value.lstrip().startswith("{"):
+        try:
+            return _SETTINGS_OVERRIDE_ADAPTER.validate_json(value)
+        except ValidationError as e:
+            raise AgentRunError(f"`{_SETTINGS_FLAG}` is not a JSON object: {value}") from e
+    path: Final = Path(value).expanduser()
+    try:
+        return load_json_or_empty(path) if path.is_file() else _missing_settings_file(path)
+    except ClaudeSettingsError as e:
+        raise AgentRunError(str(e)) from e
+    except OSError as e:
+        raise AgentRunError(f"`{_SETTINGS_FLAG}` must be a settings file or a JSON object, got: {value}") from e
+
+
+def _missing_settings_file(path: Path) -> Mapping[str, JsonValue]:
+    raise AgentRunError(f"`{_SETTINGS_FLAG}` file not found: {path}")
+
+
+def _settings_env(settings: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    env: Final = settings.get(ENV_KEY)
+    return env if isinstance(env, dict) else {}
+
+
+def _settings_json(base: Mapping[str, JsonValue], api_key: str, inherited_headers: str) -> str:
+    base_env: Final = _settings_env(base)
+    own_headers: Final = base_env.get(ANTHROPIC_CUSTOM_HEADERS_ENV)
+    headers: Final = _custom_headers_with_litellm_key(
+        own_headers if isinstance(own_headers, str) else inherited_headers, api_key
+    )
+    overlay: Final = {**base_env, **_SUBSCRIPTION_SETTINGS_ENV, ANTHROPIC_CUSTOM_HEADERS_ENV: headers}
+    return json.dumps({**base, ENV_KEY: overlay}, separators=(",", ":"))
+
+
+def _inherited_custom_headers(settings_files: Sequence[Mapping[str, JsonValue]], environ: Mapping[str, str]) -> str:
+    """The ANTHROPIC_CUSTOM_HEADERS Claude Code would apply without the overlay: the first settings file in
+    precedence order that sets it, else the process environment."""
+    from_files: Final = (_settings_env(settings).get(ANTHROPIC_CUSTOM_HEADERS_ENV) for settings in settings_files)
+    return next(
+        (value for value in from_files if isinstance(value, str)), environ.get(ANTHROPIC_CUSTOM_HEADERS_ENV, "")
+    )
+
+
+def claude_settings_files(
+    read_settings: Callable[[Path], Mapping[str, JsonValue]], environ: Mapping[str, str], project_dir: Path
+) -> tuple[Mapping[str, JsonValue], ...]:
+    """The settings files Claude Code merges below `--settings`, highest precedence first: project local, project,
+    then user. A missing file reads as empty, a malformed one is a clean CLI error."""
+    paths: Final = (
+        project_dir / ".claude" / "settings.local.json",
+        project_dir / ".claude" / "settings.json",
+        claude_settings_path(environ),
+    )
+    try:
+        return tuple(read_settings(path) for path in paths)
+    except ClaudeSettingsError as e:
+        raise AgentRunError(str(e)) from e
+
+
+OVERLAY_FILE_NAME: Final = "litellm-subscription-overlay.json"
+
+
+def write_settings_overlay(text: str, environ: Mapping[str, str]) -> Path:
+    """Write the overlay next to Claude Code's own settings.json (so under CLAUDE_CONFIG_DIR when set) and return
+    its path. One file per user, rewritten on every launch, mode 0600 whether or not it already existed. It carries
+    the LiteLLM key, which is why it is a private file and not an inline `--settings` argument that every local
+    user could read from the process list, and why it does not pile up in the temp dir."""
+    path: Final = claude_settings_path(environ).parent / OVERLAY_FILE_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd: Final = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    if os.name == "posix":
+        os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    return path
+
+
+def subscription_launch_args(
+    command: Sequence[str],
+    api_key: str,
+    environ: Mapping[str, str],
+    settings_files: Sequence[Mapping[str, JsonValue]],
+    write_overlay: Callable[[str, Mapping[str, str]], Path],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The `--settings` that keeps Claude Code on its claude.ai login, plus the user's remaining args.
+
+    Claude Code applies `env` from its settings files over the process environment, so a key that `lite up` or
+    `lite configure claude` left in ANTHROPIC_AUTH_TOKEN would land back in `Authorization`, and an
+    ANTHROPIC_CUSTOM_HEADERS there would drop the x-litellm-api-key header. The overlay blanks both credential
+    keys (read as unset for this session only) and carries the custom headers with the LiteLLM key appended,
+    taking the headers from the user's `--settings`, else the settings files in Claude Code's precedence order,
+    else the process environment. Any `--settings` the user passed is stripped and the last one (inline JSON or a
+    file, the one Claude Code would keep) is merged in, since Claude Code keeps only the last `--settings`.
+    """
+    inherited: Final = _inherited_custom_headers(settings_files, environ)
+    user_value, rest = _split_settings_flags(tuple(command[1:]))
+    base: Final[Mapping[str, JsonValue]] = _load_settings_override(user_value) if user_value is not None else {}
+    overlay: Final = write_overlay(_settings_json(base, api_key, inherited), environ)
+    return (_SETTINGS_FLAG, str(overlay)), rest
+
+
+def _codex_proxy_args(base_url: str, subscription: bool) -> list[str]:
+    """Codex `-c` overrides that point it at the proxy.
+
+    Codex ignores OPENAI_BASE_URL (it always dials api.openai.com), so the env
+    profile alone cannot route it. It does honor a custom provider, so define one
+    inline; supports_websockets=false forces the HTTP/SSE Responses transport
+    because the proxy does not speak the Responses WebSocket protocol. The key is
+    read from OPENAI_API_KEY, which build_agent_env already exports.
+    With subscription=True the provider is `lite_subscription` with requires_openai_auth, so Codex
+    signs in with its own ChatGPT login, and the key travels in the x-litellm-api-key header from
+    LITELLM_PROXY_API_KEY. It sets no env_key, which would win over the login. A `-c` override cannot
+    remove keys, so the id is one no config.toml defines: `lite configure codex` writes `litellm`, and
+    the cookbook tells users to write `litellm_subscription`, whose env_key or headers would otherwise apply.
+    """
+    provider_id: Final = CODEX_SUBSCRIPTION_PROVIDER if subscription else CODEX_PROXY_PROVIDER
+    provider: Final = f"model_providers.{provider_id}"
+    credential: Final = (
+        f"{provider}.env_http_headers={{{json.dumps(LITELLM_KEY_HEADER)}={json.dumps(LITELLM_PROXY_API_KEY_ENV)}}}"
+        if subscription
+        else f'{provider}.env_key="{OPENAI_API_KEY_ENV}"'
+    )
+    return [
+        "-c",
+        f'model_provider="{provider_id}"',
+        *(
+            argument
+            for key, value in codex_proxy_provider(base_url, subscription=subscription).items()
+            for argument in ("-c", f"{provider}.{key}={json.dumps(value)}")
+        ),
+        "-c",
+        credential,
+        "-c",
+        f"{provider}.http_headers={{}}",
+    ]
+
+
+_PROXY_ARGS: Final[dict[str, Callable[[str, bool], list[str]]]] = {
+    "codex": _codex_proxy_args,
+}
+
+
+def prepare_pi(
+    base_url: str,
+    api_key: str,
+    base_env: Mapping[str, str],
+    *,
+    get: Callable[..., requests.Response] = requests.get,
+) -> tuple[str, ...]:
+    """Sync the proxy's model list into pi's models.json before handoff.
+
+    pi has no base-URL env vars, so this file is the only way to point it at the
+    proxy. Only the litellm provider entry is touched; the synced entry references
+    the key as $LITELLM_PROXY_API_KEY, which build_agent_env exports. The returned
+    --model pin is needed because pi ignores a bare --provider when picking the
+    interactive startup model; a user-supplied --model comes later in argv and wins.
+    """
+    ids: Final = fetch_model_ids(base_url, api_key, get=get)
+    if isinstance(ids, PiSyncError):
+        raise AgentRunError(
+            f"{ids.message} pi would have nothing to run." if ids.kind is ListingFailure.EMPTY else ids.message
+        )
+    limits: Final = fetch_model_limits(base_url, api_key, get=get)
+    path: Final = models_json_path(base_env)
+    error: Final = sync_models_json(path, base_url, ids, limits)
+    if error is not None:
+        raise AgentRunError(error.message)
+    click.echo(f"litellm: synced {len(ids)} proxy models into {path}")
+    return ("--model", f"{PI_PROVIDER_NAME}/{ids[0]}")
+
+
+def _warn(message: str) -> None:
+    click.echo(message, err=True)
+
+
+_CODEX_STOP_HOOKS_DECLARED: Final = re.compile(
+    r"^\s*(\[\[\s*\"?hooks\"?\s*\.\s*\"?Stop\"?\s*\]\]|\"?hooks\"?(?:\s*\.\s*\"?Stop\"?)?\s*=|\[\s*\"?hooks\"?\s*\])",
+    re.MULTILINE,
+)
+
+
+def codex_config_path(base_env: Mapping[str, str]) -> Path:
+    return Path(base_env.get("CODEX_HOME") or Path.home() / ".codex") / "config.toml"
+
+
+def codex_declares_stop_hooks(config_path: Path) -> bool:
+    """A config that cannot be read or decoded declares nothing we can see; Codex reports its own
+    TOML failure at launch, so the pre-check must not be the thing that stops `lite codex`."""
+    try:
+        return _CODEX_STOP_HOOKS_DECLARED.search(config_path.read_text(encoding="utf-8")) is not None
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def prepare_codex(
+    base_url: str,
+    api_key: str,
+    base_env: Mapping[str, str],
+    *,
+    install: Callable[[], str] = install_statusline_script,
+    warn: Callable[[str], None] = _warn,
+) -> tuple[str, ...]:
+    """A `-c hooks.Stop=` session flag replaces the user's whole Stop list, so their own hooks win over ours."""
+    if codex_declares_stop_hooks(codex_config_path(base_env)):
+        warn("litellm: your Codex config already declares hooks; not adding the routed-model Stop hook")
+        return ()
+    try:
+        command: Final = install()
+    except ClaudeSettingsError as e:
+        raise AgentRunError(str(e)) from e
+    return ("-c", f'hooks.Stop=[{{hooks=[{{type="command",command={json.dumps(command)}}}]}}]')
+
+
+_Preparer: TypeAlias = Callable[[str, str, Mapping[str, str]], Sequence[str]]
+
+_PREPARERS: Final[Mapping[str, _Preparer]] = MappingProxyType({"pi": prepare_pi, "codex": prepare_codex})
+
+
+def agent_launch_args(command: str, base_url: str, *, subscription: bool = False) -> list[str]:
+    """Extra CLI args an agent needs to actually honor the proxy.
+
+    Claude Code and OpenCode respect the exported env vars, so they get nothing
+    here; Codex needs its provider pointed via config overrides.
+    """
+    builder: Final = _PROXY_ARGS.get(os.path.basename(command))
+    return builder(base_url, subscription) if builder else []
+
+
+class ListedModel(LiteLLMBaseModel):
+    """The fields of a /v1/models entry that an OpenCode or Codex model entry is built from."""
+
+    id: str
+    mode: str | None = None
+    max_input_tokens: int | None = None
+    max_output_tokens: int | None = None
+
+
+class _ModelListing(LiteLLMBaseModel):
+    data: tuple[ListedModel, ...]
+
+
+_MODEL_LISTING: Final = TypeAdapter(_ModelListing)
+_CHAT_MODES: Final[frozenset[str]] = frozenset({"chat", "responses"})
+_NO_EXTRA_ENV: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+@dataclass(frozen=True, slots=True)
+class ModelSyncSkipped:
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ModelSyncArgs:
+    """CLI args, placed before the user's own, that hand an agent the synced model list."""
+
+    args: tuple[str, ...]
+
+
+ModelSyncResult: TypeAlias = Mapping[str, str] | ModelSyncArgs | ModelSyncSkipped
+
+
+def _chat_models(models: Sequence[ListedModel]) -> tuple[ListedModel, ...]:
+    return tuple(m for m in models if m.mode is None or m.mode in _CHAT_MODES)
+
+
+def _fetch_model_listing(
+    base_url: str,
+    api_key: str,
+    *,
+    get: Callable[..., requests.Response],
+) -> tuple[ListedModel, ...] | ModelSyncSkipped:
+    url: Final = base_url.rstrip("/") + "/v1/models"
+    try:
+        resp: Final = get(url, headers=MappingProxyType({"Authorization": f"Bearer {api_key}"}), timeout=10)
+    except requests.RequestException as e:
+        return ModelSyncSkipped(f"could not reach {url}: {e}")
+    if resp.status_code != 200:
+        return ModelSyncSkipped(f"{url} returned HTTP {resp.status_code}")
+    try:
+        listing: Final = _MODEL_LISTING.validate_json(resp.content)
+    except ValidationError:
+        return ModelSyncSkipped(f"{url} returned an unexpected body")
+    return listing.data
+
+
+class _OpenCodeLimit(LiteLLMBaseModel):
+    context: int
+    output: int
+
+
+class _OpenCodeModel(LiteLLMBaseModel):
+    name: str
+    limit: _OpenCodeLimit | None = None
+
+
+class _OpenCodeProviderOptions(LiteLLMBaseModel):
+    baseURL: str
+    apiKey: str
+
+
+class _OpenCodeProvider(LiteLLMBaseModel):
+    npm: str
+    name: str
+    options: _OpenCodeProviderOptions
+    models: Mapping[str, _OpenCodeModel]
+
+
+class _OpenCodeConfig(LiteLLMBaseModel):
+    provider: Mapping[str, _OpenCodeProvider]
+
+
+def _opencode_model_entry(model: ListedModel) -> _OpenCodeModel:
+    if model.max_input_tokens is None or model.max_output_tokens is None:
+        return _OpenCodeModel(name=model.id)
+    return _OpenCodeModel(
+        name=model.id, limit=_OpenCodeLimit(context=model.max_input_tokens, output=model.max_output_tokens)
+    )
+
+
+def opencode_provider_config(base_url: str, models: Sequence[ListedModel]) -> str:
+    """OPENCODE_CONFIG_CONTENT declaring the proxy as OpenCode provider `litellm`.
+
+    One model entry per chat-capable /v1/models row (mode chat, responses, or
+    unknown), so OpenCode's model picker mirrors what the key can call. The key
+    is read back through {env:OPENAI_API_KEY}, which build_agent_env exports, so
+    it never lands in the config text. OpenCode merges this inline config over
+    the user's own files, leaving unrelated keys and providers untouched.
+    """
+    chat_models: Final = _chat_models(models)
+    provider: Final = _OpenCodeProvider(
+        npm=OPENCODE_PROVIDER_NPM,
+        name=OPENCODE_PROVIDER_NAME,
+        options=_OpenCodeProviderOptions(
+            baseURL=base_url.rstrip("/") + "/v1",
+            apiKey=f"{{env:{OPENAI_API_KEY_ENV}}}",
+        ),
+        models=MappingProxyType({m.id: _opencode_model_entry(m) for m in chat_models}),
+    )
+    config: Final = _OpenCodeConfig(provider=MappingProxyType({OPENCODE_PROVIDER_ID: provider}))
+    return config.model_dump_json(exclude_none=True)
+
+
+def opencode_model_sync_env(
+    base_env: Mapping[str, str],
+    base_url: str,
+    api_key: str,
+    *,
+    get: Callable[..., requests.Response] = requests.get,
+) -> Mapping[str, str] | ModelSyncSkipped:
+    """Env addition that hands OpenCode the proxy's model list, or why it was skipped.
+
+    Fetches /v1/models with the key and packs it into OPENCODE_CONFIG_CONTENT.
+    An OPENCODE_CONFIG_CONTENT already in the environment is left alone, and a
+    failed fetch is reported rather than raised: OpenCode still launches on the
+    plain OPENAI_* env, just without a synced model list.
+    """
+    if OPENCODE_CONFIG_CONTENT_ENV in base_env:
+        return ModelSyncSkipped(f"{OPENCODE_CONFIG_CONTENT_ENV} is already set")
+    listing: Final = _fetch_model_listing(base_url, api_key, get=get)
+    if isinstance(listing, ModelSyncSkipped):
+        return listing
+    return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing)})
+
+
+def codex_model_catalog(
+    models: Sequence[ListedModel], stock: Sequence[CodexStockModel], instructions: str
+) -> str | None:
+    """The `model_catalog_json` body listing the proxy's chat models, or None if there are none.
+
+    Codex refuses an empty catalog, hence None instead of `{"models": []}`.
+    Passing a catalog replaces Codex's built-in one, so a proxy model the
+    installed Codex knows keeps that Codex's own entry and the proxy only
+    decides its place in the picker: the listing orders it, lists it even when
+    Codex hides it or keeps it off the API, and keeps Codex's upgrade nudge only
+    when the model it points at is served too. A model Codex does not know gets the fallback
+    entry, with the same base instructions Codex itself uses so the agent never
+    runs without a system prompt. The catalog is the one `/v1/models?client_version=...`
+    serves, built from the installed Codex's own entries instead of the proxy's vendored ones.
+    """
+    rows: Final = tuple(CodexCatalogRow(id=m.id, mode=m.mode, max_input_tokens=m.max_input_tokens) for m in models)
+    body: Final = codex_models_response_json(
+        rows, stock=MappingProxyType({m.slug: m for m in stock}), instructions=instructions, byte_limit=None
+    )
+    return body.json if body.listed else None
+
+
+def codex_model_catalog_path(env: Mapping[str, str], *, home: Callable[[], Path] = Path.home) -> Path:
+    override: Final = env.get(CODEX_HOME_ENV)
+    root: Final = Path(override) if override else home() / ".codex"
+    return root / CODEX_MODEL_CATALOG_FILENAME
+
+
+def _replace_file(path: Path, text: str) -> None:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
+        _ = tmp.write(text)
+    try:
+        os.replace(tmp.name, path)
+    except OSError:
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
+
+
+def _codex_debug_models(
+    binary: str,
+    args: Sequence[str],
+    env: Mapping[str, str],
+    *,
+    run: Callable[..., subprocess.CompletedProcess[str]],
+) -> str | ModelSyncSkipped:
+    """What `codex debug models` prints with `args` in front, or why the installed Codex could not run it.
+
+    The command prints the catalog Codex would launch with, without touching
+    the network, so it lists the installed Codex's own models and parses a
+    catalog override the way a launch does. Releases before 0.130.0 have no
+    such command and are reported the same way. A batch shim goes through
+    cmd.exe exactly as the launch will.
+    """
+    name: Final = os.path.basename(binary)
+    command: Final = _windows_command(binary, (binary, *args, "debug", "models"))
+    try:
+        completed: Final = run(
+            command,
+            env=dict(env),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            encoding="utf-8",
+            timeout=_CODEX_PREFLIGHT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return ModelSyncSkipped(f"`{name} debug models` failed: {e}")
+    if completed.returncode == 0:
+        return completed.stdout
+    lines: Final = completed.stderr.strip().splitlines()
+    detail: Final = lines[0] if lines else "no output"
+    return ModelSyncSkipped(f"`{name} debug models` exited {completed.returncode}: {detail}")
+
+
+def _stock_codex_models(
+    binary: str, env: Mapping[str, str], *, run: Callable[..., subprocess.CompletedProcess[str]]
+) -> tuple[CodexStockModel, ...] | ModelSyncSkipped:
+    printed: Final = _codex_debug_models(binary, (), env, run=run)
+    if isinstance(printed, ModelSyncSkipped):
+        return printed
+    try:
+        return CodexStockCatalog.model_validate_json(printed).models
+    except ValidationError as e:
+        name: Final = os.path.basename(binary)
+        return ModelSyncSkipped(f"`{name} debug models` printed no model catalog: {e.errors()[0]['msg']}")
+
+
+def codex_model_sync_args(
+    base_env: Mapping[str, str],
+    base_url: str,
+    api_key: str,
+    *,
+    binary: str = "codex",
+    get: Callable[..., requests.Response] = requests.get,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    home: Callable[[], Path] = Path.home,
+    instructions_path: Path = CODEX_BASE_INSTRUCTIONS_PATH,
+) -> ModelSyncArgs | ModelSyncSkipped:
+    """`-c model_catalog_json=...` pointing Codex at the proxy's model list, or why it was skipped.
+
+    Codex has no env or inline equivalent of OPENCODE_CONFIG_CONTENT: the catalog
+    must be a file, so it is written under $CODEX_HOME (default ~/.codex) and
+    atomically replaced on every launch. The Codex at `binary` first lists its
+    own models, so the ones the proxy serves keep that Codex's entries, and then
+    reads the file back once before it is handed over. The key never lands in
+    the file. A failed fetch, read, listing, write or read-back is reported
+    rather than raised: Codex still launches with its built-in catalog and takes
+    a proxy model by name via -m, and a rejected file stays on disk to be looked
+    at.
+    """
+    listing: Final = _fetch_model_listing(base_url, api_key, get=get)
+    if isinstance(listing, ModelSyncSkipped):
+        return listing
+    try:
+        instructions: Final = instructions_path.read_text(encoding="utf-8")
+    except OSError as e:
+        return ModelSyncSkipped(f"could not read {instructions_path}: {e}")
+    path: Final = codex_model_catalog_path(base_env, home=home)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return ModelSyncSkipped(f"could not write {path}: {e}")
+    stock: Final = _stock_codex_models(binary, base_env, run=run)
+    if isinstance(stock, ModelSyncSkipped):
+        return stock
+    catalog: Final = codex_model_catalog(listing, stock, instructions)
+    if catalog is None:
+        return ModelSyncSkipped(f"{base_url.rstrip('/')}/v1/models lists no chat models")
+    try:
+        _replace_file(path, catalog)
+    except OSError as e:
+        return ModelSyncSkipped(f"could not write {path}: {e}")
+    override: Final = f"model_catalog_json={json.dumps(str(path))}"
+    read_back: Final = _codex_debug_models(binary, ("-c", override), base_env, run=run)
+    if isinstance(read_back, ModelSyncSkipped):
+        return read_back
+    return ModelSyncArgs(("-c", override))
+
+
+def agent_model_sync_env(
+    binary: str,
+    base_env: Mapping[str, str],
+    base_url: str,
+    api_key: str,
+    skip_verify: bool,
+    *,
+    get: Callable[..., requests.Response] = requests.get,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> ModelSyncResult:
+    """Extra env or args an agent needs to see the proxy's model list.
+
+    binary is the resolved path the launch will run (`codex.cmd` on a Windows
+    npm install). OpenCode takes the list as env, Codex as a `-c` override that
+    binary has read back first; Claude Code discovers models itself through
+    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY. skip_verify means the caller
+    wants no pre-launch proxy call at all, so the listing is skipped too rather
+    than hanging on an offline proxy.
+    """
+    agent: Final = os.path.splitext(os.path.basename(binary))[0]
+    if agent not in ("opencode", "codex"):
+        return _NO_EXTRA_ENV
+    if skip_verify:
+        return ModelSyncSkipped(f"{_SKIP_VERIFY_FLAG} was passed")
+    if agent == "codex":
+        return codex_model_sync_args(base_env, base_url, api_key, binary=binary, get=get, run=run)
+    return opencode_model_sync_env(base_env, base_url, api_key, get=get)
+
+
+def verify_proxy_key(
+    base_url: str,
+    api_key: str,
+    *,
+    get: Callable[..., requests.Response] = requests.get,
+    key_header: str = "Authorization",
+) -> None:
+    """Probe the proxy with the key so bad creds fail here, not inside the agent.
+
+    Raises AgentRunError when the proxy is unreachable or rejects the key. Other
+    non-2xx responses are tolerated; the agent's own call is the real test.
+    """
+    url: Final = base_url.rstrip("/") + "/v1/models"
+    try:
+        resp: Final = get(url, headers={key_header: f"Bearer {api_key}"}, timeout=10)
+    except requests.RequestException as e:
+        raise AgentRunError(
+            f"Could not reach the LiteLLM proxy at {base_url.rstrip('/')}: {e}. "
+            "Is it running, and is --base-url (or LITELLM_PROXY_URL) correct?"
+        )
+    if resp.status_code in (401, 403):
+        raise AgentRunError(
+            f"LiteLLM rejected your key (HTTP {resp.status_code}). "
+            "Run `lite login` to refresh it, or pass a valid --api-key."
+        )
+
+
+def verify_subscription_key(
+    base_url: str,
+    api_key: str,
+    *,
+    get: Callable[..., requests.Response] = requests.get,
+) -> None:
+    verify_proxy_key(base_url, api_key, get=get, key_header=LITELLM_KEY_HEADER)
+
+
+_WINDOWS_SHIM_SUFFIXES: Final[frozenset[str]] = frozenset({".cmd", ".bat"})
+_CMD_LINE_BREAKS: Final = ("\r", "\n")
+
+
+def _windows_command(path: str, args: Sequence[str]) -> str | tuple[str, ...]:
+    """Build what CreateProcess runs, routing batch shims through cmd.exe.
+
+    npm installs Claude Code as `claude.cmd`, which PATHEXT lets shutil.which
+    resolve but CreateProcess refuses to run (WinError 193), so a shim has to go
+    through the command processor. cmd.exe does not follow the C runtime quoting
+    that subprocess would apply to an argument list, and it would split on `&` or
+    `|` in a forwarded argument, so the shim case is emitted as one verbatim
+    command line with every token quoted. Every switch is load-bearing: `/s`
+    makes cmd strip only the outer pair, leaving each token quoted and its
+    metacharacters inert, `/e:on` keeps the command extensions that the percent
+    guard is built out of, `/v:off` keeps `!` from expanding, and `/d` keeps a
+    machine's AutoRun commands out of the launch. argv[0] carries the
+    caller-facing name on POSIX; Windows needs the resolved path there.
+
+    Raises AgentRunError for an argument holding a line break, which cmd would
+    read as the end of the command line and silently drop the rest of.
+    """
+    rest: Final = tuple(args[1:])
+    if os.path.splitext(path)[1].lower() not in _WINDOWS_SHIM_SUFFIXES:
+        return (path, *rest)
+    if any(brk in token for token in rest for brk in _CMD_LINE_BREAKS):
+        raise AgentRunError(
+            f"Cannot pass an argument containing a line break to `{os.path.basename(path)}` on "
+            "Windows: cmd.exe ends the command line there, so the agent would silently lose it."
+        )
+    inner: Final = " ".join(quote_for_cmd(token) for token in (path, *rest))
+    return f'cmd.exe /d /e:on /v:off /s /c "{inner}"'
+
+
+def _spawn_and_wait(command: str | Sequence[str], env: Mapping[str, str]) -> int:
+    return subprocess.run(command, env=dict(env), check=False).returncode
+
+
+def _replace_process(
+    path: str,
+    args: Sequence[str],
+    env: Mapping[str, str],
+    *,
+    execvpe: Callable[..., None] = os.execvpe,
+) -> None:
+    execvpe(path, list(args), dict(env))
+
+
+def _hand_off(
+    path: str,
+    args: Sequence[str],
+    env: Mapping[str, str],
+    *,
+    platform: str = sys.platform,
+    replace: Callable[[str, Sequence[str], Mapping[str, str]], None] = _replace_process,
+    spawn: Callable[[str | Sequence[str], Mapping[str, str]], int] = _spawn_and_wait,
+) -> None:
+    """Replace this process with the agent; on Windows, run it as a child instead.
+
+    os.exec* has no process-replacement semantics on Windows: the C runtime
+    spawns a detached child and terminates the parent, so the shell reclaims the
+    console and the agent's TUI never gets one. Windows therefore waits on the
+    child and exits with its status.
+    """
+    if platform.startswith("win"):
+        raise SystemExit(spawn(_windows_command(path, args), env))
+    replace(path, list(args), dict(env))
+
+
+def _restore_controlling_terminal() -> None:
+    """Reattach the controlling terminal to stdin before handing off to the agent.
+
+    Completing the browser SSO login can leave stdin detached from the terminal,
+    which makes a TUI agent like Claude Code start in non-interactive mode and
+    exit immediately. Reopening /dev/tty onto fd 0 gives the agent a live
+    terminal; when stdin is still a tty (no login happened) this is a no-op.
+    """
+    if sys.stdin.isatty():
+        return
+    try:
+        fd: Final = os.open("/dev/tty", os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.dup2(fd, 0)
+    finally:
+        os.close(fd)
+
+
+def run_agent(
+    base_url: str,
+    api_key: str,
+    command: Sequence[str],
+    *,
+    skip_verify: bool = False,
+    subscription: bool = False,
+    base_env: Mapping[str, str] | None = None,
+    which: Callable[[str], str | None] = shutil.which,
+    verify: Callable[[str, str], None] = verify_proxy_key,
+    verify_subscription: Callable[[str, str], None] = verify_subscription_key,
+    sync_models: Callable[[str, Mapping[str, str], str, str, bool], ModelSyncResult] = agent_model_sync_env,
+    warn: Callable[[str], None] = _warn,
+    launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _hand_off,
+    reattach_terminal: Callable[[], None] | None = None,
+    preparers: Mapping[str, _Preparer] = MappingProxyType(_PREPARERS),
+    read_settings: Callable[[Path], Mapping[str, JsonValue]] = load_json_or_empty,
+    write_overlay: Callable[[str, Mapping[str, str]], Path] = write_settings_overlay,
+    project_dir: Path | None = None,
+) -> None:
+    """Validate, wire the environment, and hand off to the agent.
+
+    On success this replaces the current process and never returns. Raises
+    AgentRunError for missing binaries, an unreachable proxy, a rejected key, or
+    a failed pre-launch config sync (pi). reattach_terminal, when given, runs
+    just before handoff to restore stdin.
+    """
+    if not command:
+        raise AgentRunError("Nothing to run.")
+
+    display_name, profiles = agent_profile(command[0])
+    binary: Final = which(command[0])
+    if binary is None:
+        docs: Final = _INSTALL_DOCS.get(os.path.basename(command[0]))
+        hint: Final = f" Install it first: {docs}" if docs else ""
+        raise AgentRunError(f"Could not find `{command[0]}` on your PATH.{hint}")
+
+    if not skip_verify:
+        (verify_subscription if subscription else verify)(base_url, api_key)
+
+    env_before_sync: Final = base_env if base_env is not None else os.environ
+    synced: Final = (
+        _NO_EXTRA_ENV if subscription else sync_models(binary, env_before_sync, base_url, api_key, skip_verify)
+    )
+    if isinstance(synced, ModelSyncSkipped):
+        warn(f"litellm: not syncing {display_name} models from the proxy: {synced.reason}")
+
+    prepare: Final = None if subscription else preparers.get(os.path.basename(command[0]))
+    prepared_args: Final = tuple(prepare(base_url, api_key, env_before_sync)) if prepare is not None else ()
+
+    env: Final = MappingProxyType(
+        {
+            **build_agent_env(env_before_sync, base_url, api_key, profiles, subscription=subscription),
+            **(synced if isinstance(synced, Mapping) else _NO_EXTRA_ENV),
+        }
+    )
+    synced_args: Final = synced.args if isinstance(synced, ModelSyncArgs) else ()
+    extra_args: Final = (
+        *agent_launch_args(command[0], base_url, subscription=subscription),
+        *synced_args,
+        *prepared_args,
+    )
+    settings_args, forwarded = (
+        subscription_launch_args(
+            command,
+            api_key,
+            env_before_sync,
+            claude_settings_files(
+                read_settings, env_before_sync, project_dir if project_dir is not None else Path.cwd()
+            ),
+            write_overlay,
+        )
+        if subscription and os.path.basename(command[0]) == "claude"
+        else ((), tuple(command[1:]))
+    )
+    if reattach_terminal is not None:
+        reattach_terminal()
+    launcher(binary, [command[0], *extra_args, *settings_args, *forwarded], env)
+
+
+def _is_interactive() -> bool:
+    return sys.stdin.isatty()
+
+
+def resolve_api_key(ctx: click.Context) -> str:
+    ctx_obj: Final = cli_context_obj(ctx)
+    base_url: Final = ctx_obj["base_url"]
+    api_key = ctx_obj.get("api_key")
+    if api_key:
+        return api_key
+
+    if not _is_interactive():
+        raise click.ClickException(
+            "No LiteLLM key found. Set LITELLM_PROXY_API_KEY (or pass --api-key) for "
+            "non-interactive use, or run `lite login` from a terminal."
+        )
+
+    click.echo("No LiteLLM credentials found; starting login...")
+    ctx.invoke(login)
+    api_key = get_stored_api_key(expected_base_url=base_url, vault=context_secret_vault(ctx))
+    if not api_key:
+        raise click.ClickException("Login did not produce an API key; cannot start the agent.")
+    return api_key
+
+
+_SKIP_VERIFY_HELP: Final = "Skip the pre-launch key check against the proxy."
+_SUBSCRIPTION_HELP: Final = MappingProxyType(
+    {
+        "claude": (
+            "Keep using your claude.ai login (and its connectors). The LiteLLM key is sent in the "
+            "x-litellm-api-key header instead of replacing Claude Code's own credential. "
+            "Make it the default with `lite config set claude_subscription true`."
+        ),
+        "codex": (
+            "Keep using your ChatGPT login. The LiteLLM key is sent in the "
+            "x-litellm-api-key header instead of replacing Codex's own credential. "
+            "Make it the default with `lite config set codex_subscription true`."
+        ),
+    }
+)
+
+
+def _launch(
+    ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool, subscription: bool | None = None
+) -> None:
+    ctx_obj: Final = cli_context_obj(ctx)
+    base_url: Final = ctx_obj["base_url"]
+    started_interactive: Final = _is_interactive()
+    api_key: Final = resolve_api_key(ctx)
+
+    display_name, _profiles = agent_profile(binary)
+    use_subscription: Final = subscription if subscription is not None else subscription_default(binary)
+    login_note: Final = f" (keeping your {_SUBSCRIPTION_LOGINS[binary]} login)" if use_subscription else ""
+    click.echo(f"litellm: routing {display_name} through proxy at {base_url.rstrip('/')}{login_note}")
+
+    try:
+        run_agent(
+            base_url,
+            api_key,
+            [binary, *args],
+            skip_verify=skip_verify,
+            subscription=use_subscription,
+            reattach_terminal=(_restore_controlling_terminal if started_interactive else None),
+        )
+    except AgentRunError as e:
+        raise click.ClickException(str(e))
+
+
+_Decorated: Final = TypeVar("_Decorated", bound=Callable[..., object] | click.Command)
+
+
+def _subscription_option(binary: str) -> Callable[[_Decorated], _Decorated]:
+    if binary not in _SUBSCRIPTION_AGENTS:
+        return lambda func: func
+    return click.option("--subscription/--no-subscription", default=None, help=_SUBSCRIPTION_HELP[binary])
+
+
+def _make_agent_command(binary: str, display_name: str) -> click.Command:
+    @click.command(
+        name=binary,
+        context_settings={"ignore_unknown_options": True},
+        short_help=f"Run {display_name} through your LiteLLM proxy",
+        hidden=binary in _HIDDEN_AGENTS,
+    )
+    @click.option("--skip-verify", is_flag=True, default=False, help=_SKIP_VERIFY_HELP)
+    @_subscription_option(binary)
+    @click.argument("args", nargs=-1, type=click.UNPROCESSED)
+    @click.pass_context
+    def _command(ctx: click.Context, skip_verify: bool, args: Sequence[str], subscription: bool | None = None) -> None:
+        _launch(ctx, binary, list(args), skip_verify=skip_verify, subscription=subscription)
+
+    _command.help = (
+        f"Run {display_name} routed through your LiteLLM proxy.\n\n"
+        f"Logs in with LiteLLM if needed, verifies your key against the proxy, "
+        f"exports the env vars {binary} reads, then hands off. Any arguments are "
+        f"forwarded to `{binary}`."
+    )
+    return _command
+
+
+def agent_commands() -> tuple[click.Command, ...]:
+    """Build one top-level command per known agent, e.g. `lite claude`."""
+    return tuple(_make_agent_command(binary, name) for binary, (name, _profiles) in _KNOWN_AGENTS.items())
+
+
+__all__ = [
+    "OVERLAY_FILE_NAME",
+    "AgentRunError",
+    "ListedModel",
+    "ModelSyncSkipped",
+    "agent_commands",
+    "agent_launch_args",
+    "agent_model_sync_env",
+    "agent_profile",
+    "build_agent_env",
+    "claude_settings_files",
+    "opencode_model_sync_env",
+    "opencode_provider_config",
+    "prepare_pi",
+    "resolve_api_key",
+    "run_agent",
+    "subscription_launch_args",
+    "verify_proxy_key",
+    "verify_subscription_key",
+    "write_settings_overlay",
+]
