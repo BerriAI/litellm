@@ -3,6 +3,7 @@
 import { Search } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { routeSegmentForPathname } from "@/utils/uiHref";
 import { paletteScopeForRoute } from "./utils";
 import { useCommandPalette } from "./CommandPaletteProvider";
@@ -42,9 +43,7 @@ export function CommandPaletteTrigger({ mobile = false }: { mobile?: boolean }) 
         <Search className="size-4 shrink-0" />
         <span className="truncate">{label}</span>
       </span>
-      <kbd className="ml-2 shrink-0 rounded-sm border border-border border-b-2 bg-muted px-[3px] font-mono text-xs text-muted-foreground">
-        {shortcut}
-      </kbd>
+      <Kbd className="ml-2 shrink-0">{shortcut}</Kbd>
     </button>
   );
 }

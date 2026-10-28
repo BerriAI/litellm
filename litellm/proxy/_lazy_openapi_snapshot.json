@@ -15015,7 +15015,7 @@
           ]
         },
         "post": {
-          "description": "Create a named custom agent on the Gemini side.\n\nExample:\n```bash\ncurl -X POST \"http://localhost:4000/v1beta/agents\" \\\n    -H \"Authorization: Bearer sk-...\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"name\": \"my-custom-slides-agent\",\n        \"base_agent\": \"waverunner\",\n        \"instructions\": \"You are a helpful assistant that creates slides.\",\n        \"base_environment\": {\n            \"type\": \"remote\",\n            \"sources\": [\n                {\"type\": \"gcs\", \"source\": \"gs://eap-templates/slides-skill\",\n                 \"target\": \"/.agents/skills/slides-skill\"}\n            ]\n        }\n    }'\n```",
+          "description": "Create a named custom agent on the Gemini side.\n\nExample:\n```bash\ncurl -X POST \"http://localhost:4000/v1beta/agents\" \\\n    -H \"Authorization: Bearer sk-...\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"id\": \"my-custom-slides-agent\",\n        \"base_agent\": \"antigravity-preview-09-2026\",\n        \"system_instruction\": \"You are a helpful assistant that creates slides.\",\n        \"agent_config\": {\"type\": \"antigravity\", \"model\": \"gemini-3.8-flash\"},\n        \"base_environment\": {\n            \"type\": \"remote\",\n            \"sources\": [\n                {\"type\": \"gcs\", \"source\": \"gs://eap-templates/slides-skill\",\n                 \"target\": \"/.agents/skills/slides-skill\"}\n            ]\n        }\n    }'\n```",
           "operationId": "create_gemini_agent_v1beta_agents_post",
           "responses": {
             "200": {
