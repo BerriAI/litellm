@@ -10,6 +10,7 @@ import os
 from typing import Any, Final, Literal
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -29,6 +30,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 GUARDRAIL_NAME: Final = "qualifire"
 DEFAULT_QUALIFIRE_API_BASE: Final = "https://proxy.qualifire.ai"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class QualifireGuardrail(CustomGuardrail):
@@ -139,7 +141,7 @@ class QualifireGuardrail(CustomGuardrail):
             ]
         )
 
-    def _convert_messages_to_api_format(self, messages: list[AllMessageValues]) -> list[dict[str, Any]]:
+    def _convert_messages_to_api_format(self, messages: list[AllMessageValues]) -> list[dict[str, object]]:
         """
         Convert LiteLLM messages to Qualifire API format.
         Supports tool calls for tool_selection_quality_check.
@@ -167,7 +169,7 @@ class QualifireGuardrail(CustomGuardrail):
                         text_parts.append(part)
                 content = "\n".join(text_parts)
 
-            api_message: dict[str, Any] = {
+            api_message: dict[str, object] = {
                 "role": role,
                 "content": content if isinstance(content, str) else str(content),
             }
@@ -188,7 +190,7 @@ class QualifireGuardrail(CustomGuardrail):
                         args = function_info.get("arguments", {})
                         if isinstance(args, str):
                             try:
-                                args = json.loads(args)
+                                args = _DECODED_JSON.validate_python(json.loads(args))
                             except json.JSONDecodeError:
                                 args = {}
                         api_tool_calls.append(
@@ -205,7 +207,7 @@ class QualifireGuardrail(CustomGuardrail):
 
         return api_messages
 
-    def _convert_tools_to_api_format(self, tools: list[Any] | None) -> list[dict[str, Any]] | None:
+    def _convert_tools_to_api_format(self, tools: list[object] | None) -> list[dict[str, object]] | None:
         """
         Convert OpenAI-format tools to Qualifire API format.
 
@@ -264,13 +266,13 @@ class QualifireGuardrail(CustomGuardrail):
 
     def _build_evaluate_payload(
         self,
-        api_messages: list[dict[str, Any]],
+        api_messages: list[dict[str, object]],
         output: str | None,
         assertions: list[str] | None,
-        available_tools: list[dict[str, Any]] | None,
-    ) -> dict[str, Any]:
+        available_tools: list[dict[str, object]] | None,
+    ) -> dict[str, object]:
         """Build payload dictionary for the /api/evaluation/evaluate endpoint."""
-        payload: Final[dict[str, Any]] = {"messages": api_messages}
+        payload: Final[dict[str, object]] = {"messages": api_messages}
 
         if output is not None:
             payload["output"] = output
@@ -305,7 +307,7 @@ class QualifireGuardrail(CustomGuardrail):
         messages: list[AllMessageValues],
         output: str | None,
         dynamic_params: dict[str, Any],
-        available_tools: list[Any] | None = None,
+        available_tools: list[object] | None = None,
     ) -> None:
         """
         Core Qualifire check logic - shared between hooks.
@@ -378,12 +380,13 @@ class QualifireGuardrail(CustomGuardrail):
                 url=url,
                 headers=headers,
                 json=payload,
+                timeout=self.timeout,
             )
             response.raise_for_status()
             result: Final = response.json()
 
             # Extract response info for logging
-            qualifire_response: Final = {
+            qualifire_response: Final[dict[str, object]] = {
                 "score": result.get("score"),
                 "status": result.get("status"),
             }
@@ -418,6 +421,9 @@ class QualifireGuardrail(CustomGuardrail):
         except Exception as e:
             verbose_proxy_logger.exception("Qualifire Guardrail error: %s", e)
             raise
+
+    def supports_structured_messages(self) -> bool:
+        return False
 
     @log_guardrail_information
     async def apply_guardrail(

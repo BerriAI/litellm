@@ -9,6 +9,9 @@ const WORD_FORM_BUDGET_DURATIONS: Record<string, string> = {
 export const canonicalBudgetDuration = (duration: string | null | undefined): string | null =>
   duration ? WORD_FORM_BUDGET_DURATIONS[duration] ?? duration : null;
 
+export const keyOrganizationId = (key: { organization_id?: string | null; org_id?: string | null }): string | null =>
+  key.organization_id || key.org_id || null;
+
 // Determine the key_type display value from allowed_routes
 export const keyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string => {
   if (!allowedRoutes || allowedRoutes.length === 0) return "default";
@@ -32,6 +35,39 @@ export const modelSentinelOptions = (
 ): { value: string; label: string }[] => {
   if (keyTeamId == null) return [{ value: "all-proxy-models", label: "All Proxy Models" }];
   return teamLoaded ? [{ value: "all-team-models", label: "All Team Models" }] : [];
+};
+
+export type MovedMetadataTags = {
+  metadata: string;
+  tags: string[];
+  movedTags: string[];
+};
+
+const parseJsonObject = (text: string): Record<string, unknown> | null => {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+export const moveTagsOutOfMetadataJson = (
+  metadataJson: string | undefined,
+  currentTags: readonly string[] | undefined,
+): MovedMetadataTags | null => {
+  const parsed = metadataJson === undefined ? null : parseJsonObject(metadataJson);
+  if (parsed === null) return null;
+  const { tags: metadataTags, ...rest } = parsed;
+  if (!Array.isArray(metadataTags)) return null;
+  const existing = currentTags ?? [];
+  const movedTags = metadataTags
+    .filter((tag: unknown): tag is string => typeof tag === "string")
+    .map((tag) => tag.trim())
+    .filter((tag, index, all) => tag.length > 0 && !existing.includes(tag) && all.indexOf(tag) === index);
+  return { metadata: JSON.stringify(rest, null, 2), tags: [...existing, ...movedTags], movedTags };
 };
 
 export const currentValuePlaceholder = (

@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -43,16 +44,16 @@ class BaseVectorStoreFilesConfig(ABC):
         self,
         *,
         operation: str,
-        non_default_params: dict[str, Any],
-        optional_params: dict[str, Any],
+        non_default_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
         drop_params: bool,
-    ) -> dict[str, Any]:
+    ) -> Mapping[str, object]:
         """Map non-default OpenAI params to provider-specific params."""
 
         return optional_params
 
     @abstractmethod
-    def get_auth_credentials(self, litellm_params: dict[str, Any]) -> VectorStoreFileAuthCredentials: ...
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> VectorStoreFileAuthCredentials: ...
 
     @abstractmethod
     def get_vector_store_file_endpoints_by_type(
@@ -74,7 +75,7 @@ class BaseVectorStoreFilesConfig(ABC):
         *,
         api_base: str | None,
         vector_store_id: str,
-        litellm_params: dict[str, Any],
+        litellm_params: Mapping[str, object],
     ) -> str:
         if api_base is None:
             raise ValueError("api_base is required")
@@ -87,7 +88,7 @@ class BaseVectorStoreFilesConfig(ABC):
         vector_store_id: str,
         create_request: VectorStoreFileCreateRequest,
         api_base: str,
-    ) -> tuple[str, dict[str, Any]]: ...
+    ) -> tuple[str, dict[str, object]]: ...
 
     @abstractmethod
     def transform_create_vector_store_file_response(
@@ -103,7 +104,7 @@ class BaseVectorStoreFilesConfig(ABC):
         vector_store_id: str,
         query_params: VectorStoreFileListQueryParams,
         api_base: str,
-    ) -> tuple[str, dict[str, Any]]: ...
+    ) -> tuple[str, dict[str, object]]: ...
 
     @abstractmethod
     def transform_list_vector_store_files_response(
@@ -119,7 +120,7 @@ class BaseVectorStoreFilesConfig(ABC):
         vector_store_id: str,
         file_id: str,
         api_base: str,
-    ) -> tuple[str, dict[str, Any]]: ...
+    ) -> tuple[str, dict[str, object]]: ...
 
     @abstractmethod
     def transform_retrieve_vector_store_file_response(
@@ -135,7 +136,7 @@ class BaseVectorStoreFilesConfig(ABC):
         vector_store_id: str,
         file_id: str,
         api_base: str,
-    ) -> tuple[str, dict[str, Any]]: ...
+    ) -> tuple[str, dict[str, object]]: ...
 
     @abstractmethod
     def transform_retrieve_vector_store_file_content_response(
@@ -152,7 +153,7 @@ class BaseVectorStoreFilesConfig(ABC):
         file_id: str,
         update_request: VectorStoreFileUpdateRequest,
         api_base: str,
-    ) -> tuple[str, dict[str, Any]]: ...
+    ) -> tuple[str, dict[str, object]]: ...
 
     @abstractmethod
     def transform_update_vector_store_file_response(
@@ -168,7 +169,7 @@ class BaseVectorStoreFilesConfig(ABC):
         vector_store_id: str,
         file_id: str,
         api_base: str,
-    ) -> tuple[str, dict[str, Any]]: ...
+    ) -> tuple[str, dict[str, object]]: ...
 
     @abstractmethod
     def transform_delete_vector_store_file_response(
@@ -182,7 +183,7 @@ class BaseVectorStoreFilesConfig(ABC):
         *,
         error_message: str,
         status_code: int,
-        headers: dict[str, Any] | httpx.Headers,
+        headers: dict[str, str] | httpx.Headers,
     ) -> BaseLLMException:
         from ..chat.transformation import BaseLLMException
 
@@ -196,8 +197,8 @@ class BaseVectorStoreFilesConfig(ABC):
         self,
         *,
         headers: dict[str, str],
-        optional_params: dict[str, Any],
-        request_data: dict[str, Any],
+        optional_params: Mapping[str, object],
+        request_data: Mapping[str, object],
         api_base: str,
         api_key: str | None = None,
     ) -> tuple[dict[str, str], bytes | None]:

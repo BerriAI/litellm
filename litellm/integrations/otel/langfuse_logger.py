@@ -1,18 +1,55 @@
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from typing import TYPE_CHECKING, Final
 
+from opentelemetry.sdk.trace import ReadableSpan
+
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.logger import OpenTelemetryV2
-from litellm.integrations.otel.mappers.langfuse import LANGFUSE_OBSERVATION_INPUT, LANGFUSE_OBSERVATION_OUTPUT
+from litellm.integrations.otel.mappers.langfuse import (
+    LANGFUSE_OBSERVATION_INPUT,
+    LANGFUSE_OBSERVATION_OUTPUT,
+    LANGFUSE_TRACE_NAME,
+    LangfuseMapper,
+)
+from litellm.integrations.otel.model.metadata import internal_call_origin
 from litellm.integrations.otel.model.request_io import request_input, response_output, stream_output
+from litellm.integrations.otel.model.trace_controls import caller_trace_controls
+from litellm.integrations.otel.model.utils import as_str
 from litellm.integrations.otel.plumbing.context import request_root_span
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
+    from opentelemetry.trace import Span
+
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.utils import ModelResponseStream
 
 
 class LangfuseOpenTelemetryV2(OpenTelemetryV2):
+    """Stamps the caller's trace controls (name, user, session, tags) on the request. Langfuse reads them off
+    the root observation, and the proxy's root span is still recording when the LLM call starts."""
+
+    def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
+        root: Final = request_root_span()
+        if root is not None and root.is_recording():
+            root.set_attributes(
+                LangfuseMapper.trace_attributes(
+                    caller_trace_controls(kwargs),
+                    as_str(kwargs.get("call_type")) if self._derives_trace_name(root, kwargs) else None,
+                )
+            )
+        super().log_pre_api_call(model, messages, kwargs)
+
+    def _derives_trace_name(self, root: "Span", kwargs: Mapping[str, object]) -> bool:
+        return (
+            internal_call_origin(None, kwargs) is None
+            and isinstance(root, ReadableSpan)
+            and root.parent is None
+            and root.resource is self.tracer_provider.resource
+            and LANGFUSE_TRACE_NAME not in (root.attributes or {})
+        )
+
+
+class LangfuseContentOpenTelemetryV2(LangfuseOpenTelemetryV2):
     """Stamps the request's input and output on the root observation while it is still recording.
 
     Langfuse shows a trace's input and output from its root observation. The proxy's root span ends
@@ -35,6 +72,10 @@ class LangfuseOpenTelemetryV2(OpenTelemetryV2):
         response: "AsyncIterator[ModelResponseStream]",
         request_data: Mapping[str, object],
     ) -> "AsyncGenerator[ModelResponseStream, None]":
+        if not self._capture_span_content():
+            async for chunk in response:
+                yield chunk
+            return
         relayed: Final[list[ModelResponseStream]] = []  # mutable-ok: relayed as they arrive, assembled at end of stream
         async for chunk in response:
             relayed.append(chunk)
@@ -42,6 +83,8 @@ class LangfuseOpenTelemetryV2(OpenTelemetryV2):
         self._stamp_root_io(request_data, lambda: stream_output(tuple(relayed), request_data))
 
     def _stamp_root_io(self, data: Mapping[str, object], render_output: Callable[[], str | None]) -> None:
+        if not self._capture_span_content():
+            return
         root: Final = request_root_span()
         if root is None or not root.is_recording():
             return

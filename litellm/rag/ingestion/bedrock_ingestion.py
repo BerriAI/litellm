@@ -14,24 +14,24 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_arn_prefix
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
+from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion, RAGIngestBadRequestError
 
 if TYPE_CHECKING:
     from litellm import Router
     from litellm.types.rag import RAGIngestOptions
 
 
-def _get_str_or_none(value: Any) -> str | None:
+def _get_str_or_none(value: object) -> str | None:
     """Cast config value to Optional[str]."""
     return str(value) if value is not None else None
 
 
-def _get_int(value: Any, default: int) -> int:
+def _get_int(value: str | float | None, default: int) -> int:
     """Cast config value to int with default."""
     if value is None:
         return default
@@ -106,11 +106,11 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         )
         self.embedding_model = self.vector_store_config.get("embedding_model") or "amazon.titan-embed-text-v2:0"
 
-        self.wait_for_ingestion = self.vector_store_config.get("wait_for_ingestion", False)
+        self.wait_for_ingestion: object = self.vector_store_config.get("wait_for_ingestion", False)
         self.ingestion_timeout: int = _get_int(self.vector_store_config.get("ingestion_timeout"), 300)
 
         # Get AWS region using BaseAWSLLM method
-        _aws_region: Final = self.vector_store_config.get("aws_region_name")
+        _aws_region: Final[object] = self.vector_store_config.get("aws_region_name")
         self.aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
             aws_region_name=str(_aws_region) if _aws_region else None
         )
@@ -122,7 +122,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         self._config_initialized = False
 
         # Track resources we create (for cleanup if needed)
-        self._created_resources: dict[str, Any] = {}
+        self._created_resources: dict[str, object] = {}
 
     async def _ensure_config_initialized(self):
         """Lazily initialize KB config - either detect from existing or create new."""
@@ -149,7 +149,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         data_sources: Final = ds_response.get("dataSourceSummaries", [])
 
         if not data_sources:
-            raise ValueError(
+            raise RAGIngestBadRequestError(
                 f"No data sources found for Knowledge Base {self.knowledge_base_id}. "
                 "Please create a data source first or provide data_source_id and s3_bucket."
             )
@@ -181,7 +181,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                 self.s3_prefix = prefixes[0]
         else:
             if not self._s3_bucket:
-                raise ValueError(
+                raise RAGIngestBadRequestError(
                     f"Could not auto-detect S3 bucket for data source {self.data_source_id}. "
                     "Please provide s3_bucket in config."
                 )
@@ -233,7 +233,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         verbose_logger.debug("Creating S3 bucket: %s", bucket_name)
 
-        create_params: Final[dict[str, Any]] = {"Bucket": bucket_name}
+        create_params: Final[dict[str, object]] = {"Bucket": bucket_name}
         if self.aws_region_name != "us-east-1":
             create_params["CreateBucketConfiguration"] = {"LocationConstraint": self.aws_region_name}
 

@@ -1,11 +1,14 @@
 import base64
+from collections.abc import Mapping
 from io import BufferedReader, BytesIO
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import httpx
 from httpx._types import RequestFiles
 
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.gemini.common_utils import (
     get_gemini_image_generation_config,
@@ -16,6 +19,7 @@ from litellm.llms.gemini.image_usage_transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
+from litellm.types.llms.vertex_ai import GenerateContentResponseBody
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     FileTypes,
@@ -32,6 +36,14 @@ else:
     LiteLLMLoggingObj = Any
 
 
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
+
+
 class GeminiImageEditConfig(BaseImageEditConfig):
     DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
     SUPPORTED_PARAMS: list[str] = ["n", "size", "imageConfig"]
@@ -44,7 +56,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         return map_openai_image_params_to_gemini(
             params=image_edit_optional_params,
             model=model,
@@ -78,19 +90,18 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         api_base: str | None,
         litellm_params: dict,
     ) -> str:
-        base_url = api_base or get_secret_str("GEMINI_API_BASE") or self.DEFAULT_BASE_URL
-        base_url = base_url.rstrip("/")
-        return f"{base_url}/models/{model}:generateContent"
+        base_url: Final = api_base or get_secret_str("GEMINI_API_BASE") or self.DEFAULT_BASE_URL
+        return join_api_base(base_url, f"models/{model}:generateContent")
 
     def transform_image_edit_request(
         self,
         model: str,
         prompt: str | None,
         image: FileTypes | None,
-        image_edit_optional_request_params: dict[str, Any],
+        image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict[str, Any], RequestFiles | None]:
+    ) -> tuple[dict[str, object], RequestFiles | None]:
         inline_parts: Final = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
             raise ValueError("Gemini image edit requires at least one image.")
@@ -106,7 +117,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             }
         ]
 
-        request_body: Final[dict[str, Any]] = {"contents": contents}
+        request_body: Final[dict[str, object]] = {"contents": contents}
 
         request_body["generationConfig"] = get_gemini_image_generation_config(
             model=model,
@@ -124,7 +135,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
     ) -> ImageResponse:
         model_response: Final = ImageResponse()
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _json_body(raw_response)
         except Exception as exc:
             raise self.get_error_class(
                 error_message=f"Error transforming image edit response: {exc}",
@@ -132,7 +143,10 @@ class GeminiImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        candidates: Final = response_json.get("candidates", [])
+        payload: Final = cast(  # cast-ok: the body passes through unvalidated, as before it was typed
+            GenerateContentResponseBody, response_json
+        )
+        candidates: Final = payload.get("candidates", [])
         data_list: Final[list[ImageObject]] = []
 
         for candidate in candidates:
@@ -140,27 +154,28 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             parts = content.get("parts", [])
             for part in parts:
                 inline_data = part.get("inlineData")
-                if inline_data and inline_data.get("data"):
+                image_data = inline_data.get("data") if inline_data else None
+                if image_data:
                     data_list.append(
                         ImageObject(
-                            b64_json=inline_data["data"],
+                            b64_json=image_data,
                             url=None,
                         )
                     )
 
         model_response.data = cast(list[OpenAIImage], data_list)
-        if "usageMetadata" in response_json:
-            model_response.usage = transform_gemini_image_usage(response_json["usageMetadata"])
+        if "usageMetadata" in payload:
+            model_response.usage = transform_gemini_image_usage(dict(decoded_json_object(payload["usageMetadata"])))
         return model_response
 
-    def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[dict[str, Any]]:
+    def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[dict[str, object]]:
         images: list[FileTypes]
         if isinstance(image, list):
             images = image
         else:
             images = [image]
 
-        inline_parts: Final[list[dict[str, Any]]] = []
+        inline_parts: Final[list[dict[str, object]]] = []
         for img in images:
             if img is None:
                 continue

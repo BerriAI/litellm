@@ -4,7 +4,7 @@ import os
 import subprocess
 from typing import Final
 
-from litellm._logging import verbose_logger
+from litellm._logging import print_startup_message, verbose_logger
 
 
 def extract_sql_commands(diff_output: str) -> list[str]:
@@ -46,17 +46,32 @@ def extract_sql_commands(diff_output: str) -> list[str]:
 
 def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
     """Checks for differences between current database and Prisma schema.
+
+    Never raises: a diff that cannot be produced, because the runner is missing,
+    because the command failed, or because it outlived its budget, is reported as
+    "no diff" so boot continues.
+
     Returns:
         A tuple containing:
         - A boolean indicating if differences were found (True) or not (False).
-        - A string with the diff output or error message.
-    Raises:
-        subprocess.CalledProcessError: If the Prisma command fails.
-        Exception: For any other errors during execution.
+        - The SQL commands that would close the diff, empty when there is none.
     """
-    verbose_logger.debug("Checking for Prisma schema diff...")
     try:
-        result: Final = subprocess.run(
+        from litellm_proxy_extras.prisma_toolchain import (
+            PRISMA_COMMAND_TIMEOUT_ENV_VAR,
+            prisma_command_timeout,
+            run_prisma,
+        )
+    except ImportError as e:
+        print_startup_message(
+            f"Skipping the migration diff: litellm-proxy-extras has no Prisma runner. Error: {e}",
+        )
+        return False, []
+
+    verbose_logger.debug("Checking for Prisma schema diff...")
+    timeout: Final = prisma_command_timeout()
+    try:
+        result: Final = run_prisma(
             [
                 "prisma",
                 "migrate",
@@ -67,25 +82,28 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
                 "./schema.prisma",
                 "--script",
             ],
-            capture_output=True,
-            text=True,
-            check=True,
+            timeout=timeout,
+            env=os.environ.copy(),
         )
 
-        # return True, "Migration diff generated successfully."
         sql_commands: Final = extract_sql_commands(result.stdout)
 
         if sql_commands:
-            print("Changes to DB Schema detected")  # noqa: T201
-            print("Required SQL commands:")  # noqa: T201
-            for command in sql_commands:
-                print(command)  # noqa: T201
+            print_startup_message(
+                "\n".join(("Changes to DB Schema detected", "Required SQL commands:", *sql_commands)),
+            )
             return True, sql_commands
         else:
             return False, []
+    except subprocess.TimeoutExpired:
+        print_startup_message(
+            f"Timed out after {timeout}s generating the migration diff. "
+            f"Raise {PRISMA_COMMAND_TIMEOUT_ENV_VAR} if this database needs longer.",
+        )
+        return False, []
     except subprocess.CalledProcessError as e:
         error_message: Final = f"Failed to generate migration diff. Error: {e.stderr}"
-        print(error_message)  # noqa: T201
+        print_startup_message(error_message)
         return False, []
 
 

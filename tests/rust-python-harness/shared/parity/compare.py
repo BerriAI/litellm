@@ -78,3 +78,4 @@ def assert_parity(baseline: Execution, candidate: Execution, baseline_user_agent
     validate_harness(baseline, candidate, baseline_user_agent)
     assert_request_parity(baseline.requests, candidate.requests)
     assert_value_parity(baseline.report, candidate.report)
+    assert_value_parity(baseline.callbacks, candidate.callbacks, path="$.callbacks")

@@ -2,11 +2,13 @@ import { test, expect, type Page as PlaywrightPage } from "@playwright/test";
 import { ADMIN_STORAGE_PATH, E2E_TEAM_NO_ADMIN_ID } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup, clickTeamId } from "../../helpers/navigation";
+import { deleteGuardrailFromTable } from "../../helpers/guardrails";
 import { CHAT_MODEL_A, MOCK_RESPONSE_TEXT, masterKey } from "../../helpers/traffic";
 
 interface StoredGuardrail {
   guardrail_id: string;
   guardrail_name: string | null;
+  litellm_params?: { pii_entities_config?: Record<string, string> | null } | null;
 }
 
 async function listGuardrails(page: PlaywrightPage): Promise<StoredGuardrail[]> {
@@ -182,21 +184,9 @@ test.describe("Guardrails", () => {
   test("Delete a guardrail", async ({ page }) => {
     const stamp = Date.now();
     const guardrailName = `e2e-guardrail-delete-${stamp}`;
-    const guardrailId = await createKeywordGuardrailViaApi(page, guardrailName, `e2edelete${stamp}`);
+    await createKeywordGuardrailViaApi(page, guardrailName, `e2edelete${stamp}`);
 
-    await navigateToPage(page, Page.Guardrails);
-    await dismissFeedbackPopup(page);
-
-    await expect(page.getByRole("row").filter({ hasText: guardrailName })).toBeVisible({ timeout: 15_000 });
-
-    await page.getByTestId(`guardrail-actions-${guardrailId}`).click();
-    await page.getByTestId("guardrail-action-delete").click();
-
-    const modal = page.getByRole("dialog");
-    await expect(modal).toBeVisible({ timeout: 5_000 });
-    await modal.getByRole("button", { name: "Delete", exact: true }).click();
-
-    await expect(page.getByRole("row").filter({ hasText: guardrailName })).toHaveCount(0, { timeout: 15_000 });
+    await deleteGuardrailFromTable(page, guardrailName);
 
     // The RC checklist deletes then reloads, because a row vanishing from the table has
     // fooled us before; assert against the route the reload would read.
@@ -249,6 +239,17 @@ test.describe("Guardrails", () => {
     const row = page.getByRole("row").filter({ hasText: guardrailName });
     await expect(row).toHaveCount(1, { timeout: 15_000 });
 
+    const stored = await findGuardrail(page, guardrailName);
+    const piiConfig = stored?.litellm_params?.pii_entities_config ?? {};
+    expect(
+      Object.keys(piiConfig).length,
+      "Select All & Mask persisted no PII entities, so the guardrail would mask nothing",
+    ).toBeGreaterThan(0);
+    expect(
+      Object.entries(piiConfig).filter(([, action]) => action !== "MASK"),
+      "Select All & Mask must persist every entity with the MASK action",
+    ).toEqual([]);
+
     await navigateToPage(page, Page.Teams);
     await dismissFeedbackPopup(page);
     await clickTeamId(page, E2E_TEAM_NO_ADMIN_ID);
@@ -262,19 +263,7 @@ test.describe("Guardrails", () => {
     await expect(page.getByRole("option", { name: guardrailName })).toBeVisible({ timeout: 10_000 });
     await page.keyboard.press("Escape");
 
-    await navigateToPage(page, Page.Guardrails);
-    await expect(row).toHaveCount(1, { timeout: 15_000 });
-    await row.getByRole("button", { name: "Open guardrail actions" }).click();
-    await page.getByRole("menuitem", { name: "Delete" }).click();
-
-    const deleteModal = page.getByRole("dialog", { name: "Delete Guardrail" });
-    await expect(deleteModal).toBeVisible({ timeout: 5_000 });
-    await deleteModal.getByRole("button", { name: "Delete", exact: true }).click();
-
-    await expect(page.getByText(`Guardrail "${guardrailName}" deleted successfully`)).toBeVisible({
-      timeout: 10_000,
-    });
-    await expect(row).toHaveCount(0, { timeout: 15_000 });
+    await deleteGuardrailFromTable(page, guardrailName);
 
     await page.reload();
     await expect(page.getByRole("button", { name: /Add New Guardrail/i })).toBeVisible({ timeout: 20_000 });
