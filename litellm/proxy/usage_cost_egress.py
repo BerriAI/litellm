@@ -10,6 +10,7 @@ from typing import Final, TypeAlias, TypeVar
 
 from pydantic import BaseModel
 
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
@@ -47,7 +48,8 @@ def with_client_stream_usage_cost(chunk: BaseModel, price: Pricer) -> BaseModel:
         usage: Final = getattr(chunk, "usage", None)
         if not isinstance(usage, Usage):
             return chunk
-        priced: Final = ModelResponse(usage=usage, service_tier=getattr(chunk, "service_tier", None))
+        priced: Final = ModelResponse(model=chunk.model, usage=usage, service_tier=getattr(chunk, "service_tier", None))
+        priced.hidden_params = dict(get_hidden_params(chunk) or {})
         cost: Final = _client_usage_cost(getattr(usage, "cost", None), price(priced))
         return chunk if cost is None else _with_usage_cost(chunk, usage, cost)
     if getattr(chunk, "type", None) not in _RESPONSES_USAGE_EVENTS:

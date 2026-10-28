@@ -103,16 +103,26 @@ def test_a_content_chunk_is_not_priced() -> None:
     assert priced == []
 
 
-def test_the_stream_pricer_sees_the_upstream_cost_and_the_served_tier_so_the_bill_matches_the_spend_row() -> None:
-    seen: list[tuple[object, object]] = []
+def test_the_stream_pricer_sees_the_served_model_tier_and_upstream_cost_so_the_bill_matches_the_spend_row() -> None:
+    seen: list[tuple[object, object, object, object]] = []
 
     def price(reply: object) -> float | None:
-        seen.append((getattr(getattr(reply, "usage", None), "cost", None), getattr(reply, "service_tier", None)))
+        seen.append(
+            (
+                getattr(reply, "model", None),
+                getattr(reply, "hidden_params", {}).get("provider_response_model"),
+                getattr(reply, "service_tier", None),
+                getattr(getattr(reply, "usage", None), "cost", None),
+            )
+        )
         return OPERATOR_BILL
 
-    with_client_stream_usage_cost(_usage_chunk(UPSTREAM_COST, service_tier="default"), price)
+    chunk: Final = _usage_chunk(UPSTREAM_COST, service_tier="default")
+    chunk.hidden_params = {"provider_response_model": "gpt-4o-mini"}
 
-    assert seen == [(UPSTREAM_COST, "default")]
+    with_client_stream_usage_cost(chunk, price)
+
+    assert seen == [("omni-model", "gpt-4o-mini", "default", UPSTREAM_COST)]
 
 
 @pytest.mark.parametrize("upstream_cost", [UPSTREAM_COST, None])

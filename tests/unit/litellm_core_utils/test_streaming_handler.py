@@ -6118,6 +6118,28 @@ def test_chunk_creator_keeps_provider_model_private_across_stream():
     )
 
 
+def test_the_usage_chunk_carries_the_served_model_so_its_price_matches_the_assembled_response():
+    from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="requested-route",
+        logging_obj=MagicMock(),
+        custom_llm_provider="openai",
+    )
+    wrapper.chunk_creator(
+        chunk=ModelResponseStream(
+            id="chunk-1",
+            model="selected-model",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="hello"))],
+        )
+    )
+
+    usage_chunk = wrapper._new_usage_chunk()
+
+    assert get_hidden_params_dict(usage_chunk)["provider_response_model"] == "selected-model"
+
+
 def test_assembled_stream_uses_later_provider_model_for_cost(
     monkeypatch: pytest.MonkeyPatch,
 ):

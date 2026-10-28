@@ -2500,7 +2500,9 @@ class CustomStreamWrapper:
         return any(get(field) for field in cls._CONTINUATION_DISQUALIFYING_DELTA_FIELDS)
 
     def _new_usage_chunk(self) -> ModelResponseStream:
-        usage_chunk: Final = self.model_response_creator()
+        usage_chunk: Final = self.model_response_creator(
+            hidden_params=_provider_hidden_params(None, self._provider_response_model)
+        )
         if self.caller_requested_stream_usage:
             usage_chunk.choices = []
         return usage_chunk
