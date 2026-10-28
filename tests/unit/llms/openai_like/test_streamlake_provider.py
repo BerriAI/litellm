@@ -98,19 +98,19 @@ class TestStreamlakeProviderConfig:
         )
         assert url == STREAMLAKE_CHAT_URL
 
-    def test_streamlake_max_completion_tokens_mapped_to_max_tokens(self) -> None:
+    @pytest.mark.parametrize("cap_param", ("max_tokens", "max_completion_tokens"))
+    def test_streamlake_token_cap_sent_as_max_completion_tokens(self, cap_param: str) -> None:
         provider: Final = JSONProviderRegistry.get("streamlake")
         assert provider is not None
         config: Final = create_config_class(provider)()
 
         optional_params: Final = config.map_openai_params(
-            non_default_params={"max_completion_tokens": 1024},
+            non_default_params={cap_param: 1024},
             optional_params={},
             model="ep-test-endpoint",
             drop_params=False,
         )
-        assert optional_params == {"max_tokens": 1024}
-        assert "max_completion_tokens" not in optional_params
+        assert optional_params == {"max_completion_tokens": 1024}
 
     def test_streamlake_chat_params_pass_through(self) -> None:
         provider: Final = JSONProviderRegistry.get("streamlake")
@@ -167,7 +167,7 @@ async def test_streamlake_completion_uses_openai_compatible_http(
     expected_request_body: Final[dict[str, object]] = {
         "messages": [{"role": "user", "content": "hello"}],
         "model": "ep-test-endpoint",
-        "max_tokens": 512,
+        "max_completion_tokens": 512,
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -188,7 +188,7 @@ async def test_streamlake_completion_uses_openai_compatible_http(
                 messages=[{"role": "user", "content": "hello"}],
                 api_key="sk-streamlake-test",
                 api_base=api_base,
-                max_completion_tokens=512,
+                max_tokens=512,
             )
         else:
             response: Final = litellm.completion(
@@ -196,7 +196,7 @@ async def test_streamlake_completion_uses_openai_compatible_http(
                 messages=[{"role": "user", "content": "hello"}],
                 api_key="sk-streamlake-test",
                 api_base=api_base,
-                max_completion_tokens=512,
+                max_tokens=512,
             )
 
     assert route.call_count == 1
