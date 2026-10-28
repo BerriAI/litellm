@@ -289,7 +289,7 @@ async fn websocket_uses_system_roots(
         let result = open(&config(Verify::BuiltInRoots), &url, HeaderMap::new()).await;
         match result {
             Ok(mut socket) if connects => round_trip(&mut socket).await,
-            Err(Error::Connect(_)) if !connects => {}
+            Err(error) if !connects && error.is_connect() => {}
             other => panic!("unexpected handshake outcome: {:?}", other.map(drop)),
         }
         return;

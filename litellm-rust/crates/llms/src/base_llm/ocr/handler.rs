@@ -173,7 +173,7 @@ pub async fn read_response_bytes(
         return Err(Error::Provider {
             status,
             body,
-            headers,
+            headers: Box::new(headers),
         });
     }
     if response

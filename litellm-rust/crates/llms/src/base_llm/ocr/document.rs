@@ -68,7 +68,8 @@ pub async fn inline_remote_document(
                 max_redirects: OCR_MAX_FETCH_REDIRECTS,
             },
         )
-        .await?;
+        .await
+        .map_err(Error::DocumentDownload)?;
     let result = document.with_source(format!(
         "data:{};base64,{}",
         downloaded.content_type,
