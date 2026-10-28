@@ -281,14 +281,8 @@ def _stored_replay(message: _ChatMessage) -> _Replay | None:
         return None
 
 
-def _covers(entries: Sequence[_IndexedEntry], count: int) -> bool:
-    return sorted(entry.index for entry in entries) == list(range(count))
-
-
-def _message_texts(entries: Sequence[_MessageEntry], content: str) -> tuple[tuple[str, ...], ...] | None:
+def _message_texts(entries: Sequence[_MessageEntry], content: str) -> tuple[tuple[str, ...], ...]:
     lengths: Final = tuple(chain.from_iterable(entry.parts for entry in entries))
-    if sum(lengths) != len(content):
-        return None
     bounds: Final = tuple(accumulate(lengths, initial=0))
     parts: Final = tuple(content[start:end] for start, end in pairwise(bounds))
     groups: Final = tuple(accumulate((len(entry.parts) for entry in entries), initial=0))
@@ -355,27 +349,17 @@ def _input_item(resolved: _Resolved, position: int, entry: _MessageEntry | _Inde
 def _resolve(
     message: _ChatMessage, entries: Sequence[_MessageEntry | _IndexedEntry], replay_tool_search: bool
 ) -> ReplayedTurn | None:
-    messages: Final = tuple(entry for entry in entries if isinstance(entry, _MessageEntry))
     indexed: Final = tuple(entry for entry in entries if isinstance(entry, _IndexedEntry))
-    reasoning: Final = tuple(entry for entry in indexed if entry.type == "reasoning")
-    calls: Final = tuple(entry for entry in indexed if entry.type in ("function_call", "custom_tool_call"))
-    searches: Final = tuple(entry for entry in indexed if entry.type in ("tool_search_call", "tool_search_output"))
-    tool_searches: Final = _tool_search_entries(message)
-    texts: Final = _message_texts(messages, message.content or "")
-    if (
-        texts is None
-        or (searches and not replay_tool_search)
-        or not _covers(reasoning, len(message.reasoning_items or ()))
-        or not _covers(calls, len(message.tool_calls or ()))
-        or not _covers(searches, len(tool_searches))
-        or any(tool_searches[entry.index].get("type") != entry.type for entry in searches)
-    ):
+    if not replay_tool_search and any(entry.type in ("tool_search_call", "tool_search_output") for entry in indexed):
         return None
+    messages: Final = tuple(entry for entry in entries if isinstance(entry, _MessageEntry))
+    calls: Final = tuple(entry for entry in indexed if entry.type in ("function_call", "custom_tool_call"))
+    texts: Final = _message_texts(messages, message.content or "")
     positions: Final = tuple(position for position, entry in enumerate(entries) if isinstance(entry, _MessageEntry))
     resolved: Final = _Resolved(
         message=message,
         texts=MappingProxyType(dict(zip(positions, texts, strict=True))),
-        tool_searches=tool_searches,
+        tool_searches=_tool_search_entries(message),
     )
     tool_calls: Final = message.tool_calls or ()
     return ReplayedTurn(

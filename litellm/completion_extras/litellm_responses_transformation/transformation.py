@@ -535,12 +535,11 @@ def _fold_choices_into_one(
 
 
 def _with_replay_fields(choice: "Choices", output_items: Sequence[object], *, completed: bool) -> "Choices":
-    fields: Final = replay_fields(output_items, choice.message, completed=completed)
-    if not fields:
-        return choice
-    message: Final = choice.message.model_copy(
-        update={"provider_specific_fields": {**(choice.message.provider_specific_fields or {}), **fields}}
-    )
+    fields: Final = {
+        **(choice.message.provider_specific_fields or {}),
+        **replay_fields(output_items, choice.message, completed=completed),
+    }
+    message: Final = choice.message.model_copy(update={"provider_specific_fields": fields or None})
     return choice.model_copy(update={"message": message})
 
 
@@ -556,10 +555,7 @@ def completed_stream_history(
     completed: bool,
     structured_output: bool,
 ) -> dict[str, object] | None:  # mutable-ok: Delta.provider_specific_fields is typed as a dict
-    try:
-        items: Final = _STREAMED_OUTPUT_ITEMS.validate_python(output_payload)
-    except ValidationError:
-        return dict(tool_search_fields) if tool_search_fields else None
+    items: Final = _STREAMED_OUTPUT_ITEMS.validate_python(output_payload)
     calls: Final = tuple(item for item in items if item.get("type") in ("function_call", "custom_tool_call"))
     streamed_message: Final = {
         "role": "assistant",
@@ -2261,7 +2257,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     StreamingChoices(
                         index=0,
                         delta=Delta(
-                            content="",
+                            content=None,
                             reasoning_items=terminal_reasoning_items_typed,
                             provider_specific_fields=(
                                 completed_stream_history(

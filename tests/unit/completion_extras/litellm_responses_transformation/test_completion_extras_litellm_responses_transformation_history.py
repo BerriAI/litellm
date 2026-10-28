@@ -205,7 +205,9 @@ def _assistant_turn(
 
 
 def _next_turn_input(
-    assistant: Mapping[str, object], model: str = f"openai/responses/{MODEL}"
+    assistant: Mapping[str, object],
+    model: str = f"openai/responses/{MODEL}",
+    tools: Sequence[Mapping[str, object]] = TOOLS,
 ) -> list[Mapping[str, object]]:
     with respx.mock(assert_all_called=True) as router:
         upstream: Final = router.post(
@@ -214,7 +216,7 @@ def _next_turn_input(
         litellm.completion(
             model=model,
             messages=[USER, dict(assistant), TOOL_RESULT],
-            tools=list(TOOLS),
+            tools=list(tools),
             api_key="sk-test",
             api_base=None if model.startswith("openai/") else AZURE_API_BASE,
             api_version=None if model.startswith("openai/") else "2025-04-01-preview",
@@ -317,6 +319,47 @@ def test_missing_or_corrupt_replay_metadata_falls_back_to_the_chat_fields(
     assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
     assert sent[3]["content"] == [{"type": "output_text", "text": "Checking the weather.Paris: light rain."}]
     assert sent[3]["phase"] == "final_answer"
+
+
+def test_a_phase_openai_does_not_define_is_left_off_the_fallback() -> None:
+    assistant: Final = _assistant_turn(OUTPUT, stream=False)
+
+    sent: Final = _next_turn_input({**assistant, "provider_specific_fields": {"phase": "analysis"}})
+
+    assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
+    assert "phase" not in sent[3]
+
+
+SEARCH_CALL: Final = {
+    "type": "tool_search_call",
+    "id": "tsc_weather",
+    "arguments": {"paths": ["get_weather"]},
+    "status": "completed",
+}
+SEARCH_OUTPUT: Final = {
+    "type": "tool_search_output",
+    "id": "tso_weather",
+    "status": "completed",
+    "tools": [{"name": "get_weather"}],
+}
+
+
+@pytest.mark.parametrize(
+    ("tools", "expected"),
+    [
+        ((*TOOLS, {"type": "tool_search"}), ["tool_search_call", "tool_search_output", *_types(REPLAYED)]),
+        (TOOLS, ["reasoning", "reasoning", "message", "function_call"]),
+    ],
+    ids=["searching", "not-searching"],
+)
+def test_tool_search_items_replay_only_when_the_next_request_searches(
+    tools: Sequence[Mapping[str, object]], expected: Sequence[str]
+) -> None:
+    assistant: Final = _assistant_turn((SEARCH_CALL, SEARCH_OUTPUT, *OUTPUT), stream=False)
+
+    sent: Final = _next_turn_input(assistant, tools=tools)
+
+    assert _types(sent[1:-1]) == list(expected)
 
 
 WEB_SEARCH: Final = {"type": "web_search_call", "id": "ws_1", "status": "completed", "action": {"type": "search"}}
