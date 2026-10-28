@@ -42156,6 +42156,7 @@
     },
     "morph/morph-dsv41flash-abliterated": {
         "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
         "cache_read_input_token_cost": 3e-08,
