@@ -12,12 +12,17 @@ from mcp.types import Tool as MCPTool
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm._logging import verbose_logger
+from litellm.integrations.custom_guardrail import (
+    _sync_guardrail_info_to_logging_obj,  # pyright: ignore[reportPrivateUsage]  # share the guardrail logging bridge
+)
 from litellm.proxy.mcp_server.utils import logging_safe_mcp_headers, strip_known_server_prefix
 from litellm.types.mcp import MCPPreCallRequestObject
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
 from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
 
@@ -37,6 +42,7 @@ class _ScanKwargs(TypedDict):
     name: ReadOnly[str]
     arguments: ReadOnly[Mapping[str, object]]
     server_name: ReadOnly[str]
+    guardrail_context: ReadOnly[Mapping[str, object] | None]
     mcp_rate_limit_server_name: ReadOnly[str]
     user_api_key_auth: ReadOnly[UserAPIKeyAuth | None]
     user_api_key_user_id: ReadOnly[str | None]
@@ -155,12 +161,23 @@ async def scan_tool_descriptions(
     proxy_logging_obj: ProxyLogging,
     user_api_key_auth: UserAPIKeyAuth | None,
     raw_headers: Mapping[str, str] | None,
+    *,
+    guardrail_context: Mapping[str, object] | None = None,
+    litellm_logging_obj: LiteLLMLoggingObj | None = None,
 ) -> ToolDescriptionScan:
     batches: Final = tuple(
         [
             await asyncio.gather(
                 *(
-                    _scan_tool(tool, server, proxy_logging_obj, user_api_key_auth, raw_headers)
+                    _scan_tool(
+                        tool,
+                        server,
+                        proxy_logging_obj,
+                        user_api_key_auth,
+                        raw_headers,
+                        guardrail_context,
+                        litellm_logging_obj,
+                    )
                     for tool in tools[offset : offset + _CATALOG_SCAN_BATCH_SIZE]
                 )
             )
@@ -183,11 +200,15 @@ async def _scan_tool(
     proxy_logging_obj: ProxyLogging,
     user_api_key_auth: UserAPIKeyAuth | None,
     raw_headers: Mapping[str, str] | None,
+    guardrail_context: Mapping[str, object] | None,
+    litellm_logging_obj: LiteLLMLoggingObj | None,
 ) -> MCPTool | BlockedTool:
     if not _has_scannable_text(tool):
         return tool
     try:
-        guarded: Final = await _guarded_catalog_entry(tool, server, proxy_logging_obj, user_api_key_auth, raw_headers)
+        guarded: Final = await _guarded_catalog_entry(
+            tool, server, proxy_logging_obj, user_api_key_auth, raw_headers, guardrail_context, litellm_logging_obj
+        )
     except Exception as e:  # noqa: BLE001  # any guardrail failure hides the tool: fail closed
         return BlockedTool(name=tool.name, reason=_block_reason(e))
     return tool if guarded is None else _masked_tool(tool, guarded)
@@ -199,6 +220,8 @@ async def _guarded_catalog_entry(
     proxy_logging_obj: ProxyLogging,
     user_api_key_auth: UserAPIKeyAuth | None,
     raw_headers: Mapping[str, str] | None,
+    guardrail_context: Mapping[str, object] | None,
+    litellm_logging_obj: LiteLLMLoggingObj | None,
 ) -> Mapping[str, object] | None:
     request: Final[_ScanRequest] = {"tool_name": tool.name, "arguments": {}, "server_name": server.name}
     request_obj: Final = MCPPreCallRequestObject.model_validate(request)
@@ -206,6 +229,7 @@ async def _guarded_catalog_entry(
         "name": tool.name,
         "arguments": {},
         "server_name": server.name,
+        "guardrail_context": guardrail_context,
         "mcp_rate_limit_server_name": server.alias or server.server_name or server.name,
         "user_api_key_auth": user_api_key_auth,
         "user_api_key_user_id": user_api_key_auth.user_id if user_api_key_auth else None,
@@ -216,17 +240,23 @@ async def _guarded_catalog_entry(
         "mcp_tool_description": tool.description or "",
         "mcp_input_schema": tool.input_schema,
     }
-    data: Final = _JSON_OBJECT.validate_python(
-        proxy_logging_obj._convert_mcp_to_llm_format(request_obj, kwargs)  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # the tool-call path builds its guardrail payload through this same untyped helper
-    )
-    return _OPTIONAL_GUARDED.validate_python(
-        await proxy_logging_obj.pre_call_hook(  # pyright: ignore[reportUnknownMemberType, reportCallIssue, reportUnknownArgumentType]  # untyped hook; its overloads want an auth the MCP call types tolerate missing
-            user_api_key_dict=user_api_key_auth,  # pyright: ignore[reportArgumentType]  # the tool-call path passes the same optional auth
-            data=data,
-            call_type=CallTypes.list_mcp_tools.value,
-            guardrails_only=True,
+    data: Final = {
+        **_JSON_OBJECT.validate_python(
+            proxy_logging_obj._convert_mcp_to_llm_format(request_obj, kwargs)  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # the tool-call path builds its guardrail payload through this same untyped helper
+        ),
+        **({"litellm_logging_obj": litellm_logging_obj} if litellm_logging_obj is not None else {}),
+    }
+    try:
+        return _OPTIONAL_GUARDED.validate_python(
+            await proxy_logging_obj.pre_call_hook(  # pyright: ignore[reportUnknownMemberType, reportCallIssue, reportUnknownArgumentType]  # untyped hook; its overloads want an auth the MCP call types tolerate missing
+                user_api_key_dict=user_api_key_auth,  # pyright: ignore[reportArgumentType]  # the tool-call path passes the same optional auth
+                data=data,
+                call_type=CallTypes.list_mcp_tools.value,
+                guardrails_only=True,
+            )
         )
-    )
+    finally:
+        record_mcp_guardrail_evaluations(data, litellm_logging_obj)
 
 
 def _block_reason(exc: Exception) -> str:
@@ -248,3 +278,32 @@ def _masked_tool(tool: MCPTool, guarded: Mapping[str, object]) -> MCPTool:
 
 def _with_served_entry(tool: MCPTool, update: _ServedCatalogEntry) -> MCPTool:
     return tool.model_copy(deep=True, update=update)
+
+
+def record_mcp_guardrail_evaluations(
+    synthetic_llm_data: dict[str, object],  # mutable-ok: `_sync_guardrail_info_to_logging_obj` takes a concrete dict
+    litellm_logging_obj: LiteLLMLoggingObj | None,
+) -> None:
+    """Bridge guardrail decision records off an MCP synthetic request onto the request's logger.
+
+    MCP guardrails run against a throwaway LLM-shaped dict from
+    ``ProxyLogging._convert_mcp_to_llm_format``, so ``@log_guardrail_information``
+    files ``standard_logging_guardrail_information`` in that dict's metadata bucket,
+    which ``get_standard_logging_object_payload`` never reads. Native (non-unified)
+    guardrails receive no ``logging_obj`` kwarg, so the decorator cannot bridge on
+    their behalf; this calls the same helper it would have.
+
+    Only the decision records move. The synthetic request's messages and tool
+    arguments stay behind: they can carry end-user data, and the monitor needs none
+    of it.
+    """
+    if litellm_logging_obj is None:
+        return
+
+    try:
+        _sync_guardrail_info_to_logging_obj(synthetic_llm_data, litellm_logging_obj)
+    except Exception as e:  # noqa: BLE001  # callers run this from a `finally` on the block path
+        # The breadth is the point. Narrowing to the knowable AttributeError/TypeError
+        # would let an unexpected type escape that ``finally`` and replace the guardrail's
+        # block with a bookkeeping error.
+        verbose_logger.warning("Failed to record MCP guardrail evaluation for logging: %s", e)

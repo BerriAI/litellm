@@ -13,7 +13,7 @@ Unlike the semantic `auto_router` which uses embedding-based matching, the `comp
 
 ## How It Works
 
-The router scores each request across 7 dimensions:
+The default `classifier_type: heuristic` scores each request across 7 dimensions. These weights, keyword lists and score boundaries apply to the weighted heuristic scorer. [`heuristic_v2`](#heuristic-v2) uses a separate success-probability predictor
 
 | Dimension | Description | Weight |
 |-----------|-------------|--------|
@@ -254,10 +254,22 @@ model_list:
 
 No classifier model call or per-model training data is required. The classifier
 uses global tier quality, request-type quality, and similar-request cohorts from
-the bundled UltraFeedback artifact. It estimates success at every tier, enforces
+the bundled UltraFeedback artifact. Cohorts group prompts by request type, length,
+code and math markers, multiple-choice formatting and non-ASCII character share.
+Each tier's global estimate is `(successes + 1) / (observations + 2)`. Request-type
+and cohort estimates combine their successes and observations with the broader
+estimate as a prior, so sparse or missing statistics fall back toward broader data.
+The predictor estimates success at every tier, enforces
 monotonic probabilities, and returns the first tier meeting the success threshold,
 or REASONING if no tier meets it. The existing complexity-router tier pool then
 selects and dispatches a model from that tier
+
+`heuristic_v2` does not read `reasoning_keywords` or apply `reasoning_override_min_score`,
+even when the floor is `0`. The weighted scorer's keyword lists, `dimension_weights`,
+`token_thresholds` and `tier_boundaries` do not affect v2's probabilities or tier selection.
+This also applies when a chain selects `local_heuristic: heuristic_v2`. Use
+`classifier_type: heuristic` for the [reasoning-marker override](#reasoning-override).
+The separate `keyword_tier_rules` routing overrides still run before classification
 
 Set `heuristic_v2_success_threshold` to a value from 0 to 1 to override the
 artifact's threshold. For example, `0.9` requires a predicted success probability
@@ -646,7 +658,16 @@ of that threshold, or when no tier meets the threshold. A zero margin still defe
 
 ### Reasoning Override
 
-If 2+ reasoning markers are detected in the user message, the request is promoted to the REASONING tier even when the weighted score maps lower, so complex reasoning tasks get the appropriate model. The promotion requires the score to reach `reasoning_override_min_score`, which tracks `tier_boundaries.simple_medium` unless set, so stock phrases on an otherwise trivial prompt cannot buy the top tier. Set it to `0` to promote on the markers alone.
+The weighted heuristic scorer promotes its result to REASONING when the user message matches 2+ entries in `reasoning_keywords` and the weighted score reaches `reasoning_override_min_score`. The floor tracks `tier_boundaries.simple_medium` unless set. An explicit `0` lowers the floor to zero, so a negative weighted score still does not qualify. `heuristic_v2` bypasses this scorer and does not apply the override
+
+For routing based on these reasoning keywords, set the following under your existing `complexity_router_config` and keep your tier mapping
+
+```yaml
+classifier_type: heuristic
+reasoning_override_min_score: 0
+```
+
+Omit `reasoning_keywords` to use the built-in list, or supply a nonempty list to replace it. These scoring keywords are separate from `keyword_tier_rules`, which can select a tier before either classifier runs
 
 ### System Prompt Handling
 

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
 from starlette.requests import Request
@@ -1692,3 +1693,44 @@ async def test_form_data_metadata_keeps_non_ascii_and_valid_surrogate_pairs():
     result = await read_request_body(mock_request)
 
     assert result["metadata"]["tags"] == ["café", "😀"]
+
+
+def _request_whose_client_disconnects_mid_upload(content_type: str) -> Request:
+    scope: Final = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": [(b"content-type", content_type.encode()), (b"content-length", b"96")],
+        "query_string": b"",
+    }
+
+    async def receive() -> Message:
+        return {"type": "http.disconnect"}
+
+    return Request(scope, receive)
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    ("application/json", "multipart/form-data; boundary=synthetic-boundary", "application/x-protobuf"),
+)
+async def test_read_request_body_aborts_with_499_when_the_client_disconnects_mid_upload(content_type: str) -> None:
+    request: Final = _request_whose_client_disconnects_mid_upload(content_type)
+    with pytest.raises(HTTPException) as raised:
+        await read_request_body(request)
+    assert (raised.value.status_code, raised.value.detail) == (499, "Client disconnected the request")
+    assert _safe_get_request_parsed_body(request) is None, "a half-received body must never be cached as {}"
+
+
+async def test_read_request_body_closes_the_otel_server_span_when_the_client_disconnects_mid_upload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    span: Final = MagicMock()
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", MagicMock(), raising=False)
+    request: Final = _request_whose_client_disconnects_mid_upload("application/json")
+    request.state.parent_otel_span = span
+    with pytest.raises(HTTPException):
+        await read_request_body(request)
+    assert (span.end.called, request.state.parent_otel_span) == (True, None), "the auth-time span must not dangle"
