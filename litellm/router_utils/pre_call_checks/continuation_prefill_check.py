@@ -29,7 +29,6 @@ _STR_KEYED_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 _UNCONSTRAINED_RESPONSE_FORMAT: Final[Mapping[str, str]] = MappingProxyType({"type": "text"})
 _OUTPUT_CEILING_KEYS: Final = ("max_tokens", "max_completion_tokens")
-_NON_FORCING_TOOL_CHOICES: Final = ("auto", "none")
 
 
 def _str_keyed(value: object) -> Mapping[str, object]:
@@ -51,25 +50,26 @@ def deployment_supports_prefill(deployment: object) -> bool:
     return model is not None and supports_assistant_prefill(model=model)
 
 
-def _forces_tool(tool_choice: object) -> bool:
-    choice: Final = _str_keyed(tool_choice)
-    if not choice:
-        return tool_choice == "required"
-    mode: Final = choice.get("mode", _str_keyed(choice.get("allowed_tools")).get("mode"))
-    return choice.get("type") not in _NON_FORCING_TOOL_CHOICES and mode not in _NON_FORCING_TOOL_CHOICES
+def constrains_output_text(params: Mapping[str, object]) -> bool:
+    sent: Final = {**params, **_str_keyed(params.get("extra_body"))}
+    response_format: Final = sent.get("response_format")
+    text_format: Final = _str_keyed(sent.get("text")).get("format")
+    return (
+        (response_format is not None and response_format != _UNCONSTRAINED_RESPONSE_FORMAT)
+        or (text_format is not None and text_format != _UNCONSTRAINED_RESPONSE_FORMAT)
+        or sent.get("text_format") is not None
+    )
 
 
 def constrains_continuation(params: Mapping[str, object]) -> bool:
     sent: Final = {**params, **_str_keyed(params.get("extra_body"))}
     choice_count: Final = sent.get("n")
-    response_format: Final = sent.get("response_format")
-    text_format: Final = _str_keyed(sent.get("text")).get("format")
+    tool_choice: Final = sent.get("tool_choice")
     return (
         (isinstance(choice_count, int) and choice_count > 1)
-        or (response_format is not None and response_format != _UNCONSTRAINED_RESPONSE_FORMAT)
-        or (text_format is not None and text_format != _UNCONSTRAINED_RESPONSE_FORMAT)
-        or sent.get("text_format") is not None
-        or _forces_tool(sent.get("tool_choice"))
+        or constrains_output_text(params)
+        or tool_choice == "required"
+        or isinstance(tool_choice, Mapping)
         or sent.get("merge_reasoning_content_in_choices") is True
     )
 

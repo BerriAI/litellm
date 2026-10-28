@@ -7101,9 +7101,6 @@ _NUMBERS_TEXT_FORMAT: Final = {
 
 
 _FORCED_TOOL: Final = {"tool_choice": {"type": "function", "name": "lookup"}}
-_ALLOWED_TOOLS_AUTO: Final = {
-    "tool_choice": {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "lookup"}]}
-}
 
 
 @pytest.mark.asyncio
@@ -7113,9 +7110,8 @@ _ALLOWED_TOOLS_AUTO: Final = {
         pytest.param({"text": {"format": _NUMBERS_TEXT_FORMAT}}, "text", False, id="json_schema"),
         pytest.param({"text": {"format": {"type": "json_object"}}}, "text", False, id="json_object"),
         pytest.param({"text_format": _NumbersOutput}, "text", False, id="sdk_text_format"),
-        pytest.param(_FORCED_TOOL, "text", False, id="forced_tool"),
         pytest.param({"text": {"format": {"type": "text"}}}, "text", True, id="plain_text"),
-        pytest.param(_ALLOWED_TOOLS_AUTO, "text", True, id="allowed_tools_auto"),
+        pytest.param(_FORCED_TOOL, "text", True, id="forced_tool_prose_continues"),
         pytest.param(_FORCED_TOOL, "tool_arguments", True, id="forced_tool_cut_in_arguments_restarts"),
         pytest.param(
             {"text": {"format": _NUMBERS_TEXT_FORMAT}}, "before_output", True, id="json_schema_cut_before_output"
@@ -7126,8 +7122,8 @@ async def test_aresponses_streaming_iterator_does_not_continue_constrained_outpu
     request_params: Mapping[str, object], cut: Literal["text", "tool_arguments", "before_output"], falls_back: bool
 ):
     """A Responses stream cut after it emitted part of a constrained text output surfaces the primary's error, since
-    a fallback continuing a JSON document completes with output that breaks the request's contract. Plain text and
-    allowed_tools in auto mode still continue, and a cut before any text, a forced tool's partial arguments included,
+    a fallback continuing a JSON document completes with output that breaks the request's contract. Plain text still
+    continues, a forced tool's prose included, and a cut before any text, a forced tool's partial arguments included,
     still falls back with the request as sent."""
     primary_output: Final = {
         "text": (MagicMock(type="response.output_text.delta", delta='{"numbers": [1, 2, '),),

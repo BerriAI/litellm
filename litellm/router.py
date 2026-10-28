@@ -307,6 +307,7 @@ from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     ContinuationPrefillDeploymentCheck,
     ContinuedPartial,
     constrains_continuation,
+    constrains_output_text,
     continuation_deployments,
     continuation_output_ceilings,
     continued_text,
@@ -4029,9 +4030,9 @@ class Router:
           - Pre-first-chunk: retry with the original input unchanged.
           - Partial content: inject a developer instruction + prior
             assistant message carrying the generated text so the fallback
-            model continues rather than restarts. A request whose output is
-            constrained (a JSON schema, a forced tool) is not continued, and
-            the primary's error surfaces instead.
+            model continues rather than restarts. A request whose output text
+            is constrained (a JSON schema or JSON object format) is not
+            continued, and the primary's error surfaces instead.
           - Usage combining: merge partial-stream usage onto the fallback's
             response.completed event so accounting reflects both attempts.
           - Stream cleanup: shielded aclose() on both source and fallback
@@ -4243,9 +4244,7 @@ class Router:
         cut_deployment: Final = (
             self.get_deployment(model_id=cut_deployment_id) if isinstance(cut_deployment_id, str) else None
         )
-        if continues_output and constrains_continuation(
-            self._params_sent_to_deployment(initial_kwargs, cut_deployment)
-        ):
+        if continues_output and constrains_output_text(self._params_sent_to_deployment(initial_kwargs, cut_deployment)):
             Router._raise_original_mid_stream_error(e)
         partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
         fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted

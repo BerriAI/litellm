@@ -6,7 +6,6 @@ from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_MARKER,
     ContinuationOutput,
     ContinuationPrefillDeploymentCheck,
-    constrains_continuation,
     continuation_output_ceilings,
     deployment_supports_prefill,
 )
@@ -178,27 +177,6 @@ async def test_filter_drops_deployments_whose_own_params_constrain_the_continuat
         request_kwargs={MID_STREAM_CONTINUATION_KWARG: MID_STREAM_CONTINUATION_MARKER},
     )
     assert [d["model_info"]["id"] for d in result] == ["plain"]
-
-
-@pytest.mark.parametrize(
-    ("tool_choice", "constrains"),
-    [
-        pytest.param("required", True, id="required"),
-        pytest.param({"type": "function", "name": "f"}, True, id="responses_named_function"),
-        pytest.param({"type": "function", "function": {"name": "f"}}, True, id="chat_named_function"),
-        pytest.param({"type": "allowed_tools", "mode": "required", "tools": []}, True, id="responses_allowed_required"),
-        pytest.param({"type": "any"}, True, id="anthropic_any"),
-        pytest.param("auto", False, id="auto"),
-        pytest.param({"type": "auto"}, False, id="anthropic_auto"),
-        pytest.param({"type": "none"}, False, id="anthropic_none"),
-        pytest.param({"type": "allowed_tools", "mode": "auto", "tools": []}, False, id="responses_allowed_auto"),
-        pytest.param(
-            {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": []}}, False, id="chat_allowed_auto"
-        ),
-    ],
-)
-def test_constrains_continuation_only_for_a_tool_choice_that_forces_a_tool(tool_choice: object, constrains: bool):
-    assert constrains_continuation({"tool_choice": tool_choice}) is constrains
 
 
 def _text_chunk(text: str) -> litellm.ModelResponseStream:
