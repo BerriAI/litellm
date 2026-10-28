@@ -46,18 +46,36 @@ def _review(login: str, state: str, commit_id: str | None = "head") -> "guard.Re
     return guard.Review(state=state, user=guard.Reviewer(login=login), commit_id=commit_id)
 
 
-class TestLatestApproval:
+class TestApprovedBy:
     def test_the_latest_review_of_the_approver_decides(self):
-        reviews: Final = (
-            _review("kerry-berri", "CHANGES_REQUESTED", "old"),
-            _review("someone-else", "APPROVED"),
-            _review("kerry-berri", "APPROVED"),
+        reviews: Final = tuple(
+            guard.Review(state=state, user=guard.Reviewer(login=login))
+            for login, state in (
+                ("kerry-berri", "CHANGES_REQUESTED"),
+                ("someone-else", "APPROVED"),
+                ("kerry-berri", "APPROVED"),
+            )
         )
-        assert guard.latest_approval(reviews, "kerry-berri") is reviews[-1]
-        assert guard.latest_approval(reviews[::-1], "kerry-berri") is None
+        assert guard.approved_by(reviews, "kerry-berri") is True
+        assert guard.approved_by(reviews[::-1], "kerry-berri") is False
 
     def test_no_review_from_the_approver_is_not_an_approval(self):
-        assert guard.latest_approval((_review("someone-else", "APPROVED"),), "kerry-berri") is None
+        other: Final = guard.Review(state="APPROVED", user=guard.Reviewer(login="someone-else"))
+        assert guard.approved_by((other,), "kerry-berri") is False
+        assert guard.approved_by((), "kerry-berri") is False
+
+
+class TestLatestApproval:
+    def test_the_approvers_last_approved_review_is_returned_with_its_commit(self):
+        reviews: Final = (
+            _review("kerry-berri", "APPROVED", "old"),
+            _review("someone-else", "APPROVED", "head"),
+            _review("kerry-berri", "APPROVED", "new"),
+            _review("kerry-berri", "COMMENTED", "head"),
+        )
+        assert guard.latest_approval(reviews, "kerry-berri") is reviews[2]
+        assert guard.latest_approval(reviews[:2], "kerry-berri") is reviews[0]
+        assert guard.latest_approval(reviews[1:2], "kerry-berri") is None
         assert guard.latest_approval((), "kerry-berri") is None
 
 

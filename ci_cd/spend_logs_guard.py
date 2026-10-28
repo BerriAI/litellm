@@ -72,10 +72,16 @@ def _path_of(section: str) -> str:
     return match.group(1) if match else ""
 
 
+def approved_by(reviews: Sequence[Review], login: str) -> bool:
+    """True when `login`'s most recent review on the pull request is an approval."""
+    states: Final = tuple(review.state for review in reviews if review.user.login == login)
+    return bool(states) and states[-1] == "APPROVED"
+
+
 def latest_approval(reviews: Sequence[Review], login: str) -> Review | None:
-    """`login`'s most recent review on the pull request when it is an approval."""
-    own: Final = tuple(review for review in reviews if review.user.login == login)
-    return own[-1] if own and own[-1].state == "APPROVED" else None
+    """`login`'s most recent APPROVED review on the pull request, the one GitHub keeps in force after pushes."""
+    own: Final = tuple(review for review in reviews if review.user.login == login and review.state == "APPROVED")
+    return own[-1] if own else None
 
 
 def approval_covers(
@@ -128,7 +134,8 @@ def main(argv: Sequence[str]) -> int:
     if not hits:
         sys.stdout.write("No added line in schema.prisma or a migration names LiteLLM_SpendLogs; nothing to review.\n")
         return 0
-    approval: Final = latest_approval(_REVIEWS.validate_json(args.reviews.read_bytes()), args.approver)
+    reviews: Final = _REVIEWS.validate_json(args.reviews.read_bytes())
+    approval: Final = latest_approval(reviews, args.approver) if approved_by(reviews, args.approver) else None
     if approval is not None and approval_covers(
         approval, args.head, hits, lambda commit: reviewed_hits(args.base, commit)
     ):
