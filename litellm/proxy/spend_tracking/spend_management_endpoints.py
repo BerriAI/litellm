@@ -96,6 +96,7 @@ _SESSION_REPRESENTATIVE_ORDER_SQL: Final = (
     f'call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC, request_id'
 )
 _BATCH_CALL_TYPES_SQL: Final = "('acreate_batch', 'create_batch', 'aretrieve_batch', 'retrieve_batch')"
+_HAS_ERROR_INFORMATION_SQL: Final = "jsonb_typeof(metadata->'error_information') = 'object'"
 _SPAN_TYPE_SQL_CONDITIONS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "mcp": f"call_type IN {_MCP_CALL_TYPES_SQL}",
@@ -2932,6 +2933,8 @@ async def ui_view_spend_logs(
             sql_conditions.append(f"metadata->>'user_api_key_alias' LIKE ${p}")
             sql_params.append(f"%{key_alias}%")
             p += 1
+        if error_code is not None or error_message is not None:
+            sql_conditions.append(_HAS_ERROR_INFORMATION_SQL)
         if error_code is not None:
             sql_conditions.append(f"metadata->'error_information'->>'error_code' = ${p}")
             sql_params.append(error_code)

@@ -5,8 +5,10 @@ background, once it serves).
 A migration cannot build them: a plain `CREATE INDEX` blocks spend-log inserts for the
 whole build, and `CREATE INDEX CONCURRENTLY` is refused on a partitioned parent
 (db_scripts/partition_spend_logs.sql). `REQUEST_LOG_INDEXES` is the one list to extend;
-names match what Prisma derives from the `@@index` declarations in schema.prisma, so an
-index a database already has is recognized and never rebuilt.
+names of plain indexes match what Prisma derives from the `@@index` declarations in
+schema.prisma, so an index a database already has is recognized and never rebuilt.
+Prisma cannot declare a partial index, and its schema diff ignores one, so a partial
+index lives only here.
 """
 
 import hashlib
@@ -33,20 +35,27 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class RequestLogIndex:
-    """One index the migration job owns: the table, the exact Prisma index name and the
-    column list as it would be written after `ON <table>`."""
+    """One index the migration job owns: the table, the exact Prisma index name, the
+    column list as it would be written after `ON <table>`, and the WHERE predicate of a
+    partial index."""
 
     table: str
     name: str
     definition: str
+    predicate: str | None = None
 
     @property
     def columns(self) -> tuple[str, ...]:
         return tuple(re.findall(r'"([^"]+)"', self.definition))
 
+    @property
+    def body(self) -> str:
+        return self.definition if self.predicate is None else f"{self.definition} WHERE {self.predicate}"
+
     def partition_index_name(self, partition: str) -> str:
-        """The child index name for one partition, built the way Postgres names the
-        children of a partitioned index, and kept within the 63 byte identifier limit."""
+        """The child index name this job builds on one partition, kept within the 63 byte
+        identifier limit. Postgres names the children it creates for a new partition after
+        their columns instead, so a partition's child is found by attachment, never by name."""
         name: Final = f"{partition}_{self.name.removeprefix(f'{self.table}_')}"
         if len(name.encode()) <= _IDENTIFIER_MAX_BYTES:
             return name
@@ -59,6 +68,12 @@ class RequestLogIndex:
 REQUEST_LOG_INDEXES: Final = (
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_api_key_startTime_idx", '("api_key", "startTime")'),
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_litellm_call_id_idx", '("litellm_call_id")'),
+    RequestLogIndex(
+        "LiteLLM_SpendLogs",
+        "LiteLLM_SpendLogs_error_startTime_idx",
+        '("startTime")',
+        "jsonb_typeof(metadata->'error_information') = 'object'",
+    ),
 )
 
 _IDENTIFIER_MAX_BYTES: Final = 63
@@ -256,9 +271,12 @@ def _equivalent_indexes(
 ) -> tuple[_EquivalentIndex, ...]:
     """The indexes on `table` other than `name` with the same definition: default btree
     over the same columns in the same order, no expression, predicate, DESC or custom
-    opclass or collation, and not attached under a partitioned index. Valid ones first."""
+    opclass or collation, and not attached under a partitioned index. Valid ones first.
+    Empty for a partial index, whose predicate this lookup cannot compare."""
     from psycopg.rows import class_row
 
+    if index.predicate is not None:
+        return ()
     with connection.cursor(row_factory=class_row(_EquivalentIndex)) as cursor:
         return tuple(
             cursor.execute(
@@ -371,7 +389,7 @@ def _build_leaf_index(
         prefix: Final = sql.SQL("CREATE INDEX CONCURRENTLY IF NOT EXISTS {} ON {} ").format(
             sql.Identifier(name), sql.Identifier(schema, table)
         )
-        connection.execute(_create_index_statement(connection, prefix, index.definition))
+        connection.execute(_create_index_statement(connection, prefix, index.body))
         built: Final = _index_state(connection, schema, name)
         return built is not None and built.valid
 
@@ -440,7 +458,7 @@ def _create_parent_index(
     prefix: Final = sql.SQL("CREATE INDEX IF NOT EXISTS {} ON ONLY {} ").format(
         sql.Identifier(name), sql.Identifier(schema, table)
     )
-    statement: Final = _create_index_statement(connection, prefix, index.definition)
+    statement: Final = _create_index_statement(connection, prefix, index.body)
     connection.execute(statement)
     return True
 

@@ -44,6 +44,8 @@ API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttim
 CALL_ID_INDEX_MIGRATION: Final = "20260831120001_spend_logs_litellm_call_id_index"
 API_KEY_INDEX: Final = "LiteLLM_SpendLogs_api_key_startTime_idx"
 CALL_ID_INDEX: Final = "LiteLLM_SpendLogs_litellm_call_id_idx"
+ERROR_INDEX: Final = "LiteLLM_SpendLogs_error_startTime_idx"
+START_TIME_INDEX: Final = "LiteLLM_SpendLogs_startTime_idx"
 PARTITIONED_PARENT_ERROR: Final = 'cannot create index on partitioned table "LiteLLM_SpendLogs" concurrently'
 ORIGINAL_MIGRATION_SQL: Final = MappingProxyType(
     {
@@ -258,6 +260,21 @@ def _index_oids(database_url: str) -> Mapping[str, int]:
     return MappingProxyType({row.name: row.oid for row in rows})
 
 
+@dataclass(frozen=True, slots=True)
+class _PredicateRow:
+    predicate: "str | None"
+
+
+def _index_predicate(database_url: str, index: str) -> "str | None":
+    with psycopg.connect(database_url) as conn, conn.cursor(row_factory=class_row(_PredicateRow)) as cursor:
+        row: Final = cursor.execute(
+            "SELECT pg_get_expr(indpred, indrelid) AS predicate FROM pg_index WHERE indexrelid = to_regclass(%s)",
+            (f'"{index}"',),
+        ).fetchone()
+    assert row is not None, index
+    return row.predicate
+
+
 def _migration_job(use_v2_resolver: bool) -> bool:
     return ProxyExtrasDBManager.run_migration_job(use_migrate=True, use_v2_resolver=use_v2_resolver)
 
@@ -287,13 +304,14 @@ def _assert_index_covers_every_partition(database_url: str, parent_index: str, s
 @requires_db
 @RESOLVERS
 @RELEASES
-def test_a_partitioned_spend_logs_upgrade_builds_both_indexes_per_partition_and_a_rerun_is_idempotent(
+def test_a_partitioned_spend_logs_upgrade_builds_every_index_per_partition_and_a_rerun_is_idempotent(
     partitioned_database: str, use_v2_resolver: bool
 ) -> None:
     assert _migration_job(use_v2_resolver) is True
 
     _assert_index_covers_every_partition(partitioned_database, API_KEY_INDEX, "api_key_startTime_idx")
     _assert_index_covers_every_partition(partitioned_database, CALL_ID_INDEX, "litellm_call_id_idx")
+    _assert_index_covers_every_partition(partitioned_database, ERROR_INDEX, "error_startTime_idx")
     ledger: Final = _assert_every_ledger_row_is_finished(partitioned_database)
     _assert_no_pending_migrations(partitioned_database)
     oids: Final = _index_oids(partitioned_database)
@@ -303,14 +321,11 @@ def test_a_partitioned_spend_logs_upgrade_builds_both_indexes_per_partition_and_
             'CREATE TABLE "LiteLLM_SpendLogs_p2026_10" PARTITION OF "LiteLLM_SpendLogs" '
             "FOR VALUES FROM ('2026-10-01') TO ('2026-11-01')"
         )
-    inherited: Final = frozenset(
-        ("LiteLLM_SpendLogs_p2026_10", f"LiteLLM_SpendLogs_p2026_10_{suffix}")
-        for suffix in ("api_key_startTime_idx", "litellm_call_id_idx")
-    )
-    attached: Final = _attached_children(partitioned_database, API_KEY_INDEX) | _attached_children(
-        partitioned_database, CALL_ID_INDEX
-    )
-    assert inherited <= attached, attached
+    inherited: Final = {
+        index: "LiteLLM_SpendLogs_p2026_10" in {table for table, _ in _attached_children(partitioned_database, index)}
+        for index in (API_KEY_INDEX, CALL_ID_INDEX, ERROR_INDEX)
+    }
+    assert all(inherited.values()), inherited
 
     assert _migration_job(use_v2_resolver) is True
     assert _ledger(partitioned_database) == ledger
@@ -320,7 +335,7 @@ def test_a_partitioned_spend_logs_upgrade_builds_both_indexes_per_partition_and_
 @requires_db
 @RESOLVERS
 @RELEASES
-def test_a_plain_spend_logs_upgrade_builds_both_indexes_and_a_second_job_run_rebuilds_nothing(
+def test_a_plain_spend_logs_upgrade_builds_every_index_and_a_second_job_run_rebuilds_nothing(
     scratch_database: str, use_v2_resolver: bool
 ) -> None:
     with psycopg.connect(scratch_database, autocommit=True) as conn:
@@ -331,6 +346,7 @@ def test_a_plain_spend_logs_upgrade_builds_both_indexes_and_a_second_job_run_reb
 
     assert _index_validity(scratch_database, "api_key_startTime_idx") == {API_KEY_INDEX: True}
     assert _index_validity(scratch_database, "litellm_call_id_idx") == {CALL_ID_INDEX: True}
+    assert _index_validity(scratch_database, "error_startTime_idx") == {ERROR_INDEX: True}
     _assert_every_ledger_row_is_finished(scratch_database)
     _assert_no_pending_migrations(scratch_database)
     oids: Final = _index_oids(scratch_database)
@@ -358,7 +374,8 @@ def test_a_database_that_applied_the_original_migration_files_sees_no_pending_mi
     assert _migration_job(use_v2_resolver) is True
 
     assert _ledger(scratch_database) == before
-    assert _index_oids(scratch_database) == oids
+    after: Final = _index_oids(scratch_database)
+    assert {name: after[name] for name in oids} == oids
 
 
 @requires_db
@@ -539,22 +556,28 @@ def test_an_invalid_child_index_left_by_an_interrupted_build_is_rebuilt_and_atta
 
 
 @requires_db
-def test_partitioning_a_table_the_index_job_already_covered_moves_its_call_id_index_aside(
+def test_partitioning_a_table_the_index_job_already_covered_moves_its_indexes_aside(
     scratch_database: str,
 ) -> None:
     """The runbook renames the Prisma indexes off the legacy table so the partitioned table can take their
-    names. The call-id index is built by the index job, not Prisma, and a deployment that partitions after
-    that job ran kept the name on the legacy table, so every later job run reported it as on another table."""
+    names. The call-id and error indexes are built by the index job, not Prisma, and a deployment that partitions
+    after that job ran kept their names on the legacy table, so every later job run reported them as on another
+    table."""
     assert ensure_request_log_indexes(scratch_database, "public") is True
     assert _indexed_table(scratch_database, CALL_ID_INDEX) == "LiteLLM_SpendLogs"
+    assert _indexed_table(scratch_database, ERROR_INDEX) == "LiteLLM_SpendLogs"
 
     _partition_spend_logs(scratch_database)
 
     assert (
         _indexed_table(scratch_database, "LiteLLM_SpendLogs_legacy_litellm_call_id_idx") == "LiteLLM_SpendLogs_legacy"
     )
+    assert (
+        _indexed_table(scratch_database, "LiteLLM_SpendLogs_legacy_error_startTime_idx") == "LiteLLM_SpendLogs_legacy"
+    )
     assert ensure_request_log_indexes(scratch_database, "public") is True
     _assert_index_covers_every_partition(scratch_database, CALL_ID_INDEX, "litellm_call_id_idx")
+    _assert_index_covers_every_partition(scratch_database, ERROR_INDEX, "error_startTime_idx")
 
 
 @requires_db
@@ -883,6 +906,21 @@ def test_a_hand_built_child_index_under_another_name_is_renamed_and_attached(par
 
 
 @requires_db
+def test_the_partial_error_index_is_built_beside_the_plain_start_time_index_never_renamed_from_it(
+    scratch_database: str,
+) -> None:
+    start_time_index: Final = _index_oids(scratch_database)[START_TIME_INDEX]
+
+    assert ensure_request_log_indexes(scratch_database, "public") is True
+
+    oids: Final = _index_oids(scratch_database)
+    assert oids[START_TIME_INDEX] == start_time_index
+    assert oids[ERROR_INDEX] != start_time_index
+    assert _index_predicate(scratch_database, START_TIME_INDEX) is None
+    assert _index_predicate(scratch_database, ERROR_INDEX) is not None
+
+
+@requires_db
 def test_an_index_with_another_definition_is_not_taken_for_the_managed_one(scratch_database: str) -> None:
     with psycopg.connect(scratch_database, autocommit=True) as conn:
         conn.execute(sql.SQL("DROP INDEX {}").format(sql.Identifier(API_KEY_INDEX)))
@@ -921,7 +959,7 @@ def test_a_valid_partitioned_parent_index_under_another_name_is_renamed_with_its
     with caplog.at_level("INFO", logger="litellm_proxy_extras"):
         assert ensure_request_log_indexes(partitioned_database, "public") is True
 
-    assert "Building index" not in caplog.text
+    assert not [line for line in caplog.messages if line.startswith("Building index") and "litellm_call_id" in line]
     oids: Final = _index_oids(partitioned_database)
     assert "call_id_parent_by_hand" not in oids and oids[CALL_ID_INDEX] == hand_built
     assert _attached_children(partitioned_database, CALL_ID_INDEX) == children_before

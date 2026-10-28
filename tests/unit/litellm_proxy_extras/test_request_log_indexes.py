@@ -34,10 +34,10 @@ def _prisma_indexes_of(schema: str, model: str) -> frozenset[str]:
 
 
 class TestTheIndexList:
-    def test_every_migration_job_index_is_declared_in_the_prisma_schema_under_the_same_name(self):
+    def test_every_plain_migration_job_index_is_declared_in_the_prisma_schema_under_the_same_name(self):
         schema: Final = SCHEMA.read_text()
         for index in REQUEST_LOG_INDEXES:
-            assert index.name in _prisma_indexes_of(schema, index.table), index
+            assert (index.predicate is None) == (index.name in _prisma_indexes_of(schema, index.table)), index
 
     @pytest.mark.parametrize("name", INERT_MIGRATIONS)
     def test_the_migrations_that_used_to_build_these_indexes_run_no_sql(self, name: str):
