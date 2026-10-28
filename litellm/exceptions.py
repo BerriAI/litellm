@@ -313,6 +313,10 @@ class VectorStoreSearchError(BadRequestError):
         )
 
 
+class MalformedRequestFieldError(BadRequestError):
+    pass
+
+
 class UnprocessableEntityError(openai.UnprocessableEntityError):
     def __init__(
         self,
@@ -1269,7 +1273,7 @@ class MidStreamFallbackError(ServiceUnavailableError):
         self.message = _saved_message
         self.args = (_saved_message,)
 
-        original_headers: Final = getattr(original_exception, "litellm_response_headers", None)
+        original_headers: Final[object] = getattr(original_exception, "litellm_response_headers", None)
         if original_headers is not None:
             self.litellm_response_headers = original_headers
 

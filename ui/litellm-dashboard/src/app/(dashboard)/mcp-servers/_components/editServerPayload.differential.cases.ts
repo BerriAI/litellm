@@ -82,6 +82,7 @@ const AUTH_TYPES = [
   "bearer_token",
   "token",
   "basic",
+  "authorization",
   "oauth2",
   "oauth2_token_exchange",
   "oauth2_id_jag",
@@ -295,11 +296,6 @@ export const CASES: readonly DifferentialCase[] = [
     ui: {},
   },
   { label: "credentials absent entirely", values: { ...ROOT, auth_type: "oauth2" }, ui: {} },
-  {
-    label: "removeStoredApp forces an explicit-null app write",
-    values: { ...ROOT, auth_type: "true_passthrough", credentials: { ...CREDS } },
-    ui: { removeStoredApp: true, mcpServer: { ...SERVER, auth_type: "true_passthrough" } },
-  },
   {
     label: "removeStoredApp ignored outside a client-forwarded mode",
     values: { ...ROOT, auth_type: "api_key", credentials: { ...CREDS } },

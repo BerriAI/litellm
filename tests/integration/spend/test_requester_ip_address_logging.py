@@ -24,6 +24,8 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 FORWARDED_IP: Final = "203.0.113.74"
 PROXY_HOP: Final = "198.51.100.23"
 REAL_IP: Final = "203.0.113.75"

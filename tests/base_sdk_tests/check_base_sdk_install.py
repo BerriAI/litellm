@@ -102,9 +102,32 @@ def check_completion() -> str:
     return "mock completion round-trips"
 
 
+def check_completion_with_function_tool() -> str:
+    import litellm
+
+    response: Final = litellm.completion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "ping"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "noop",
+                    "description": "No operation",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        mock_response="pong",
+    )
+    content: Final = response.choices[0].message.content
+    _require(content == "pong", f"mock completion with a function tool returned {content!r}")
+    return "mock completion with a function tool round-trips"
+
+
 def check_mcp_install_guidance() -> str:
     try:
-        import litellm.experimental_mcp_client
+        import litellm.mcp_client
     except ImportError as error:
         _require("pip install 'litellm[mcp]'" in str(error), f"missing MCP installation guidance: {error}")
         _require(isinstance(error.__cause__, ModuleNotFoundError), "original missing-dependency cause was lost")
@@ -151,8 +174,8 @@ def check_token_counter() -> str:
 
 def check_tokenizer_dependencies() -> str:
     import litellm
-    from litellm.rust_bridge import tokenizer
     from litellm.litellm_core_utils.tokenizer import HuggingFace, HuggingFaceTokenizer, Tokenizer
+    from litellm.rust_bridge import tokenizer
     from litellm.utils import claude_json_str
 
     _require(isinstance(litellm.encoding, Tokenizer), "runtime alias rejects the default encoding")
@@ -209,6 +232,7 @@ CHECKS: tuple[tuple[str, Callable[[], str]], ...] = (
     ("import litellm", check_import),
     ("optional MCP installation guidance", check_mcp_install_guidance),
     ("chat completion", check_completion),
+    ("chat completion with a function tool", check_completion_with_function_tool),
     ("embedding", check_embedding),
     ("bundled model metadata", check_bundled_model_metadata),
     ("token counter", check_token_counter),
