@@ -59866,6 +59866,8 @@ export interface operations {
                 purpose?: string | null;
                 limit?: number | null;
                 after?: string | null;
+                after_id?: string | null;
+                before_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -79082,6 +79084,8 @@ export interface operations {
                 purpose?: string | null;
                 limit?: number | null;
                 after?: string | null;
+                after_id?: string | null;
+                before_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -86427,6 +86431,8 @@ export interface operations {
                 purpose?: string | null;
                 limit?: number | null;
                 after?: string | null;
+                after_id?: string | null;
+                before_id?: string | null;
             };
             header?: never;
             path: {
