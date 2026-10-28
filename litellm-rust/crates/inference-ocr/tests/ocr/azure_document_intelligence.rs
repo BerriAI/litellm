@@ -131,8 +131,13 @@ async fn an_inline_document_is_sent_as_base64_and_only_page_text_is_kept(#[case]
     assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
 }
 
+#[rstest]
+#[case::lower_case("markdown")]
+#[case::capitalized("Markdown")]
 #[tokio::test]
-async fn markdown_output_is_requested_on_the_analyze_call_and_split_into_pages() {
+async fn markdown_output_is_requested_on_the_analyze_call_and_split_into_pages(
+    #[case] output_content_format: &str,
+) {
     let upstream = upstream([json_response(json!({
         "status": "succeeded",
         "analyzeResult": {
@@ -149,7 +154,7 @@ async fn markdown_output_is_requested_on_the_analyze_call_and_split_into_pages()
 
     let response = perform(read_request(
         &upstream.uri(),
-        json!({"outputContentFormat": "markdown", "pages": [0, 1]}),
+        json!({"outputContentFormat": output_content_format, "pages": [0, 1]}),
     ))
     .await
     .unwrap();
@@ -176,6 +181,10 @@ async fn markdown_output_is_requested_on_the_analyze_call_and_split_into_pages()
         .collect::<Vec<_>>();
     assert_eq!(pages, ["# Tïtle\n\n<!-- PageBreak -->\n\n", "| a |"]);
     assert_eq!(
+        response.extra_fields.get("stringIndexType"),
+        Some(&json!("unicodeCodePoint"))
+    );
+    assert_eq!(
         response.usage_info.as_ref().unwrap().pages_processed,
         Some(2)
     );
@@ -192,7 +201,11 @@ async fn only_litellm_format_markdown_asks_for_code_point_offsets(
 ) {
     let upstream = upstream([json_response(json!({
         "status": "succeeded",
-        "analyzeResult": {"pages": [{"pageNumber": 1, "lines": [{"content": "hello"}]}]}
+        "analyzeResult": {
+            "contentFormat": "text",
+            "stringIndexType": "textElements",
+            "pages": [{"pageNumber": 1, "lines": [{"content": "hello"}]}]
+        }
     }))])
     .await;
 
@@ -208,6 +221,7 @@ async fn only_litellm_format_markdown_asks_for_code_point_offsets(
     assert_eq!(sent.query("stringIndexType"), None);
     assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
     assert_eq!(response.pages[0].markdown, "hello");
+    assert_eq!(response.extra_fields.get("stringIndexType"), None);
 }
 
 #[tokio::test]

@@ -37,6 +37,7 @@ const AZURE_DI_API_KEY_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY";
 const AZURE_DI_ENDPOINT_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT";
 const OUTPUT_CONTENT_FORMAT_PARAM: &str = "outputContentFormat";
 const CODE_POINT_STRING_INDEX: &str = "unicodeCodePoint";
+const STRING_INDEX_TYPE_FIELD: &str = "stringIndexType";
 
 #[derive(
     Clone,
@@ -46,8 +47,10 @@ const CODE_POINT_STRING_INDEX: &str = "unicodeCodePoint";
     strum::EnumString,
     strum::IntoStaticStr,
     strum::Display,
+    strum::VariantArray,
     serde_with::SerializeDisplay,
 )]
+#[strum(ascii_case_insensitive)]
 pub enum OutputContentFormat {
     #[strum(serialize = "text")]
     Text,
@@ -462,6 +465,11 @@ fn transform_completed_response(
             pages_processed: Some(pages_processed),
             ..Default::default()
         }),
+        extra_fields: result
+            .string_index_type
+            .filter(|unit| unit == CODE_POINT_STRING_INDEX)
+            .map(|unit| Map::from_iter([(STRING_INDEX_TYPE_FIELD.to_owned(), Value::String(unit))]))
+            .unwrap_or_default(),
         ..LiteLLMOcrResponse::new(model, pages)
     })
 }
@@ -983,7 +991,13 @@ mod tests {
         Some(OutputContentFormat::Markdown),
         None
     )]
+    #[case::capitalized_markdown(
+        json!({"outputContentFormat": "Markdown"}),
+        Some(OutputContentFormat::Markdown),
+        Some("unicodeCodePoint")
+    )]
     #[case::text(json!({"outputContentFormat": "text"}), Some(OutputContentFormat::Text), None)]
+    #[case::upper_case_text(json!({"outputContentFormat": "TEXT"}), Some(OutputContentFormat::Text), None)]
     #[case::null(json!({"outputContentFormat": null}), None, None)]
     #[case::omitted(json!({}), None, None)]
     fn output_content_format_maps_to_query_fields(
@@ -999,7 +1013,6 @@ mod tests {
 
     #[rstest]
     #[case::unknown(json!("html"))]
-    #[case::wrong_case(json!("Markdown"))]
     #[case::empty(json!(""))]
     #[case::number(json!(1))]
     #[case::boolean(json!(true))]
@@ -1024,7 +1037,7 @@ mod tests {
             .collect()
     }
 
-    #[test]
+    #[rstest]
     fn markdown_pages_are_code_point_slices_of_the_content() {
         let content = "# Ünïcode क्ष\n\n<!-- PageBreak -->\n\n## Två 🙂\n\n|a|\n\n> tail";
         let second_page_start = "# Ünïcode क्ष\n\n<!-- PageBreak -->\n\n".chars().count();
@@ -1048,7 +1061,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn spans_past_the_content_end_are_clamped() {
         let pages = markdown_pages(json!({
             "content": "ab",
