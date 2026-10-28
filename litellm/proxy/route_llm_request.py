@@ -1,8 +1,13 @@
 import asyncio
-from collections.abc import Mapping
+import hashlib
+import json
+from collections import OrderedDict
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
+from uuid import uuid4
 
 import httpx
 from fastapi import HTTPException, status
@@ -10,6 +15,7 @@ from pydantic import BeforeValidator, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router_utils.common_utils import is_proxy_admin_request
 
@@ -54,7 +60,34 @@ _ROUTER_ONLY_SETTINGS: Final = frozenset(
 )
 
 
-def _route_user_config_request(data: dict, route_type: str):
+class UserConfigRouters:
+    def __init__(self, max_size: int) -> None:
+        self._max_size: Final = max_size
+        self._routers: Final[OrderedDict[str, LitellmRouter]] = OrderedDict()  # mutable-ok: LRU evicts in place
+
+    def get(self, config: Mapping[str, object], build: Callable[[], LitellmRouter]) -> LitellmRouter:
+        key: Final = hashlib.sha256(json.dumps(config, sort_keys=True, default=str).encode()).hexdigest()
+        cached: Final = self._routers.get(key)
+        if cached is not None:
+            self._routers.move_to_end(key)
+            return cached
+        router: Final = build()
+        router.serve_through_request_logging()
+        self._routers[key] = router
+        if len(self._routers) > self._max_size:
+            self._routers.popitem(last=False)[1].discard()
+        return router
+
+    def clear(self) -> None:
+        for router in self._routers.values():
+            router.discard()
+        self._routers.clear()
+
+
+user_config_routers: Final = UserConfigRouters(max_size=32)
+
+
+async def _route_user_config_request(data: dict, route_type: str):
     """Route a request using the user-provided router config."""
     router_config: Final = data.pop("user_config")
 
@@ -63,10 +96,24 @@ def _route_user_config_request(data: dict, route_type: str):
     valid_args: Final = litellm.Router.get_valid_args()
     filtered_config: Final = {k: v for k, v in router_config.items() if k in valid_args}
 
-    user_router: Final = litellm.Router(**filtered_config)
-    ret_val: Final = getattr(user_router, f"{route_type}")(**data)
-    user_router.discard()
-    return ret_val
+    logging_obj: Final = _request_logging_obj(JSON_OBJECT_ADAPTER.validate_python(data), route_type)
+    cached_router: Final = user_config_routers.get(filtered_config, lambda: litellm.Router(**filtered_config))
+    cached_router.bind_to_request_logging(logging_obj)
+    return await getattr(cached_router, f"{route_type}")(**{**data, "litellm_logging_obj": logging_obj})
+
+
+def _request_logging_obj(data: Mapping[str, object], route_type: str) -> LiteLLMLoggingObj:
+    arrived_with: Final = data.get("litellm_logging_obj")
+    if isinstance(arrived_with, LiteLLMLoggingObj):
+        return arrived_with
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function=route_type,
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),  # noqa: DTZ005  # Logging subtracts it from naive end times
+        is_async_call=True,
+        **{"litellm_call_id": str(uuid4()), **data},
+    )
+    return logging_obj
 
 
 def _is_a2a_agent_model(model_name: object) -> bool:
@@ -111,6 +158,7 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "asearch": "/search",
     "adecisions": "/decisions",
     "asystemone": "/systemone",
+    "aextraction": "/extraction",
     "avideo_generation": "/videos",
     "avideo_list": "/videos",
     "avideo_status": "/videos/{video_id}",
@@ -573,6 +621,7 @@ RouteType = Literal[
     "asearch",
     "adecisions",
     "asystemone",
+    "aextraction",
     "avideo_generation",
     "avideo_list",
     "avideo_status",

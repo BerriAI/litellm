@@ -152,13 +152,7 @@ async fn invalid_audio_is_rejected_before_sending(
     .await
     .expect_err("invalid audio is rejected");
 
-    assert!(
-        matches!(
-            error,
-            Error::InvalidRequest(_) | Error::MissingField(_) | Error::InvalidType { .. }
-        ),
-        "{error:?}"
-    );
+    assert!(error.is_request(), "{error:?}");
     assert!(received(&upstream).await.is_empty());
 }
 
@@ -185,7 +179,9 @@ async fn unsupported_providers_are_rejected_before_sending(
     .await
     .expect_err("unsupported provider errors");
 
-    assert_eq!(error, Error::InvalidProvider(reported.into()));
+    assert!(error.is_request(), "{error:?}");
+    let report = litellm_error::Report::new(&error).to_string();
+    assert!(report.contains(reported), "{report}");
 }
 
 #[rstest]
@@ -222,12 +218,26 @@ async fn an_upstream_error_keeps_its_status_and_body(
     .expect_err("upstream error propagates");
 
     assert_eq!(
-        error,
-        Error::Transport(litellm_http::transport::Error::Http {
-            status,
-            body: "upstream said no".into()
-        })
+        error.upstream_response(),
+        Some((status, "upstream said no"))
     );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_transport_error_does_not_echo_the_provider_url(
+    request: AudioTranscriptionRequest<'static>,
+) {
+    let base = format!("{UNREACHABLE_BASE}/tenant-token-1234");
+
+    let error = transcribe(AudioTranscriptionRequest {
+        api_base: Some(&base),
+        ..request
+    })
+    .await
+    .expect_err("nothing is listening");
+
+    assert!(!error.to_string().contains("tenant-token-1234"), "{error}");
 }
 
 #[rstest]
@@ -248,7 +258,7 @@ async fn an_unreadable_success_body_is_an_invalid_response(
     .await
     .expect_err("an unreadable body fails");
 
-    assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
+    assert!(error.is_response(), "{error:?}");
 }
 
 #[rstest]

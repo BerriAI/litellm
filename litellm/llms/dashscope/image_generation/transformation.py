@@ -49,6 +49,7 @@ else:
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 DEFAULT_API_BASE: Final = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 
@@ -187,7 +188,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
             )
 
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Failed to parse DashScope image generation response: {e}",

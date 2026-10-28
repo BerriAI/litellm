@@ -1,3 +1,4 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useState, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,7 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
   isLoading = false,
   progressInfo,
 }) => {
+  const term = useTerminology();
   const [selectedGuardrails, setSelectedGuardrails] = useState<Set<string>>(new Set());
 
   // Prepare guardrail info with existence status
@@ -199,7 +201,7 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
                 <div className="mb-2 flex items-center gap-2">
                   <span className="text-lg">✨</span>
                   <span className="text-sm font-medium">
-                    AI-Discovered Competitors ({template.discoveredCompetitors.length})
+                    {term("AI-Discovered Competitors")} ({template.discoveredCompetitors.length})
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-1.5">

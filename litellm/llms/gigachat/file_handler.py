@@ -12,18 +12,23 @@ import uuid
 from collections.abc import Mapping
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
 from litellm.llms.gigachat.utils import get_api_base
+from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.types.utils import LlmProviders
 
 from .authenticator import get_access_token, get_access_token_async
 
 # Simple in-memory cache for file IDs
-_file_cache: Final[dict[str, str]] = {}
+_file_cache: Final[dict[str, object]] = {}
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _get_url_hash(url: str) -> str:
@@ -90,7 +95,7 @@ def upload_file_sync(
     credentials: str | None = None,
     api_base: str | None = None,
     litellm_params: Mapping[str, object] | None = None,
-) -> str | None:
+) -> object:
     """
     Upload file to GigaChat and return file_id (sync).
 
@@ -125,8 +130,7 @@ def upload_file_sync(
         access_token: Final = get_access_token(credentials=credentials, litellm_params=litellm_params)
 
         # Upload to GigaChat
-        base_url: Final = get_api_base(api_base)
-        upload_url: Final = f"{base_url}/files"
+        upload_url: Final = join_api_base(get_api_base(api_base), "files")
 
         client: Final = get_httpx_client(params={"ssl_verify": False})
         response: Final = client.post(
@@ -137,9 +141,9 @@ def upload_file_sync(
             timeout=60,
         )
         response.raise_for_status()
-        result: Final = response.json()
+        result: Final = _DECODED_JSON.validate_python(response.json())
 
-        file_id: Final = result.get("id")
+        file_id: Final = decoded_json_object(result).get("id")
         if file_id:
             _file_cache[url_hash] = file_id
             verbose_logger.debug("File uploaded successfully, file_id: %s", file_id)
@@ -156,7 +160,7 @@ async def upload_file_async(
     credentials: str | None = None,
     api_base: str | None = None,
     litellm_params: Mapping[str, object] | None = None,
-) -> str | None:
+) -> object:
     """
     Upload file to GigaChat and return file_id (async).
 
@@ -191,8 +195,7 @@ async def upload_file_async(
         access_token: Final = await get_access_token_async(credentials=credentials, litellm_params=litellm_params)
 
         # Upload to GigaChat
-        base_url: Final = get_api_base(api_base)
-        upload_url: Final = f"{base_url}/files"
+        upload_url: Final = join_api_base(get_api_base(api_base), "files")
 
         client: Final = get_async_httpx_client(
             llm_provider=LlmProviders.GIGACHAT,
@@ -206,9 +209,9 @@ async def upload_file_async(
             timeout=60,
         )
         response.raise_for_status()
-        result: Final = response.json()
+        result: Final = _DECODED_JSON.validate_python(response.json())
 
-        file_id: Final = result.get("id")
+        file_id: Final = decoded_json_object(result).get("id")
         if file_id:
             _file_cache[url_hash] = file_id
             verbose_logger.debug("File uploaded successfully, file_id: %s", file_id)

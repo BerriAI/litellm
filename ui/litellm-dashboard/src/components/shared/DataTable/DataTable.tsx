@@ -26,6 +26,7 @@ import {
   type VisibilityState,
 } from "@tanstack/react-table";
 import { SearchX } from "lucide-react";
+import { ErrorState } from "@/components/shared/ErrorState";
 import * as React from "react";
 import { Fragment, useEffect, useState } from "react";
 
@@ -599,6 +600,9 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
 
   const {
     isLoading = false,
+    isError = false,
+    errorMessage,
+    onRetry,
     loadingMessage = "Loading…",
     skeletonRowCount = 8,
     noDataMessage,
@@ -656,6 +660,13 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
           size={size}
           message={loadingMessage}
         />
+      );
+    }
+    if (isError && rows.length === 0) {
+      return (
+        <MessageRow colSpan={visibleColumnCount} stretch={stretchEmpty}>
+          <ErrorState message={errorMessage} onRetry={onRetry} />
+        </MessageRow>
       );
     }
     if (rows.length === 0) {

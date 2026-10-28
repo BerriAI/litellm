@@ -252,6 +252,7 @@ def isolate_host_environment(isolated_aws_config_files: tuple[Path, Path]) -> It
 @pytest.fixture(autouse=True)
 def isolate_litellm_globals() -> Iterator[None]:
     original_callbacks: Final = {name: list(getattr(litellm, name) or []) for name in CALLBACK_LISTS}
+    original_callback_holders: Final = frozenset(litellm_router_module._routers_holding_global_callbacks)
     original_reset: Final = {name: getattr(litellm, name) for name in RESET_TO_NONE_GLOBALS}
     original_restored: Final = {name: getattr(litellm, name) for name in RESTORED_GLOBALS if hasattr(litellm, name)}
     original_clients: Final = {name: litellm.__dict__[name] for name in MODULE_LEVEL_CLIENTS if name in litellm.__dict__}
@@ -263,6 +264,7 @@ def isolate_litellm_globals() -> Iterator[None]:
     _flush_client_caches()
     for name in CALLBACK_LISTS:
         setattr(litellm, name, [])
+    litellm_router_module._routers_holding_global_callbacks.clear()
     for name in RESET_TO_NONE_GLOBALS:
         setattr(litellm, name, None)
     for name in MODULE_LEVEL_CLIENTS:
@@ -277,6 +279,8 @@ def isolate_litellm_globals() -> Iterator[None]:
     litellm.__dict__.update(original_clients)
     for name, value in (original_callbacks | original_reset | original_restored).items():
         setattr(litellm, name, value)
+    litellm_router_module._routers_holding_global_callbacks.clear()
+    litellm_router_module._routers_holding_global_callbacks.update(original_callback_holders)
     for logger, (level, disabled, propagate, handlers, filters) in original_loggers.items():
         logger.setLevel(level)
         logger.disabled = disabled
@@ -303,6 +307,30 @@ def isolate_router_model_cost_state() -> Iterator[None]:
         litellm_router_module._live_routers.add(router)
     litellm_utils_module._runtime_registered_model_cost.clear()
     litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
+    litellm_utils_module._invalidate_model_cost_lowercase_map()
+    litellm.get_model_info.cache_clear()
+
+
+def _provider_model_sets() -> tuple[set[str], ...]:
+    module_globals: Final = tuple(vars(litellm).items())
+    return tuple(models for name, models in module_globals if name.endswith("_models") and isinstance(models, set))
+
+
+@pytest.fixture(autouse=True)
+def isolate_model_catalog() -> Iterator[None]:
+    model_cost: Final = litellm.model_cost
+    model_cost_entries: Final = dict(model_cost)
+    models_by_provider: Final = litellm.models_by_provider
+    models_by_provider_entries: Final = dict(models_by_provider)
+    provider_model_sets: Final = tuple((models, frozenset(models)) for models in _provider_model_sets())
+    yield
+    model_cost.clear()
+    model_cost.update(model_cost_entries)
+    models_by_provider.clear()
+    models_by_provider.update(models_by_provider_entries)
+    for models, entries in provider_model_sets:
+        models.clear()
+        models.update(entries)
     litellm_utils_module._invalidate_model_cost_lowercase_map()
     litellm.get_model_info.cache_clear()
 
