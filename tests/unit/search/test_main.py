@@ -321,9 +321,22 @@ def test_a_price_registered_for_exa_wins_over_the_cost_exa_reports(
     assert response._hidden_params["response_cost"] == pytest.approx(expected)
 
 
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+def test_registering_no_price_on_an_exa_entry_keeps_the_cost_exa_reports(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [], "costDollars": {"total": EXA_REPORTED_TOTAL}})
+    litellm.register_model(
+        {"exa_ai/search": {"metadata": {"notes": "operator note"}, "litellm_provider": "exa_ai", "mode": "search"}}
+    )
+
+    response: Final = litellm.search(query="litellm release notes", search_provider="exa_ai", api_key="test-exa-key")
+
+    assert response._hidden_params["response_cost"] == pytest.approx(EXA_REPORTED_TOTAL)
+
+
 OPERATOR_COST_MAP_URL: Final = "https://costs.invalid/model_prices_and_context_window.json"
 OPERATOR_FLAT_PRICE: Final = 0.003
 OPERATOR_TIER_PRICE: Final = 0.0045
+ServedExaEntry = Callable[[Mapping[str, object]], Mapping[str, object]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,10 +348,11 @@ class _ServedCostMap:
 
 
 @pytest.fixture
-def _remote_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str, Mapping[str, object]], None]]:
-    def serve(url: str, exa_entry: Mapping[str, object]) -> None:
+def _remote_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str, ServedExaEntry], None]]:
+    def serve(url: str, exa_entry: ServedExaEntry) -> None:
         monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP")
-        body: Final = json.dumps({**GetModelCostMap.load_local_model_cost_map(), "exa_ai/search": exa_entry}).encode()
+        shipped: Final = GetModelCostMap.load_local_model_cost_map()
+        body: Final = json.dumps({**shipped, "exa_ai/search": exa_entry(shipped["exa_ai/search"])}).encode()
         monkeypatch.setattr(
             litellm, "model_cost", litellm.get_model_cost_map(url=url, max_attempts=1, client=_ServedCostMap(body))
         )
@@ -355,13 +369,19 @@ def _remote_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str,
     [
         pytest.param(
             OPERATOR_COST_MAP_URL,
-            {"input_cost_per_query": OPERATOR_FLAT_PRICE, "litellm_provider": "exa_ai", "mode": "search"},
+            lambda _: {"input_cost_per_query": OPERATOR_FLAT_PRICE, "litellm_provider": "exa_ai", "mode": "search"},
             OPERATOR_FLAT_PRICE,
             id="own-map-flat-price",
         ),
         pytest.param(
             OPERATOR_COST_MAP_URL,
-            {
+            lambda shipped: {**shipped, "input_cost_per_query": OPERATOR_FLAT_PRICE},
+            OPERATOR_FLAT_PRICE,
+            id="own-map-flat-price-over-shipped-tiers",
+        ),
+        pytest.param(
+            OPERATOR_COST_MAP_URL,
+            lambda _: {
                 "tiered_pricing": [{"input_cost_per_query": OPERATOR_TIER_PRICE, "max_results_range": [0, 100]}],
                 "litellm_provider": "exa_ai",
                 "mode": "search",
@@ -369,9 +389,16 @@ def _remote_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str,
             OPERATOR_TIER_PRICE,
             id="own-map-tiers",
         ),
+        pytest.param(OPERATOR_COST_MAP_URL, lambda shipped: shipped, EXA_REPORTED_TOTAL, id="own-map-mirrors-litellm"),
+        pytest.param(
+            OPERATOR_COST_MAP_URL,
+            lambda shipped: {name: value for name, value in shipped.items() if name != "input_cost_per_query"},
+            EXA_REPORTED_TOTAL,
+            id="own-map-from-a-release-without-the-flat-price",
+        ),
         pytest.param(
             DEFAULT_MODEL_COST_MAP_URL,
-            {"input_cost_per_query": OPERATOR_FLAT_PRICE, "litellm_provider": "exa_ai", "mode": "search"},
+            lambda _: {"input_cost_per_query": OPERATOR_FLAT_PRICE, "litellm_provider": "exa_ai", "mode": "search"},
             EXA_REPORTED_TOTAL,
             id="published-map",
         ),
@@ -379,9 +406,9 @@ def _remote_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str,
 )
 def test_an_exa_price_from_the_operators_own_cost_map_wins_over_the_cost_exa_reports(
     respx_mock: respx.MockRouter,
-    _remote_cost_map: Callable[[str, Mapping[str, object]], None],
+    _remote_cost_map: Callable[[str, ServedExaEntry], None],
     url: str,
-    exa_entry: Mapping[str, object],
+    exa_entry: ServedExaEntry,
     expected: float,
 ) -> None:
     _remote_cost_map(url, exa_entry)
@@ -433,3 +460,26 @@ def test_a_price_registered_over_catalog_tiers_bills_every_tiered_search_entry(
     }
 
     assert costs == {key: pytest.approx((expected, 0.0)) for key in tiered}
+
+
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+def test_registering_the_catalogs_own_flat_price_over_its_tiers_still_bills_the_flat_price() -> None:
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    flat_and_tiered: Final = tuple(
+        key
+        for key, entry in catalog.items()
+        if entry.get("mode") == "search" and entry.get("tiered_pricing") and entry.get("input_cost_per_query")
+    )
+    assert flat_and_tiered
+    litellm.register_model(
+        {key: {"input_cost_per_query": catalog[key]["input_cost_per_query"]} for key in flat_and_tiered}
+    )
+
+    costs: Final = {
+        key: search_provider_cost_per_query(
+            model=key, custom_llm_provider=str(catalog[key]["litellm_provider"]), optional_params={"max_results": 50}
+        )
+        for key in flat_and_tiered
+    }
+
+    assert costs == {key: pytest.approx((catalog[key]["input_cost_per_query"], 0.0)) for key in flat_and_tiered}

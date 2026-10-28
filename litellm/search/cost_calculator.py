@@ -2,6 +2,7 @@
 Cost calculation for search providers.
 """
 
+import functools
 import math
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -11,18 +12,24 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import DEFAULT_MODEL_COST_MAP_URL
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap, get_model_cost_map_source_info
+from litellm.litellm_core_utils.get_model_cost_map import (
+    AliasedCostEntry,
+    GetModelCostMap,
+    get_model_cost_map_source_info,
+)
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.utils import get_model_info
 
 PROVIDER_USAGE_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
-PROVIDER_COST_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 EMPTY_OPTIONAL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 SEARCH_MODE_PARAM_BY_PROVIDER: Final[Mapping[str, str]] = MappingProxyType(
     {"tavily": "search_depth", "linkup": "depth", "exa_ai": "type"}
 )
+SEARCH_PRICE_FIELDS: Final = ("input_cost_per_query", "tiered_pricing")
+FLAT_PRICE_ONLY: Final = frozenset({"input_cost_per_query"})
 
 
 def _provider_usage(
@@ -38,31 +45,72 @@ def _provider_usage(
 
 
 def _field(value: object, key: str) -> object:
-    return PROVIDER_COST_ADAPTER.validate_python(value).get(key) if isinstance(value, Mapping) else None
+    return MAPPING_ADAPTER.validate_python(value).get(key) if isinstance(value, Mapping) else None
 
 
 def _live_entry(entry: str) -> object:
     return litellm.model_cost.get(entry)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # registry is dynamically typed
 
 
+def _changed_price_fields(value: object, reference: object) -> frozenset[str]:
+    """Price fields `value` holds a price in that differ from `reference`, so a price an entry leaves out sets
+    nothing."""
+    return frozenset(
+        name
+        for name in SEARCH_PRICE_FIELDS
+        if _field(value, name) is not None and _field(value, name) != _field(reference, name)
+    )
+
+
+def _runtime_price_fields(entry: str) -> frozenset[str]:
+    """Price fields `register_model` set on `entry`, even to the catalog's own value, or that differ from the catalog
+    as loaded."""
+    live: Final = _live_entry(entry)
+    registered: Final[frozenset[str]] = (
+        live.registered_fields.intersection(SEARCH_PRICE_FIELDS) if isinstance(live, AliasedCostEntry) else frozenset()
+    )
+    return registered | _changed_price_fields(live, GetModelCostMap.loaded_model_cost_map().get(entry))
+
+
+@functools.cache
+def _shipped_search_prices() -> Mapping[str, Mapping[str, object]]:
+    shipped: Final = MAPPING_ADAPTER.validate_json(GetModelCostMap.read_local_model_cost_map_bytes())
+    return MappingProxyType(
+        {
+            key: MappingProxyType({name: _field(entry, name) for name in SEARCH_PRICE_FIELDS})
+            for key, entry in shipped.items()
+            if _field(entry, "mode") == "search"
+        }
+    )
+
+
+def _own_cost_map_price_fields(entry: str) -> frozenset[str]:
+    """Price fields a cost map served from the operator's own URL sets differently from the map LiteLLM ships, so a
+    mirror of LiteLLM's map prices nothing."""
+    source: Final = get_model_cost_map_source_info()
+    if source["source"] != "remote" or source["url"] == DEFAULT_MODEL_COST_MAP_URL:
+        return frozenset()
+    return _changed_price_fields(
+        GetModelCostMap.loaded_model_cost_map().get(entry), _shipped_search_prices().get(entry)
+    )
+
+
+def _operator_price_fields(entry: str) -> frozenset[str]:
+    return _runtime_price_fields(entry) | _own_cost_map_price_fields(entry)
+
+
 def _registered_at_runtime(entry: str) -> bool:
-    """Whether `entry`'s live price differs from the catalog as loaded, i.e. `register_model` changed it."""
-    return _live_entry(entry) != GetModelCostMap.loaded_model_cost_map().get(entry)
+    return bool(_runtime_price_fields(entry))
 
 
 def _operator_priced(entry: str) -> bool:
-    """Whether an operator set `entry`'s price, with `register_model` or a cost map served from their own URL."""
-    source: Final = get_model_cost_map_source_info()
-    own_cost_map: Final = source["source"] == "remote" and source["url"] != DEFAULT_MODEL_COST_MAP_URL
-    return own_cost_map or _registered_at_runtime(entry)
+    """Whether an operator set a price on `entry`, with `register_model` or a cost map served from their own URL."""
+    return bool(_operator_price_fields(entry))
 
 
-def _registered_flat_price_replaces_tiers(entry: str) -> bool:
-    """Whether `register_model` changed `entry`'s flat price but left the catalog's tiers it merged into in place."""
-    live: Final = _live_entry(entry)
-    catalog: Final = GetModelCostMap.loaded_model_cost_map().get(entry, EMPTY_OPTIONAL_PARAMS)
-    same_tiers: Final = _field(live, "tiered_pricing") == catalog.get("tiered_pricing")
-    return same_tiers and _field(live, "input_cost_per_query") != catalog.get("input_cost_per_query")
+def _operator_flat_price_replaces_tiers(entry: str) -> bool:
+    """Whether the operator set `entry`'s flat price but not its tiers, so the tiers LiteLLM ships stop applying."""
+    return _operator_price_fields(entry) == FLAT_PRICE_ONLY
 
 
 def _exa_reported_total(response: object) -> float | None:
@@ -107,7 +155,7 @@ def search_provider_cost_per_query(
     Supports tiered pricing based on max_results parameter, and per-mode price entries selected by the
     provider's mode parameter (Tavily `search_depth`, Linkup `depth`, Exa `type`). Exa bills one request at the
     `costDollars.total` it reports, else at its list price, unless an operator priced the entry. A flat price
-    registered over an entry's catalog tiers replaces them.
+    an operator set over the tiers LiteLLM ships replaces them.
 
     Args:
         model: Model name (e.g., "exa_ai/search", "tavily/search")
@@ -155,7 +203,7 @@ def search_provider_cost_per_query(
     if (
         tiered_pricing
         and isinstance(tiered_pricing, list)
-        and not _registered_flat_price_replaces_tiers(model_info["key"])
+        and not _operator_flat_price_replaces_tiers(model_info["key"])
     ):
         max_results: Final = (optional_params or {}).get("max_results", 10)  # default 10 results
         cost_per_query = 0.0
