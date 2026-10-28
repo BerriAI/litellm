@@ -8,7 +8,7 @@ import time
 import types
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
-from typing import Final, List, TypeAlias
+from typing import Final, List, TypeAlias, cast
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -1866,6 +1866,106 @@ def test_convert_gemini_tool_call_result_with_image_url():
     inline_parts = _get_gemini_function_response_inline_data_parts(result2)
     assert len(inline_parts) == 1
 
+
+@pytest.mark.parametrize(
+    ("content", "mime_type"),
+    [
+        ({"type": "input_audio", "input_audio": {"data": "c291bmQ=", "format": "flac"}}, "audio/flac"),
+        ({"type": "input_audio", "input_audio": {"data": "c291bmQ=", "format": "audio/flac"}}, "audio/flac"),
+        (
+            {"type": "file", "file": {"file_data": "c291bmQ=", "file_id": "opaque-id", "format": "audio/wav"}},
+            "audio/wav",
+        ),
+        ({"type": "file", "file": {"file_data": "c291bmQ=", "format": "application/pdf"}}, "application/pdf"),
+        (
+            {
+                "type": "input_file",
+                "file_data": "data:application/pdf;base64,c291bmQ=",
+                "file": {"filename": "report.pdf"},
+            },
+            "application/pdf",
+        ),
+        (
+            {"type": "input_file", "file_data": "data:video/mp4;base64,c291bmQ=", "file_id": "gs://bucket/media"},
+            "video/mp4",
+        ),
+        (
+            {
+                "type": "file",
+                "file": {"file_data": "data:application/octet-stream;base64,c291bmQ=", "format": "audio/wav"},
+            },
+            "audio/wav",
+        ),
+        (
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:application/octet-stream;base64,c291bmQ=", "format": "image/png"},
+            },
+            "image/png",
+        ),
+    ],
+)
+def test_gemini_tool_media_preserves_inline_payload_precedence_and_mime(
+    content: Mapping[str, object], mime_type: str
+) -> None:
+    message: Final = cast(  # cast-ok: exercise canonical and Responses tool-content representations
+        ChatCompletionToolMessage,
+        {"role": "tool", "name": "get_media", "content": [{"type": "text", "text": '{"ok":true}'}, content]},
+    )
+    with respx.mock:
+        result: Final = convert_to_gemini_tool_call_result(message, None, custom_llm_provider="vertex_ai")
+
+    # Nested inlineData contract checked 2026-10-26: https://ai.google.dev/api/generate-content#FunctionResponsePart
+    assert result == [
+        {
+            "function_response": {
+                "name": "get_media",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "c291bmQ=", "mime_type": mime_type}}],
+            }
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("inline_data", "reference"), [(None, "https://example.com/image.png"), ("", "gs://bucket/image.png")]
+)
+def test_gemini_tool_media_keeps_vertex_reference_when_inline_data_is_absent(
+    inline_data: object,
+    reference: str,
+) -> None:
+    file: Final = {"file_id": reference, "file_data": inline_data, "format": "image/png"}
+    message: Final = cast(  # cast-ok: exercise missing and malformed optional runtime file_data values
+        ChatCompletionToolMessage,
+        {"role": "tool", "name": "get_media", "content": [{"type": "file", "file": file}]},
+    )
+
+    with respx.mock:
+        delivered: Final = convert_to_gemini_tool_call_result(message, None, custom_llm_provider="vertex_ai")
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "get_media",
+                "response": {"content": ""},
+                "parts": [{"file_data": {"file_uri": reference, "mime_type": "image/png"}}],
+            }
+        }
+    ]
+
+
+
+def test_gemini_tool_media_fetch_failure_preserves_tool_text() -> None:
+    message: Final = ChatCompletionToolMessage(
+        role="tool", name="lookup", content=[
+            {"type": "text", "text": '{"ok":true}'},
+            {"type": "image_url", "image_url": {"url": "https://8.8.8.8/unavailable.png"}},
+        ],
+    )
+    with respx.mock as router:
+        router.get("https://8.8.8.8/unavailable.png").respond(404)
+        result: Final = convert_to_gemini_tool_call_result(message, None, custom_llm_provider="gemini")
+    assert result == {"function_response": {"name": "lookup", "response": {"ok": True}}}
 
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
     """

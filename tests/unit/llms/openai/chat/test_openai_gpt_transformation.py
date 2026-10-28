@@ -10,7 +10,10 @@ import respx
 from httpx import Response
 
 import litellm
-from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    TOOL_RESULT_IMAGE_BOUNDARY,
+    TOOL_RESULT_MEDIA_BOUNDARY,
+)
 from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
 from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.llms.openai.chat.gpt_transformation import (
@@ -1278,15 +1281,17 @@ _OPENAI_CHAT_REPLY: Final = {
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("tool_result", [False, True])
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.asyncio
-async def test_openai_pdf_url_is_downloaded_into_file_data(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, sync_mode: bool
+async def test_openai_media_download_preserves_supported_chat_fields(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, sync_mode: bool, tool_result: bool
 ) -> None:
     monkeypatch.setattr(litellm, "user_url_validation", False)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     pdf_url: Final = "https://files.example.test/pdf-url-download.pdf"
     pdf_content: Final = b"%PDF-1.7\nmock-pdf"
+    image_url: Final = "data:image/png;base64,aW1hZ2U="
     in_memory_cache.delete_cache(pdf_url)
     download: Final = respx_mock.get(pdf_url).mock(
         return_value=Response(200, headers={"content-type": "application/pdf"}, content=pdf_content)
@@ -1295,28 +1300,50 @@ async def test_openai_pdf_url_is_downloaded_into_file_data(
         return_value=Response(200, json=_OPENAI_CHAT_REPLY)
     )
 
-    messages: Final = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "What is the first page of the PDF?"},
-                {"type": "file", "file": {"file_id": pdf_url}},
-            ],
-        }
+    text_part: Final = {"type": "text", "text": "What is the first page of the PDF?"}
+    audio_part: Final = {"type": "input_audio", "input_audio": {"data": "YXVkaW8=", "format": "wav"}}
+    media_parts: Final = [
+        {"type": "file", "file": {
+            "file_id": pdf_url, "format": "application/pdf", "detail": "high", "video_metadata": {"fps": 2},
+        }},
+        {"type": "image_url", "image_url": {
+            "url": image_url, "format": "image/png", "detail": "high", "video_metadata": {"fps": 2},
+        }},
+        audio_part,
     ]
+    tool_call: Final = {
+        "role": "assistant",
+        "tool_calls": [{"id": "call_asset", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+    }
+    messages: Final = (
+        [tool_call, {"role": "tool", "tool_call_id": "call_asset", "content": [text_part, *media_parts]}]
+        if tool_result else [{"role": "user", "content": [text_part, *media_parts]}]
+    )
     if sync_mode:
         litellm.completion(model="gpt-4o", messages=messages, api_key="sk-openai-test")
     else:
         await litellm.acompletion(model="gpt-4o", messages=messages, api_key="sk-openai-test")
 
     assert download.call_count == 1
-    assert json.loads(chat.calls[0].request.content)["messages"][0]["content"][1] == {
-        "type": "file",
-        "file": {
-            "file_data": f"data:application/pdf;base64,{base64.b64encode(pdf_content).decode('utf-8')}",
-            "filename": "my_file.pdf",
+    expected_content: Final = [
+        {"type": "text", "text": TOOL_RESULT_MEDIA_BOUNDARY} if tool_result else text_part,
+        {
+            "type": "file",
+            "file": {
+                "file_data": f"data:application/pdf;base64,{base64.b64encode(pdf_content).decode('utf-8')}",
+                "filename": "my_file.pdf",
+            },
         },
-    }
+        {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}},
+        audio_part,
+    ]
+    expected_messages: Final = (
+        [tool_call, {"role": "tool", "tool_call_id": "call_asset", "content": [text_part]},
+         {"role": "user", "content": expected_content}]
+        if tool_result else [{"role": "user", "content": expected_content}]
+    )
+    assert json.loads(chat.calls[0].request.content)["messages"] == expected_messages
+
 
 
 @pytest.mark.respx(assert_all_called=True)
