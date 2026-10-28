@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import threading
 import wave
+from array import array
 from collections.abc import Iterable, Iterator
 from concurrent import futures
 from contextlib import contextmanager
@@ -36,7 +37,7 @@ class Word:
 @dataclass(frozen=True, slots=True)
 class RivaCall:
     rpc: Rpc
-    audio_bytes: int
+    audio: bytes
     cancelled: bool
 
 
@@ -49,19 +50,30 @@ class RivaServer:
         return tuple(self.calls.get_nowait() for _ in range(self.calls.qsize()))
 
 
+def _clip_samples(seconds: float) -> array[int]:
+    return array("h", (((index * 37) % 2001 - 1000) * 16 for index in range(int(seconds * SAMPLE_RATE_HZ))))
+
+
 def pcm_wav(seconds: float) -> bytes:
-    frames: Final = int(seconds * SAMPLE_RATE_HZ)
     buffer: Final = io.BytesIO()
     with wave.open(buffer, "wb") as writer:
         writer.setnchannels(1)
         writer.setsampwidth(2)
         writer.setframerate(SAMPLE_RATE_HZ)
-        writer.writeframes(b"\x01\x00" * frames)
+        writer.writeframes(_clip_samples(seconds).tobytes())
     return buffer.getvalue()
 
 
 def pcm_bytes(seconds: float) -> int:
     return int(seconds * SAMPLE_RATE_HZ) * 2
+
+
+def carries_clip(audio: bytes, seconds: float) -> bool:
+    sent: Final = _clip_samples(seconds)
+    if len(audio) != len(sent) * 2:
+        return False
+    received: Final = array("h", audio)
+    return all(abs(left - right) <= 1 for left, right in zip(sent, received, strict=True))
 
 
 class _Asr(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):
@@ -71,13 +83,13 @@ class _Asr(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):
         self._stall: Final = stall
         self._calls: Final = calls
 
-    def _alternative(self) -> riva_asr_pb2.SpeechRecognitionAlternative:
+    def _alternative(self, config: riva_asr_pb2.RecognitionConfig) -> riva_asr_pb2.SpeechRecognitionAlternative:
+        timed: Final = self._words if config.enable_word_time_offsets else ()
         return riva_asr_pb2.SpeechRecognitionAlternative(
             transcript=" ".join(word.word for word in self._words),
             confidence=0.9,
             words=[
-                riva_asr_pb2.WordInfo(word=word.word, start_time=word.start_ms, end_time=word.end_ms)
-                for word in self._words
+                riva_asr_pb2.WordInfo(word=word.word, start_time=word.start_ms, end_time=word.end_ms) for word in timed
             ],
         )
 
@@ -88,23 +100,26 @@ class _Asr(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):
             released: Final = threading.Event()
             context.add_callback(released.set)
             released.wait(timeout=_STALL_LIMIT_SECONDS)
-            self._calls.put(RivaCall(Rpc.RECOGNIZE, len(request.audio), cancelled=not context.is_active()))
+            self._calls.put(RivaCall(Rpc.RECOGNIZE, request.audio, cancelled=not context.is_active()))
             return riva_asr_pb2.RecognizeResponse()
-        self._calls.put(RivaCall(Rpc.RECOGNIZE, len(request.audio), cancelled=False))
+        self._calls.put(RivaCall(Rpc.RECOGNIZE, request.audio, cancelled=False))
         return riva_asr_pb2.RecognizeResponse(
-            results=[riva_asr_pb2.SpeechRecognitionResult(alternatives=[self._alternative()])]
+            results=[riva_asr_pb2.SpeechRecognitionResult(alternatives=[self._alternative(request.config)])]
         )
 
     def StreamingRecognize(
         self, request_iterator: Iterable[riva_asr_pb2.StreamingRecognizeRequest], context: grpc.ServicerContext
     ) -> Iterator[riva_asr_pb2.StreamingRecognizeResponse]:
         if self._offline_only:
-            self._calls.put(RivaCall(Rpc.STREAMING, 0, cancelled=False))
+            self._calls.put(RivaCall(Rpc.STREAMING, b"", cancelled=False))
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, OFFLINE_ONLY_REFUSAL)
-        audio_bytes: Final = sum(len(request.audio_content) for request in request_iterator)
-        self._calls.put(RivaCall(Rpc.STREAMING, audio_bytes, cancelled=False))
+        requests: Final = tuple(request_iterator)
+        config: Final = requests[0].streaming_config.config if requests else riva_asr_pb2.RecognitionConfig()
+        self._calls.put(
+            RivaCall(Rpc.STREAMING, b"".join(request.audio_content for request in requests), cancelled=False)
+        )
         yield riva_asr_pb2.StreamingRecognizeResponse(
-            results=[riva_asr_pb2.StreamingRecognitionResult(alternatives=[self._alternative()], is_final=True)]
+            results=[riva_asr_pb2.StreamingRecognitionResult(alternatives=[self._alternative(config)], is_final=True)]
         )
 
 

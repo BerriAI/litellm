@@ -6,7 +6,7 @@ import openai
 import pytest
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.openai_wire import chat_reply
-from integration._support.riva import Rpc, RivaServer, Word, pcm_bytes, pcm_wav, riva_server
+from integration._support.riva import RivaServer, Rpc, Word, carries_clip, pcm_bytes, pcm_wav, riva_server
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
@@ -80,7 +80,9 @@ def test_an_offline_deployment_sends_the_whole_clip_in_one_recognize_call(gatewa
         assert [(word.word, word.start, word.end) for word in transcription.words or ()] == [
             (word.word, word.start_ms / 1000, word.end_ms / 1000) for word in _WORDS
         ]
-        assert [(call.rpc, call.audio_bytes) for call in server.drain()] == [(Rpc.RECOGNIZE, pcm_bytes(_CLIP_SECONDS))]
+        assert [(call.rpc, carries_clip(call.audio, _CLIP_SECONDS)) for call in server.drain()] == [
+            (Rpc.RECOGNIZE, True)
+        ]
 
 
 def test_a_deployment_without_riva_offline_still_streams_the_clip(gateway: Gateway) -> None:
@@ -89,7 +91,9 @@ def test_a_deployment_without_riva_offline_still_streams_the_clip(gateway: Gatew
         served: Final = _transcribe(gateway, scenario.key(), model)
         assert served.status_code == 200, served.text
         assert served.json()["text"] == _TRANSCRIPT, served.text
-        assert [(call.rpc, call.audio_bytes) for call in server.drain()] == [(Rpc.STREAMING, pcm_bytes(_CLIP_SECONDS))]
+        assert [(call.rpc, carries_clip(call.audio, _CLIP_SECONDS)) for call in server.drain()] == [
+            (Rpc.STREAMING, True)
+        ]
 
 
 @pytest.mark.parametrize(
