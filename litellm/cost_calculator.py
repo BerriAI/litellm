@@ -961,19 +961,14 @@ def select_model_name_for_cost_calc(
     """
     1. If custom pricing is true, return received model name
     2. If base_model is set (e.g. for azure models), return that
-    3. If completion response has model set return that
+    3. If completion response has model set return that, unless only the requested model's cost-map row has rates
     4. Check if model is passed in return that
     """
 
     return_model: str | None = None
     custom_llm_provider = _get_provider_for_cost_calc(model=model, custom_llm_provider=custom_llm_provider)
 
-    completion_response_model: str | None = None
-    if completion_response is not None:
-        if isinstance(completion_response, BaseModel):
-            completion_response_model = getattr(completion_response, "model", None)
-        elif isinstance(completion_response, dict):
-            completion_response_model = completion_response.get("model", None)
+    completion_response_model: Final = _get_response_model(completion_response)
     hidden_params: Final[dict | None] = getattr(completion_response, "_hidden_params", None)
     provider_response_model: Final = _get_hidden_str_for_cost_calc(hidden_params, "provider_response_model")
     explicit_pricing: Final = custom_pricing is True or base_model is not None
@@ -1009,25 +1004,41 @@ def select_model_name_for_cost_calc(
             return_model = hidden_params.get("model", model)
 
     if return_model is None and completion_response_model is not None:
-        return_model = completion_response_model
+        return _served_or_priced_requested_model(
+            served=_cost_map_model_name(completion_response_model, custom_llm_provider, priced_region),
+            requested=_cost_map_model_name(model, custom_llm_provider, None) if model is not None else None,
+            custom_llm_provider=custom_llm_provider,
+        )
 
     if return_model is None and model is not None:
         return_model = model
 
-    if (
-        return_model is not None
-        and custom_llm_provider is not None
-        and not _model_contains_known_llm_provider(return_model)
-    ):  # add provider prefix if not already present, to match model_cost
-        provider_prefix: Final = (
-            custom_llm_provider if priced_region is None else f"{custom_llm_provider}/{priced_region}"
-        )
-        return_model = _strip_unregistered_leading_segments(f"{provider_prefix}/{return_model}", priced_region)
-
-    return return_model
+    if return_model is None:
+        return None
+    return _cost_map_model_name(return_model, custom_llm_provider, priced_region)
 
 
 _select_model_name_for_cost_calc = select_model_name_for_cost_calc
+
+
+def _cost_map_model_name(model: str, custom_llm_provider: str | None, region_name: str | None) -> str:
+    if custom_llm_provider is None or _model_contains_known_llm_provider(model):
+        return model
+    provider_prefix: Final = custom_llm_provider if region_name is None else f"{custom_llm_provider}/{region_name}"
+    return _strip_unregistered_leading_segments(f"{provider_prefix}/{model}", region_name)
+
+
+def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
+    rule_info: Final = unmapped_model_generalization(model, custom_llm_provider)
+    if rule_info is not None:
+        return _cost_map_entry_prices_anything(rule_info)
+    return _declares_rates(_cost_map_model_info(model, custom_llm_provider))
+
+
+def _served_or_priced_requested_model(served: str, requested: str | None, custom_llm_provider: str | None) -> str:
+    if requested is None or requested == served or _resolves_to_rates(served, custom_llm_provider):
+        return served
+    return requested if _resolves_to_rates(requested, custom_llm_provider) else served
 
 
 def _strip_unregistered_leading_segments(model: str, region_name: str | None) -> str:
