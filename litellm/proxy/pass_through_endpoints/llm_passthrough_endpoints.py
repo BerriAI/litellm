@@ -96,6 +96,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     get_form_data,
     get_request_body,
     is_json_content_type,
+    read_raw_request_body,
     read_request_body,
     safe_get_request_headers,
     safe_set_request_parsed_body,
@@ -1798,7 +1799,7 @@ async def azure_speech_proxy_route(
             )
         }
     )
-    raw_body: Final = await request.body()
+    raw_body: Final = await read_raw_request_body(request)
 
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
@@ -3689,7 +3690,7 @@ async def _tinyfish_json_object_field_names(request: Request) -> frozenset[str] 
     content_type: Final = request.headers.get("content-type", "")
     if content_type and not is_json_content_type(content_type):
         return None
-    raw_body: Final = await request.body()
+    raw_body: Final = await read_raw_request_body(request)
     if not raw_body:
         return frozenset()
     try:

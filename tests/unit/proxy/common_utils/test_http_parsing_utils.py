@@ -1722,6 +1722,14 @@ async def test_read_request_body_aborts_with_499_when_the_client_disconnects_mid
     assert _safe_get_request_parsed_body(request) is None, "a half-received body must never be cached as {}"
 
 
+async def test_read_raw_json_body_aborts_with_499_when_the_client_disconnects_mid_upload() -> None:
+    request: Final = _request_whose_client_disconnects_mid_upload("audio/wav")
+    safe_set_request_parsed_body(request=request, parsed_body={})
+    with pytest.raises(HTTPException) as raised:
+        await read_raw_json_body(request)
+    assert (raised.value.status_code, raised.value.detail) == (499, "Client disconnected the request")
+
+
 async def test_read_request_body_closes_the_otel_server_span_when_the_client_disconnects_mid_upload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

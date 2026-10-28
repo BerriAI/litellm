@@ -20,6 +20,7 @@ from fastapi.routing import APIRoute
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
+from starlette.types import Message
 
 
 import litellm
@@ -63,6 +64,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     relay_nvidia_nim_request,
     openai_proxy_route,
     openrouter_proxy_route,
+    tinyfish_proxy_route,
     typesafe_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
@@ -9167,3 +9169,62 @@ class TestTinyFishRouteTimeout:
 
         monkeypatch.setattr(proxy_server, "general_settings", {"pass_through_request_timeout": 30}, raising=False)
         assert _tinyfish_route_timeout() is None
+
+
+def _upload_whose_client_disconnects_mid_body(path: str, content_type: str) -> Request:
+    scope: Final = {
+        "type": "http",
+        "method": "POST",
+        "scheme": "http",
+        "server": ("testserver", 80),
+        "root_path": "",
+        "path": path,
+        "headers": [(b"content-type", content_type.encode()), (b"content-length", b"4096")],
+        "query_string": b"language=en-US",
+    }
+
+    async def receive() -> Message:
+        return {"type": "http.disconnect"}
+
+    return Request(scope, receive)
+
+
+class TestClientDisconnectMidUpload:
+    """A caller that hangs up mid-body gets the same 499 `read_request_body` answers with, never a 500 traceback."""
+
+    async def test_azure_speech_upload_cut_off_by_the_client_aborts_with_499(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AZURE_SPEECH_API_KEY", "server-subscription-key")
+        monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+        monkeypatch.delenv("AZURE_SPEECH_API_BASE", raising=False)
+        request: Final = _upload_whose_client_disconnects_mid_body(
+            f"/azure_speech{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}", "audio/wav"
+        )
+
+        with respx.mock(assert_all_called=False) as upstream, pytest.raises(HTTPException) as raised:
+            await azure_speech_proxy_route(
+                endpoint=AZURE_SPEECH_SHORT_AUDIO_ENDPOINT.lstrip("/"),
+                request=request,
+                fastapi_response=Response(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-virtual"),
+            )
+
+        assert (raised.value.status_code, raised.value.detail) == (499, "Client disconnected the request")
+        assert upstream.calls.call_count == 0, "nothing may be forwarded on behalf of a caller that hung up"
+
+    async def test_tinyfish_run_cut_off_by_the_client_aborts_with_499(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("TINYFISH_API_KEY", "sk-tf-upstream")
+        monkeypatch.delenv("TINYFISH_AGENT_API_BASE", raising=False)
+        request: Final = _upload_whose_client_disconnects_mid_body("/tinyfish/v1/automation/run", "application/json")
+
+        with respx.mock(assert_all_called=False) as upstream, pytest.raises(HTTPException) as raised:
+            await tinyfish_proxy_route(
+                endpoint="v1/automation/run",
+                request=request,
+                fastapi_response=Response(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-virtual"),
+            )
+
+        assert (raised.value.status_code, raised.value.detail) == (499, "Client disconnected the request")
+        assert upstream.calls.call_count == 0, "nothing may be forwarded on behalf of a caller that hung up"

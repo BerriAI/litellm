@@ -23,6 +23,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module exports
     _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_ip_address,
+    is_client_disconnect_error,
     is_invalid_virtual_key_error,
     is_unauthorized_error,
     mark_invalid_virtual_key_error,
@@ -205,7 +206,9 @@ class UserAPIKeyAuthExceptionHandler:
             # (suppressible via LITELLM_LOG=ERROR); anything else is unexpected and logs at ERROR.
             log_extra: Final = {"requester_ip": requester_ip}
             is_invalid_virtual_key: Final = is_invalid_virtual_key_error(e)
-            is_quiet_log: Final = is_unauthorized_error(e) and not litellm.log_client_error_tracebacks
+            is_quiet_log: Final = (
+                is_unauthorized_error(e) or is_client_disconnect_error(e)
+            ) and not litellm.log_client_error_tracebacks
             logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger
             logger.log(
                 logging.WARNING if is_quiet_log else logging.ERROR,
@@ -264,7 +267,9 @@ class UserAPIKeyAuthExceptionHandler:
 
             final_exception: Final = mark_invalid_virtual_key_error(_as_proxy_exception(e), is_invalid_virtual_key)
             # If a quiet-logged malformed-key transform yields non-401, escalate to ERROR
-            if is_quiet_log and str(final_exception.code) != str(status.HTTP_401_UNAUTHORIZED):
+            if is_quiet_log and not (
+                is_unauthorized_error(final_exception) or is_client_disconnect_error(final_exception)
+            ):
                 verbose_proxy_logger.error(
                     "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",
                     final_exception,

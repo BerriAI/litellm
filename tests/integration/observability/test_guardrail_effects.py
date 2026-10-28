@@ -3218,12 +3218,14 @@ def _openai_upstream(request: Request) -> Reply:
     return Reply(body=_chat_completion_body("control-reply"))
 
 
-def _post_half_of_the_body_then_hang_up(gateway: Gateway, path: str, body: bytes) -> None:
+def _post_half_of_the_body_then_hang_up(
+    gateway: Gateway, path: str, body: bytes, content_type: str = "application/json"
+) -> None:
     address: Final = urlsplit(str(gateway.client.base_url))
     assert address.hostname is not None and address.port is not None, address
     head: Final = (
         f"POST {path} HTTP/1.1\r\nHost: {address.netloc}\r\nAuthorization: Bearer {gateway.key}\r\n"
-        f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n"
+        f"Content-Type: {content_type}\r\nContent-Length: {len(body)}\r\n\r\n"
     ).encode()
     with socket.create_connection((address.hostname, address.port)) as connection:
         connection.sendall(head + body[: len(body) // 2])
@@ -3267,3 +3269,25 @@ def test_client_disconnect_during_the_body_upload_runs_no_endpoint_and_writes_no
         assert [request.target for request in upstream.drain()] == ["/v1/chat/completions"], (
             "the half-uploaded request must never reach the provider"
         )
+
+
+def test_client_disconnect_during_an_azure_speech_upload_is_a_499_not_a_traceback(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with owned_proxy_process(
+        gateway, tmp_path, {"AZURE_SPEECH_API_KEY": "synthetic-subscription-key", "AZURE_SPEECH_REGION": "eastus"}
+    ) as owned:
+        _post_half_of_the_body_then_hang_up(
+            owned.gateway,
+            "/azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US",
+            b"RIFF" + bytes(8192),
+            content_type="audio/wav",
+        )
+        log: Final = eventually(
+            lambda: owned.log.read_text(),
+            lambda text: "ClientDisconnect" in text or "Client disconnected" in text,
+            seconds=30,
+        )
+    assert "499: Client disconnected the request" in log, log[-4000:]
+    assert "starlette.requests.ClientDisconnect" not in log, "a caller hanging up is not an ERROR traceback"
+    assert not [line for line in log.splitlines() if "ERROR" in line and "user_api_key_auth()" in line], log[-4000:]

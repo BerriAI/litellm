@@ -19,6 +19,7 @@ from litellm.constants import (
     ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
     EMPTY_MAPPING,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
+    LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MINIMUM_CUSTOM_KEY_LENGTH,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
@@ -56,6 +57,15 @@ def is_unauthorized_error(exception: BaseException | None) -> bool:
     code: Final[object] = getattr(exception, "code", None)
     status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
     return str(status_code) == str(status.HTTP_401_UNAUTHORIZED)
+
+
+def is_client_disconnect_error(exception: BaseException | None) -> bool:
+    """True when the caller hung up mid-upload and the body reader answered with the proxy's 499."""
+    if not isinstance(exception, (HTTPException, ProxyException)):
+        return False
+    code: Final[object] = getattr(exception, "code", None)
+    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
+    return str(status_code) == str(LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED)
 
 
 def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:

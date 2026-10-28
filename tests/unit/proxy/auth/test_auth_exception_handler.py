@@ -1177,6 +1177,12 @@ def _marked_malformed_key_error() -> HTTPException:
             "ERROR",
             id="403_stays_error_without_traceback",
         ),
+        pytest.param(
+            HTTPException(status_code=499, detail="Client disconnected the request"),
+            False,
+            "WARNING",
+            id="client_hangup_mid_upload_499_warning_no_traceback",
+        ),
     ],
 )
 async def test_handle_authentication_error_traceback_only_for_unexpected_errors(auth_error, expect_traceback, expect_level, caplog):

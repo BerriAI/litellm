@@ -355,20 +355,32 @@ async def read_request_body(request: Request | None) -> dict:
         verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
         raise
     except ClientDisconnect as e:
-        from litellm.proxy.proxy_server import (
-            _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; the Starlette HTTPException handler does not stamp the OTel server span opened at auth time, so the body reader must before it aborts
-        )
-
-        verbose_proxy_logger.info("Client disconnected before the request body was fully received")
-        disconnected: Final = HTTPException(
-            status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail=LITELLM_CLIENT_DISCONNECT_DETAIL
-        )
-        _close_dangling_otel_server_span(request, LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, exc=disconnected)
-        raise disconnected from e
+        raise _client_disconnected_mid_upload(request) from e
     except Exception as e:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception("Unexpected error reading request body - %s", e)
         return {}
+
+
+def _client_disconnected_mid_upload(request: Request) -> HTTPException:
+    from litellm.proxy.proxy_server import (
+        _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; the Starlette HTTPException handler does not stamp the OTel server span opened at auth time, so the body reader must before it aborts
+    )
+
+    verbose_proxy_logger.info("Client disconnected before the request body was fully received")
+    disconnected: Final = HTTPException(
+        status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail=LITELLM_CLIENT_DISCONNECT_DETAIL
+    )
+    _close_dangling_otel_server_span(request, LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, exc=disconnected)
+    return disconnected
+
+
+async def read_raw_request_body(request: Request) -> bytes:
+    """Read the body byte for byte, aborting with the 499 ``read_request_body`` uses when the client hangs up."""
+    try:
+        return await request.body()
+    except ClientDisconnect as e:
+        raise _client_disconnected_mid_upload(request) from e
 
 
 _read_request_body: Final = read_request_body
@@ -389,7 +401,7 @@ async def read_raw_json_body(request: Request | None) -> bytes | None:
     if _is_form_content_type(content_type):
         return None
     try:
-        return await request.body()
+        return await read_raw_request_body(request)
     except RuntimeError:
         return None
 
