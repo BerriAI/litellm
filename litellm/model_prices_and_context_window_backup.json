@@ -76370,5 +76370,21 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "use_openai_responses_path": true
+    },
+    "frequency/google/gemma-4-26b-a4b-it": {
+        "cache_read_input_token_cost": 9.3e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "frequency",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 1024,
+        "mode": "chat",
+        "output_cost_per_token": 5.5e-07,
+        "source": "https://scalefrequency.com/pricing",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": false,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
     }
 }

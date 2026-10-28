@@ -263,5 +263,11 @@
       "/v1/chat/completions",
       "/v1/responses"
     ]
+  },
+  "frequency": {
+    "base_url": "https://llm.scalefrequency.com/v2",
+    "api_key_env": "FREQUENCY_API_KEY",
+    "api_base_env": "FREQUENCY_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
