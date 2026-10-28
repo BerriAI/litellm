@@ -6,6 +6,8 @@ Additional tests live in tests/guardrails_tests/test_lakera_v2.py.
 """
 
 import importlib, logging, os
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -332,8 +334,12 @@ PII_AND_PROMPT_ATTACK_LAKERA_RESPONSE = {
 }
 
 
-async def _run_pre_call(guardrail, lakera_response):
-    data = {"messages": [{"role": "user", "content": "hello world"}], "model": "gpt-3.5-turbo", "metadata": {}}
+def _hello_world_request() -> dict[str, object]:
+    return {"messages": [{"role": "user", "content": "hello world"}], "model": "gpt-3.5-turbo", "metadata": {}}
+
+
+async def _run_pre_call(guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object]) -> dict[str, object]:
+    data: Final = _hello_world_request()
     with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock, return_value=(lakera_response, {})):
         await guardrail.async_pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(api_key="test_key"), cache=MagicMock(), data=data, call_type="completion"
@@ -341,24 +347,24 @@ async def _run_pre_call(guardrail, lakera_response):
     return data
 
 
-async def _run_during_call(guardrail, lakera_response):
-    data = {"messages": [{"role": "user", "content": "hello world"}], "model": "gpt-3.5-turbo", "metadata": {}}
+async def _run_during_call(guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object]) -> None:
     with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock, return_value=(lakera_response, {})):
         await guardrail.async_moderation_hook(
-            data=data, user_api_key_dict=UserAPIKeyAuth(api_key="test_key"), call_type="completion"
+            data=_hello_world_request(), user_api_key_dict=UserAPIKeyAuth(api_key="test_key"), call_type="completion"
         )
-    return data
 
 
-async def _run_post_call(guardrail, lakera_response):
-    llm_response = MagicMock()
+async def _run_post_call(guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object]) -> ModelResponse:
+    llm_response: Final = MagicMock()
     llm_response.model_dump.return_value = {"choices": [{"message": {"role": "assistant", "content": "hello world"}}]}
     with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock, return_value=(lakera_response, {})):
-        return await guardrail.async_post_call_success_hook(
+        response: Final = await guardrail.async_post_call_success_hook(
             data={"messages": [], "model": "gpt-3.5-turbo", "metadata": {}},
             user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
             response=llm_response,
         )
+    assert isinstance(response, ModelResponse)
+    return response
 
 
 @pytest.mark.asyncio
