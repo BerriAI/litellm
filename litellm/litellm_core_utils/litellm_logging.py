@@ -2758,7 +2758,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if entry is None or not is_str_keyed_dict(litellm_params):
             return
         metadata: Final[object] = litellm_params.get("metadata")
-        bucket: Final = metadata if is_str_keyed_dict(metadata) else {}
+        bucket: Final = {**metadata} if is_str_keyed_dict(metadata) else {}
         litellm_params["metadata"] = bucket
         with_guardrail_entry(bucket, entry)
 
