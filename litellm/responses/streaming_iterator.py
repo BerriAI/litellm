@@ -228,6 +228,7 @@ async def drain_logging_tasks(timeout: float = 5.0) -> None:
 _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
     {
         "server_error": 500,
+        "invalid_api_key": 401,
         "rate_limit_exceeded": 429,
         "insufficient_quota": 429,
         "vector_store_timeout": 504,

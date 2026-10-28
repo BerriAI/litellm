@@ -43,6 +43,7 @@ from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import realtime_ssl_for_url
+from ..llms.openai.common_utils import is_openai_backed_api_base
 from ..llms.openai.live.handler import OpenAILiveSessions
 from ..llms.openai.realtime.handler import OpenAIRealtime, confirm_session_started
 from ..llms.openai.workload_identity import openai_static_api_key, resolve_openai_bearer_token_async
@@ -802,11 +803,12 @@ async def realtime_health_check(
             without the OpenAI-Beta header is bridged to, with transcription-only models adding intent=transcription
 
     Returns:
-        bool - True once the connection is open, and for OpenAI once the first server event is not an error,
-            since OpenAI accepts the websocket handshake with missing or invalid credentials and only reports
-            the failure in its first server event
+        bool - True once the connection is open, and on OpenAI's own hosts once the first server event is not an
+            error, since OpenAI accepts the websocket handshake with missing or invalid credentials and only reports
+            the failure in its first server event. An `invalid_model` error also counts as healthy: OpenAI checks
+            the key first, and Live and transcription models are served through other endpoints
     Raises:
-        Exception - if the connection is not successful, if OpenAI's first server event is an error, or if
+        Exception - if the connection is not successful, if OpenAI's first server event is any other error, or if
             OpenAI sends no server event within first_event_timeout_seconds
     """
     import websockets
@@ -905,7 +907,7 @@ async def realtime_health_check(
         max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
         ssl=realtime_ssl_for_url(url),
     ) as connection:
-        if custom_llm_provider != "openai":
+        if custom_llm_provider != "openai" or not is_openai_backed_api_base(url):
             return True
         return await confirm_session_started(connection, model, first_event_timeout_seconds)
 

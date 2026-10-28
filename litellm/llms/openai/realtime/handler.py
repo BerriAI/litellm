@@ -14,7 +14,8 @@ from pydantic import TypeAdapter
 
 from litellm._logging import redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
-from litellm.exceptions import AuthenticationError, BadRequestError, InternalServerError, Timeout
+from litellm.exceptions import Timeout
+from litellm.responses.streaming_iterator import map_stream_error_to_exception
 from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
 
 _SERVER_EVENT_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_CREDENTIALS_ACCEPTED_FOR_A_NON_REALTIME_MODEL: Final = "invalid_model"
 
 
 def first_event_error(first_event: str | bytes) -> RealtimeError | None:
@@ -40,16 +42,6 @@ def first_event_error(first_event: str | bytes) -> RealtimeError | None:
     if event.get("type") != "error":
         return None
     return RealtimeErrorEvent.model_validate(event).error
-
-
-def first_event_exception(error: RealtimeError, model: str) -> Exception:
-    match error:
-        case RealtimeError(code="invalid_api_key"):
-            return AuthenticationError(message=error.message, llm_provider="openai", model=model)
-        case RealtimeError(type="server_error"):
-            return InternalServerError(message=error.message, llm_provider="openai", model=model)
-        case _:
-            return BadRequestError(message=error.message, model=model, llm_provider="openai")
 
 
 async def confirm_session_started(connection: "ClientConnection", model: str, timeout_seconds: float) -> Literal[True]:
@@ -62,9 +54,9 @@ async def confirm_session_started(connection: "ClientConnection", model: str, ti
             llm_provider="openai",
         ) from None
     error: Final = first_event_error(first_event)
-    if error is None:
+    if error is None or error.code == _CREDENTIALS_ACCEPTED_FOR_A_NON_REALTIME_MODEL:
         return True
-    raise first_event_exception(error, model)
+    raise map_stream_error_to_exception(error, model=model, custom_llm_provider="openai")
 
 
 class OpenAIRealtime(OpenAIChatCompletion):
