@@ -10336,3 +10336,47 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     assert entry is not None
     assert entry[1]["input_cost_per_token_above_300k_tokens"] == 0.03
     assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
+
+def test_nebius_moonshotai_kimi_k3_cost_calculation():
+    """
+    Test cost calculation for Nebius provider model: nebius/moonshotai/Kimi-K3
+    Verifies fix for issue #41782 where cost tracking was off by 10x.
+    """
+    import litellm
+    from litellm.types.utils import ModelResponse, Usage, Choices, Message
+
+    model = "nebius/moonshotai/Kimi-K3"
+    prompt_tokens = 816_000_000
+    completion_tokens = 11_500_000
+
+    # 1. Test raw cost_per_token calculation
+    prompt_cost, completion_cost = litellm.cost_calculator.cost_per_token(
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+
+    assert round(prompt_cost, 2) == 2448.0
+    assert round(completion_cost, 2) == 172.5
+    assert round(prompt_cost + completion_cost, 2) == 2620.5
+
+    # 2. Test completion_cost with ModelResponse
+    response = ModelResponse(
+        id="test-nebius-resp",
+        choices=[Choices(message=Message(content="Hello", role="assistant"))],
+        model=model,
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+    )
+
+    total_cost = litellm.completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="nebius",
+    )
+
+    assert round(total_cost, 2) == 2620.5
+
