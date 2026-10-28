@@ -41,12 +41,15 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     _resolve_key_models_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
     can_key_call_resolved_model,
+    key_model_aliases_for_auth_check,
+    team_model_aliases_for_auth_check,
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils import http_parsing_utils
+from litellm.proxy.common_utils.model_listing_utils import CallerAliases, dispatched_model
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.health_check_latest import (
@@ -1085,24 +1088,47 @@ async def _key_may_call_model(model_name: str, user_api_key_dict: UserAPIKeyAuth
     return True
 
 
-async def _model_names_key_may_call(
+async def _caller_aliases(user_api_key_dict: UserAPIKeyAuth) -> CallerAliases:
+    from litellm.proxy.proxy_server import prisma_client, proxy_config, proxy_logging_obj
+
+    router_settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict, prisma_client, proxy_logging_obj
+    )
+    return CallerAliases(
+        team_model_aliases_for_auth_check(user_api_key_dict),
+        key_model_aliases_for_auth_check(user_api_key_dict),
+        router_settings.get("model_group_alias") if router_settings is not None else None,
+    )
+
+
+def _served_model_group(model_name: str, aliases: CallerAliases, llm_router: Router | None) -> str:
+    dispatched: Final = dispatched_model(model_name, aliases)
+    return llm_router.routable_model_group(dispatched) if llm_router is not None else dispatched
+
+
+async def _model_groups_key_may_reach(
     llm_model_list: Sequence[object], user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None
 ) -> frozenset[str]:
     requested_names: Final = frozenset[str]().union(
         *(_names_caller_may_request(deployment, user_api_key_dict.team_id) for deployment in llm_model_list)
     )
+    aliases: Final = await _caller_aliases(user_api_key_dict)
     return frozenset(
-        [name for name in requested_names if await _key_may_call_model(name, user_api_key_dict, llm_router)]
+        [
+            _served_model_group(name, aliases, llm_router)
+            for name in requested_names
+            if await _key_may_call_model(name, user_api_key_dict, llm_router)
+        ]
     )
 
 
 def _caller_may_probe_deployment(
-    deployment: Mapping[str, object], callable_names: frozenset[str], team_id: str | None, caller_is_admin: bool
+    deployment: Mapping[str, object], reachable_groups: frozenset[str], team_id: str | None, caller_is_admin: bool
 ) -> bool:
     """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
     if not caller_is_admin and not Router.deployment_usable_by_team(deployment, team_id):
         return False
-    return not callable_names.isdisjoint(_names_caller_may_request(deployment, team_id))
+    return not reachable_groups.isdisjoint(_names_caller_may_request(deployment, team_id))
 
 
 def _resolve_targeted_model_ids(
@@ -1327,8 +1353,8 @@ async def health_endpoint(
                 detail={"error": "Model list not initialized"},
             )
         restrict_to_allowed_models: Final = not is_admin or not _key_models_unrestricted(user_api_key_dict)
-        callable_names: Final = (
-            await _model_names_key_may_call(
+        reachable_groups: Final = (
+            await _model_groups_key_may_reach(
                 _DEPLOYMENT_LIST.validate_python(llm_model_list), user_api_key_dict, llm_router
             )
             if restrict_to_allowed_models
@@ -1338,7 +1364,7 @@ async def health_endpoint(
             m
             for m in copy.deepcopy(llm_model_list)
             if not restrict_to_allowed_models
-            or _caller_may_probe_deployment(m, callable_names, user_api_key_dict.team_id, is_admin)
+            or _caller_may_probe_deployment(m, reachable_groups, user_api_key_dict.team_id, is_admin)
         ]
         targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id, user_api_key_dict.team_id)
         if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:

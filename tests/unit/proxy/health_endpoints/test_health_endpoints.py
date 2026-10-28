@@ -3771,7 +3771,10 @@ def test_clean_endpoint_data_never_displays_credential_fields(credential_field, 
 
 
 async def _live_probed_model_ids(
-    model_list: Sequence[Mapping[str, object]], user_api_key_dict: UserAPIKeyAuth, model: str | None = None
+    model_list: Sequence[Mapping[str, object]],
+    user_api_key_dict: UserAPIKeyAuth,
+    model: str | None = None,
+    llm_router: Router | None = None,
 ) -> set[str]:
     from fastapi import Response
 
@@ -3784,7 +3787,7 @@ async def _live_probed_model_ids(
         return {"healthy_endpoints": [], "unhealthy_endpoints": [], "healthy_count": 0, "unhealthy_count": 0}
 
     with (
-        _proxy_health_globals(model_list, _router_for(model_list)),
+        _proxy_health_globals(model_list, llm_router or _router_for(model_list)),
         patch(  # test-quality-ok: the model list handed to the probe is the assertion; no injection seam
             "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
             side_effect=fake_perform,
@@ -4341,6 +4344,86 @@ async def test_health_endpoint_refuses_a_deployment_the_team_allowlist_forbids(u
     assert refused.value.status_code == 403
     probe.assert_not_awaited()
 
+
+
+_KEY_ALIASED_AWAY_FROM_HAIKU = UserAPIKeyAuth(
+    api_key="hashed-test-key", models=["gpt-5.4-mini"], aliases={"claude-haiku-5-5": "gpt-5.4-mini"}
+)
+_TEAM_ALIASED_AWAY_FROM_HAIKU = UserAPIKeyAuth(
+    api_key="hashed-test-key",
+    models=["claude-haiku-5-5"],
+    team_id="team-a",
+    team_model_aliases={"claude-haiku-5-5": "gpt-5.4-mini"},
+)
+_MINI_ONLY_KEY = UserAPIKeyAuth(api_key="hashed-test-key", models=["gpt-5.4-mini"])
+_ALIAS_SHADOW_CASES = [
+    pytest.param(_KEY_ALIASED_AWAY_FROM_HAIKU, {}, id="key-alias"),
+    pytest.param(_TEAM_ALIASED_AWAY_FROM_HAIKU, {}, id="team-alias"),
+    pytest.param(_MINI_ONLY_KEY, {"claude-haiku-5-5": "gpt-5.4-mini"}, id="router-alias"),
+]
+
+
+def _router_with_aliases(model_group_alias: Mapping[str, str]) -> Router:
+    return Router(model_list=copy.deepcopy(_PROVIDER_PREFIXED_MODEL_LIST), model_group_alias=dict(model_group_alias))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("caller", "model_group_alias"), _ALIAS_SHADOW_CASES)
+async def test_health_endpoint_probes_the_deployment_an_alias_sends_the_key_to_not_the_one_it_shadows(
+    caller, model_group_alias
+):
+    probed = await _live_probed_model_ids(
+        _PROVIDER_PREFIXED_MODEL_LIST, caller, llm_router=_router_with_aliases(model_group_alias)
+    )
+
+    assert probed == {"id-mini"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("caller", "model_group_alias"), _ALIAS_SHADOW_CASES)
+async def test_health_endpoint_returns_the_deployment_an_alias_sends_the_key_to_on_background_cache_path(
+    caller, model_group_alias
+):
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _PROVIDER_PREFIXED_MODEL_LIST,
+        _router_with_aliases(model_group_alias),
+        use_background_health_checks=True,
+        health_check_results=_PROVIDER_PREFIXED_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(response=Response(), user_api_key_dict=caller, model=None, model_id=None)
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-mini"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_background_health_checks", [False, True])
+async def test_health_endpoint_refuses_the_deployment_a_key_alias_shadows(use_background_health_checks):
+    from fastapi import HTTPException, Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with (
+        _proxy_health_globals(
+            _PROVIDER_PREFIXED_MODEL_LIST,
+            _router_for(_PROVIDER_PREFIXED_MODEL_LIST),
+            use_background_health_checks=use_background_health_checks,
+            health_check_results=_PROVIDER_PREFIXED_CACHED_RESULTS,
+        ),
+        patch(  # test-quality-ok: the probe must never run; the endpoint has no injection seam for it
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save", new_callable=AsyncMock
+        ) as probe,
+        pytest.raises(HTTPException) as refused,
+    ):
+        await health_endpoint(
+            response=Response(), user_api_key_dict=_KEY_ALIASED_AWAY_FROM_HAIKU, model=None, model_id="id-haiku"
+        )
+
+    assert refused.value.status_code == 403
+    probe.assert_not_awaited()
 
 def test_resolve_targeted_model_ids_lets_model_id_win_over_model():
     resolve = _health_endpoints_module._resolve_targeted_model_ids
