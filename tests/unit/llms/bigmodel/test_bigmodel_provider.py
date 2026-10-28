@@ -307,6 +307,11 @@ def test_chat_asks_an_always_thinking_model_for_its_lowest_effort_when_thinking_
             {"output_config": {"effort": "high"}},
             {"thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}},
         ),
+        (
+            MODEL,
+            {"reasoning_effort": "high"},
+            {"thinking": {"type": "adaptive"}, "reasoning_effort": "high", "output_config": None},
+        ),
         ("glm-4.7", {}, {"thinking": {"type": "disabled"}, "output_config": None}),
     ),
 )

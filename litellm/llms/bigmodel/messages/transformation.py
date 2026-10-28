@@ -30,10 +30,13 @@ def _with_lowest_effort_thinking(
     params: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: the parent transform takes a request dict
     requested_output_config: Final = params.get("output_config")
-    output_config: Final = (
-        _OUTPUT_CONFIG.validate_python(requested_output_config) if isinstance(requested_output_config, dict) else {}
-    )
-    return {**params, "thinking": {"type": "adaptive"}, "output_config": {"effort": "low", **output_config}}
+    output_config: Final = {
+        **({} if "reasoning_effort" in params else {"effort": "low"}),
+        **(
+            _OUTPUT_CONFIG.validate_python(requested_output_config) if isinstance(requested_output_config, dict) else {}
+        ),
+    }
+    return {**params, "thinking": {"type": "adaptive"}, **({"output_config": output_config} if output_config else {})}
 
 
 def _normalize_message(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:  # mutable-ok: native JSON response
