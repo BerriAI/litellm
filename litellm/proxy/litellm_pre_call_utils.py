@@ -29,6 +29,7 @@ from litellm._service_logger import ServiceLogging
 from litellm._uuid import uuid
 from litellm.constants import (
     BAGGAGE_MAPPED_TAGS_METADATA_KEY,
+    BILLED_RETRY_ATTEMPT_METADATA_KEY,
     CALLER_SESSION_ID_METADATA_KEY,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
@@ -98,6 +99,8 @@ _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names
     {"cookie", "proxy-authorization"}
 )
 _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", "headers", "api_key"})
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
 
 # Matches any header of the form x-<something>-session-id (case-insensitive).
 # Excludes the two explicit litellm headers which are handled with higher priority.
@@ -267,7 +270,7 @@ def sanitize_for_log(value: object) -> str:
 
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
-from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
+from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES, STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.router import BaggageMappedTagsStamp, holds_api_key_secret_reference
 from litellm.types.services import ServiceTypes
@@ -287,6 +290,9 @@ _DESTINATION_ONLY_CALLBACK_VARS: Final[frozenset[str]] = frozenset({CAPTURE_MESS
 
 _CALLBACK_CREDENTIAL_KEYS: Final = frozenset(StandardCallbackDynamicParams.__annotations__) | frozenset(
     {TRUSTED_CALLBACK_VARS_FIELD}
+)
+_HEADERS_THAT_CANNOT_CHANGE_PROVIDER_AUTH: Final = frozenset(
+    {*(f"x-litellm-{key}" for key in StandardLoggingUserAPIKeyMetadata.__annotations__), *ANTHROPIC_API_HEADERS}
 )
 service_logger_obj: Final = ServiceLogging()  # used for tracking latency on OTEL
 # Bounded dedup for stale-alias warnings (FIFO eviction when over cap).
@@ -333,6 +339,7 @@ LITELLM_METADATA_ROUTES: Final = (
     "/v1/messages",
     "responses",
     "files",
+    "interactions",
 )
 
 LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
@@ -352,6 +359,7 @@ LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
 _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "weights",
     "_router_weights",
+    "_encrypted_content_affinity_pinned",
     "fallback_depth",
     "_target_order",
     "attempted_targets",
@@ -426,6 +434,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    BILLED_RETRY_ATTEMPT_METADATA_KEY,
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     "standard_logging_object",
     "litellm_roi_estimator",
@@ -457,10 +466,7 @@ _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY: Final = "allow_client_mess
 _CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys()) | {"base_model"}
 # ``model_info`` carries the same pricing fields when read by
 # ``use_custom_pricing_for_model``; strip from metadata for the same reason.
-# ``standard_logging_guardrail_information`` is proxy-written telemetry summed
-# into response_cost and spend; a client seeding it forges (even negative)
-# guardrail cost.
-_CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info", "standard_logging_guardrail_information"})
+_CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info"})
 # ``attempted_fallbacks`` and ``original_model_group`` are written by the router
 # and read by spend logs as fact; a client value has no legitimate meaning and no
 # key or team setting keeps it, so the strip is never gated.
@@ -788,6 +794,19 @@ def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
             "metadata to keep these values.",
             ", ".join(stripped),
         )
+
+
+def strip_client_guardrail_information(data: dict[str, object]) -> None:  # mutable-ok: strips the request body in place
+    """Guardrail hooks write this field and its cost is billed, so no key or team setting keeps a caller's value."""
+    for metadata_key in ("metadata", "litellm_metadata"):
+        if (
+            isinstance(metadata := data.get(metadata_key), dict)
+            and "standard_logging_guardrail_information" in metadata
+        ):
+            del metadata["standard_logging_guardrail_information"]
+            verbose_proxy_logger.debug(
+                "Stripped client-supplied guardrail information from request body: %s", metadata_key
+            )
 
 
 def _strip_router_reserved_metadata(
@@ -1413,13 +1432,14 @@ def clean_headers(
         Cleaned headers dict
     """
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+    from litellm.llms.chatgpt.common_utils import is_chatgpt_oauth_key
 
     clean_headers: Final = {}
     litellm_key_lower: Final = litellm_key_header_name.lower() if litellm_key_header_name is not None else None
     for header, value in headers.items():
         header_lower = header.lower()
 
-        if header_lower == "authorization" and is_anthropic_oauth_key(value):
+        if header_lower == "authorization" and (is_anthropic_oauth_key(value) or is_chatgpt_oauth_key(value)):
             if authenticated_with_header is None or authenticated_with_header.lower() != "authorization":
                 clean_headers[header] = value
             continue
@@ -1446,9 +1466,47 @@ def clean_headers(
     return clean_headers
 
 
+def _request_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _REQUEST_FIELDS.validate_python(value)
+    except PydanticValidationError:
+        return MappingProxyType({})
+
+
+def _request_entries(value: object) -> tuple[object, ...]:
+    if value is None:
+        return ()
+    try:
+        return _REQUEST_ENTRIES.validate_python(value)
+    except PydanticValidationError:
+        return (value,)
+
+
+def _carries_a_caller_header(headers: object) -> bool:
+    return any(name.lower() not in _HEADERS_THAT_CANNOT_CHANGE_PROVIDER_AUTH for name in _request_fields(headers))
+
+
+def _caller_credential_fields(data: Mapping[str, object]) -> tuple[str, ...]:
+    """Names of the request fields through which the caller can change how the provider authenticates the call:
+    ``api_key``, ``organization``, and ``headers``, ``extra_headers`` or a ``provider_specific_header`` entry's
+    ``extra_headers`` that carry any header besides the key and user details the proxy adds under
+    ``add_user_information_to_llm_headers`` and the ``anthropic-version`` and ``anthropic-beta`` headers."""
+    carried: Final = {
+        "api_key": "api_key" in data,
+        "extra_headers": _carries_a_caller_header(data.get("extra_headers")),
+        "headers": _carries_a_caller_header(data.get("headers")),
+        "organization": "organization" in data,
+        "provider_specific_header": any(
+            _carries_a_caller_header(_request_fields(entry).get("extra_headers"))
+            for entry in _request_entries(data.get("provider_specific_header"))
+        ),
+    }
+    return tuple(name for name, sent in sorted(carried.items()) if sent)
+
+
 def _is_credential_header(header: str) -> bool:
     """Whether `header` carries a caller credential rather than request context."""
-    return header.lower() in _CREDENTIAL_HEADER_NAMES
+    return header.lower().removeprefix("x-pass-") in _CREDENTIAL_HEADER_NAMES
 
 
 def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
@@ -2368,7 +2426,15 @@ def refresh_proxy_server_request_body_snapshot(
     if not isinstance(proxy_server_request, dict):
         return
     _body_snapshot_exclude: Final = (
-        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj", VECTOR_STORE_CALLER_METADATA_KWARG})
+        frozenset(
+            {
+                "secret_fields",
+                "proxy_server_request",
+                "litellm_logging_obj",
+                VECTOR_STORE_CALLER_METADATA_KWARG,
+                STREAM_USAGE_INJECTED_FIELD,
+            }
+        )
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
         | _CALLBACK_CREDENTIAL_KEYS
     )
@@ -2469,7 +2535,7 @@ async def add_litellm_data_to_request(
         _headers,
         allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
     )
-    from litellm.proxy._experimental.mcp_server.utils import upstream_credential_headers
+    from litellm.proxy.mcp_server.utils import upstream_credential_headers
 
     _mcp_credential_headers: Final = upstream_credential_headers(_headers)
     _logging_safe_headers: Final = redact_credential_headers(
@@ -2592,6 +2658,8 @@ async def add_litellm_data_to_request(
     data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
         data=data, headers=_headers
     )
+    caller_fields: Final = _caller_credential_fields(_REQUEST_FIELDS.validate_python(data))
+    data["proxy_server_request"]["caller_credential_fields"] = caller_fields  # rebind-ok: data is an out-param
 
     ## Cache Controls
     cache_control_header: Final = _headers.get("Cache-Control", None)
@@ -2637,6 +2705,7 @@ async def add_litellm_data_to_request(
     # would silently skip the field.
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
         _strip_client_pricing_overrides(data)
+    strip_client_guardrail_information(data)
     _strip_router_reserved_metadata(data)
 
     # Same reason as the strips above: runs after the metadata string-to-dict parse
@@ -4266,7 +4335,11 @@ _ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
         LlmProviders.VERTEX_AI.value,
     )
 )
+_NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
+    (LlmProviders.AZURE_AI.value, LlmProviders.DATABRICKS.value)
+)
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
+_CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
 
 
 def add_provider_specific_headers_to_request(
@@ -4274,6 +4347,7 @@ def add_provider_specific_headers_to_request(
     headers: Mapping[str, str],
 ) -> bool:
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+    from litellm.llms.chatgpt.common_utils import select_chatgpt_client_credential_headers
 
     anthropic_api_headers: Final = {header: headers[header] for header in ANTHROPIC_API_HEADERS if header in headers}
     anthropic_oauth_credential_headers: Final = {
@@ -4281,6 +4355,8 @@ def add_provider_specific_headers_to_request(
         for header, value in headers.items()
         if header.lower() == "authorization" and is_anthropic_oauth_key(value)
     }
+    chatgpt_oauth_credential_headers: Final = dict(select_chatgpt_client_credential_headers(headers))
+
     typesafe_danger_zone_headers: Final = {
         header: value
         for header, value in headers.items()
@@ -4294,7 +4370,7 @@ def add_provider_specific_headers_to_request(
                 custom_llm_provider=_ANTHROPIC_API_HEADER_PROVIDERS, extra_headers=anthropic_api_headers
             ),
             ProviderSpecificHeader(
-                custom_llm_provider=LlmProviders.DATABRICKS.value,
+                custom_llm_provider=_NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS,
                 extra_headers=anthropic_api_headers,
                 native_anthropic_messages_only=True,
             ),
@@ -4305,13 +4381,17 @@ def add_provider_specific_headers_to_request(
             ProviderSpecificHeader(
                 custom_llm_provider=LlmProviders.TYPESAFE.value, extra_headers=typesafe_danger_zone_headers
             ),
+            ProviderSpecificHeader(
+                custom_llm_provider=_CHATGPT_OAUTH_CREDENTIAL_PROVIDERS,
+                extra_headers=chatgpt_oauth_credential_headers,
+            ),
         )
         if scoped_header["extra_headers"]
     ]
 
     if scoped_headers:
         data["provider_specific_header"] = scoped_headers[0] if len(scoped_headers) == 1 else scoped_headers
-    return bool(anthropic_oauth_credential_headers)
+    return bool(anthropic_oauth_credential_headers or chatgpt_oauth_credential_headers)
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):

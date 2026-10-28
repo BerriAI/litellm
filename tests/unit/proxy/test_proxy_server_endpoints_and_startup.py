@@ -7,6 +7,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import time
 import types
 from datetime import datetime, timedelta, timezone
@@ -28,10 +29,11 @@ from fastapi.testclient import TestClient
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
 from litellm._internal_context import current_service_target
+from litellm._logging import turn_on_json, verbose_proxy_logger
 from litellm.caching.caching import RedisCache
+from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
-from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     AwsErrorTypeProxyException,
     LitellmUserRoles,
@@ -46,6 +48,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
 from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.proxy.common_utils.banner import LITELLM_BANNER
 from tests._master_key import MASTER_KEY
 
 PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
@@ -9335,8 +9338,8 @@ async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(
     from the authoritative DB and adds this request's settled cost, which the
     async spend flush has not written yet, so budget gating continues."""
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import increment_spend_counters
     from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+    from litellm.proxy.proxy_server import increment_spend_counters
 
     counter_cache = DualCache()
     budget_reservation = {
@@ -12350,8 +12353,8 @@ def _config_field_info_client(monkeypatch, user_role):
     from fastapi.testclient import TestClient
 
     import litellm.proxy.proxy_server as ps
-    from litellm.proxy.config_resolvers import SettingsStore
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.config_resolvers import SettingsStore
     from litellm.proxy.proxy_server import app
 
     db_record = types.SimpleNamespace(
@@ -13742,11 +13745,11 @@ def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
 def _window_spend_enqueue_env(cached_objects: dict):
     """Point increment_spend_counters at throwaway caches and a real
     WindowSpendUpdateQueue, and hand back the queue to inspect."""
+    import litellm.proxy.proxy_server as ps
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
         WindowSpendUpdateQueue,
     )
-    import litellm.proxy.proxy_server as ps
 
     user_api_key_cache = MagicMock()
     user_api_key_cache.async_get_cache = AsyncMock(side_effect=lambda key, **_: cached_objects.get(key))
@@ -13825,8 +13828,8 @@ async def test_team_window_spend_row_is_enqueued():
 async def test_window_spend_row_is_enqueued_even_when_the_counter_was_reserved():
     """A reservation only pre-charged the cache counter with an estimate; the
     row still owes the actual cost, so the enqueue must not be skipped."""
-    from litellm.proxy.proxy_server import increment_spend_counters
     import litellm.proxy.spend_tracking.budget_reservation as br
+    from litellm.proxy.proxy_server import increment_spend_counters
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=10)
     key_obj = MagicMock()
@@ -14266,7 +14269,6 @@ async def test_moderations_response_carries_litellm_call_id_header():
 async def test_moderations_failure_log_carries_the_callers_litellm_call_id(caplog):
     """LIT-7836: the /v1/moderations error line must carry the litellm_call_id the
     client sent, rendered in the message and as a structured log record field."""
-    from litellm._logging import verbose_proxy_logger
     from litellm.proxy._types import ProxyException
 
     call_id = "moderations-call-7836"
@@ -15166,7 +15168,7 @@ async def test_update_general_settings_keeps_yaml_openai_websocket_passthrough()
 
 
 def test_settings_store_exposes_dashboard_saved_mcp_client_allowlist_to_the_mcp_gateway() -> None:
-    from litellm.proxy._experimental.mcp_server.client_allowlist import MCPClientAllowlist, load_mcp_client_allowlist
+    from litellm.proxy.mcp_server.client_allowlist import MCPClientAllowlist, load_mcp_client_allowlist
     from litellm.proxy.proxy_server import ProxyConfig
 
     settings: Final = ProxyConfig().settings
@@ -15207,21 +15209,23 @@ async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_coun
     assert_loop_stayed_free(took, lags)
 
 
-async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeypatch):
-    from litellm.rust_bridge._native import Tokenizer
+async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    from queue import SimpleQueue
+    from threading import Thread, current_thread
+
+    from tokenizers import Tokenizer
 
     from litellm import Router
-    from tests.unit.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
 
-    claude_tokenizer: Final = litellm.utils.select_tokenizer("claude-fable-5")["tokenizer"]
+    claude_tokenizer: Final = Tokenizer.from_str(litellm.utils.claude_json_str)
+    loop_thread: Final = current_thread()
+    loader_threads: Final[SimpleQueue[Thread]] = SimpleQueue()
 
-    class SlowHubTokenizer:
-        @staticmethod
-        def from_pretrained(identifier: str, revision: str = "main", token: str | None = None) -> Tokenizer:
-            time.sleep(0.3)
-            return claude_tokenizer
+    def from_pretrained(identifier: str, revision: str = "main", token: str | None = None) -> Tokenizer:
+        loader_threads.put(current_thread())
+        return claude_tokenizer
 
-    monkeypatch.setattr("litellm.rust_bridge.tokenizer.from_pretrained", SlowHubTokenizer.from_pretrained)
+    monkeypatch.setattr("tokenizers.Tokenizer", types.SimpleNamespace(from_pretrained=from_pretrained))
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
         Router(
@@ -15237,21 +15241,21 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
         ),
     )
 
-    response, took, lags = await timed_with_loop_lags(
-        lambda: proxy_server_module.token_counter(
+    litellm.utils._select_custom_tokenizer_helper.cache_clear()
+    try:
+        response: Final = await proxy_server_module.token_counter(
             TokenCountRequest(model="self-hosted", prompt="count me off the loop")
         )
-    )
-
-    assert response.tokenizer_type == "huggingface_tokenizer"
-    assert response.total_tokens > 0
-    assert_loop_stayed_free(took, lags)
+        assert loader_threads.get_nowait() is not loop_thread
+        assert response.tokenizer_type == "huggingface_tokenizer"
+        assert response.total_tokens > 0
+    finally:
+        litellm.utils._select_custom_tokenizer_helper.cache_clear()
 
 
 async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revision_and_token(monkeypatch):
-    from litellm.rust_bridge._native import Tokenizer
-
     from litellm import Router
+    from litellm.rust_bridge._native import Tokenizer
     from litellm.types.router import DeploymentTypedDict
 
     claude_tokenizer: Final[Tokenizer] = litellm.utils.select_tokenizer("claude-fable-5")["tokenizer"]
@@ -15304,13 +15308,13 @@ async def test_auth_cache_invalidation_subscriber_evicts_byok_credentials_cached
     """A peer worker's BYOK revocation broadcast must reach this worker's BYOK credential cache."""
     from redis.asyncio import Redis
 
-    from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.mcp_server.byok_credential_cache import (
         byok_credential_cache,
         byok_credential_cache_key,
         cache_byok_credential,
         get_cached_byok_credential,
     )
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     class _QueuePubSub:
         def __init__(self, messages: list[object]) -> None:
@@ -15585,3 +15589,60 @@ async def test_spend_capture_rate_check_job_clears_the_gauge_once_the_setting_is
         call(api_provider="openai", capture_rate=None),
     ]
 
+
+def test_feedback_box_is_one_json_record_in_json_mode(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """The feedback box is a dozen terminal lines; with JSON logs on it has to land as one parseable
+    record, not a plaintext line per row."""
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    turn_on_json()
+
+    proxy_server_module.generate_feedback_box()
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    lines: Final = [raw for raw in out.splitlines() if raw.strip()]
+    assert len(lines) == 1, lines
+    record: Final = json.loads(lines[0])
+    assert "Give Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new" in record["message"]
+    assert "Thank you for using LiteLLM! - Krrish & Ishaan" in record["message"]
+    assert "\x1b[" not in record["message"]
+
+
+@pytest.mark.asyncio
+async def test_initialize_prints_the_banner_between_blank_lines_in_plain_mode(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """Operators without JSON logs see the banner exactly as before, through show_banner()'s flushing
+    click.echo."""
+    monkeypatch.setattr(litellm, "json_logs", False)
+    monkeypatch.setenv("LITELLM_DONT_SHOW_FEEDBACK_BOX", "true")
+
+    await proxy_server_module.initialize()
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    assert out.startswith(f"\n{LITELLM_BANNER}\n\n"), out
+
+
+@pytest.mark.asyncio
+async def test_initialize_prints_the_banner_as_one_json_record_in_json_mode(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """With JSON logs on, the six banner rows are one INFO record with their indentation kept, so the
+    first line a worker writes parses like every other."""
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    monkeypatch.setenv("LITELLM_DONT_SHOW_FEEDBACK_BOX", "true")
+    turn_on_json()
+
+    await proxy_server_module.initialize()
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    records: Final = [json.loads(raw) for raw in out.splitlines() if raw.strip()]
+    banner_records: Final = [record for record in records if record["message"] == LITELLM_BANNER]
+    assert len(banner_records) == 1, records
+    assert banner_records[0]["level"] == "INFO"

@@ -1,6 +1,10 @@
-import litellm
+import json
+from unittest.mock import MagicMock, patch
+
+import httpx
 import pytest
-from unittest.mock import MagicMock
+
+import litellm
 
 
 @pytest.mark.asyncio
@@ -132,6 +136,34 @@ async def test_aws_polly_tts_with_native_voice():
         assert request_body["OutputFormat"] == "mp3"
         assert request_body["Engine"] == "neural"
         assert request_body.get("TextType", "text") == "text"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize("engine", ["standard", "neural", "long-form", "generative"])
+async def test_aws_polly_tts_sends_engine_from_model(engine: str) -> None:
+    """
+    The engine in the model name must reach Polly. speech() strips the
+    provider prefix before the config reads it, which used to turn every
+    engine into the neural default.
+    """
+    mock_httpx_response = MagicMock(spec=httpx.Response)
+    mock_httpx_response.content = b"fake_audio_data"
+    mock_httpx_response.status_code = 200
+    mock_httpx_response.headers = {"content-type": "audio/mpeg"}
+
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+        mock_post.return_value = mock_httpx_response
+
+        await litellm.aspeech(
+            model=f"aws_polly/{engine}",
+            voice="Joanna",
+            input="Hello",
+            aws_region_name="us-east-1",
+        )
+
+        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        assert request_body["Engine"] == engine
 
 
 @pytest.mark.asyncio
