@@ -743,7 +743,7 @@ async def test_wildcard_access_after_cost_map_reload(key_models, model, expect_t
     litellm.model_cost but never re-ran add_known_models(), so the provider sets
     stayed stale and wildcard matching failed for new models.
 
-    Fix: each reload now calls litellm.add_known_models(model_cost_map=new_map)
+    Fix: each reload now calls litellm.model_cost.update(new_map)
     with the fetched map passed explicitly to avoid any reference ambiguity.
     """
     from litellm.proxy._types import ProxyException
@@ -762,11 +762,8 @@ async def test_wildcard_access_after_cost_map_reload(key_models, model, expect_t
     original_model_cost = litellm.model_cost
     litellm.model_cost = new_cost_map
 
-    # Confirm the model is NOT yet in the provider set before reload propagation.
-    assert model not in litellm.anthropic_models
-
     # Simulate what proxy_server.py now does after every reload.
-    litellm.add_known_models(model_cost_map=new_cost_map)
+    litellm.model_cost.update(new_cost_map)
 
     # After add_known_models(), the model must be in the set.
     assert model in litellm.anthropic_models
@@ -804,7 +801,6 @@ async def test_wildcard_access_after_cost_map_reload(key_models, model, expect_t
                 )
     finally:
         litellm.model_cost = original_model_cost
-        litellm.anthropic_models.discard(model)
 
 
 @pytest.mark.asyncio
@@ -816,7 +812,7 @@ async def test_add_known_models_explicit_map_updates_provider_sets():
     wildcard access checks (anthropic/*, openai/*, …) work immediately.
 
     This covers the proxy_server.py fix where both reload paths now call
-    litellm.add_known_models(model_cost_map=new_model_cost_map) instead of
+    litellm.model_cost.update(new_model_cost_map) instead of
     relying on the module-level model_cost being up to date.
     """
     fake_new_model = "claude-brand-new-explicit-map-test"
@@ -835,7 +831,7 @@ async def test_add_known_models_explicit_map_updates_provider_sets():
     # Simulate what proxy_server.py does on reload.
     original_model_cost = litellm.model_cost
     litellm.model_cost = new_cost_map
-    litellm.add_known_models(model_cost_map=new_cost_map)
+    litellm.model_cost.update(new_cost_map)
 
     try:
         assert fake_new_model in litellm.anthropic_models, (
@@ -845,7 +841,6 @@ async def test_add_known_models_explicit_map_updates_provider_sets():
     finally:
         # Clean up: restore original state.
         litellm.model_cost = original_model_cost
-        litellm.anthropic_models.discard(fake_new_model)
 
 
 @pytest.mark.asyncio

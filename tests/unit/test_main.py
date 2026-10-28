@@ -4314,17 +4314,14 @@ def _gemini_client_returning_a_reply():
 
 @pytest.fixture
 def restore_model_registry():
-    """litellm.model_cost and the provider name sets are module-global.
+    """litellm.model_cost is module-global, and the provider sets are derived from it.
 
     register_model merges into the existing entry in place, hence the deep copy.
     """
     model_cost = copy.deepcopy(litellm.model_cost)
-    openai_models = set(litellm.open_ai_chat_completion_models)
     yield
     litellm.model_cost.clear()
     litellm.model_cost.update(model_cost)
-    litellm.open_ai_chat_completion_models.clear()
-    litellm.open_ai_chat_completion_models.update(openai_models)
 
 
 def test_openai_model_name_does_not_outrank_explicit_provider():
@@ -4367,7 +4364,6 @@ def test_mislabelled_pricing_entry_does_not_reroute_provider(restore_model_regis
             }
         }
     )
-    assert "gemini-2.5-pro" in litellm.open_ai_chat_completion_models
     client, post = _gemini_client_returning_a_reply()
 
     with patch.object(client, "post", new=post):

@@ -164,9 +164,8 @@ class TestRegistration:
             monkeypatch.setenv("EDENAI_API_KEY", "eden-test-key")
             present = litellm.validate_environment(model=alias)
         finally:
-            litellm.edenai_models.discard(alias)
             litellm.model_cost.pop(alias, None)
-            litellm.add_known_models(model_cost_map={})
+            litellm.model_cost.update({})
 
         assert (missing["keys_in_environment"], missing["missing_keys"]) == (False, ["EDENAI_API_KEY"])
         assert (present["keys_in_environment"], present["missing_keys"]) == (True, [])
@@ -178,12 +177,11 @@ class TestRegistration:
         wildcard = LiteLLM_Params(model="edenai/*", api_key="wildcard-key")
         assert alias not in (get_provider_models("edenai", wildcard) or [])
 
-        litellm.add_known_models(model_cost_map={alias: {"litellm_provider": "edenai", "mode": "chat"}})
+        litellm.model_cost.update({alias: {"litellm_provider": "edenai", "mode": "chat"}})
         try:
             expanded = get_provider_models("edenai", wildcard)
         finally:
-            litellm.edenai_models.discard(alias)
-            litellm.add_known_models(model_cost_map={})
+            litellm.model_cost.pop(alias, None)
 
         assert expanded is not None
         assert alias in expanded

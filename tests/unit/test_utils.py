@@ -2299,10 +2299,8 @@ def test_add_known_models_skips_region_scoped_bedrock_pricing_keys(monkeypatch: 
         "bedrock/us-west-1/migration.bedrock-model-v1:0": {**price, "litellm_provider": "bedrock"},
         "migration-openai-model": {**price, "litellm_provider": "openai"},
     }
-    monkeypatch.setattr(litellm, "bedrock_models", set(litellm.bedrock_models))
-    monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
 
-    litellm.add_known_models(model_cost_map=model_cost_map)
+    litellm.model_cost.update(model_cost_map)
 
     assert "migration.bedrock-model-v1:0" in litellm.bedrock_models
     assert "bedrock/us-west-1/migration.bedrock-model-v1:0" not in litellm.bedrock_models
@@ -2416,9 +2414,6 @@ def test_register_model_openrouter_without_slash():
     always works.
     """
     # Clear any existing entries
-    litellm.openrouter_models.discard("my-custom-alias")
-    litellm.openrouter_models.discard("gpt-4")
-    litellm.openrouter_models.discard("openai/gpt-4")
 
     # Test 1: Model name without '/' (this was the bug - would raise IndexError)
     litellm.register_model(
@@ -2446,7 +2441,8 @@ def test_register_model_openrouter_without_slash():
             },
         }
     )
-    assert "gpt-4" in litellm.openrouter_models
+    assert "openrouter/gpt-4" in litellm.openrouter_models
+    assert "gpt-4" not in litellm.openrouter_models
 
     # Test 3: Model name with double '/' (openrouter/provider/model format)
     litellm.register_model(
@@ -2460,7 +2456,8 @@ def test_register_model_openrouter_without_slash():
             },
         }
     )
-    assert "openai/gpt-4-turbo" in litellm.openrouter_models
+    assert "openrouter/openai/gpt-4-turbo" in litellm.openrouter_models
+    assert "openai/gpt-4-turbo" not in litellm.openrouter_models
 
 
 def test_register_model_makes_the_model_resolvable_and_wildcard_visible_without_a_restart():
@@ -2484,8 +2481,6 @@ def test_register_model_makes_the_model_resolvable_and_wildcard_visible_without_
         assert model_name in litellm.models_by_provider["vertex_ai"]
     finally:
         litellm.model_cost.pop(model_name, None)
-        litellm.vertex_language_models.discard(model_name)
-        litellm.models_by_provider["vertex_ai"].discard(model_name)
 
 
 @pytest.mark.parametrize(
@@ -2511,8 +2506,7 @@ def test_registered_chat_model_lists_under_its_provider_wildcard(
         assert f"{wildcard.removesuffix('*')}{model_name}" in listed
     finally:
         litellm.model_cost.pop(model_name, None)
-        getattr(litellm, provider_set).discard(model_name)
-        litellm.add_known_models(model_cost_map={})
+        litellm.model_cost.update({})
 
 
 def test_priced_router_deployment_id_stays_out_of_wildcard_model_listing():
@@ -5008,17 +5002,10 @@ def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch: p
             litellm.model_cost.setdefault("lit-5853-registered-during-the-rebuild", {"mode": "chat"})
             return super().lower()
 
-    class _EntryRegisteredMidWalk(dict):
-        def get(self, field: str, default: object = None) -> object:
-            litellm.model_cost.setdefault("lit-5853-registered-during-add-known-models", {"mode": "chat"})
-            return super().get(field, default)
-
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
-    litellm.model_cost[_KeyRegisteredMidWalk("LIT-5853-WALKED-LAST")] = _EntryRegisteredMidWalk(mode="chat")
+    litellm.model_cost[_KeyRegisteredMidWalk("LIT-5853-WALKED-LAST")] = {"mode": "chat"}
     try:
         assert get_model_cost_key("lit-5853-walked-last") == "LIT-5853-WALKED-LAST"
-        litellm.add_known_models(model_cost_map=litellm.model_cost)
-        assert "lit-5853-registered-during-add-known-models" in litellm.model_cost
     finally:
         _invalidate_model_cost_lowercase_map()
 
@@ -8811,17 +8798,8 @@ def reset_mock_cache() -> None:
 
 
 @pytest.fixture
-def isolated_openai_model_sets(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        litellm,
-        "open_ai_chat_completion_models",
-        set(litellm.open_ai_chat_completion_models),
-    )
-    monkeypatch.setattr(
-        litellm,
-        "open_ai_text_completion_models",
-        set(litellm.open_ai_text_completion_models),
-    )
+def isolated_openai_model_sets() -> None:
+    """The provider sets are derived from litellm.model_cost, which the autouse isolation restores"""
 
 
 def test_aget_valid_models():

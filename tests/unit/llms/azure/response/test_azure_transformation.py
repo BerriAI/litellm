@@ -788,7 +788,7 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pin the bundled cost map: the published map lags a key added in this repo."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=""))
-    litellm.add_known_models(model_cost_map=litellm.model_cost)
+    litellm.model_cost.update(litellm.model_cost)
 
 
 def test_azure_responses_reasoning_effort_none_unlocks_temperature_off_the_azure_row(

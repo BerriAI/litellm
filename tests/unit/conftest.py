@@ -44,18 +44,27 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at import
 import litellm.router as litellm_router_module  # noqa: E402  # same import-time dependency
 import litellm.utils as litellm_utils_module  # noqa: E402  # same import-time dependency
+from litellm._catalog.provider_sets import LEGACY_NAMES as LEGACY_PROVIDER_SETS  # noqa: E402  # after litellm
 from litellm._logging import ALL_LOGGERS  # noqa: E402  # same import-time dependency
+from litellm.anthropic_beta_headers_manager import (
+    reload_beta_headers_config,  # noqa: E402  # same import-time dependency
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER  # noqa: E402  # same import-time dependency
-from litellm.anthropic_beta_headers_manager import reload_beta_headers_config  # noqa: E402  # same import-time dependency
-from litellm.litellm_core_utils.prompt_templates import factory as prompt_factory_module  # noqa: E402  # same import-time dependency
+from litellm.litellm_core_utils.prompt_templates import (
+    factory as prompt_factory_module,  # noqa: E402  # same import-time dependency
+)
 from litellm.litellm_core_utils.prompt_templates import (  # noqa: E402  # same import-time dependency
     image_handling as image_handling_module,
 )
-from litellm.llms.gemini.chat import transformation as gemini_chat_transformation_module  # noqa: E402  # same import-time dependency
 from litellm.llms.custom_httpx.async_client_cleanup import (  # noqa: E402  # same import-time dependency
     close_litellm_async_clients,
 )
-from litellm.proxy.db import tool_registry_writer as tool_registry_writer_module  # noqa: E402  # same import-time dependency
+from litellm.llms.gemini.chat import (
+    transformation as gemini_chat_transformation_module,  # noqa: E402  # same import-time dependency
+)
+from litellm.proxy.db import (
+    tool_registry_writer as tool_registry_writer_module,  # noqa: E402  # same import-time dependency
+)
 
 LOOPBACK_HOSTS: Final = ["127.0.0.1", "::1", "localhost"]
 AMBIENT_AZURE_CREDENTIAL_ENV_VARS: Final = (
@@ -124,8 +133,6 @@ RESTORED_GLOBALS: Final = (
     "cost_discount_config",
     "disable_hf_tokenizer_download",
     "disable_copilot_system_to_assistant",
-    "cohere_models",
-    "anthropic_models",
     "token_counter",
     "initialized_langfuse_clients",
 )
@@ -309,26 +316,15 @@ def isolate_router_model_cost_state() -> Iterator[None]:
     litellm.get_model_info.cache_clear()
 
 
-def _provider_model_sets() -> tuple[set[str], ...]:
-    module_globals: Final = tuple(vars(litellm).items())
-    return tuple(models for name, models in module_globals if name.endswith("_models") and isinstance(models, set))
-
-
 @pytest.fixture(autouse=True)
 def isolate_model_catalog() -> Iterator[None]:
     model_cost: Final = litellm.model_cost
     model_cost_entries: Final = dict(model_cost)
-    models_by_provider: Final = litellm.models_by_provider
-    models_by_provider_entries: Final = dict(models_by_provider)
-    provider_model_sets: Final = tuple((models, frozenset(models)) for models in _provider_model_sets())
     yield
     model_cost.clear()
     model_cost.update(model_cost_entries)
-    models_by_provider.clear()
-    models_by_provider.update(models_by_provider_entries)
-    for models, entries in provider_model_sets:
-        models.clear()
-        models.update(entries)
+    for name in LEGACY_PROVIDER_SETS:
+        vars(litellm).pop(name, None)
     litellm_utils_module._invalidate_model_cost_lowercase_map()
     litellm.get_model_info.cache_clear()
 

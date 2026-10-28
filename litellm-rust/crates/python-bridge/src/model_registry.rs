@@ -18,7 +18,7 @@ use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog, Keys, Layers, Located};
 use litellm_model_catalog_refresh::{Source, git_blob_id};
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule};
+use pyo3::types::{PyDict, PyFrozenSet, PyModule};
 use serde::Serialize;
 
 pub(crate) use fetch::{Bundled, File, Provenance, Remote};
@@ -331,6 +331,30 @@ impl CatalogHandle {
             index: &self.index,
         };
         Ok(keys.provider_keys(provider))
+    }
+
+    /// The keys whose live row names this raw `litellm_provider`, empty when none (decision 18)
+    fn models_for<'py>(
+        &self,
+        py: Python<'py>,
+        provider: &str,
+    ) -> PyResult<Bound<'py, PyFrozenSet>> {
+        let dict = self.bound_dict(py)?;
+        let keys = resolve::LiveKeys {
+            dict: &dict,
+            index: &self.index,
+        };
+        PyFrozenSet::new(py, keys.provider_keys(provider))
+    }
+
+    /// Every raw `litellm_provider` string a live row names, sorted
+    fn providers(&self, py: Python<'_>) -> PyResult<Vec<String>> {
+        let dict = self.bound_dict(py)?;
+        let keys = resolve::LiveKeys {
+            dict: &dict,
+            index: &self.index,
+        };
+        Ok(keys.providers())
     }
 
     /// main's 133-field copy of a row Python built, a generalization match or a fill-missing merge

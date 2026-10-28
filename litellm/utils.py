@@ -51,6 +51,7 @@ import litellm.litellm_core_utils
 
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
+from litellm._catalog.provider_sets import contains as _in_provider_set
 from litellm._internal_context import is_internal_call
 from litellm._lazy_imports import (
     _get_modified_max_tokens,
@@ -2635,7 +2636,7 @@ def _return_openai_tokenizer(model: str) -> SelectTokenizerResponse:
 
 
 def uses_anthropic_tokenizer(model: str) -> bool:
-    return model in litellm.anthropic_models and "claude-3" not in model
+    return _in_provider_set("anthropic_models", model) and "claude-3" not in model
 
 
 HuggingFaceTokenizerKind = Literal["cohere", "anthropic", "deepseek", "llama2", "llama3"]
@@ -2651,7 +2652,7 @@ _BUNDLED_TOKENIZER_LOAD_LOCKS: Final[Mapping[HuggingFaceTokenizerKind, threading
 
 def huggingface_tokenizer_kind(model: str) -> HuggingFaceTokenizerKind | None:
     """Which HuggingFace tokenizer `token_counter` selects for a model; `None` means tiktoken."""
-    if model in litellm.cohere_models and "command-r" in model:
+    if _in_provider_set("cohere_models", model) and "command-r" in model:
         return "cohere"
     if uses_anthropic_tokenizer(model):
         return "anthropic"
@@ -3656,9 +3657,10 @@ def register_model(
     that provider, so a deployment id that happens to equal another provider's
     catalog key stays its own provider-less entry instead of merging into it.
 
-    ``add_to_provider_model_sets`` adds the keys to the per-provider model sets
-    behind provider resolution and wildcard model listing. Pass False when the
-    keys are opaque ids rather than model names (e.g. router deployment ids).
+    The provider model sets are derived from ``litellm.model_cost`` on read
+    (decision 18). Pass ``add_to_provider_model_sets=False`` when the keys are
+    opaque ids rather than model names (e.g. router deployment ids), so no set
+    lists them.
     """
 
     loaded_model_cost = {}
@@ -3685,12 +3687,12 @@ def register_model(
             "register_model: model=%s has custom pricing but not in built-in cost map and no prefix/region variant matched; cache_creation_input_token_cost and cache_read_input_token_cost will default to 0 for this model (input/output cost tracking is unaffected). To track cache cost, add them to model_info",
             warning_display_name or key,
         )
-    for key, value in loaded_model_cost.items():
+    for key in loaded_model_cost:
         verbose_logger.debug("added/updated model=%s in litellm.model_cost", key)
-        if add_to_provider_model_sets and value.get("litellm_provider") == "openrouter":
-            litellm.openrouter_models.add(str(key).split("/", 1)[-1])
-    if add_to_provider_model_sets:
-        litellm.add_known_models(loaded_model_cost)
+    if not add_to_provider_model_sets:
+        from litellm._catalog.provider_sets import OPAQUE_KEYS
+
+        OPAQUE_KEYS.update(str(key) for key in loaded_model_cost)
     return model_cost
 
 
@@ -4864,12 +4866,12 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "vertex_ai" and (
-        model in litellm.vertex_chat_models
-        or model in litellm.vertex_code_chat_models
-        or model in litellm.vertex_text_models
-        or model in litellm.vertex_code_text_models
-        or model in litellm.vertex_language_models
-        or model in litellm.vertex_vision_models
+        _in_provider_set("vertex_chat_models", model)
+        or _in_provider_set("vertex_code_chat_models", model)
+        or _in_provider_set("vertex_text_models", model)
+        or _in_provider_set("vertex_code_text_models", model)
+        or _in_provider_set("vertex_language_models", model)
+        or _in_provider_set("vertex_vision_models", model)
     ):
         optional_params = litellm.VertexGeminiConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -4900,7 +4902,7 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "vertex_ai":
-        if model in litellm.vertex_mistral_models:
+        if _in_provider_set("vertex_mistral_models", model):
             if "codestral" in model:
                 optional_params = litellm.CodestralTextCompletionConfig().map_openai_params(
                     model=model,
@@ -4915,7 +4917,7 @@ def get_optional_params(
                     optional_params=optional_params,
                     drop_params=bool(drop_params),
                 )
-        elif model in litellm.vertex_ai_ai21_models:
+        elif _in_provider_set("vertex_ai_ai21_models", model):
             optional_params = litellm.VertexAIAi21Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -6109,10 +6111,10 @@ def get_model_info_helper(
         if custom_llm_provider is not None and custom_llm_provider == "vertex_ai_beta":
             custom_llm_provider = "vertex_ai"
         if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
-            if "meta/" + model in litellm.vertex_llama3_models:
+            if _in_provider_set("vertex_llama3_models", "meta/" + model):
                 model = "meta/" + model
-            elif (
-                model + "@latest" in litellm.vertex_mistral_models or model + "@latest" in litellm.vertex_ai_ai21_models
+            elif _in_provider_set("vertex_mistral_models", model + "@latest") or _in_provider_set(
+                "vertex_ai_ai21_models", model + "@latest"
             ):
                 model = model + "@latest"
         ##########################
@@ -6845,8 +6847,8 @@ def validate_environment(
     else:
         ## openai - chatcompletion + text completion
         if (
-            model in litellm.open_ai_chat_completion_models
-            or model in litellm.open_ai_text_completion_models
+            _in_provider_set("open_ai_chat_completion_models", model)
+            or _in_provider_set("open_ai_text_completion_models", model)
             or model in litellm.open_ai_embedding_models
             or model in litellm.openai_image_generation_models
             or model.startswith("gpt-image")
@@ -6856,13 +6858,13 @@ def validate_environment(
             else:
                 missing_keys.append("OPENAI_API_KEY")
         ## anthropic
-        elif model in litellm.anthropic_models:
+        elif _in_provider_set("anthropic_models", model):
             if "ANTHROPIC_API_KEY" in os.environ or "ANTHROPIC_AUTH_TOKEN" in os.environ:
                 keys_in_environment = True
             else:
                 missing_keys.append("ANTHROPIC_API_KEY")
         ## cohere
-        elif model in litellm.cohere_models:
+        elif _in_provider_set("cohere_models", model):
             if "COHERE_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
@@ -6874,33 +6876,33 @@ def validate_environment(
             else:
                 missing_keys.append("REPLICATE_API_KEY")
         ## openrouter
-        elif model in litellm.openrouter_models:
+        elif _in_provider_set("openrouter_models", model):
             if "OPENROUTER_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
         ## vercel_ai_gateway
-        elif model in litellm.vercel_ai_gateway_models:
+        elif _in_provider_set("vercel_ai_gateway_models", model):
             if "VERCEL_AI_GATEWAY_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
                 missing_keys.append("VERCEL_AI_GATEWAY_API_KEY")
         ## edenai
-        elif model in litellm.edenai_models:
+        elif _in_provider_set("edenai_models", model):
             if "EDENAI_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
                 missing_keys.append("EDENAI_API_KEY")
         ## datarobot
-        elif model in litellm.datarobot_models:
+        elif _in_provider_set("datarobot_models", model):
             if "DATAROBOT_API_TOKEN" in os.environ:
                 keys_in_environment = True
             else:
                 missing_keys.append("DATAROBOT_API_TOKEN")
         ## vertex - text + chat models
         elif (
-            model in litellm.vertex_chat_models
-            or model in litellm.vertex_text_models
+            _in_provider_set("vertex_chat_models", model)
+            or _in_provider_set("vertex_text_models", model)
             or model in litellm.models_by_provider["vertex_ai"]
         ):
             if "VERTEXAI_PROJECT" in os.environ and "VERTEXAI_LOCATION" in os.environ:
@@ -6914,7 +6916,7 @@ def validate_environment(
             else:
                 missing_keys.append("HUGGINGFACE_API_KEY")
         ## ai21
-        elif model in litellm.ai21_models:
+        elif _in_provider_set("ai21_models", model):
             if "AI21_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
@@ -6926,34 +6928,34 @@ def validate_environment(
             else:
                 missing_keys.append("TOGETHERAI_API_KEY")
         ## aleph_alpha
-        elif model in litellm.aleph_alpha_models:
+        elif _in_provider_set("aleph_alpha_models", model):
             if "ALEPH_ALPHA_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
                 missing_keys.append("ALEPH_ALPHA_API_KEY")
         ## baseten
-        elif model in litellm.baseten_models:
+        elif _in_provider_set("baseten_models", model):
             if "BASETEN_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
                 missing_keys.append("BASETEN_API_KEY")
         ## nlp_cloud
-        elif model in litellm.nlp_cloud_models:
+        elif _in_provider_set("nlp_cloud_models", model):
             if "NLP_CLOUD_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
                 missing_keys.append("NLP_CLOUD_API_KEY")
-        elif model in litellm.novita_models:
+        elif _in_provider_set("novita_models", model):
             if "NOVITA_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
                 missing_keys.append("NOVITA_API_KEY")
-        elif model in litellm.nebius_models:
+        elif _in_provider_set("nebius_models", model):
             if "NEBIUS_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
                 missing_keys.append("NEBIUS_API_KEY")
-        elif model in litellm.wandb_models:
+        elif _in_provider_set("wandb_models", model):
             if "WANDB_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
@@ -6985,7 +6987,9 @@ def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain ca
 def valid_model(model):
     try:
         # for a given model name, check if the user has the right permissions to access the model
-        if model in litellm.open_ai_chat_completion_models or model in litellm.open_ai_text_completion_models:
+        if _in_provider_set("open_ai_chat_completion_models", model) or _in_provider_set(
+            "open_ai_text_completion_models", model
+        ):
             openai.models.retrieve(model)
         else:
             messages: Final = [{"role": "user", "content": "Hello World"}]
@@ -8494,11 +8498,11 @@ class ProviderConfigManager:
             )
 
             return VertexAIGPTOSSTransformation()
-        elif model in litellm.vertex_mistral_models:
+        elif _in_provider_set("vertex_mistral_models", model):
             if "codestral" in model:
                 return litellm.CodestralTextCompletionConfig()
             return litellm.VertexAIMistralConfig()
-        elif model in litellm.vertex_ai_ai21_models:
+        elif _in_provider_set("vertex_ai_ai21_models", model):
             return litellm.VertexAIAi21Config()
         else:
             return litellm.VertexAILlama3Config()

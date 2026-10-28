@@ -19,7 +19,7 @@ def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
     import path fetches the published map, which lags a key added in this repo."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=""))
-    litellm.add_known_models(model_cost_map=litellm.model_cost)
+    litellm.model_cost.update(litellm.model_cost)
 
 
 def test_azure_gpt5_supports_reasoning_effort(config: AzureOpenAIGPT5Config):

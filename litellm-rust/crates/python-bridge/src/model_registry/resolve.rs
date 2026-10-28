@@ -106,6 +106,10 @@ impl LiveKeys<'_, '_> {
             Some(NameIndex::build(self.dict));
     }
 
+    pub(crate) fn providers(&self) -> Vec<String> {
+        self.indexed(NameIndex::providers)
+    }
+
     pub(crate) fn provider_keys(&self, provider: &str) -> Vec<String> {
         self.indexed(|index| index.provider_keys(provider).to_vec())
     }

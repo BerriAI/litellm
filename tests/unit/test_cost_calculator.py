@@ -9058,7 +9058,6 @@ def test_cost_calculator_with_custom_pricing():
 @pytest.fixture
 def isolated_pricing_registry(local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setattr(litellm, "open_ai_chat_completion_models", set(litellm.open_ai_chat_completion_models))
     monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
 
 

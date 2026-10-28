@@ -8376,7 +8376,7 @@ def test_get_deployment_model_info_base_model_flow():
     print("✓ All base model flow test cases passed!")
 
 
-@patch("litellm.model_cost", {})
+@patch("litellm.model_cost", {"gpt-3.5-turbo": {"litellm_provider": "openai", "mode": "chat"}})
 def test_get_deployment_model_info_base_model_merge_priority():
     """Test that base model info merging respects the correct priority order"""
     from unittest.mock import patch

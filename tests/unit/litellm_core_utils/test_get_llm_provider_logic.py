@@ -264,10 +264,8 @@ def test_get_llm_provider_deepseek_custom_api_base():
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_vertex_ai_image_models(monkeypatch):
-    monkeypatch.setattr(litellm, "vertex_ai_image_models", set())
-    monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
-    litellm.add_known_models(
-        model_cost_map={
+    litellm.model_cost.update(
+        {
             "vertex_ai/imagegeneration@006": {
                 "litellm_provider": "vertex_ai-image-models",
                 "mode": "image_generation",

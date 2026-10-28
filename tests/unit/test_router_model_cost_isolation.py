@@ -3819,7 +3819,7 @@ def _simulate_price_data_reload_with_provider_sets(monkeypatch, fetched_catalog)
     `reload_model_cost_map` does before replaying, so bare names in the new catalog resolve."""
     monkeypatch.setattr(litellm, "model_cost", fetched_catalog)
     _invalidate_model_cost_lowercase_map()
-    litellm.add_known_models(model_cost_map=fetched_catalog)
+    litellm.model_cost.update(fetched_catalog)
     CATALOG.replay_registrations()
 
 
@@ -3859,8 +3859,7 @@ def test_a_config_deployment_dropped_by_a_stale_cost_map_comes_back_on_reload(mo
         assert [d["model_info"]["id"] for d in router.model_list] == ["control-id", "new-id"]
         assert "new-id" in litellm.model_cost
     finally:
-        litellm.open_ai_chat_completion_models.discard(backend)
-        litellm.models_by_provider["openai"].discard(backend)
+        pass
 
 
 def test_a_config_deployment_dropped_for_a_permanent_reason_is_not_retried_on_reload(monkeypatch):

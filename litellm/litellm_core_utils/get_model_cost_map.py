@@ -160,11 +160,9 @@ def _install(
 
 
 def _refresh_derived_state() -> None:
-    import litellm
     from litellm import utils
 
     utils._invalidate_model_cost_lowercase_map()  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
-    litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 
 def reload_model_cost_map(source: Source, catalog: Catalog = CATALOG) -> Installed | Unavailable:

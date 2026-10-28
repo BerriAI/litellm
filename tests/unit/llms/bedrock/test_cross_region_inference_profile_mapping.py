@@ -21,21 +21,11 @@ from litellm.types.utils import (
 def local_model_cost_map(monkeypatch):
     """Resolve models against this checkout's cost map instead of the network-fetched
     ``main`` copy, which lags this branch until merge."""
-    original_converse_models = set(litellm.bedrock_converse_models)
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     litellm.get_model_info.cache_clear()
-    try:
-        litellm.bedrock_converse_models.update(
-            key
-            for key, value in litellm.model_cost.items()
-            if isinstance(value, dict) and value.get("litellm_provider") == "bedrock_converse"
-        )
-        yield
-    finally:
-        litellm.bedrock_converse_models.clear()
-        litellm.bedrock_converse_models.update(original_converse_models)
-        litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
 
 
 class GptProfile(NamedTuple):

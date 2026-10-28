@@ -921,16 +921,13 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
     captured_reference = litellm.models_by_provider
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
     try:
-        litellm.add_known_models(
-            model_cost_map={fake_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"}}
-        )
+        litellm.model_cost.update({fake_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"}})
         assert fake_model in litellm.models_by_provider["vertex_ai"]
         assert litellm.models_by_provider is captured_reference
         assert fake_model in captured_reference["vertex_ai"]
         assert fake_model in get_known_models_from_wildcard("vertex_ai/*")
     finally:
-        litellm.vertex_language_models.discard(fake_model)
-        litellm.add_known_models(model_cost_map={})
+        litellm.model_cost.pop(fake_model, None)
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
 
 
@@ -949,9 +946,7 @@ def test_wildcard_lists_a_model_once_when_registered_both_bare_and_provider_pref
     finally:
         litellm.model_cost.pop(bare, None)
         litellm.model_cost.pop(f"openai/{bare}", None)
-        litellm.open_ai_chat_completion_models.discard(bare)
-        litellm.open_ai_chat_completion_models.discard(f"openai/{bare}")
-        litellm.add_known_models(model_cost_map={})
+        litellm.model_cost.update({})
 
 
 def test_get_complete_model_list_drops_no_default_models_sentinel():
@@ -1216,7 +1211,7 @@ def _registered_chat_models(provider_by_model: Mapping[str, str]) -> Generator[N
             litellm.model_cost.pop(model, None)
             for provider_models in provider_model_sets:
                 provider_models.discard(model)
-        litellm.add_known_models(model_cost_map={})
+        litellm.model_cost.update({})
 
 
 @pytest.mark.parametrize(

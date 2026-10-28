@@ -7,6 +7,7 @@ import pytest
 import respx
 
 import litellm
+from litellm._catalog.provider_sets import OPAQUE_KEYS
 from litellm.llms.baseten.chat import BasetenConfig
 from litellm.utils import get_valid_models
 
@@ -66,7 +67,7 @@ class TestBasetenModelDiscovery:
             key
             for key, value in litellm.model_cost.items()
             if value.get("litellm_provider") == "baseten" and not litellm._is_past_deprecation_date(value)
-        }
+        } - OPAQUE_KEYS
 
         assert servable_registry_models
         assert servable_registry_models <= set(baseten_models)
@@ -82,15 +83,14 @@ class TestBasetenModelDiscovery:
         """A refreshed cost map that marks a listed model retired removes it without a restart."""
         model: Final = "baseten/acme/reload-probe"
         try:
-            litellm.add_known_models({model: {"litellm_provider": "baseten"}})
+            litellm.model_cost.update({model: {"litellm_provider": "baseten"}})
             assert model in litellm.models_by_provider["baseten"]
 
-            litellm.add_known_models({model: {"litellm_provider": "baseten", "deprecation_date": "2000-01-01"}})
+            litellm.model_cost.update({model: {"litellm_provider": "baseten", "deprecation_date": "2000-01-01"}})
 
             assert model not in litellm.models_by_provider["baseten"]
         finally:
-            litellm.baseten_models.discard(model)
-            litellm.add_known_models({})
+            litellm.model_cost.update({})
 
     @pytest.mark.parametrize(
         "value, expected",
