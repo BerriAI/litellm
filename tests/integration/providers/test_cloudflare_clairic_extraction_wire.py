@@ -219,9 +219,10 @@ def test_key_checks_on_extraction_match_chat(gateway: Gateway) -> None:
         allowed: Final = scenario.key(models=[model], max_budget=1e-06)
         first: Final = _extract(gateway, model, marker, key=allowed)
         assert first.status_code == 200, first.text
-        blocked: Final = eventually(
-            lambda: _extract(gateway, model, uuid.uuid4().hex, key=allowed),
-            lambda response: response.status_code != 200,
+        assert len(wire.drain()) == 1
+        blocked, upstream_calls = eventually(
+            lambda: (_extract(gateway, model, uuid.uuid4().hex, key=allowed), len(wire.drain())),
+            lambda answer: answer[0].status_code != 200,
             seconds=70,
         )
         chat_blocked: Final = gateway.request(
@@ -232,6 +233,8 @@ def test_key_checks_on_extraction_match_chat(gateway: Gateway) -> None:
         )
         assert 400 <= blocked.status_code < 500, blocked.text
         assert blocked.status_code == chat_blocked.status_code, (blocked.text, chat_blocked.text)
+        assert upstream_calls == 0
+        assert wire.drain() == ()
 
 
 def test_a_small_key_tpm_limit_serves_extraction_and_counts_its_input_tokens(gateway: Gateway) -> None:
