@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
+from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
@@ -37,6 +38,7 @@ from litellm.proxy.db.db_spend_update_writer import (
 )
 from litellm.proxy.hooks.search_free_tier import apply_search_free_tier
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_route
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_counter_batch import post_call_counter_keys, spend_counter_batch_scope
 from litellm.proxy.spend_tracking.spend_event import (
     ObjectMapping,
@@ -59,7 +61,12 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     sanitize_error_information_for_spend_logs,
     should_store_prompts_and_responses_in_spend_logs,
 )
-from litellm.proxy.utils import BilledFailedAttempt, ProxyUpdateSpend
+from litellm.proxy.utils import (
+    REJECTED_BEFORE_REQUEST_SETUP,
+    REJECTED_BEFORE_REQUEST_SETUP_KEY,
+    BilledFailedAttempt,
+    ProxyUpdateSpend,
+)
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     CallTypes,
@@ -127,6 +134,9 @@ _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
 )
 
 
+_OBJECT_MAPPING: Final = TypeAdapter(ObjectMapping)
+
+
 def _proxy_stamped_used_client_oauth_token(
     request_data: Mapping[str, object], request_route: str | None
 ) -> bool | None:
@@ -181,6 +191,26 @@ def _failure_snapshot_with_guardrails_recorded_after_it(
     ):
         return None
     return {**failure_snapshot, "guardrail_information": recorded_guardrail_information}
+
+
+def _guardrail_info_lifted_from_litellm_metadata(
+    litellm_metadata: ObjectMapping, *, guardrail_info_already_set: bool
+) -> ObjectMapping:
+    guardrail_info: Final = litellm_metadata.get("standard_logging_guardrail_information")
+    if guardrail_info is None or guardrail_info_already_set:
+        return {}
+    return {"standard_logging_guardrail_information": guardrail_info}
+
+
+def _redaction_opt_in_lifted_from_litellm_metadata(
+    litellm_metadata: ObjectMapping, *, caller_set_headers: bool
+) -> ObjectMapping:
+    request_headers: Final = litellm_metadata.get("headers")
+    if caller_set_headers or not isinstance(request_headers, dict):
+        return {}
+    headers: Final = _OBJECT_MAPPING.validate_python(request_headers)
+    opt_in_headers: Final = {name: headers[name] for name in MESSAGE_REDACTION_ENABLE_HEADERS if name in headers}
+    return {"headers": opt_in_headers} if opt_in_headers else {}
 
 
 def _proxy_spend_writer() -> DBSpendUpdateWriter:
@@ -372,6 +402,8 @@ class _ProxyDBLogger(CustomLogger):
         request_route: Final = user_api_key_dict.request_route
         if (
             ProxyDBLogger._should_track_errors_in_db() is False
+            or ProxyDBLogger._skips_pre_routing_rejections()
+            and is_pre_routing_rejection(original_exception, _REQUEST_DATA.validate_python(request_data))
             or request_route is not None
             and not (
                 RouteChecks.is_llm_api_route(route=request_route) or RouteChecks.is_info_route(route=request_route)
@@ -417,13 +449,17 @@ class _ProxyDBLogger(CustomLogger):
         existing_metadata.update({**_routed_metadata_fallback(request_fields), **_metadata})
 
         litellm_metadata_bucket: Final = request_data.get("litellm_metadata")
-        if (
-            isinstance(litellm_metadata_bucket, dict)
-            and "standard_logging_guardrail_information" not in existing_metadata
-        ):
-            guardrail_info: Final = litellm_metadata_bucket.get("standard_logging_guardrail_information")
-            if guardrail_info is not None:
-                existing_metadata["standard_logging_guardrail_information"] = guardrail_info
+        litellm_metadata: Final[ObjectMapping] = (
+            _OBJECT_MAPPING.validate_python(litellm_metadata_bucket)
+            if isinstance(litellm_metadata_bucket, dict)
+            else {}
+        )
+        existing_metadata.update(
+            _guardrail_info_lifted_from_litellm_metadata(
+                litellm_metadata,
+                guardrail_info_already_set="standard_logging_guardrail_information" in existing_metadata,
+            )
+        )
 
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}
@@ -438,7 +474,12 @@ class _ProxyDBLogger(CustomLogger):
         request_data["litellm_params"]["proxy_server_request"] = (
             request_data.get("proxy_server_request") or existing_litellm_params.get("proxy_server_request") or {}
         )
-        request_data["litellm_params"]["metadata"] = existing_metadata
+        request_data["litellm_params"]["metadata"] = {
+            **existing_metadata,
+            **_redaction_opt_in_lifted_from_litellm_metadata(
+                litellm_metadata, caller_set_headers="headers" in existing_metadata
+            ),
+        }
 
         # Preserve model name and custom_llm_provider
         if "model" not in request_data:
@@ -829,14 +870,38 @@ class _ProxyDBLogger(CustomLogger):
 
         If users want to disable error tracking, they can set the disable_error_logs flag in the general_settings
         """
-        from litellm.proxy.proxy_server import general_settings
-
-        if general_settings.get("disable_error_logs") is True:
+        if _general_setting_enabled("disable_error_logs"):
             return False
         return
 
+    @staticmethod
+    def _skips_pre_routing_rejections() -> bool:
+        """``general_settings.disable_pre_routing_error_logs`` keeps requests the proxy rejected before
+        selecting a deployment out of the spend logs, so a client retrying a bad key or an exhausted
+        budget cannot flood ``LiteLLM_SpendLogs`` with zero-spend rows."""
+        return _general_setting_enabled("disable_pre_routing_error_logs")
+
+
+def _general_setting_enabled(name: str) -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return name in general_settings and general_settings[name] is True
+
 
 ProxyDBLogger: Final = _ProxyDBLogger
+
+
+_REQUEST_DATA: Final = TypeAdapter(dict[str, object])
+
+
+def is_pre_routing_rejection(exception: Exception, request_data: Mapping[str, object]) -> bool:
+    """The pipeline sets up the logging object only after auth, body parsing and model resolution succeed, and
+    before guardrails or routing run. ``ProxyLogging._handle_logging_proxy_only_error`` marks a failure that
+    arrives without one with the ``REJECTED_BEFORE_REQUEST_SETUP`` sentinel, so that request never had a provider
+    considered. An unknown model is the one later rejection that still never reached a provider."""
+    return request_data.get(REJECTED_BEFORE_REQUEST_SETUP_KEY) is REJECTED_BEFORE_REQUEST_SETUP or isinstance(
+        exception, ProxyModelNotFoundError
+    )
 
 
 def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:

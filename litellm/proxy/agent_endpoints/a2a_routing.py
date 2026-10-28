@@ -18,6 +18,7 @@ from litellm.a2a_protocol.litellm_completion_bridge.handler import (
     bridge_model_name,
 )
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.databricks_oauth import (
     resolve_databricks_backend_auth,
@@ -173,13 +174,14 @@ async def route_a2a_agent_request(
         return _call_route(route_type, _bridge_agent_request(data, agent, bridge_auth.litellm_params))
 
     # Get API base URL from agent config
-    if not agent.agent_card_params or "url" not in agent.agent_card_params:
+    card_params: Final = as_str_mapping(agent.agent_card_params)
+    if not card_params or "url" not in card_params:
         verbose_proxy_logger.error("[A2A] Agent '%s' has no URL configured", agent_name)
         route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
         raise ProxyModelNotFoundError(route=route_name, model_name=model_name, retryable_with_model_read_through=False)
 
     # Inject API base and route to litellm
-    data["api_base"] = agent.agent_card_params["url"]
+    data["api_base"] = card_params["url"]
     verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, data["api_base"])
 
     return _call_route(route_type, data)
