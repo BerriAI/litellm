@@ -40,7 +40,7 @@ from pydantic import JsonValue
 
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
-pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 _BUDGET_ENV: Final = "LITELLM_GEMINI_DEFAULT_MAX_OUTPUT_TOKENS"
 _SMALL_BACKEND: Final = "gemini-2.5-flash"
