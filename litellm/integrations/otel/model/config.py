@@ -44,6 +44,7 @@ class ExporterOwner(str, Enum):
     AGENTOPS = "agentops"
     NEWRELIC = "newrelic"
     SIGNOZ = "signoz"
+    MIXPANEL = "mixpanel"
 
 
 class _OTelV2Flag(BaseSettings):

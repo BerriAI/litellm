@@ -254,6 +254,10 @@ class Server:
     PORT: Final = "server.port"
 
 
+class User:
+    ID: Final = "user.id"
+
+
 class DB:
     """Database / cache client-span keys (OTel ``db.*`` semconv).
 

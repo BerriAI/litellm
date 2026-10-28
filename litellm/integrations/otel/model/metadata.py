@@ -71,6 +71,14 @@ IDENTITY_METADATA_FIELDS: Final = (
 
 REQUESTER_METADATA_KEY: Final = "requester_metadata"
 REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
+_USER_ID_METADATA_KEYS: Final[tuple[str, ...]] = (
+    "requester_metadata.user.id",
+    "user.id",
+    "requester_metadata.user_id",
+    "user_id",
+    "requester_metadata.trace_user_id",
+    "trace_user_id",
+)
 
 
 def allowlisted_metadata(metadata: Mapping[str, str], metadata_keys: tuple[str, ...]) -> Mapping[str, str]:
@@ -101,8 +109,20 @@ class RequestIdentity:
     request_route: str | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
 
+    @property
+    def user_id(self) -> str | None:
+        return (
+            next((value for key in _USER_ID_METADATA_KEYS if (value := self.metadata.get(key))), None)
+            or self.end_user
+            or self.metadata.get("user_api_key_end_user_id")
+        )
+
     @classmethod
-    def from_payload(cls, payload: StandardLoggingPayload) -> RequestIdentity:
+    def from_payload(
+        cls,
+        payload: StandardLoggingPayload,
+        request_metadata: Mapping[str, str] = MappingProxyType({}),
+    ) -> RequestIdentity:
         """Parse caller identity out of a closed request's payload metadata.
 
         ``provider_model`` is resolved here too (see :func:`resolve_provider_model`)
@@ -110,7 +130,9 @@ class RequestIdentity:
         model, not just the user-facing one.
         """
         raw_meta: Final = cast(Mapping[str, object], payload.get("metadata") or {})
-        metadata: Final = MappingProxyType(dict(flatten_metadata(raw_meta)))
+        payload_view: Final = as_str_mapping(payload)
+        params: Final = as_str_mapping(payload_view.get("model_parameters")) if payload_view is not None else None
+        metadata: Final = MappingProxyType({**request_metadata, **dict(flatten_metadata(raw_meta))})
         return cls(
             call_id=as_str(payload.get("litellm_call_id")) or as_str(payload.get("id")),
             # StandardLoggingMetadata's canonical key is ``user_api_key_team_id``;
@@ -120,7 +142,11 @@ class RequestIdentity:
             team_alias=as_str(raw_meta.get("user_api_key_team_alias")) or as_str(raw_meta.get("team_alias")),
             team_metadata=_team_metadata_dict(raw_meta.get("user_api_key_team_metadata")),
             key_hash=as_str(raw_meta.get("user_api_key_hash")),
-            end_user=as_str(payload.get("end_user")) or as_str(raw_meta.get("user_api_key_end_user_id")),
+            end_user=(
+                as_str(payload.get("end_user"))
+                or as_str(raw_meta.get("user_api_key_end_user_id"))
+                or (as_str(params.get("user")) if params is not None else None)
+            ),
             provider_model=resolve_provider_model(payload),
             request_route=as_str(raw_meta.get("user_api_key_request_route")),
             metadata=metadata,
@@ -188,7 +214,11 @@ class RequestContext:
         return self.identity.provider_model
 
     @classmethod
-    def from_standard_logging_payload(cls, payload: StandardLoggingPayload) -> RequestContext:
+    def from_standard_logging_payload(
+        cls,
+        payload: StandardLoggingPayload,
+        request_metadata: Mapping[str, str] = MappingProxyType({}),
+    ) -> RequestContext:
         raw_meta: Final = cast(Mapping[str, object], payload.get("metadata") or {})
         hidden: Final = cast(Mapping[str, object], payload.get("hidden_params") or {})
         raw_response: Final = payload.get("response")
@@ -203,7 +233,7 @@ class RequestContext:
             model_group=model_group,
             model_id=as_str(payload.get("model_id")) or _model_info_id(raw_meta.get("model_info")),
             api_base=as_str(payload.get("api_base")) or as_str(hidden.get("api_base")),
-            identity=RequestIdentity.from_payload(payload),
+            identity=RequestIdentity.from_payload(payload, request_metadata=request_metadata),
         )
 
 
@@ -270,6 +300,7 @@ class LLMCallEvent:
     completion_start_seconds: float | None
     trace: TraceControls
     session_id: str | None
+    user_id_metadata: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, object]) -> LLMCallEvent:
@@ -293,7 +324,19 @@ class LLMCallEvent:
             completion_start_seconds=_epoch_seconds(kwargs.get("completion_start_time")),
             trace=trace,
             session_id=caller_session_id(kwargs, trace),
+            user_id_metadata=caller_user_id_metadata(kwargs),
         )
+
+
+def caller_user_id_metadata(kwargs: Mapping[str, object]) -> Mapping[str, str]:
+    params: Final = as_str_mapping(kwargs.get("litellm_params"))
+    if params is None:
+        return MappingProxyType({})
+    bodies: Final = (
+        *(flatten_metadata(meta) if (meta := as_str_mapping(params.get("metadata"))) is not None else ()),
+        *(flatten_metadata(lm_meta) if (lm_meta := as_str_mapping(params.get("litellm_metadata"))) is not None else ()),
+    )
+    return MappingProxyType({key: value for key, value in bodies if key in _USER_ID_METADATA_KEYS})
 
 
 def _epoch_seconds(value: object) -> float | None:

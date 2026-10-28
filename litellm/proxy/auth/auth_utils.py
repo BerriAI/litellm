@@ -1919,9 +1919,11 @@ def get_end_user_id_from_request_body(
     if user_id_str:
         return user_id_str
 
-    # Check 5: 'metadata.user_id' in request_body (another common pattern)
+    # Check 5: 'metadata.user_id' or 'metadata.user.id' in request_body (another common pattern)
     metadata_dict: Final = _as_dict(request_body.get("metadata"))
-    user_id_str = _coerce_user_id_to_str(metadata_dict.get("user_id"))
+    user_id_str = _coerce_user_id_to_str(metadata_dict.get("user_id")) or _coerce_user_id_to_str(
+        metadata_dict.get("user.id")  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # _as_dict returns untyped dict
+    )
     if user_id_str:
         return user_id_str
 

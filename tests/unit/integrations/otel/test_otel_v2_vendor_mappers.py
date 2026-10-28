@@ -17,6 +17,7 @@ from litellm.integrations.otel import GenAIOperation
 from litellm.integrations.otel.mappers import (
     LangfuseMapper,
     LangtraceMapper,
+    MixpanelMapper,
     OpenInferenceMapper,
     WeaveMapper,
     resolve_mappers,
@@ -986,3 +987,41 @@ def test_langfuse_root_trace_attributes_derive_the_name_only_when_the_caller_gav
     trace: TraceControls, call_type: str | None, expected: Mapping[str, object]
 ) -> None:
     assert LangfuseMapper.trace_attributes(trace, call_type) == expected
+
+
+def test_mixpanel_mapper_stamps_user_id_and_omits_when_absent():
+    from litellm.integrations.otel.model.payloads import MCPToolCallSpanData
+
+    with_end_user = _llm_call(identity=RequestIdentity(call_id="c1", end_user="user_123"))
+    assert MixpanelMapper().map(with_end_user) == {"user.id": "user_123"}
+
+    with_trace_user = _llm_call(trace=TraceControls(user_id="trace_user_456"))
+    assert MixpanelMapper().map(with_trace_user) == {"user.id": "trace_user_456"}
+
+    mcp_span = MCPToolCallSpanData(
+        operation=GenAIOperation.EXECUTE_TOOL,
+        method="tools/call",
+        tool_name="search",
+        server_name="srv",
+        server_address=None,
+        server_port=None,
+        session_id=None,
+        arguments_json=None,
+        result_json=None,
+        error=None,
+        response_cost=None,
+        identity=RequestIdentity(call_id="c2", end_user="mcp_user"),
+    )
+    assert MixpanelMapper().map(mcp_span) == {"user.id": "mcp_user"}
+    assert MixpanelMapper().map(_llm_call()) == {}
+
+    from litellm.integrations.otel.model.metadata import LLMCallEvent
+
+    sdk_event = LLMCallEvent.from_dict(
+        {
+            "litellm_params": {"metadata": {"user.id": "sdk_user_789", "ignored_key": "x"}},
+            "standard_logging_object": {"id": "c3", "model": "gpt-4o", "metadata": {}},
+        }
+    )
+    assert sdk_event.user_id_metadata == {"user.id": "sdk_user_789"}
+    assert LLMCallEvent.from_dict({}).user_id_metadata == {}

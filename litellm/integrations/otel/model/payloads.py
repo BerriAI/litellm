@@ -464,13 +464,14 @@ class LLMCallSpanData:
         session_id: str | None = None,
         *,
         metadata_keys: tuple[str, ...] = (),
+        request_metadata: Mapping[str, str] = MappingProxyType({}),
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
         cache_hit: Final = as_bool(payload.get("cache_hit")) is True  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
         # The single parse of the request's metadata — the request-vs-provider
         # model split, the response model, api base, and identity all come from
         # here rather than being re-derived from the raw payload dicts.
-        context: Final = RequestContext.from_standard_logging_payload(payload)
+        context: Final = RequestContext.from_standard_logging_payload(payload, request_metadata=request_metadata)
         metadata: Final = payload.get("metadata")
         decision: Final = metadata["routing_decision"] if metadata and "routing_decision" in metadata else None
         promoted_metadata: Final = allowlisted_metadata(context.identity.metadata, metadata_keys)

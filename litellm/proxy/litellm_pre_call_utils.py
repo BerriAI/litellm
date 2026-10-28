@@ -1139,6 +1139,8 @@ def convert_key_logging_metadata_to_callback(
             continue
         if var.startswith("signoz_") and data.callback_name != "signoz":
             continue
+        if var.startswith("mixpanel_") and data.callback_name != "mixpanel":
+            continue
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
         team_callback_settings_obj.callback_vars[var] = str(value)

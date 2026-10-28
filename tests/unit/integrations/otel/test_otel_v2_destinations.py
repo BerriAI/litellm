@@ -5500,3 +5500,13 @@ class TestLangfuseRequestMetadataStaysWithLangfuse:
         assert [(span.dropped_attributes, span.dropped_events, span.dropped_links) for span in stripped] == [
             (1, 1, 1)
         ] * 2
+
+
+def test_mixpanel_destination_resolves_endpoint_and_basic_auth():
+    assert "mixpanel" in destination_capable_backends()
+    assert destination_for("mixpanel", {"mixpanel_region": "eu"}) is None
+    destination = destination_for("mixpanel", {"mixpanel_project_token": "team-tok", "mixpanel_region": "eu"})
+    assert destination is not None
+    assert destination.endpoint == "https://ingestion-eu.mixpanel.com/v1/ai/otel/traces"
+    assert destination.headers["Authorization"] == f"Basic {b64encode(b'team-tok:').decode()}"
+    assert destination.callback_name == "mixpanel"

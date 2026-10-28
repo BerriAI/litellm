@@ -10977,3 +10977,51 @@ def test_mapped_baggage_tags_keep_non_string_client_tags_as_sent():
     data: Final[dict[str, object]] = {"metadata": {"tags": [1, {"team": "x"}, "client-tag", "client-tag"]}}
     LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, data)
     assert data["metadata"]["tags"] == [1, {"team": "x"}, "client-tag", "client-tag", "tenant:a"]
+
+
+def test_mixpanel_callback_vars_are_scoped_and_request_blocked():
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+    from litellm.proxy._types import AddTeamCallback
+    from litellm.proxy.litellm_pre_call_utils import convert_key_logging_metadata_to_callback
+    from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD
+
+    under_mixpanel: Final = convert_key_logging_metadata_to_callback(
+        data=AddTeamCallback(
+            callback_name="mixpanel",
+            callback_type="success",
+            callback_vars={"mixpanel_project_token": "team-tok", "mixpanel_region": "eu"},
+        ),
+        team_callback_settings_obj=None,
+    )
+    assert under_mixpanel.callback_vars == {"mixpanel_project_token": "team-tok", "mixpanel_region": "eu"}
+
+    under_other: Final = convert_key_logging_metadata_to_callback(
+        data=AddTeamCallback(
+            callback_name="langfuse",
+            callback_type="success",
+            callback_vars={"mixpanel_project_token": "team-tok", "langfuse_host": "https://cloud.langfuse.com"},
+        ),
+        team_callback_settings_obj=None,
+    )
+    assert under_other.callback_vars == {"langfuse_host": "https://cloud.langfuse.com"}
+
+    blocked: Final = initialize_standard_callback_dynamic_params(
+        {
+            "mixpanel_project_token": "attacker-tok",
+            "mixpanel_region": "eu",
+            "metadata": {"mixpanel_project_token": "attacker-tok"},
+        }
+    )
+    assert "mixpanel_project_token" not in blocked
+    assert "mixpanel_region" not in blocked
+
+    trusted: Final = initialize_standard_callback_dynamic_params(
+        {
+            "mixpanel_project_token": "attacker-tok",
+            TRUSTED_CALLBACK_VARS_FIELD: {"mixpanel_project_token": "trusted-tok", "mixpanel_region": "in"},
+        }
+    )
+    assert trusted.get("mixpanel_project_token") == "trusted-tok"
+    assert trusted.get("mixpanel_region") == "in"
