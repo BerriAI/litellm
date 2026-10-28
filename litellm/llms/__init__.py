@@ -3,6 +3,7 @@ import os
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.types.utils import CallTypes
 
 from . import *
@@ -128,7 +129,7 @@ def discover_guardrail_translation_mappings() -> dict[CallTypes, type["BaseTrans
 
                     # Check for guardrail_translation_mappings dictionary
                     if hasattr(module, "guardrail_translation_mappings"):
-                        mappings = getattr(module, "guardrail_translation_mappings")
+                        mappings = attribute_or_none(module, "guardrail_translation_mappings")
                         if isinstance(mappings, dict):
                             discovered_mappings.update(mappings)
                             verbose_logger.debug(

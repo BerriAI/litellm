@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import repeat
 from pathlib import Path
 from queue import SimpleQueue
@@ -21,6 +21,7 @@ from integration._support.client import Gateway, eventually
 from integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
 from integration._support.timing import assert_not_delayed_by, timed
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from openai import AsyncOpenAI, OpenAI
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.trace.v1.trace_pb2 import Span, Status
@@ -595,8 +596,7 @@ def test_langtrace_two_workers_deliver_every_burst_span_exactly_once(gateway: Ga
 
 def test_langtrace_sink_outage_mid_burst_recovers_on_the_same_port(gateway: Gateway, tmp_path: Path) -> None:
     key: Final = "synthetic-langtrace-key-" + uuid.uuid4().hex
-    with wire_server(_accepted) as probe:
-        port: Final = int(probe.url.rsplit(":", 1)[1])
+    port: Final = allocate_port()
     host: Final = f"http://127.0.0.1:{port}"
     with wire_server(_upstream) as provider:
         overrides: Final = {"LANGTRACE_API_KEY": key, "LANGTRACE_API_HOST": host, "OTEL_BSP_SCHEDULE_DELAY": "300"}
@@ -659,7 +659,7 @@ def test_langtrace_survives_a_killed_worker(gateway: Gateway, tmp_path: Path) ->
                 limits=httpx.Limits(max_keepalive_connections=0),
             ) as fresh_connections,
         ):
-            proxy: Final = Gateway(fresh_connections, owned.gateway.key, owned.gateway.upstream_url)
+            proxy: Final = replace(owned.gateway, client=fresh_connections)
             with proxy.scenario() as scenario:
                 rig: Final = _Rig(proxy, scenario.model(api_base=provider.url + "/v1"), provider, _Sink(sink, key))
                 _assert_kill_and_recovery(owned, rig)

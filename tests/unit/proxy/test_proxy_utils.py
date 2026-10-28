@@ -1,7 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, Dict, Final, List, Optional, Union
+from typing import Any, Dict, Final, List, Optional, TypeAlias, Union
 from unittest.mock import Mock
 
 import pytest
@@ -24,6 +24,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     get_dynamic_logging_metadata,
     add_litellm_data_to_request,
 )
+from litellm.router import Router
 from pydantic import ValidationError
 
 pytestmark = pytest.mark.xdist_group("proxy_heavy")
@@ -1602,6 +1603,109 @@ def test_get_model_group_info():
     assert len(model_list) == 1
 
 
+def _custom_metadata_router(*model_infos: dict[object, object]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": f"fake-{index}"},
+                "model_info": model_info,
+            }
+            for index, model_info in enumerate(model_infos)
+        ]
+    )
+
+
+_CustomFieldsCase: TypeAlias = tuple[
+    tuple[dict[object, object], ...], tuple[str, ...] | None, dict[str, str | int | float | bool] | None
+]
+_CUSTOM_FIELDS_CASES: Final[tuple[_CustomFieldsCase, ...]] = (
+    ((), None, None),
+    (({},), None, None),
+    (
+        ({"custom_tags": ["deprecated", "ptu"], "custom_metadata": {"retirement_date": "2027-03-01"}},),
+        ("deprecated", "ptu"),
+        {"retirement_date": "2027-03-01"},
+    ),
+    (
+        ({}, {"custom_tags": ["ptu"], "custom_metadata": {"provisioned_ptu": 100, "gsu": False}}),
+        ("ptu",),
+        {"provisioned_ptu": 100, "gsu": False},
+    ),
+    (
+        (
+            {"custom_tags": ["ptu", "eu"], "custom_metadata": {"provisioned_ptu": 100, "region": "eu"}},
+            {"custom_tags": ["eu", "deprecated"], "custom_metadata": {"provisioned_ptu": 50, "max_tpm": 1.5}},
+        ),
+        ("ptu", "eu", "deprecated"),
+        {"provisioned_ptu": 100, "region": "eu", "max_tpm": 1.5},
+    ),
+    (
+        ({"custom_tags": ["ok", 7, None, {"x": 1}], "custom_metadata": {"owner": "ml", "nested": {"a": 1}}},),
+        ("ok",),
+        {"owner": "ml"},
+    ),
+    (({"custom_tags": "ptu", "custom_metadata": ["not", "a", "map"]},), None, None),
+    (
+        (
+            {
+                "custom_metadata": {
+                    2027: "retirement",
+                    "nan": float("nan"),
+                    "inf": float("inf"),
+                    "neg_inf": float("-inf"),
+                    "max_tpm": 1.5,
+                }
+            },
+        ),
+        None,
+        {"max_tpm": 1.5},
+    ),
+)
+
+
+@pytest.mark.parametrize(("model_infos", "expected_tags", "expected_metadata"), _CUSTOM_FIELDS_CASES)
+def test_get_model_group_info_merges_custom_tags_and_metadata_across_deployments(
+    model_infos: tuple[dict[object, object], ...],
+    expected_tags: tuple[str, ...] | None,
+    expected_metadata: dict[str, str | int | float | bool] | None,
+) -> None:
+    from litellm.proxy.proxy_server import get_model_group_info
+
+    router: Final = _custom_metadata_router({"description": "first"}, *model_infos)
+
+    (group,) = get_model_group_info(llm_router=router, all_models_str=["gpt-4"], model_group="gpt-4")
+
+    assert (group.custom_tags, group.custom_metadata) == (expected_tags, expected_metadata)
+
+
+@pytest.mark.parametrize(
+    "alias_target",
+    [pytest.param("gpt-4", id="string"), pytest.param({"model": "gpt-4", "hidden": False}, id="item")],
+)
+def test_get_model_group_info_serves_the_target_groups_custom_fields_on_an_alias_row(
+    alias_target: str | dict[str, object],
+) -> None:
+    from litellm.proxy.proxy_server import get_model_group_info
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake"},
+                "model_info": {"custom_tags": ["deprecated"], "custom_metadata": {"retirement_date": "2027-03-01"}},
+            }
+        ],
+        model_group_alias={"gpt-alias": alias_target},
+    )
+
+    groups: Final = get_model_group_info(llm_router=router, all_models_str=["gpt-4", "gpt-alias"], model_group=None)
+
+    assert {group.model_group: (group.custom_tags, group.custom_metadata) for group in groups} == {
+        model_group: (("deprecated",), {"retirement_date": "2027-03-01"}) for model_group in ("gpt-4", "gpt-alias")
+    }
+
+
 @pytest.fixture
 def mock_team_data():
     return [
@@ -2007,13 +2111,145 @@ def test_provider_specific_header():
         data=data,
         headers=headers,
     )
-    # Verify multi-provider support: anthropic headers work across multiple providers
-    assert data["provider_specific_header"] == {
-        "custom_llm_provider": "anthropic,bedrock,bedrock_mantle,vertex_ai",
-        "extra_headers": {
-            "anthropic-beta": "prompt-caching-2024-07-31",
+    from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+
+    for provider in ("anthropic", "bedrock", "bedrock_mantle", "vertex_ai"):
+        assert ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=data["provider_specific_header"], custom_llm_provider=provider
+        ) == {"anthropic-beta": "prompt-caching-2024-07-31"}
+    assert (
+        ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=data["provider_specific_header"], custom_llm_provider="databricks"
+        )
+        == {}
+    )
+    assert ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_header=data["provider_specific_header"],
+        custom_llm_provider="databricks",
+        native_anthropic_messages=True,
+    ) == {"anthropic-beta": "prompt-caching-2024-07-31"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_client_anthropic_betas_reach_databricks_claude_filtered_to_the_ones_the_workspace_accepts():
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    data: Final[dict] = {"model": "databricks-claude-sonnet-4-6"}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(
+        data=data,
+        headers={
+            "content-type": "application/json",
+            "anthropic-beta": "context-1m-2025-08-07,prompt-caching-scope-2026-01-05",
+            "anthropic-version": "2023-06-01",
         },
-    }
+    )
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake workspace records what the proxy sent
+
+    def workspace_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(
+            status_code=200,
+            json={
+                "id": "msg_bdrk_01",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 6},
+            },
+            request=request,
+        )
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(workspace_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="databricks/databricks-claude-sonnet-4-6",
+            api_key="dapimykey",
+            api_base="https://my.workspace.cloud.databricks.com/serving-endpoints",
+            client=upstream,
+            provider_specific_header=data["provider_specific_header"],
+        )
+    finally:
+        await upstream.close()
+
+    assert received[0].headers["anthropic-beta"] == "context-1m-2025-08-07"
+
+
+_CLIENT_ANTHROPIC_HEADERS: Final = {
+    "content-type": "application/json",
+    "anthropic-beta": "context-1m-2025-08-07",
+    "anthropic-version": "2023-06-01",
+}
+_DATABRICKS_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-01",
+    "object": "chat.completion",
+    "created": 1760000000,
+    "model": "databricks-gpt-oss-120b",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 12, "completion_tokens": 6, "total_tokens": 18},
+}
+
+
+async def _databricks_chat_completion(provider_specific_header: object, upstream: object) -> None:
+    await litellm.acompletion(
+        model="databricks/databricks-gpt-oss-120b",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="dapimykey",
+        api_base="https://my.workspace.cloud.databricks.com/serving-endpoints",
+        client=upstream,
+        provider_specific_header=provider_specific_header,
+    )
+
+
+async def _databricks_messages_bridge(provider_specific_header: object, upstream: object) -> None:
+    await litellm.anthropic.messages.acreate(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="databricks/databricks-gpt-oss-120b",
+        api_key="dapimykey",
+        api_base="https://my.workspace.cloud.databricks.com/serving-endpoints",
+        client=upstream,
+        provider_specific_header=provider_specific_header,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_databricks",
+    [_databricks_chat_completion, _databricks_messages_bridge],
+    ids=["chat_completions", "messages_bridge"],
+)
+async def test_client_anthropic_headers_never_reach_databricks_chat_completions(call_databricks):
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    data: Final[dict] = {"model": "databricks-gpt-oss-120b"}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(data=data, headers=_CLIENT_ANTHROPIC_HEADERS)
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake workspace records what the proxy sent
+
+    def workspace_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(status_code=200, json=_DATABRICKS_CHAT_COMPLETION, request=request)
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(workspace_answers))
+    try:
+        await call_databricks(data["provider_specific_header"], upstream)
+    finally:
+        await upstream.close()
+
+    assert [request.url.path for request in received] == ["/serving-endpoints/chat/completions"]
+    assert "anthropic-beta" not in received[0].headers
+    assert "anthropic-version" not in received[0].headers
 
 
 def test_provider_specific_header_multi_provider():
@@ -2080,10 +2316,10 @@ def test_provider_specific_header_multi_provider():
     # Verify that provider_specific_header contains comma-separated providers
     assert "provider_specific_header" in data
     assert (
-        data["provider_specific_header"]["custom_llm_provider"]
+        data["provider_specific_header"][0]["custom_llm_provider"]
         == "anthropic,bedrock,bedrock_mantle,vertex_ai"
     )
-    assert data["provider_specific_header"]["extra_headers"] == {
+    assert data["provider_specific_header"][0]["extra_headers"] == {
         "anthropic-beta": "context-1m-2025-08-07",
         "anthropic-version": "2023-06-01",
     }
@@ -2518,6 +2754,58 @@ async def test_post_call_failure_hook_auth_error_llm_api_route():
         # Assert that _handle_logging_proxy_only_error WAS called
         # because /v1/chat/completions is an LLM API route
         mock_handle_logging.assert_called_once()
+
+
+class _InlineThread:
+    def __init__(self, target, args=(), kwargs=None, daemon=None) -> None:
+        self._run = lambda: target(*args, **(kwargs or {}))
+
+    def start(self) -> None:
+        self._run()
+
+
+@pytest.mark.asyncio
+async def test_proxy_only_failure_gives_a_logger_with_both_failure_hooks_only_the_async_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import types
+
+    import litellm.proxy.utils as proxy_utils
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    hooks: Final[list[str]] = []
+
+    class Recorder(CustomLogger):
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            hooks.append("sync_failure")
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            hooks.append("async_failure")
+
+    for name in ("failure_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(proxy_utils, "threading", types.SimpleNamespace(Thread=_InlineThread))
+    recorder: Final = Recorder()
+    logging_obj: Final = Logging(
+        model="gpt-4o-mini-tts",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="aspeech",
+        start_time=datetime.now(),
+        litellm_call_id="proxy-only-failure",
+        function_id="proxy-only-failure",
+        dynamic_failure_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+
+    await proxy_utils.ProxyLogging._dispatch_proxy_only_failure_handlers(
+        litellm_logging_obj=logging_obj,
+        original_exception=HTTPException(status_code=401, detail="Authentication Error: invalid user key"),
+    )
+
+    assert hooks == ["async_failure"]
 
 
 @pytest.mark.asyncio

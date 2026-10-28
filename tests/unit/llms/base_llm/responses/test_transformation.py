@@ -24,7 +24,7 @@ from litellm.types.llms.openai import(
     ResponsesAPIStreamEvents,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from typing import Any, AsyncIterator, List
+from typing import Any, AsyncIterator, Final, List
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 
@@ -438,9 +438,9 @@ class TestBaseResponsesAPIStreamingIterator:
 
         # This should NOT raise an exception
         # Previously it would fail with: TypeError: cannot pickle 'ValidatorIterator'
-        # Mock asyncio.create_task and executor.submit since we're not in async context
         with (
-            patch("asyncio.create_task") as mock_create_task,
+            patch("asyncio.get_running_loop"),
+            patch("litellm.responses.streaming_iterator.spawn_logging_task"),
             patch("litellm.responses.streaming_iterator.executor") as mock_executor,
         ):
             try:
@@ -728,7 +728,8 @@ class TestBaseResponsesAPIStreamingIterator:
                 "update_responses_api_response_id_with_model_id",
                 return_value=mock_responses_api_response,
             ),
-            patch("asyncio.create_task") as mock_create_task,
+            patch("asyncio.get_running_loop"),
+            patch("litellm.responses.streaming_iterator.spawn_logging_task") as mock_spawn_logging_task,
             patch("litellm.responses.streaming_iterator.executor") as mock_executor,
         ):
             result = iterator._process_chunk(json.dumps(test_chunk_data))
@@ -739,7 +740,8 @@ class TestBaseResponsesAPIStreamingIterator:
 
             # Success handlers are dispatched as one async task (via _handle_logging_completed_response);
             # the sync handler must never be submitted to the executor concurrently (LIT-4210)
-            mock_create_task.assert_called_once()
+            spawned_task_names: Final = [call.kwargs["task_name"] for call in mock_spawn_logging_task.call_args_list]
+            assert spawned_task_names.count("Responses stream success logging") == 1
             mock_executor.submit.assert_not_called()
 
             # Failure handlers should NOT have been called

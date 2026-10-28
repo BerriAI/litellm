@@ -14,10 +14,11 @@ from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
-    custom_prompt,
     deepseek_r1_pt,
     prompt_factory,
+    render_custom_prompt_template,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -51,8 +52,16 @@ _GUARDRAIL_CONFIG_EXPECTED_FORMAT: Final = (
     "{'guardrailIdentifier': str, 'guardrailVersion': str, 'trace': 'enabled'|'disabled'|'enabled_full'}"
 )
 
+_INVOKE_PROVIDERS: Final = TypeAdapter(tuple[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, ...]).validate_python(
+    get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL)
+)
 
-def _bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
+
+def _response_header(headers: Mapping[str, str], name: str) -> str | None:
+    return headers.get(name, None)
+
+
+def bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
     try:
         guardrail_config: Final = _GUARDRAIL_CONFIG_VALIDATOR.validate_python(raw_guardrail_config)
     except ValidationError as e:
@@ -128,20 +137,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         aws_bedrock_runtime_endpoint: Final = optional_params.get(
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
-        endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
+        endpoint_url, _ = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=self._get_aws_region_name(optional_params=optional_params, model=model),
         )
-
-        if (stream is not None and stream is True) and provider != "ai21":
-            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
-        else:
-            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
-
-        return endpoint_url
+        invoke_route: Final = "invoke-with-response-stream" if stream is True and provider != "ai21" else "invoke"
+        return join_api_base(endpoint_url, f"model/{modelId}/{invoke_route}")
 
     def sign_request(
         self,
@@ -394,8 +396,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             )
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
-        bedrock_input_tokens: Final = raw_response.headers.get("x-amzn-bedrock-input-token-count", None)
-        bedrock_output_tokens: Final = raw_response.headers.get("x-amzn-bedrock-output-token-count", None)
+        bedrock_input_tokens: Final = _response_header(raw_response.headers, "x-amzn-bedrock-input-token-count")
+        bedrock_output_tokens: Final = _response_header(raw_response.headers, "x-amzn-bedrock-output-token-count")
 
         prompt_tokens: Final = int(bedrock_input_tokens or litellm.token_counter(messages=messages))
 
@@ -432,7 +434,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         guardrail_headers: Final = (
             ()
             if raw_guardrail_config is None
-            else tuple(_bedrock_invoke_guardrail_headers(raw_guardrail_config).items())
+            else tuple(bedrock_invoke_guardrail_headers(raw_guardrail_config).items())
         )
         owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
         return merge_bedrock_invoke_headers(headers, guardrail_headers, metadata_headers, owned_names)
@@ -568,7 +570,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         if provider is not None:
             return provider
 
-        for provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
+        for provider in _INVOKE_PROVIDERS:
             if provider in model:
                 return provider
         return None
@@ -593,7 +595,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
         return None
 
-    def convert_messages_to_prompt(self, model, messages, provider, custom_prompt_dict) -> tuple[str, list | None]:
+    def convert_messages_to_prompt(self, model: str, messages, provider, custom_prompt_dict) -> tuple[str, list | None]:
         # handle anthropic prompts and amazon titan prompts
         prompt = ""
         chat_history: list | None = None
@@ -601,11 +603,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details: Final = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
-                final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
-                messages=messages,
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="bedrock"
             )
             return prompt, None
         ## ELSE

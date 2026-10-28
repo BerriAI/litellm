@@ -1,10 +1,39 @@
 import os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
+
+
+def test_ollama_payload_key_matches_returned_response_id() -> None:
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import convert_to_model_response_object
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.types.utils import ModelResponse
+
+    logger: Final = object.__new__(GCSBucketLogger)
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-0",
+            "system_fingerprint": "fp_ollama",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}}],
+        },
+        model_response_object=ModelResponse(),
+    )
+    logged: Final = get_logging_payload(
+        kwargs={"call_type": "acompletion", "response_cost": 0.01},
+        response_obj=response,
+        start_time=datetime(2025, 1, 1),
+        end_time=datetime(2025, 1, 1),
+    )
+    object_name: Final = logger._get_object_name({}, {"error_str": None}, response)
+    assert response.id != "chatcmpl-0"
+    assert object_name.split("/", 1)[1] == response.id
+    assert logged["request_id"] == response.id
 
 
 class TestGCSBucketBase:

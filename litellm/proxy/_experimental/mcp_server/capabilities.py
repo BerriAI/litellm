@@ -15,6 +15,8 @@ from litellm.types.mcp import (
     MCP_LEGACY_VERSIONS,
     MCPAdvertisedVersion,
     MCPAdvertisedVersions,
+    MCPDisableableCapability,
+    MCPDisabledCapabilities,
     MCPSpecVersion,
     MCPTransport,
 )
@@ -28,6 +30,13 @@ GATEWAY_OPERATIONS: Final = frozenset(
         "resources/list",
         "resources/read",
         "resources/templates/list",
+        "subscriptions/listen",
+    }
+)
+_CAPABILITY_OPERATIONS: Final[Mapping[MCPDisableableCapability, frozenset[str]]] = MappingProxyType(
+    {
+        "prompts": frozenset({"prompts/list", "prompts/get"}),
+        "resources": frozenset({"resources/list", "resources/read", "resources/templates/list"}),
     }
 )
 
@@ -60,6 +69,7 @@ REVISION_SUPPORT: Final[Mapping[str, RevisionSupport]] = MappingProxyType(
 _COMPLETED_REVISIONS: Final = tuple(version for version, support in REVISION_SUPPORT.items() if support.completed)
 TRANSLATION_PAIRS: Final = frozenset(product(_COMPLETED_REVISIONS, repeat=2))
 _ADVERTISED_VERSIONS: Final[TypeAdapter[tuple[MCPAdvertisedVersion, ...]]] = TypeAdapter(MCPAdvertisedVersions)
+_DISABLED_CAPABILITIES: Final[TypeAdapter[MCPDisabledCapabilities]] = TypeAdapter(MCPDisabledCapabilities)
 
 
 def configured_versions() -> tuple[str, ...]:
@@ -67,6 +77,22 @@ def configured_versions() -> tuple[str, ...]:
 
     configured: Final = general_settings_view().get("mcp_advertised_versions")
     return _ADVERTISED_VERSIONS.validate_python(MCP_LEGACY_VERSIONS if configured is None else configured)
+
+
+def disabled_capabilities() -> frozenset[MCPDisableableCapability]:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    return frozenset(
+        _DISABLED_CAPABILITIES.validate_python(general_settings_view().get("mcp_disabled_capabilities") or ())
+    )
+
+
+def disabled_operations(disabled: frozenset[MCPDisableableCapability]) -> frozenset[str]:
+    return frozenset[str]().union(*(_CAPABILITY_OPERATIONS[name] for name in disabled))
+
+
+def enabled_gateway_operations(disabled: frozenset[MCPDisableableCapability]) -> frozenset[str]:
+    return GATEWAY_OPERATIONS - disabled_operations(disabled)
 
 
 def build_discovery(
@@ -99,13 +125,30 @@ def build_discovery(
         if operations and revision_support is not None
         else frozenset()
     )
+    notifications: Final = revision in HANDSHAKE_PROTOCOL_VERSIONS or (
+        "subscriptions/listen" in operations and revision == "2026-07-28" and transport is MCPTransport.http
+    )
     caller_capabilities: Final = capabilities.model_copy(deep=True)
+    tools: Final = caller_capabilities.tools
+    prompts: Final = caller_capabilities.prompts
+    resources: Final = caller_capabilities.resources
     return DiscoverResult(
         supported_versions=list(supported),
         capabilities=ServerCapabilities(
-            tools=caller_capabilities.tools if {"tools/list", "tools/call"} <= operations else None,
-            prompts=caller_capabilities.prompts if {"prompts/list", "prompts/get"} <= operations else None,
-            resources=caller_capabilities.resources if {"resources/list", "resources/read"} <= operations else None,
+            tools=tools.model_copy(update={"list_changed": tools.list_changed if notifications else None})
+            if tools is not None and {"tools/list", "tools/call"} <= operations
+            else None,
+            prompts=prompts.model_copy(update={"list_changed": prompts.list_changed if notifications else None})
+            if prompts is not None and {"prompts/list", "prompts/get"} <= operations
+            else None,
+            resources=resources.model_copy(
+                update={
+                    "list_changed": resources.list_changed if notifications else None,
+                    "subscribe": resources.subscribe if notifications else None,
+                }
+            )
+            if resources is not None and {"resources/list", "resources/read"} <= operations
+            else None,
             extensions={
                 key: value for key, value in (caller_capabilities.extensions or {}).items() if key in extensions
             }
@@ -118,8 +161,13 @@ def build_discovery(
 
 
 class GatewayVersionPolicy:
-    def __init__(self, versions: Callable[[], tuple[str, ...]] = configured_versions) -> None:
+    def __init__(
+        self,
+        versions: Callable[[], tuple[str, ...]] = configured_versions,
+        disabled: Callable[[], frozenset[MCPDisableableCapability]] = disabled_capabilities,
+    ) -> None:
         self._versions = versions
+        self._disabled = disabled
 
     async def __call__(self, ctx: ServerRequestContext[object, object], call_next: CallNext) -> HandlerResult:
         versions: Final = self._versions()
@@ -143,7 +191,7 @@ class GatewayVersionPolicy:
             configured=versions,
             revision=initialized.protocol_version,
             transport=MCPTransport.http,
-            authorized_operations=GATEWAY_OPERATIONS,
+            authorized_operations=enabled_gateway_operations(self._disabled()),
             upstream_versions=frozenset(HANDSHAKE_PROTOCOL_VERSIONS),
             capabilities=initialized.capabilities,
             instructions=initialized.instructions,

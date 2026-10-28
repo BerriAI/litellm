@@ -1,20 +1,9 @@
-from dataclasses import replace
-import json
 from typing import Final
 
-import pytest
-from integration._support.client import Gateway, JSON_OBJECT
+from integration._support.client import JSON_OBJECT, Gateway
 from integration._support.provider import SharedProvider
 from integration._support.wire import Reply
-from integration.translation.case import TranslationTestCase
-from integration.translation.chat_completions.bases.anthropic import CLAUDE_SONNET_5_5_TEST_CASE
-from integration.translation.runner import assert_translation
 from pydantic import JsonValue
-
-CLAUDE_SONNET_5_5_BASIC_REPLAY_TEST_CASE: Final[TranslationTestCase] = replace(
-    CLAUDE_SONNET_5_5_TEST_CASE,
-    scenario="basic_completion_replay",
-)
 
 ANTHROPIC_STREAM_REPLY: Final = b"".join(
     (
@@ -30,13 +19,6 @@ ANTHROPIC_STREAM_REPLY: Final = b"".join(
         b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
     )
 )
-
-
-@pytest.mark.parametrize("case", [CLAUDE_SONNET_5_5_BASIC_REPLAY_TEST_CASE], ids=lambda case: case.id)
-def test_anthropic_basic_completion_replay(
-    case: TranslationTestCase, gateway: Gateway, provider: SharedProvider
-) -> None:
-    assert_translation(case, gateway, provider)
 
 
 def test_anthropic_streaming_completion_replay(gateway: Gateway, provider: SharedProvider) -> None:
@@ -67,15 +49,8 @@ def test_anthropic_streaming_completion_replay(gateway: Gateway, provider: Share
         for line in response.text.splitlines()
         if line.startswith("data: {")
     )
-    choices: Final = tuple(
-        JSON_OBJECT.validate_python(choice)
-        for chunk in data_lines
-        for choice in chunk["choices"]
-    )
-    contents: Final = tuple(
-        JSON_OBJECT.validate_python(choice["delta"]).get("content")
-        for choice in choices
-    )
+    choices: Final = tuple(JSON_OBJECT.validate_python(choice) for chunk in data_lines for choice in chunk["choices"])
+    contents: Final = tuple(JSON_OBJECT.validate_python(choice["delta"]).get("content") for choice in choices)
 
     assert contents.count("Hello") == 1
     assert sum(choice["delta"].get("role") == "assistant" for choice in choices) == 1

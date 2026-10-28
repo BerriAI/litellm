@@ -122,7 +122,7 @@ class OperationContext:
 
 
 class ProgressCallback(Protocol):
-    async def __call__(self, progress: float, total: float | None, /) -> None: ...
+    async def __call__(self, progress: float, total: float | None, message: str | None = None, /) -> None: ...
 
 
 class ClientInteraction(Protocol):
@@ -138,5 +138,6 @@ class AuthorizedToolCall:
     host_progress_callback: ProgressCallback | None
     guardrail_context: Mapping[str, object] | None
     logging_data: Mapping[str, object]
+    guardrail_auth: UserAPIKeyAuth | None = None
     input_responses: InputResponses | None = None
     request_state: str | None = None

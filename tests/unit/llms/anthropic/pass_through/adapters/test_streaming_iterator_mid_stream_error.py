@@ -19,12 +19,14 @@ import json
 import os
 import sys
 import threading
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-from collections.abc import Callable
-from typing import List, Optional
+from typing import Final, Iterator, List, Optional
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 
@@ -33,12 +35,13 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
     _mid_stream_error_sse_event,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
-from litellm.types.utils import Delta, StreamingChoices
+from litellm.types.utils import Delta, ModelResponseStream, StandardLoggingPayload, StreamingChoices, Usage
 
 
 def _make_chunk(delta: Delta, finish_reason: Optional[str] = None) -> MagicMock:
@@ -55,14 +58,14 @@ class _AsyncStreamThenRaise:
     """Yields the given chunks, then raises ``exc`` (mimics a provider stream
     that terminates mid-response)."""
 
-    def __init__(self, items: List[MagicMock], exc: BaseException):
+    def __init__(self, items: Sequence[object], exc: BaseException) -> None:
         self._it = iter(items)
         self._exc = exc
 
-    def __aiter__(self):
+    def __aiter__(self) -> "_AsyncStreamThenRaise":
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> object:
         try:
             return next(self._it)
         except StopIteration:
@@ -182,9 +185,73 @@ class _AsyncFailureRecorder(CustomLogger):
     def __init__(self):
         super().__init__()
         self.exceptions: list[BaseException] = []
+        self.usages: tuple[tuple[int, int], ...] = ()
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
         self.exceptions.append(kwargs["exception"])
+        payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"])
+        self.usages = (*self.usages, (payload["prompt_tokens"], payload["completion_tokens"]))
+
+
+class _BoundaryAsyncFailureRecorder(_AsyncFailureRecorder):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = 0
+        self.completed = 0
+
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
+        self.started += 1
+        await asyncio.sleep(0.05)
+        await super().async_log_failure_event(kwargs, response_obj, start_time, end_time)
+        self.completed += 1
+
+
+def test_anthropic_adapter_does_not_repeat_custom_stream_failure_dispatch() -> None:
+    async_recorder: Final = _BoundaryAsyncFailureRecorder()
+    sync_recorder: Final = _SyncFailureRecorder()
+    logging_obj: Final = _make_logging_obj("wrapped-custom-stream", async_recorder, sync_recorder)
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-dropped",
+        object="chat.completion.chunk",
+        created=1,
+        model="gpt-5.6",
+        choices=[StreamingChoices(index=0, delta=Delta(content="partial"), finish_reason=None)],
+        usage=Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31),
+    )
+    inner_stream: Final = CustomStreamWrapper(
+        completion_stream=_AsyncStreamThenRaise([chunk], httpx.ReadError("stream dropped")),
+        model="gpt-5.6",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper: Final = AnthropicStreamWrapper(
+        completion_stream=inner_stream,
+        model="openai/gpt-5.6",
+        litellm_logging_obj=logging_obj,
+    )
+
+    events: Final = asyncio.run(_drain_sse(wrapper))
+
+    assert async_recorder.started == 1
+    assert async_recorder.completed == 1
+    assert sync_recorder.called.wait(timeout=5), "sync failure callback never ran"
+    assert _parse_sse(events[-1])[0] == "error"
+    assert len(async_recorder.exceptions) == 1
+    assert len(sync_recorder.exceptions) == 1
+    assert async_recorder.usages == ((30, 1),)
+    assert sync_recorder.exceptions[0] == async_recorder.exceptions[0]
 
 
 class _SyncFailureRecorder:

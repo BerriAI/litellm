@@ -2,6 +2,8 @@
 
 Tactical guide for building chat UI features. Copy patterns exactly — don't improvise spacing, colors, or components.
 
+The standalone `/ui/chat` workspace reuses Moyai's workspace structure and visual rules from `frontend/theme.css`, `native/web/style.css`, `brand.css`, `sidebar-layout.css`, and `home.css` at Moyai commit `1118ab0` (October 20, 2026). This is an intentional visual departure from the dashboard: neutral white/charcoal surfaces, restrained purple actions, and translucent navigation and composers. Shared controls and chat behavior remain owned by the existing LiteLLM primitives.
+
 > **Agents:** Read `AGENTS.md` alongside this file. It contains decision trees, the pre-commit checklist, and the rules that govern when to use each pattern here. This file is the _what_; `AGENTS.md` is the _when and how_.
 
 ---
@@ -9,16 +11,34 @@ Tactical guide for building chat UI features. Copy patterns exactly — don't im
 ## Stack
 
 - **Next.js 16** App Router, TypeScript
-- **Tailwind CSS v4** — utility classes only, no custom CSS except in `globals.css`
+- **Tailwind CSS v4** — shared primitives and utilities, with the standalone Moyai port scoped in `globals.css` (theme and rail) and `moyai/moyai-chat.css` (home, composer and transcript)
 - **shadcn/ui**: import from `@/components/ui/*`. Available today: `alert-dialog`, `badge`, `bubble`, `button`, `card`, `collapsible`, `dialog`, `input`, `input-group`, `label`, `popover`, `scroll-area`, `select`, `separator`, `sheet`, `skeleton`, `sonner`, `switch`, `table`, `tabs`, `textarea`, `tooltip`. Use these shared primitives when composing chat features
 - **lucide-react** — only icon library, no emoji in UI
-- System font stack (`-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`), inherited from `ChatShell`'s root
+- Moyai's General Sans font from its original Fontshare stylesheet, with bundled Geist fallback; Geist Mono is bundled for model names
 
 ---
 
 ## Tokens
 
 Never hardcode hex values. Use these CSS variables via Tailwind classes — all verified present in `src/app/globals.css`.
+
+`ChatShell` applies `.chat-theme`, which scopes the palette to standalone Chat. Its dialogs and mobile Sheet also carry `.chat-theme` because they render through portals. Do not apply these overrides globally or to the Playground. Light and dark modes follow LiteLLM's existing theme switch. Keep status colors semantic.
+
+### Glass surfaces
+
+- `.chat-workspace`: static neutral backdrop, with no blur on this layout ancestor.
+- `.chat-glass-sidebar`: Moyai's frosted navigation rail with its original neutral sheen.
+- `.chat-glass-pane`: transparent on the home view so the source glass backdrop remains visible; quiet reading fill on conversation and workspace pages, without nested backdrop filtering.
+- `.moyai-chat-home-composer`: Moyai's 10px rounded glass editor, 132px minimum desktop entry height, 14px blur, original sheen/shadow and bordered lower action row. `MoyaiChatComposer` owns its layout. Model selection sits at the right beside send. Message and code surfaces stay solid, using `--chat-message` / `--chat-message-border`; editor focus uses `--chat-focus-border`.
+- `.chat-mobile-sidebar`: elevated, nearly opaque Sheet surface so navigation remains legible over conversation content.
+
+Glass progressively enhances solid fills inside `@supports`. Reduced transparency and forced colors disable filtering, sheen and decorative shadows. Reduced motion disables chrome transitions. Use the original static dot/grid backdrop and source home heading measurements. Do not add animated backgrounds or an outer rounded frame.
+
+The standalone `ChatModelPicker` exposes the account's chat and image-generation models from the composer action row. Its portalled popover carries `.chat-theme`; keep model names, capabilities and selection states readable in both themes. Attachment and MCP tools stay beside the composer.
+
+The **Models** sidebar destination opens `/ui/chat/models` inside the same shell. It reuses the existing Model Hub catalog, filters, pricing and details in a read-only `chat` variant. Admins see the authenticated catalog and other users see the published catalog, matching the dashboard's existing access rules. The page uses `.moyai-models-page` for scrolling and `.chat-model-hub-card` for the bordered Moyai surface. Portalled model details carry `.chat-theme`; catalog management and other hub tabs stay in the dashboard.
+
+Show available providers in a single-select dropdown beside model search. “All providers” clears the provider filter while keeping the other filters. The dropdown includes provider logos and uses the Chat theme in its portal. Provider logos reuse the existing asset mapping; white logo plates preserve the colors and contrast of the original assets in both themes. Unknown or failed logos fall back to a provider initial. The model list uses compact search and capability controls, quiet separators, and provider identities beside model names. Keep these styles scoped to Chat.
 
 ### Colors
 
@@ -38,7 +58,7 @@ Never hardcode hex values. Use these CSS variables via Tailwind classes — all 
 | `--sidebar-accent-foreground` | `text-sidebar-accent-foreground`      | Active nav item text                                       |
 | `--sidebar-border`            | `border-sidebar-border`               | Sidebar's own dividers/right border                        |
 
-**Known gotcha — verified in `globals.css`:** `--accent`, `--secondary`, and `--muted` all resolve to the _identical_ OKLCH value in both light and dark themes. Using `bg-accent` for a "selected" state against a `bg-secondary` container is **invisible** — there is zero contrast. This bit us repeatedly in this exact sidebar. Rules:
+**Known gotcha:** generic `--accent`, `--secondary`, and `--muted` values may coincide in the dashboard theme. The standalone palette deliberately separates its sidebar selection from the chrome. Always use the sidebar-specific tokens rather than relying on incidental contrast from a generic token. Rules:
 
 - Sidebar container: `bg-sidebar`, never `bg-secondary` or `bg-accent`.
 - Active/selected nav item: `bg-sidebar-accent text-sidebar-accent-foreground`, never `bg-accent` on its own inside the sidebar.
@@ -59,7 +79,9 @@ Never hardcode hex values. Use these CSS variables via Tailwind classes — all 
 
 ```tsx
 // Page/greeting heading
-<h1 className="text-[28px] font-semibold tracking-tight">Good afternoon</h1>
+<header className="moyai-chat-home-header">
+  <h1>What are we building?</h1>
+</header> // Moyai: 500 weight, clamp(32px, 3.4vw, 46px), 1.13 line-height
 
 // Section heading (panel titles: "Your API Keys", "Your Usage")
 <h2 className="text-base font-semibold tracking-tight">Your Usage</h2>
@@ -91,7 +113,7 @@ Never hardcode hex values. Use these CSS variables via Tailwind classes — all 
 
 | Context                            | Value                                       |
 | ---------------------------------- | ------------------------------------------- |
-| Sidebar outer padding              | `p-2` (8px)                                 |
+| Sidebar outer padding              | `8px 10px 8px`                              |
 | Nav item padding                   | `px-2.5 py-2`                               |
 | Inline icon-to-label gap           | `gap-2.5` in nav items, `gap-1.5` elsewhere |
 | Section divider margin             | `mx-2`                                      |
@@ -104,11 +126,11 @@ Never hardcode hex values. Use these CSS variables via Tailwind classes — all 
 ## Border Radius
 
 ```tsx
-rounded-md // 8px — buttons, inputs, nav items, bordered divs
-rounded-lg // 10px — panel cards, table containers
-rounded-xl // 14px — chat input composer
-rounded-2xl // 16px — chat message bubbles
-rounded-full // pills, avatars, status dots
+rounded - md; // 8px — buttons, inputs, nav items, bordered divs
+rounded - lg; // 10px — panel cards, table containers
+rounded - xl; // 12px — shared controls (Moyai composer uses its source 10px rule)
+rounded - lg; // 8px — Moyai user message bubbles
+rounded - full; // pills, avatars, status dots
 ```
 
 ---
@@ -154,7 +176,11 @@ No dedicated shadcn `Sidebar` block is installed (see gaps). Build nav items fro
 </Button>
 ```
 
-There is no collapsible/icon-rail sidebar mode — it was removed (added complexity, no real use case, and its collapse toggle button had nowhere sensible to live). Don't reintroduce collapse state without a concrete reason.
+The desktop sidebar follows Moyai: 240px wide, 230px below 1250px, and 52px when collapsed. Its top row uses the shared `ViewSwitcher`, search and collapse controls above a transparent 32px New Chat button and compact destinations. The switcher exposes AI Gateway, Moyai, Chat and registered plugins, with the active workspace marked. Chat uses the same rounded speech-bubble icon in the trigger and menu, including the dashboard entry point. The collapsed rail keeps the icon-only switcher above its expand button. Workspace keeps credentials, API keys, logs, usage and preview feedback reachable in one menu. Recent conversation rows show title, model and date at 48px height. The footer shows account identity, appearance, settings and sign out. The shared dashboard Navbar is absent from this standalone surface; only its product switcher is reused.
+
+At 600px and below, a compact header keeps the workspace switcher beside the labelled menu button, visible even when the navigation Sheet is closed. The same navigation renders once inside the existing `Sheet`. Choosing a route or conversation closes the Sheet. Do not render two concurrent conversation lists: they each own a search shortcut listener. The collapsed desktop list remains mounted for keyboard search, but is visually hidden. The Chat layout owns an authenticated `PluginModeProvider` so returning to AI Gateway clears a previously selected plugin.
+
+The landing page reuses Moyai's left-aligned 720px home content, dot/grid backdrop, 46px heading, 132px editor and compact starter rows. `ChatModelPicker` sits at the right of the composer action row, matching Moyai's model selector position. Selecting a model chooses chat or image generation. Preserve LiteLLM's existing model access and request behavior; do not copy Moyai product or backend logic.
 
 ### ScrollArea
 
@@ -176,7 +202,7 @@ If you need "shrink to fit content, cap at N px" rather than "always N px," you 
 
 ### Input / Textarea
 
-Use `Input` and `Textarea` from `@/components/ui`. The shared `ChatComposer` uses `InputGroupTextarea` and owns submission, cancellation and IME handling. Reuse it for new chat surfaces
+Use `Input` and `Textarea` from `@/components/ui`. Standalone Chat uses `MoyaiChatComposer` for the source editor and toolbar arrangement, preserving submission, cancellation, attachments and IME handling. Uploads share a limit of four files per message and 10 MB per file. Images retain previews; PDF, DOCX, XLSX, text and code files use named file chips and native Responses `input_file` parts. File support depends on the selected model and provider. Attachment bytes stay in the existing user-scoped IndexedDB store; history metadata stays small. Legacy DOC/XLS files are not accepted. Other chat surfaces continue using the shared `ChatComposer` / `InputGroupTextarea`; this visual port is scoped to standalone Chat.
 
 ```tsx
 import { Input } from "@/components/ui/input";
@@ -315,16 +341,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 ### Chat shell (sidebar + routed content)
 
 ```tsx
-<div className="flex h-full w-full flex-col bg-background overflow-hidden">
+<div className="chat-theme chat-workspace flex h-full w-full flex-col overflow-hidden text-foreground">
   {/* optional full-width banner */}
   <div className="flex flex-1 min-h-0 overflow-hidden">
-    <aside
-      className="shrink-0 bg-sidebar border-r flex flex-col overflow-hidden"
-      style={{ width: collapsed ? 56 : 260 }}
-    >
-      {/* nav items, conversation list */}
+    <aside className="chat-glass-sidebar w-[248px] shrink-0 border-r border-sidebar-border flex flex-col overflow-hidden">
+      {/* Desktop nav; on mobile use Sheet with the same content instead. */}
     </aside>
-    <main className="flex-1 flex flex-col overflow-hidden min-w-0">{children}</main>
+    <main className="chat-glass-pane flex-1 flex flex-col overflow-hidden min-w-0">{children}</main>
   </div>
 </div>
 ```
@@ -372,7 +395,7 @@ The shadcn Sidebar primitive block (`SidebarProvider`/`SidebarMenu`/etc) is stil
 
 ```
 src/components/chat/
-  ChatShell.tsx          # Sidebar chrome (nav, collapse, conversation list), shared across all /chat/* routes
+  ChatShell.tsx          # Desktop navigation / mobile Sheet, shared across all /chat/* routes
   ConversationList.tsx   # Date-grouped chat list + Cmd+K search
   ChatMessages.tsx       # Shared list and single-message rendering (user, assistant, tool)
   MCPAppsPanel.tsx       # Integrations grid + detail view

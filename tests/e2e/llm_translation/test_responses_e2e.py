@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-import threading
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable
 from types import MappingProxyType
 from typing import Final, cast
 
@@ -39,10 +37,10 @@ from openai.types.responses import (
     ResponseReasoningItem,
 )
 from provider_edge import LiveEdge, start_provider_edge
-from provider_edge_bedrock import bedrock_signer
+from provider_edge_bedrock import ConverseBodyCapture, bedrock_signer
 from proxy_client import ProxyClient
 from pydantic import BaseModel, TypeAdapter
-from responses_helpers import AZURE_OPENAI_BACKEND, azure_openai_params
+from responses_helpers import AZURE_OPENAI_API_VERSION, AZURE_OPENAI_BACKEND, azure_openai_params
 from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
@@ -69,26 +67,6 @@ BEDROCK_EDGE_MOUNT: Final = f"bedrock/{BEDROCK_EDGE_REGION}"
 
 class ConverseRequestBody(BaseModel):
     additionalModelRequestFields: dict[str, str] | None = None
-
-
-@dataclass(slots=True)
-class ConverseRequestCapture:
-    """The Converse bodies the proxy actually sent upstream, as seen by a live
-    edge sitting between the proxy and Bedrock."""
-
-    _bodies: list[ConverseRequestBody] = field(default_factory=list)
-    _lock: threading.Lock = field(default_factory=threading.Lock)
-
-    def observe(self, url: str, headers: Mapping[str, str], body: bytes | None) -> None:
-        if body is None or "/converse" not in url:
-            return
-        with self._lock:
-            self._bodies.append(ConverseRequestBody.model_validate_json(body))
-
-    @property
-    def bodies(self) -> tuple[ConverseRequestBody, ...]:
-        with self._lock:
-            return tuple(self._bodies)
 
 
 WEATHER_TOOL: FunctionToolParam = {
@@ -774,6 +752,70 @@ class TestResponses:
         Subject(
             domain=Domain.LLM_TRANSLATION,
             route=Route.RESPONSES,
+            providers=(Provider.AZURE,),
+            models=(AZURE_OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_responses_azure_openai_dated_ga_chat_api_version_serves_responses(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model: Final = _register(
+            proxy,
+            resources,
+            azure_openai_params(api_version="2024-10-21"),
+            prefix="e2e-responses-azure-dated-chat",
+        )
+        client: Final = sdk.openai(resources.key())
+
+        response: Final = client.responses.create(
+            model=model,
+            input="reply with one word",
+            instructions=INSTRUCTIONS,
+            extra_body=NO_PROXY_CACHE,
+        )
+        assert response.output_text.strip(), (
+            f"/responses over an azure deployment pinned to a dated GA chat api_version returned no output text: "
+            f"{response.output!r}"
+        )
+
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.AZURE,),
+            models=(AZURE_OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_responses_azure_openai_responses_api_version_overrides_a_pre_responses_api_version(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        # Azure rejects /openai/responses below api-version 2025-03-01-preview (probed live 2026-10-15),
+        # so this call only succeeds if the proxy sends responses_api_version instead of api_version.
+        model: Final = _register(
+            proxy,
+            resources,
+            azure_openai_params(api_version="2024-10-01-preview", responses_api_version=AZURE_OPENAI_API_VERSION),
+            prefix="e2e-responses-azure-override",
+        )
+        client: Final = sdk.openai(resources.key())
+
+        response: Final = client.responses.create(
+            model=model,
+            input="reply with one word",
+            instructions=INSTRUCTIONS,
+            extra_body=NO_PROXY_CACHE,
+        )
+        assert response.output_text.strip(), (
+            f"/responses over an azure deployment with responses_api_version set returned no output text: "
+            f"{response.output!r}"
+        )
+
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
             providers=(Provider.OPENAI,),
             models=(OPENAI_RESPONSES_BACKEND,),
             mode=Mode.NONSTREAM,
@@ -919,7 +961,7 @@ class TestResponses:
         """Judges the Converse bodies the edge captured, not the reply: Claude on
         Bedrock rejects the forwarded field with a 400, which the chat leg's
         ``Result`` carries as a value and the OpenAI SDK raises."""
-        capture: Final = ConverseRequestCapture()
+        capture: Final = ConverseBodyCapture()
         edge: Final = start_provider_edge(
             LiveEdge(observe_request=capture.observe, sign=bedrock_signer(BEDROCK_EDGE_REGION)),
             mounts=MappingProxyType(
@@ -964,10 +1006,11 @@ class TestResponses:
                 ),
             )
 
-        forwarded: Final = tuple(body.additionalModelRequestFields for body in capture.bodies)
+        bodies: Final = tuple(ConverseRequestBody.model_validate_json(body) for body in capture.drain())
+        forwarded: Final = tuple(body.additionalModelRequestFields for body in bodies)
         assert forwarded, f"{endpoint} produced no Bedrock Converse request"
         assert forwarded == ({"safety_identifier": safety_identifier},) * len(forwarded), (
-            f"{endpoint} did not forward safety_identifier to Bedrock Converse on every attempt: {capture.bodies}"
+            f"{endpoint} did not forward safety_identifier to Bedrock Converse on every attempt: {bodies}"
         )
 
     @pytest.mark.skip(

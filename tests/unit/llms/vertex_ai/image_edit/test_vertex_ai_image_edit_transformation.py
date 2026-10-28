@@ -1,13 +1,18 @@
 import base64
 import json
 import os
+from datetime import datetime
 from io import BytesIO
 from typing import Dict
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
+import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.vertex_ai.image_edit.vertex_gemini_transformation import (
     VertexAIGeminiImageEditConfig,
 )
@@ -410,3 +415,184 @@ class TestVertexAIImagenImageEditTransformation:
             self.config._read_all_bytes(bytearray(b"test_bytearray"))
             == b"test_bytearray"
         )
+
+
+_IMAGEN_EDIT_IMAGE_KEY = "bytesBase64Encoded"
+
+
+def _imagen_edit_predict_response(payload: object) -> httpx.Response:
+    return httpx.Response(200, content=json.dumps(payload).encode(), headers={"content-type": "application/json"})
+
+
+def _imagen_edit_response_images(payload: object) -> list[tuple[object, object]]:
+    response = VertexAIImagenImageEditConfig().transform_image_edit_response(
+        model="imagen-3.0-capability-001",
+        raw_response=_imagen_edit_predict_response(payload),
+        logging_obj=Logging(
+            model="imagen-3.0-capability-001",
+            messages=[],
+            stream=False,
+            call_type="image_edit",
+            start_time=datetime(2026, 1, 1),
+            litellm_call_id="imagen-edit-call",
+            function_id="imagen-edit-function",
+        ),
+    )
+    return [(image.b64_json, image.url) for image in response.data]
+
+
+def _imagen_edit_rejection_text(payload: object) -> str:
+    with pytest.raises(ValidationError) as rejection:
+        _imagen_edit_response_images(payload)
+    return str(rejection.value)
+
+
+def _edited_imagen_images(payload: object) -> list[tuple[object, object]]:
+    transport = httpx.MockTransport(lambda request: _imagen_edit_predict_response(payload))
+    response = litellm.image_edit(
+        model="vertex_ai/imagen-3.0-capability-001",
+        image=BytesIO(b"image-bytes"),
+        prompt="add a hat",
+        api_base="https://vertex.invalid",
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        client=HTTPHandler(client=httpx.Client(transport=transport)),
+    )
+    return [(image.b64_json, image.url) for image in response.data]
+
+
+def test_imagen_image_edit_response_lists_prediction_images_in_order_and_skips_entries_without_image_bytes():
+    images = _imagen_edit_response_images(
+        {
+            "predictions": [
+                {_IMAGEN_EDIT_IMAGE_KEY: "first", "mimeType": "image/png"},
+                "plain text",
+                [],
+                {},
+                ["other"],
+                {"raiFilteredReason": "blocked"},
+                {_IMAGEN_EDIT_IMAGE_KEY: "second"},
+            ],
+            "deployedModelId": "1",
+        }
+    )
+
+    assert images == [("first", None), ("second", None)]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"predictions": []},
+        {"predictions": ""},
+        {"predictions": "plain text"},
+        {"predictions": _IMAGEN_EDIT_IMAGE_KEY},
+        {"predictions": {}},
+        {"predictions": {"mimeType": "image/png"}},
+        {"predictions": [{}]},
+        {"predictions": [{"mimeType": "image/png"}]},
+        {"predictions": ["plain", ""]},
+        {"predictions": [["a", "b"], []]},
+        {"predictions": [[[_IMAGEN_EDIT_IMAGE_KEY]]]},
+        {"Predictions": [{_IMAGEN_EDIT_IMAGE_KEY: "a"}]},
+        {"predictions": [{"bytes_base64_encoded": "a"}]},
+    ],
+)
+def test_imagen_image_edit_response_without_prediction_image_bytes_has_no_images(payload: object):
+    assert _imagen_edit_response_images(payload) == []
+
+
+@pytest.mark.parametrize("image_bytes", [None, "", "aGVsbG8=", "1.5", "true", "é中"])
+def test_imagen_image_edit_response_keeps_the_image_bytes_value_exactly_as_sent(image_bytes: str | None):
+    images = _imagen_edit_response_images({"predictions": [{_IMAGEN_EDIT_IMAGE_KEY: image_bytes}]})
+
+    assert repr(images) == repr([(image_bytes, None)])
+
+
+def test_imagen_image_edit_response_finds_the_image_after_hundreds_of_imageless_predictions():
+    images = _imagen_edit_response_images({"predictions": [*[{}] * 403, {_IMAGEN_EDIT_IMAGE_KEY: "late"}]})
+
+    assert images == [("late", None)]
+
+
+@pytest.mark.parametrize("image_bytes", [5, 1.5, True, ["a"], {"a": 1}])
+def test_imagen_image_edit_response_rejects_non_string_image_bytes_naming_b64_json(image_bytes: object):
+    with pytest.raises(ValidationError, match="b64_json"):
+        _imagen_edit_response_images({"predictions": [{_IMAGEN_EDIT_IMAGE_KEY: image_bytes}]})
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"predictions": None},
+        {"predictions": 7},
+        {"predictions": 1.5},
+        {"predictions": True},
+        {"predictions": {_IMAGEN_EDIT_IMAGE_KEY: "vertex-secret"}},
+        {"predictions": [None]},
+        {"predictions": [7]},
+        {"predictions": [1.5]},
+        {"predictions": [False]},
+        {"predictions": ["vertex-secret " + _IMAGEN_EDIT_IMAGE_KEY]},
+        {"predictions": [[_IMAGEN_EDIT_IMAGE_KEY, "vertex-secret"]]},
+        {"predictions": [{_IMAGEN_EDIT_IMAGE_KEY: "vertex-secret"}, None]},
+    ],
+)
+def test_imagen_image_edit_response_rejects_malformed_predictions_without_echoing_them(payload: object):
+    rejection_text = _imagen_edit_rejection_text(payload)
+
+    assert "vertex-secret" not in rejection_text and "input_value" not in rejection_text, rejection_text
+
+
+@pytest.mark.parametrize("position", [403, 429])
+@pytest.mark.parametrize("malformed", [None, 7, _IMAGEN_EDIT_IMAGE_KEY, [_IMAGEN_EDIT_IMAGE_KEY]])
+def test_imagen_image_edit_response_rejection_text_is_the_same_wherever_the_malformed_prediction_sits(
+    position: int, malformed: object
+):
+    rejection_at_start = _imagen_edit_rejection_text({"predictions": [malformed]})
+
+    rejection_at_position = _imagen_edit_rejection_text({"predictions": [*[{}] * position, malformed]})
+
+    assert rejection_at_position == rejection_at_start and str(position) not in rejection_at_position
+
+
+@pytest.mark.parametrize("body", [[], [{_IMAGEN_EDIT_IMAGE_KEY: "a"}], "predictions", 7, 2.5, True, None])
+def test_imagen_image_edit_response_rejects_a_predict_body_that_is_not_an_object_with_attribute_error(body: object):
+    with pytest.raises(AttributeError, match="object has no attribute 'get'"):
+        _imagen_edit_response_images(body)
+
+
+def test_imagen_image_edit_returns_the_prediction_images_of_the_predict_endpoint():
+    images = _edited_imagen_images(
+        {
+            "predictions": [
+                {_IMAGEN_EDIT_IMAGE_KEY: "first"},
+                {"mimeType": "image/png"},
+                {_IMAGEN_EDIT_IMAGE_KEY: "second"},
+            ]
+        }
+    )
+
+    assert images == [("first", None), ("second", None)]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"predictions": None},
+        {"predictions": 7},
+        {"predictions": [None]},
+        {"predictions": ["vertex-secret " + _IMAGEN_EDIT_IMAGE_KEY]},
+        {"predictions": [*[{}] * 403, [_IMAGEN_EDIT_IMAGE_KEY, "vertex-secret"]]},
+    ],
+)
+def test_imagen_image_edit_maps_malformed_predictions_to_a_connection_error_without_echoing_them(payload: object):
+    with pytest.raises(litellm.APIConnectionError) as mapped:
+        _edited_imagen_images(payload)
+
+    assert (type(mapped.value), mapped.value.status_code, "vertex-secret" in str(mapped.value)) == (
+        litellm.APIConnectionError,
+        500,
+        False,
+    )

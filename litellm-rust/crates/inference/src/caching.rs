@@ -24,9 +24,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use tokio_util::codec::Decoder;
 
-use crate::RouteError;
+use crate::Error;
 
-pub trait Cachable: Protocol<Error = RouteError> {
+pub trait Cachable: Protocol<Error = Error> {
     const SURFACE: &'static str;
 
     fn reusable(_response: &Self::Response) -> bool {
@@ -145,15 +145,15 @@ pub async fn execute_unary<P, F, Fut>(
     request: CacheRequest,
     cache: Option<Arc<dyn ResponseCacheService>>,
     options: Option<CacheOptions>,
-    interceptors: &impl Interceptors<RouteError>,
+    interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
     provider: F,
-) -> Result<P::Response, RouteError>
+) -> Result<P::Response, Error>
 where
     P: Cachable,
     P::Response: Serialize + DeserializeOwned,
     F: FnOnce() -> Fut,
-    Fut: Future<Output = Result<P::Response, RouteError>>,
+    Fut: Future<Output = Result<P::Response, Error>>,
 {
     let identity = request.identity.clone();
     crate::diagnostic::provider(&identity.model, &identity.provider);
@@ -191,15 +191,15 @@ pub async fn execute_streaming<P, F, Fut>(
     request: CacheRequest,
     cache: Option<Arc<dyn ResponseCacheService>>,
     options: Option<CacheOptions>,
-    interceptors: &impl Interceptors<RouteError>,
+    interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
     provider: F,
-) -> Result<OutputOf<P>, RouteError>
+) -> Result<OutputOf<P>, Error>
 where
     P: StreamCachable,
     P::Response: Serialize + DeserializeOwned,
     F: FnOnce() -> Fut,
-    Fut: Future<Output = Result<OutputOf<P>, RouteError>>,
+    Fut: Future<Output = Result<OutputOf<P>, Error>>,
 {
     let identity = request.identity.clone();
     crate::diagnostic::provider(&identity.model, &identity.provider);
@@ -299,9 +299,9 @@ impl<P: StreamCachable> CallCache<P> {
 }
 
 fn capture_stream<P: StreamCachable>(
-    chunks: futures_util::stream::BoxStream<'static, Result<P::Chunk, RouteError>>,
+    chunks: futures_util::stream::BoxStream<'static, Result<P::Chunk, Error>>,
     session: CacheSession,
-) -> futures_util::stream::BoxStream<'static, Result<P::Chunk, RouteError>> {
+) -> futures_util::stream::BoxStream<'static, Result<P::Chunk, Error>> {
     stream::try_unfold(
         (chunks, Some(Vec::<u8>::new()), session),
         |(mut chunks, captured, session)| async move {
@@ -330,7 +330,7 @@ fn capture_stream<P: StreamCachable>(
                     {
                         session.store(entry).await;
                     }
-                    Ok::<_, RouteError>(None)
+                    Ok::<_, Error>(None)
                 }
             }
         },
@@ -369,9 +369,9 @@ fn successful_stream(text: &str, terminal: &str) -> bool {
 
 async fn publish(
     facts: ExecutionFacts,
-    interceptors: &impl Interceptors<RouteError>,
+    interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
-) -> Result<(), RouteError> {
+) -> Result<(), Error> {
     if let Some(observers) = observers {
         observers.emit(CallEvent::Execution(ExecutionEvent::ResultReady {
             facts: facts.clone(),

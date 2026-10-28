@@ -45,6 +45,7 @@ from tests.integration._support.process import stop_child
 from tests.integration._support.timing import assert_enforced_within
 from tests.integration._support.wire import Reply, Wire, wire_server
 from tests.integration._support.wire import Request as WireRequest
+from tests.integration._support.ports import allocate_port
 
 CONFIG_TEMPLATE_PATH = Path("tests/integration/mcp/_config_mcp_e2e.yaml")
 MCP_SERVER_SCRIPT = Path("tests/integration/mcp/_math_server.py")
@@ -294,8 +295,9 @@ def _start_proxy_server(
         sock: Final = socket_factory()
         startup.callback(sock.close)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("127.0.0.1", 0))
-        host, port = sock.getsockname()
+        host: Final = "127.0.0.1"
+        port: Final = allocate_port()
+        sock.bind((host, port))
 
         config = uvicorn.Config(proxy_app, host=host, port=port, log_level="warning", lifespan="off")
         server = uvicorn.Server(config)
@@ -369,9 +371,7 @@ def test_proxy_startup_failure_closes_acquired_resources(tmp_path: Path) -> None
 @contextmanager
 def _math_http_server(offset: int) -> typing.Iterator[str]:
     host = "127.0.0.1"
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind((host, 0))
-        _, port = sock.getsockname()
+    port: Final = allocate_port()
 
     with tempfile.TemporaryFile() as server_log:
         process = subprocess.Popen(

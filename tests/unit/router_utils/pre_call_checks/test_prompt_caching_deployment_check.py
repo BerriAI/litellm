@@ -9,15 +9,19 @@ import pytest
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT, PROMPT_CACHE_LOOKBACK_POSITIONS
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
+    _honors_one_hour_cache_ttl,
     _get_min_token_count_for_deployments,
 )
-from litellm.router_utils.prompt_caching_cache import PromptCachingCache
+from litellm.router_utils.prompt_caching_cache import PROMPT_CACHE_PIN_TTL_SECONDS, PromptCachingCache
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt, token_counter
 
 MODEL_GROUP_ALIAS = "my-claude-group"
@@ -123,6 +127,63 @@ def test_write_gate_is_what_prevents_a_pin_below_the_model_minimum():
 def test_get_min_token_count_for_deployments_falls_back_to_default_for_empty_group():
     """An empty group has no member minimum to read, so it must fall back rather than crash."""
     assert _get_min_token_count_for_deployments([]) == DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
+
+
+def test_bedrock_application_profile_uses_its_base_model_for_one_hour_ttl() -> None:
+    standard_logging_object: Final = cast(
+        StandardLoggingPayload,
+        {
+            "custom_llm_provider": "bedrock",
+            "model": "bedrock/converse/arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/pinprofile",
+        },
+    )
+
+    assert _honors_one_hour_cache_ttl(
+        standard_logging_object,
+        {"model": None, "base_model": "bedrock/us.anthropic.claude-sonnet-5-5"},
+    ) is True
+
+
+def test_bedrock_application_profile_cache_hit_reads_base_model_from_metadata_model_info() -> None:
+    standard_logging_object: Final = cast(
+        StandardLoggingPayload,
+        {
+            "custom_llm_provider": "bedrock",
+            "model": "bedrock/converse/arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/pinprofile",
+        },
+    )
+    assert (
+        _honors_one_hour_cache_ttl(
+            standard_logging_object,
+            {"metadata": {"model_info": {"base_model": "bedrock/us.anthropic.claude-sonnet-5-5"}}},
+        )
+        is True
+    )
+
+
+def test_bedrock_application_profile_top_level_base_model_wins_over_metadata_model_info() -> None:
+    standard_logging_object: Final = cast(
+        StandardLoggingPayload,
+        {
+            "custom_llm_provider": "bedrock",
+            "model": "bedrock/converse/arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/pinprofile",
+        },
+    )
+    top_level: Final = "bedrock/anthropic.claude-3-haiku-20240307-v1:0"
+    in_metadata: Final = "bedrock/us.anthropic.claude-sonnet-5-5"
+    top_level_alone: Final = _honors_one_hour_cache_ttl(standard_logging_object, {"base_model": top_level})
+    metadata_alone: Final = _honors_one_hour_cache_ttl(
+        standard_logging_object, {"metadata": {"model_info": {"base_model": in_metadata}}}
+    )
+    assert top_level_alone != metadata_alone
+
+    assert (
+        _honors_one_hour_cache_ttl(
+            standard_logging_object,
+            {"base_model": top_level, "metadata": {"model_info": {"base_model": in_metadata}}},
+        )
+        is top_level_alone
+    )
 
 
 @pytest.mark.asyncio
@@ -314,9 +375,11 @@ async def test_replayed_redacted_thinking_block_still_records_and_pins():
         kwargs={
             "standard_logging_object": {
                 "call_type": "anthropic_messages",
+                "custom_llm_provider": "anthropic",
                 "model": model,
                 "messages": messages,
                 "model_id": "dep-2",
+                "model_map_information": {"model_map_key": model, "model_map_value": None},
             }
         },
         response_obj=None,
@@ -431,7 +494,7 @@ async def test_repeated_auto_cached_prefix_pins_to_one_deployment(monkeypatch, l
     served_by = first._hidden_params["model_id"]
 
     affinity_key = PromptCachingCache.get_prompt_caching_cache_key(_affinity_messages(messages), None)
-    assert await _eventually(lambda: router.cache.get_cache(key=affinity_key)) is not None
+    assert await _eventually(lambda: router.prompt_caching_pin_cache.get_cache(key=affinity_key)) is not None
 
     subsequent = [
         (await router.acompletion(model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok"))._hidden_params[
@@ -661,9 +724,11 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
     )
     standard_logging_object = {
         "call_type": "acompletion",
+        "custom_llm_provider": "anthropic",
         "model": "anthropic/claude-fable-5",
         "messages": messages,
         "model_id": "dep-1",
+        "model_map_information": {"model_map_key": "anthropic/claude-fable-5", "model_map_value": None},
     }
 
     _, took, lags = await timed_with_loop_lags(
@@ -679,6 +744,103 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
         "model_id": "dep-1"
     }
     assert_loop_stayed_free(took, lags)
+
+
+class _ManualClock:
+    def __init__(self) -> None:
+        self.now = 1_700_000_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now = self.now + seconds
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model", "model_map_value", "pinned_past_five_minutes"),
+    [
+        pytest.param(
+            "anthropic",
+            "claude-sonnet-4-5",
+            {"cache_creation_input_token_cost_above_1hr": 6e-06},
+            True,
+            id="one-hour-cache-writes-priced",
+        ),
+        pytest.param(
+            "anthropic",
+            "claude-sonnet-4-5",
+            {"cache_creation_input_token_cost_above_1hr": None},
+            False,
+            id="no-one-hour-cache-writes",
+        ),
+        pytest.param("anthropic", "claude-sonnet-4-5", None, False, id="model-not-in-cost-map"),
+        pytest.param(
+            "anthropic",
+            "claude-sonnet-4-5",
+            {"cache_creation_input_token_cost_above_1hr": 0.0},
+            False,
+            id="one-hour-cache-writes-priced-at-zero",
+        ),
+        pytest.param(
+            "bedrock",
+            "apac.anthropic.claude-haiku-4-5-20251001-v1:0",
+            {"cache_creation_input_token_cost_above_1hr": None},
+            True,
+            id="bedrock-forwards-1h-from-the-base-model-entry",
+        ),
+        pytest.param(
+            "bedrock",
+            "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+            {"cache_creation_input_token_cost_above_1hr": 6.6e-06},
+            False,
+            id="bedrock-drops-1h-for-a-profile-arn-whatever-its-base-model",
+        ),
+    ],
+)
+async def test_one_hour_pin_follows_the_deployments_one_hour_cache_support(
+    custom_llm_provider: str,
+    model: str,
+    model_map_value: dict[str, float | None] | None,
+    pinned_past_five_minutes: bool,
+):
+    clock: Final = _ManualClock()
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
+    check: Final = PromptCachingDeploymentCheck(cache=cache)
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "word " * 6000, "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+                ],
+            }
+        ],
+    )
+
+    await check.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {
+                "call_type": "acompletion",
+                "custom_llm_provider": custom_llm_provider,
+                "model": model,
+                "messages": messages,
+                "model_id": "dep-1",
+                "model_map_information": {"model_map_key": model, "model_map_value": model_map_value},
+            }
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    pins: Final = PromptCachingCache(cache=cache)
+    assert await pins.async_get_model_id(messages=messages, tools=None) == {"model_id": "dep-1"}
+
+    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
+
+    assert (await pins.async_get_model_id(messages=messages, tools=None) is not None) is pinned_past_five_minutes
 
 
 LONG_PROMPT = "word " * 3000
@@ -969,7 +1131,7 @@ async def test_claude_code_style_session_stays_on_one_deployment_across_turns(lo
         response = await router.acompletion(model=MODEL_GROUP_ALIAS, messages=request, mock_response="ok")
         served.append(response._hidden_params["model_id"])
         pin_key = PromptCachingCache.get_prompt_caching_cache_key(request, None)
-        assert await _eventually(functools.partial(router.cache.get_cache, key=pin_key)) is not None
+        assert await _eventually(functools.partial(router.prompt_caching_pin_cache.get_cache, key=pin_key)) is not None
         history = [*history, {"role": "user", "content": [_text(text)]}, {"role": "assistant", "content": "ok"}]
 
     assert served == [served[0]] * len(user_turns)
@@ -1054,7 +1216,7 @@ async def test_router_with_prompt_caching(anthropic_messages):
     initial_model_id = response._hidden_params["model_id"]
 
     cache = PromptCachingCache(
-        cache=router.cache,
+        cache=router.prompt_caching_pin_cache,
     )
 
     cached_model_id = await _eventually(lambda: cache.get_model_id(messages=anthropic_messages, tools=None))
@@ -1075,3 +1237,225 @@ async def test_router_with_prompt_caching(anthropic_messages):
         print("response=", response)
 
         assert response._hidden_params["model_id"] == initial_model_id
+
+
+_OPENAI_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "word " * 3000,
+        "parameters": {"type": "object", "properties": {}},
+    },
+    "cache_control": {"type": "ephemeral"},
+}
+_ANTHROPIC_TOOL: Final = {
+    "name": "get_weather",
+    "description": "word " * 3000,
+    "input_schema": {"type": "object", "properties": {}},
+    "cache_control": {"type": "ephemeral"},
+}
+
+
+def _success_kwargs(
+    *,
+    call_type: str,
+    model: str,
+    model_id: str,
+    request_messages: list,
+    request_kwargs: dict,
+) -> dict:
+    """The success event shape: `messages` is what standard logging produced, `system`/`tools` stay raw."""
+    return {
+        "standard_logging_object": {
+            "call_type": call_type,
+            "model": model,
+            "model_id": model_id,
+            "custom_llm_provider": "anthropic",
+            "model_map_information": {"model_map_key": model, "model_map_value": None},
+            "messages": StandardLoggingPayloadSetup.append_system_prompt_messages(
+                kwargs=request_kwargs, messages=copy.deepcopy(request_messages)
+            ),
+        },
+        "system": request_kwargs.get("system"),
+        "tools": request_kwargs.get("tools"),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type,request_messages,request_kwargs",
+    [
+        pytest.param(
+            "acompletion",
+            [{"role": "user", "content": "weather?"}],
+            {"tools": [_OPENAI_TOOL]},
+            id="chat_tool_breakpoint_only",
+        ),
+        pytest.param(
+            "anthropic_messages",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "word " * 3000, "cache_control": {"type": "ephemeral"}},
+                    ],
+                }
+            ],
+            {"system": "you are terse"},
+            id="anthropic_messages_string_system_and_marked_user_block",
+        ),
+        pytest.param(
+            "anthropic_messages",
+            [{"role": "user", "content": "hi"}],
+            {
+                "system": [
+                    {
+                        "type": "text",
+                        "text": "word " * 3000,
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ]
+            },
+            id="anthropic_messages_list_system_breakpoint_only",
+        ),
+        pytest.param(
+            "anthropic_messages",
+            [{"role": "user", "content": "weather?"}],
+            {"tools": [_ANTHROPIC_TOOL]},
+            id="anthropic_messages_tool_breakpoint_only",
+        ),
+        pytest.param(
+            "acompletion",
+            [{"role": "user", "content": "weather?"}],
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "word " * 3000,
+                            "parameters": {"type": "object", "properties": {}},
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                    }
+                ]
+            },
+            id="chat_nested_function_cache_control_only",
+        ),
+        pytest.param(
+            "anthropic_messages",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "word " * 3000, "cache_control": {"type": "ephemeral"}},
+                    ],
+                }
+            ],
+            {},
+            id="control_message_breakpoint_no_system",
+        ),
+    ],
+)
+async def test_affinity_key_covers_the_tools_and_system_prompt_the_provider_sees(
+    call_type, request_messages, request_kwargs
+):
+    """
+    The write side keys the pin on what standard logging logged plus the raw `system`/`tools`
+    kwargs, and the read side must rebuild the same prefix from the raw request. Anything the
+    provider caches that the key ignores (tools, the /v1/messages system prompt) either writes no
+    pin or writes one the lookup can never compute.
+    """
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+
+    await check.async_log_success_event(
+        kwargs=_success_kwargs(
+            call_type=call_type,
+            model=AUTO_CACHING_MODEL,
+            model_id="dep-1",
+            request_messages=request_messages,
+            request_kwargs=request_kwargs,
+        ),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=cast(list[AllMessageValues], request_messages),
+        request_kwargs=request_kwargs,
+    )
+
+    assert filtered == [deployments[0]]
+
+
+@pytest.mark.asyncio
+async def test_a_different_tool_set_does_not_share_the_pin():
+    """Tools hash into the prefix, so a same-messages request with other tools must not read the pin."""
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    request_messages = [{"role": "user", "content": "weather?"}]
+    other_tool = {**_OPENAI_TOOL, "function": {**_OPENAI_TOOL["function"], "name": "get_time"}}
+
+    await check.async_log_success_event(
+        kwargs=_success_kwargs(
+            call_type="acompletion",
+            model=AUTO_CACHING_MODEL,
+            model_id="dep-1",
+            request_messages=request_messages,
+            request_kwargs={"tools": [_OPENAI_TOOL]},
+        ),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=cast(list[AllMessageValues], request_messages),
+        request_kwargs={"tools": [other_tool]},
+    )
+
+    assert filtered == deployments
+
+
+@pytest.mark.asyncio
+async def test_a_pin_written_without_tools_is_read_when_tools_is_an_empty_list():
+    """`tools=None` on the write and `tools=[]` on the read are the same empty seed."""
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    request_messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "word " * 3000, "cache_control": {"type": "ephemeral"}}],
+        }
+    ]
+
+    await check.async_log_success_event(
+        kwargs=_success_kwargs(
+            call_type="anthropic_messages",
+            model=AUTO_CACHING_MODEL,
+            model_id="dep-1",
+            request_messages=request_messages,
+            request_kwargs={},
+        ),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=cast(list[AllMessageValues], request_messages),
+        request_kwargs={"tools": []},
+    )
+
+    assert filtered == [deployments[0]]

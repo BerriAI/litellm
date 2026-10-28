@@ -1,5 +1,5 @@
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Any
 
 from pydantic import ConfigDict, Field
 
@@ -13,13 +13,15 @@ class ModelGroupInfoProxy(ModelGroupInfo):
     health_status: str | None = Field(default=None)
     health_response_time: float | None = Field(default=None)
     health_checked_at: str | None = Field(default=None)
+    custom_tags: tuple[str, ...] | None = None
+    custom_metadata: Mapping[str, str | int | float | bool] | None = None
 
 
 class UpdateUsefulLinksRequest(LiteLLMBaseModel):
     # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
     # New format: { "displayName": { "url": "...", "index": 0 } }
     # Old format: { "displayName": "url" } (for backward compatibility)
-    useful_links: dict[str, str | dict[str, Any]]
+    useful_links: dict[str, str | dict[str, object]]
 
 
 class AutoRouterClassifierDefaultPromptResponse(LiteLLMBaseModel):

@@ -1,5 +1,6 @@
 from importlib import import_module
 import base64
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -7,9 +8,12 @@ import pytest
 
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
-from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIOptionalRequestParams
-from litellm.types.utils import Usage
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
+from litellm.types.utils import ModelInfo, Usage
+from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
 class TestResponsesAPIRequestUtils:
@@ -410,6 +414,43 @@ class TestResponseAPILoggingUtils:
         assert result.prompt_tokens_details.cache_write_tokens == 10059
         assert result.prompt_tokens_details.cache_creation_tokens == 10059
         assert result.prompt_tokens_details.cached_tokens == 0
+
+    @pytest.mark.parametrize("as_model", [False, True])
+    def test_transform_response_api_usage_prices_12h_cache_writes(self, as_model: bool) -> None:
+        usage_data: Final = {
+            "input_tokens": 5_000,
+            "output_tokens": 0,
+            "total_tokens": 5_000,
+            "input_tokens_details": {
+                "cache_write_tokens": 5_000,
+                "cache_write_tokens_details": {"ttl_30m_tokens": 3_000, "ttl_12h_tokens": 2_000},
+            },
+        }
+        usage_input: Final = ResponseAPIUsage(**usage_data) if as_model else usage_data
+        usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_input)
+        model_info: Final[ModelInfo] = {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "cache_creation_input_token_cost": 3e-6,
+            "cache_creation_input_token_cost_above_12hr": 5e-6,
+        }
+
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cache_write_tokens == 5_000
+        assert usage.prompt_tokens_details.cache_creation_token_details is not None
+        assert usage.prompt_tokens_details.cache_creation_token_details.ephemeral_12h_input_tokens == 2_000
+        assert usage.prompt_tokens_details.cache_creation_token_details.ephemeral_30m_input_tokens == 3_000
+        cost: Final = generic_cost_per_token(
+            model="test-12h-cache-write",
+            usage=usage,
+            custom_llm_provider="openai",
+            model_info=model_info,
+        )[0]
+
+        assert cost == pytest.approx(
+            3_000 * model_info["cache_creation_input_token_cost"]
+            + 2_000 * model_info["cache_creation_input_token_cost_above_12hr"]
+        )
 
     def test_transform_response_api_usage_mixed_details(self):
         """Test transformation handles mixed token details (cached + image + audio)."""
@@ -890,3 +931,45 @@ class TestResponsesInputToChatMessages:
         assert ResponsesAPIRequestUtils.responses_input_to_chat_messages(
             [reasoning_item, user_message, "stray"]
         ) == [user_message]
+
+
+def test_responses_object_bills_an_explicit_cache_hit_at_the_explicit_rate():
+    model = "dashscope/qwen-responses-explicit-cache-test"
+    previous_row = litellm.model_cost.get(model)
+    litellm.model_cost[model] = {
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 7.5e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "explicit_cache_read_input_token_cost": 2.5e-07,
+    }
+    _invalidate_model_cost_lowercase_map()
+    try:
+        chat_usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=0,
+            prompt_tokens_details={"cached_tokens": 1000, "cache_type": "ephemeral"},
+        )
+        responses_object = ResponsesAPIResponse(
+            id="resp_explicit_cache",
+            created_at=0,
+            model="qwen-responses-explicit-cache-test",
+            object="response",
+            status="completed",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            usage=LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(chat_usage),
+        )
+
+        assert litellm.completion_cost(completion_response=responses_object, model=model) == pytest.approx(
+            1000 * 2.5e-07
+        )
+    finally:
+        if previous_row is None:
+            litellm.model_cost.pop(model, None)
+        else:
+            litellm.model_cost[model] = previous_row
+        _invalidate_model_cost_lowercase_map()

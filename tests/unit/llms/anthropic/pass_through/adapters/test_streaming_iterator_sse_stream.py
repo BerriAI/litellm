@@ -8,8 +8,11 @@ wrapper's chunks/messages/model so disconnect-time partial billing can read them
 from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
     AnthropicSSEStream,
     AnthropicStreamWrapper,
@@ -85,3 +88,67 @@ def test_sse_stream_exposes_chunks_messages_and_model():
     assert stream.messages == [{"role": "user", "content": "hi"}]
     chunks: Final = stream.chunks
     assert isinstance(chunks, list) and len(chunks) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("started", [False, True])
+async def test_sse_stream_close_releases_http_response_before_upstream_body(started: bool) -> None:
+    response: Final = httpx.Response(200, stream=httpx.ByteStream(b"unread upstream body"))
+    upstream: Final = CustomStreamWrapper(
+        completion_stream=response,
+        model="test-model",
+        custom_llm_provider="openai",
+        logging_obj=Logging(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=1.0,
+            litellm_call_id="disconnect-test",
+            function_id="test",
+        ),
+    )
+    stream: Final = AnthropicSSEStream(AnthropicStreamWrapper(completion_stream=upstream, model="test-model"))
+    if started:
+        assert (await anext(stream)).startswith(b"event: message_start")
+    assert not response.is_stream_consumed
+    assert not response.is_closed
+
+    await stream.aclose()
+    await stream.aclose()
+
+    assert response.is_closed
+    assert not response.is_stream_consumed
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
+
+
+class _CloseableAsyncStream(_AsyncStream):
+    def __init__(self, items: list[MagicMock]) -> None:
+        super().__init__(items)
+        self.close_calls = 0
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_stream", [False, True])
+async def test_sse_stream_releases_upstream_once_after_content(finish_stream: bool) -> None:
+    upstream: Final = _CloseableAsyncStream(
+        [_make_chunk(Delta(content="hello")), _make_chunk(Delta(), finish_reason="stop")]
+    )
+    stream: Final = AnthropicSSEStream(AnthropicStreamWrapper(completion_stream=upstream, model="test-model"))
+    events: Final[list[bytes]] = []
+    async for event in stream:
+        events.append(event)
+        if not finish_stream and b"event: content_block_delta" in event:
+            break
+    assert any(b'"text":"hello"' in event.replace(b" ", b"") for event in events)
+    if finish_stream:
+        assert events[-1].startswith(b"event: message_stop")
+
+    await stream.aclose()
+    await stream.aclose()
+
+    assert upstream.close_calls == 1

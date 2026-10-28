@@ -406,6 +406,32 @@ class TestInteractionsAcreateOffline:
 
     @pytest.mark.usefixtures("fake_provider_credentials")
     @pytest.mark.asyncio
+    async def test_acreate_gemini_keeps_continuation_token_out_of_the_request(self, respx_mock: MockRouter) -> None:
+        route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "interaction-offline",
+                    "object": "interaction",
+                    "model": "gemini-3.8-flash",
+                    "status": "completed",
+                    "steps": [{"type": "model_output", "content": [{"type": "text", "text": "Hi"}]}],
+                    "usage": {"input_tokens": 6, "output_tokens": 3},
+                },
+            )
+        )
+        response: Final = await interactions.acreate(
+            model="gemini/gemini-3.8-flash",
+            input="Prove it",
+            continuation_token="dG9rLTE=",
+            api_key="gemini-offline",
+        )
+        # The Interactions API answered 400 "Unknown parameter 'continuation_token'." on 2026-10-13
+        assert json.loads(route.calls.last.request.content) == {"model": "gemini-3.8-flash", "input": "Prove it"}
+        assert response.status == "completed"
+
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    @pytest.mark.asyncio
     async def test_acreate_simple_litellm_responses_bridge(self, respx_mock: MockRouter) -> None:
         route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
             return_value=httpx.Response(

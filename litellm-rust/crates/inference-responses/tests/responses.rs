@@ -7,6 +7,7 @@ use std::sync::Arc;
 use futures_util::TryStreamExt;
 use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
 use litellm_inference_responses::{
+    Error,
     route::Responses,
     types::{ResponsesCall, ResponsesOutput},
 };
@@ -30,6 +31,110 @@ fn call() -> ResponsesCall {
         extra_headers: None,
         timeout: None,
     }
+}
+
+#[rstest]
+#[case::bare_openai("gpt-5", None, "gpt-5")]
+#[case::openai_prefix("openai/gpt-5", None, "gpt-5")]
+#[case::empty_explicit_provider("openai/gpt-5", Some(""), "gpt-5")]
+#[case::explicit_openai("gpt-5", Some("openai"), "gpt-5")]
+#[case::openrouter_prefix("openrouter/anthropic/claude", None, "anthropic/claude")]
+#[case::explicit_openrouter_prefix(
+    "openrouter/anthropic/claude",
+    Some("openrouter"),
+    "anthropic/claude"
+)]
+#[case::explicit_openrouter_unprefixed("anthropic/claude", Some("openrouter"), "anthropic/claude")]
+#[case::explicit_openrouter_native_id("auto", Some("openrouter"), "openrouter/auto")]
+#[case::implicit_openrouter_native_id("openrouter/auto", None, "auto")]
+#[tokio::test]
+async fn provider_resolution_preserves_the_wire_model(
+    #[case] model: &str,
+    #[case] custom_llm_provider: Option<&str>,
+    #[case] expected_wire_model: &str,
+) {
+    let response = json!({
+        "id": "response-1",
+        "model": expected_wire_model,
+        "output": [{"type": "message", "content": []}],
+        "usage": {"total_tokens": 7}
+    });
+    let upstream = upstream([json_response(response)]).await;
+    responses_route(no_secrets())
+        .execute(
+            ResponsesCall {
+                model: model.into(),
+                api_key: Some("test-key".into()),
+                api_base: Some(upstream.uri()),
+                custom_llm_provider: custom_llm_provider.map(str::to_owned),
+                ..call()
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        only_request(&upstream).await.json()["model"],
+        expected_wire_model
+    );
+}
+
+#[rstest]
+#[case::explicit_unknown_provider("test-model", Some("unknown-provider"))]
+#[case::unsupported_responses_provider("test-model", Some("anthropic"))]
+#[tokio::test]
+async fn unsupported_providers_fail_before_transport(
+    #[case] model: &str,
+    #[case] custom_llm_provider: Option<&str>,
+) {
+    let upstream = upstream([]).await;
+    let result = responses_route(no_secrets())
+        .execute(
+            ResponsesCall {
+                model: model.into(),
+                api_base: Some(upstream.uri()),
+                custom_llm_provider: custom_llm_provider.map(str::to_owned),
+                ..call()
+            },
+            &(),
+            None,
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(Error::Unsupported("native HTTP responses provider"))
+    ));
+    assert!(received(&upstream).await.is_empty());
+}
+
+#[rstest]
+#[case::openai_with_vendor_segment("openai/other/model", None)]
+#[case::empty_model("openai/", None)]
+#[case::conflicting_prefix("openrouter/anthropic/claude", Some("openai"))]
+#[tokio::test]
+async fn invalid_provider_models_fail_before_transport(
+    #[case] model: &str,
+    #[case] custom_llm_provider: Option<&str>,
+) {
+    let upstream = upstream([]).await;
+    let result = responses_route(no_secrets())
+        .execute(
+            ResponsesCall {
+                model: model.into(),
+                api_base: Some(upstream.uri()),
+                custom_llm_provider: custom_llm_provider.map(str::to_owned),
+                ..call()
+            },
+            &(),
+            None,
+        )
+        .await;
+
+    assert!(matches!(result, Err(Error::InvalidProvider(_))));
+    assert!(received(&upstream).await.is_empty());
 }
 
 #[rstest]

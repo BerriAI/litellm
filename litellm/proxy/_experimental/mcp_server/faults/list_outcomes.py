@@ -10,17 +10,27 @@ becomes an outcome, never a second failure.
 
 from __future__ import annotations
 
+import email.utils
+import random
 import re
-from collections.abc import Iterator
-from typing import Final, Literal, NamedTuple, NoReturn, TypeAlias
+from collections.abc import Awaitable, Callable, Iterator, Mapping
+from datetime import datetime, timezone
+from typing import Final, Literal, NamedTuple, NoReturn, TypeAlias, TypeVar
 from urllib.request import parse_http_list, parse_keqv_list
 
+import anyio
 import httpx
 import httpx2
 from mcp.types import Tool as MCPTool
 from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import assert_never
 
+from litellm._logging import verbose_logger
+from litellm.constants import (
+    MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS,
+    MCP_UPSTREAM_RATE_LIMIT_MAX_DELAY_SECONDS,
+    MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES,
+)
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
     MCPUpstreamAuthError,
@@ -174,6 +184,113 @@ def classify_list_exception(exc: BaseException) -> ServerListFault:
     if isinstance(exc, (httpx.TransportError, httpx2.TransportError)):
         return ServerListFault(tag="unreachable")
     return ServerListFault(tag="internal")
+
+
+class UpstreamRateLimit(NamedTuple):
+    retry_after_seconds: float | None
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    if value is None:
+        return None
+    stripped: Final = value.strip()
+    if re.fullmatch(r"\d+", stripped):
+        return float(stripped)
+    try:
+        parsed: Final = email.utils.parsedate_to_datetime(stripped)
+    except (TypeError, ValueError):
+        return None
+    aware: Final = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, (aware - datetime.now(timezone.utc)).total_seconds())
+
+
+def upstream_rate_limit(exc: BaseException) -> UpstreamRateLimit | None:
+    """The upstream 429 signal for the tools/list retry loop: an auth challenge wins over rate
+    limiting so a 401/403 anywhere in the tree keeps its own channel, then the first 429 response
+    in deliberate order carries its Retry-After hint. Anything else is not retryable here."""
+    if upstream_auth_challenge(exc) is not None:
+        return None
+    for response in _iter_upstream_responses(exc):
+        if response.status_code == 429:
+            return UpstreamRateLimit(_parse_retry_after(response.headers.get("retry-after")))
+    return None
+
+
+def rate_limit_retry_delay(
+    attempt: int,
+    retry_after_seconds: float | None,
+    *,
+    base_delay: float,
+    max_delay: float,
+    jitter: float,
+) -> float:
+    if retry_after_seconds is not None:
+        return min(retry_after_seconds, max_delay)
+    return min(max_delay, base_delay * 2.0**attempt * (1 + jitter))
+
+
+T: Final = TypeVar("T")
+
+
+async def retry_upstream_rate_limit(
+    fetch: Callable[[], Awaitable[T]],
+    server_name: str,
+    *,
+    max_retries: int = MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES,
+    base_delay: float = MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS,
+    max_delay: float = MCP_UPSTREAM_RATE_LIMIT_MAX_DELAY_SECONDS,
+    sleep: Callable[[float], Awaitable[None]] = anyio.sleep,
+    jitter: Callable[[], float] = random.random,
+    deadline_seconds: float | None = None,
+    clock: Callable[[], float] = anyio.current_time,
+) -> T:
+    attempts: Final = max(0, max_retries)
+    deadline: Final = None if deadline_seconds is None else clock() + deadline_seconds
+    last_rate_limit: BaseException | None = None  # rebind-ok: each 429 replaces the cause a retry deadline re-raises
+    for attempt in range(attempts + 1):
+        try:
+            if attempt > 0 and deadline is not None:
+                try:
+                    with anyio.fail_after(max(0.0, deadline - clock())):
+                        return await fetch()
+                except TimeoutError as timeout:
+                    if last_rate_limit is None:
+                        raise
+                    raise last_rate_limit from timeout
+            return await fetch()
+        except Exception as exc:
+            limit = upstream_rate_limit(exc)
+            if limit is not None:
+                last_rate_limit = exc
+            if limit is None or attempt == attempts:
+                raise
+            delay = rate_limit_retry_delay(
+                attempt,
+                limit.retry_after_seconds,
+                base_delay=base_delay,
+                max_delay=max_delay,
+                jitter=jitter(),
+            )
+            if deadline is not None and clock() + delay >= deadline:
+                raise
+            verbose_logger.warning(
+                "MCP server %s answered 429 to tools/list; retry %d/%d in %.2fs",
+                server_name,
+                attempt + 1,
+                max_retries,
+                delay,
+            )
+            await sleep(delay)
+    raise AssertionError("unreachable")
+
+
+def listing_failed_outright(outcomes: Mapping[str, ServerOutcome]) -> bool:
+    """True only when every server in scope contributed a non-auth fault: an auth outcome means a
+    caller can fix the listing by authenticating, so the aggregate stays a 200 with outcomes."""
+    return bool(outcomes) and all(
+        isinstance(outcome, ServerListFault) and outcome.tag not in ("auth_required", "forbidden")
+        for outcome in outcomes.values()
+    )
 
 
 def outcome_wire_value(outcome: ServerOutcome) -> dict[str, object]:

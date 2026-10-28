@@ -4,18 +4,28 @@ import logging
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import TypedDict, Unpack
 
+from litellm._internal_context import internal_sub_call
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
+from litellm.responses.mcp.round_billing import (
+    billed_for_every_round,
+    first_round_billed_on_failure,
+    summed_cost_breakdown,
+)
 from litellm.types.utils import Message, ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+_DELEGATED_ATTRIBUTE: Final = TypeAdapter(object)
 
 
 class _MCPCompletionKwargs(TypedDict, total=False, extra_items=object):
@@ -559,7 +569,7 @@ async def acompletion_with_mcp(
 
             def __getattr__(self, name: str) -> object:
                 # Delegate all other attributes to original wrapper
-                return getattr(self._original_wrapper, name)
+                return _DELEGATED_ATTRIBUTE.validate_python(getattr(self._original_wrapper, name))
 
         # Helper class to wrap async iterator for sync iteration
         class _SyncIteratorWrapper:
@@ -588,19 +598,21 @@ async def acompletion_with_mcp(
 
         return cast(CustomStreamWrapper, MCPStreamWrapper(initial_stream, iterator))
 
-    # Non-streaming mode: use existing logic
     initial_call_args = dict(base_call_args)
     initial_call_args["stream"] = False
     if mock_tool_calls is not None:
         initial_call_args["mock_tool_calls"] = mock_tool_calls
 
-    # Make initial call
-    initial_response: Final = await litellm_acompletion(**initial_call_args)
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.carry_failed_attempt_usage()
+    with internal_sub_call():
+        initial_response: Final = await litellm_acompletion(**initial_call_args)
+    first_round_breakdown: Final = logging_obj.cost_breakdown if isinstance(logging_obj, LiteLLMLoggingObj) else None
 
     if not isinstance(initial_response, ModelResponse):
         return initial_response
 
-    # Extract tool calls from response
     tool_calls: Final = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response=initial_response)
 
     if not tool_calls:
@@ -610,48 +622,62 @@ async def acompletion_with_mcp(
         )
         return initial_response
 
-    # Execute tool calls
-    tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
-        tool_server_map=tool_server_map,
-        tool_calls=tool_calls,
-        served_tools=deduplicated_mcp_tools,
-        user_api_key_auth=user_api_key_auth,
-        mcp_auth_header=mcp_auth_header,
-        mcp_server_auth_headers=mcp_server_auth_headers,
-        oauth2_headers=oauth2_headers,
-        raw_headers=raw_headers,
-        litellm_call_id=context.litellm_call_id,
-        litellm_trace_id=context.litellm_trace_id,
-        request_tags=request_tags,
-        guardrail_context=context.guardrail_context,
-    )
-
-    if not tool_results:
-        _add_mcp_metadata_to_response(
-            response=initial_response,
-            openai_tools=openai_tools,
+    with first_round_billed_on_failure(logging_obj, initial_response):
+        tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+            tool_server_map=tool_server_map,
             tool_calls=tool_calls,
+            served_tools=deduplicated_mcp_tools,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            litellm_call_id=context.litellm_call_id,
+            litellm_trace_id=context.litellm_trace_id,
+            request_tags=request_tags,
+            guardrail_context=context.guardrail_context,
         )
-        return initial_response
 
-    # Create follow-up messages with tool results
-    follow_up_messages: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_messages_for_chat(
-        original_messages=messages,
-        response=initial_response,
-        tool_results=tool_results,
-    )
+        if not tool_results:
+            _add_mcp_metadata_to_response(
+                response=initial_response,
+                openai_tools=openai_tools,
+                tool_calls=tool_calls,
+            )
+            return initial_response
 
-    # Make follow-up call with original stream setting
-    follow_up_call_args: Final = dict(base_call_args)
-    follow_up_call_args["messages"] = follow_up_messages
-    follow_up_call_args["stream"] = stream
-
-    response = await litellm_acompletion(**follow_up_call_args)
-    if isinstance(response, (ModelResponse, CustomStreamWrapper)):
-        _add_mcp_metadata_to_response(
-            response=response,
-            openai_tools=openai_tools,
-            tool_calls=tool_calls,
+        follow_up_messages: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_messages_for_chat(
+            original_messages=messages,
+            response=initial_response,
             tool_results=tool_results,
         )
-    return response
+
+        follow_up_call_args: Final = dict(base_call_args)
+        follow_up_call_args["messages"] = follow_up_messages
+        follow_up_call_args["stream"] = stream
+
+        with internal_sub_call():
+            final_response: Final = await litellm_acompletion(**follow_up_call_args)
+
+    if not isinstance(final_response, ModelResponse):
+        return final_response
+    _add_mcp_metadata_to_response(
+        response=final_response,
+        openai_tools=openai_tools,
+        tool_calls=tool_calls,
+        tool_results=tool_results,
+    )
+    final_round_breakdown: Final = logging_obj.cost_breakdown if isinstance(logging_obj, LiteLLMLoggingObj) else None
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.cost_breakdown = summed_cost_breakdown(
+            first=initial_response,
+            first_breakdown=first_round_breakdown,
+            final=final_response,
+            final_breakdown=final_round_breakdown,
+        )
+    return billed_for_every_round(
+        first=initial_response,
+        first_breakdown=first_round_breakdown,
+        final=final_response,
+        final_breakdown=final_round_breakdown,
+    )

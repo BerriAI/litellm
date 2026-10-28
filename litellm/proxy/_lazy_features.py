@@ -156,17 +156,12 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         path_prefixes=("/v1/mcp/",),
     ),
     LazyFeature(
-        # Also serves /.well-known/oauth-* (OAuth metadata discovery).
-        # No /mcp/oauth prefix here: the mounted /mcp sub-app would
-        # shadow it, and there are no actual routes there anyway.
-        name="mcp_byok_oauth",
-        module_path="litellm.proxy._experimental.mcp_server.byok_oauth_endpoints",
-        path_prefixes=("/v1/mcp/oauth", "/.well-known/oauth-"),
-    ),
-    LazyFeature(
         # Serves OAuth dance endpoints (/authorize, /token, /callback,
         # /register) plus several /.well-known/ discovery URLs at the proxy
         # root — needed for MCP-over-OAuth flows even before /mcp is hit.
+        # Registered before mcp_byok_oauth, which also claims the root
+        # /.well-known/oauth-authorization-server: the root document is the
+        # gateway's own authorization server metadata (token endpoint /token).
         name="mcp_discoverable",
         module_path="litellm.proxy._experimental.mcp_server.discoverable_endpoints",
         path_prefixes=(
@@ -184,6 +179,14 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         ),
         # Catches the /{mcp_server_name}/authorize|token|register variants.
         path_suffixes=("/authorize", "/token", "/register"),
+    ),
+    LazyFeature(
+        # Also serves /.well-known/oauth-* (OAuth metadata discovery).
+        # No /mcp/oauth prefix here: the mounted /mcp sub-app would
+        # shadow it, and there are no actual routes there anyway.
+        name="mcp_byok_oauth",
+        module_path="litellm.proxy._experimental.mcp_server.byok_oauth_endpoints",
+        path_prefixes=("/v1/mcp/oauth", "/.well-known/oauth-"),
     ),
     LazyFeature(
         name="mcp_rest",
@@ -272,7 +275,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
     LazyFeature(
         name="decisions",
         module_path="litellm.proxy.decisions_endpoints.endpoints",
-        path_prefixes=("/v1/decisions", "/decisions", "/v1/systemone", "/systemone"),
+        path_prefixes=("/v1/decisions", "/decisions", "/v1/systemone", "/systemone", "/v1/extraction", "/extraction"),
     ),
     LazyFeature(
         name="claude_code_marketplace",
@@ -295,11 +298,6 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         name="vantage",
         module_path="litellm.proxy.spend_tracking.vantage_endpoints",
         path_prefixes=("/vantage",),
-    ),
-    LazyFeature(
-        name="usage_ai",
-        module_path="litellm.proxy.management_endpoints.usage_endpoints",
-        path_prefixes=("/usage/ai",),
     ),
     LazyFeature(
         name="prompts",
@@ -358,7 +356,7 @@ class LazyFeatureMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         # Short-circuit once every feature has loaded.
         if scope["type"] in ("http", "websocket") and len(self._loaded) < len(self._features):
-            path: str = scope.get("path", "")
+            path: str = str(_scope_value(scope, "path"))
             # Strip the request's root_path so prefix matching works under a
             # server root path. Without this, requests like /api/v1/policies/...
             # never match the registered prefixes (/policies/...) and lazy
@@ -368,7 +366,7 @@ class LazyFeatureMiddleware:
             # resolves SERVER_ROOT_PATHS prefixes there per request. The
             # `+ "/"` boundary prevents false-positive matches (e.g. /apiv2
             # against root /api); a pre-stripped path is left alone.
-            root_path: Final = str(scope.get("root_path", "")).rstrip("/") or self._root_path
+            root_path: Final = str(_scope_value(scope, "root_path")).rstrip("/") or self._root_path
             if root_path and path.startswith(root_path + "/"):
                 path = path[len(root_path) :]  # rebind-ok: local strip after the boundary check above
             for feat in self._features:
@@ -378,6 +376,10 @@ class LazyFeatureMiddleware:
                     continue
                 await _force_load(self._fastapi_app, feat, self._features)
         await self.app(scope, receive, send)
+
+
+def _scope_value(scope: Mapping[str, object], key: str) -> object:
+    return scope.get(key, "")
 
 
 def _lazy_slots(app: "FastAPI") -> Mapping[str, BaseRoute | None]:
@@ -582,6 +584,7 @@ def _make_warmup_router(app: "FastAPI", features: tuple[LazyFeature, ...] = LAZY
     from fastapi import APIRouter, Depends, HTTPException
     from fastapi.openapi.utils import get_openapi
 
+    from litellm.litellm_core_utils.core_helpers import as_str_mapping
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
     router: Final = APIRouter()
@@ -601,17 +604,22 @@ def _make_warmup_router(app: "FastAPI", features: tuple[LazyFeature, ...] = LAZY
         await _force_load(app, feat, features)
 
         feat_routes: Final = [r for r in app.routes if feat.matches(getattr(r, "path", ""))]
-        full: Final = get_openapi(title=app.title, version=app.version, routes=feat_routes)
+        full: Final[Mapping[str, object]] = MappingProxyType(
+            get_openapi(title=app.title, version=app.version, routes=feat_routes)
+        )
+        paths: Final = as_str_mapping(full.get("paths", {})) or {}
+        components: Final = as_str_mapping(full.get("components", {})) or {}
         # Force all operations under one tag so they group under a single Swagger
         # section — many lazy modules tag routes inconsistently.
-        for path_ops in full.get("paths", {}).values():
-            for op in path_ops.values():
-                if isinstance(op, dict):
-                    op["tags"] = [feat.name]
+        for path_ops in paths.values():
+            for op in (as_str_mapping(path_ops) or {}).values():
+                operation = as_str_mapping(op)
+                if isinstance(operation, dict):
+                    operation["tags"] = [feat.name]
         return {
             "stub_path": feat.path_prefixes[0],
             "paths": full.get("paths", {}),
-            "components": {"schemas": full.get("components", {}).get("schemas", {})},
+            "components": {"schemas": components.get("schemas", {})},
         }
 
     return router

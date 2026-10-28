@@ -940,6 +940,205 @@ class TestCacheControlPreservationForCustomEndpoint:
         assert all("cache_control" not in m for m in body["messages"])
 
 
+_EPHEMERAL: Final[dict[str, str]] = {"type": "ephemeral"}
+_EXPLICIT: Final[dict[str, str]] = {"mode": "explicit"}
+_LOOKUP_TOOL: Final[dict[str, object]] = {"type": "function", "function": {"name": "lookup", "parameters": {}}}
+
+
+def _text(value: str) -> dict[str, object]:
+    return {"type": "text", "text": value}
+
+
+def _marked(part: dict[str, object], mark: dict[str, str] = _EPHEMERAL) -> dict[str, object]:
+    return {**part, "cache_control": mark}
+
+
+def _breakpoint(part: dict[str, object]) -> dict[str, object]:
+    return {**part, "prompt_cache_breakpoint": _EXPLICIT}
+
+
+class TestCacheControlAsPromptCacheBreakpoint:
+    """
+    A deployment that reads OpenAI's prompt_cache_breakpoint (gpt-5.6+ on api.openai.com,
+    or one opted in through prompt_cache_options) gets each Anthropic cache_control mark
+    rewritten on the same part instead of stripped, so the cache the caller asked for is
+    still written. Every other endpoint keeps or strips the marks exactly as before.
+    """
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    @pytest.fixture(autouse=True)
+    def _clean_openai_base_env(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+        monkeypatch.setattr(litellm, "api_base", None, raising=False)
+
+    @staticmethod
+    def _marked_messages() -> list[dict[str, object]]:
+        return [
+            {"role": "system", "content": [_text("Answer briefly"), _marked(_text("Stable rules"))]},
+            {
+                "role": "user",
+                "content": [
+                    _marked(_text("Describe this"), {"type": "ephemeral", "ttl": "1h"}),
+                    _marked({"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}),
+                    _text("and nothing else"),
+                ],
+            },
+            {"role": "assistant", "content": [_marked(_text("earlier answer"))]},
+            {"role": "user", "content": "and again"},
+        ]
+
+    @staticmethod
+    def _rewritten_messages() -> list[dict[str, object]]:
+        return [
+            {"role": "system", "content": [_text("Answer briefly"), _breakpoint(_text("Stable rules"))]},
+            {
+                "role": "user",
+                "content": [
+                    _breakpoint(_text("Describe this")),
+                    _breakpoint({"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}),
+                    _text("and nothing else"),
+                ],
+            },
+            {"role": "assistant", "content": [_text("earlier answer")]},
+            {"role": "user", "content": "and again"},
+        ]
+
+    def _transform(
+        self,
+        model: str,
+        messages: list[dict[str, object]],
+        *,
+        custom_llm_provider: str = "openai",
+        api_base: str | None = None,
+        optional_params: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        return self.config.transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params or {},
+            litellm_params={"custom_llm_provider": custom_llm_provider, "api_base": api_base},
+            headers={},
+        )
+
+    def test_gpt_5_6_rewrites_system_and_user_marks_and_drops_the_assistant_mark(self):
+        body = self._transform("gpt-5.6", self._marked_messages())
+        assert body["messages"] == self._rewritten_messages()
+
+    @pytest.mark.asyncio
+    async def test_async_gpt_5_6_rewrites_the_same_way(self):
+        body = await self.config.async_transform_request(
+            model="gpt-5.6",
+            messages=self._marked_messages(),
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai", "api_base": None},
+            headers={},
+        )
+        assert body["messages"] == self._rewritten_messages()
+
+    def test_gpt_5_6_turns_a_marked_string_message_into_one_marked_text_part(self):
+        messages: list[dict[str, object]] = [
+            {"role": "system", "content": "You are helpful.", "cache_control": _EPHEMERAL},
+            {"role": "user", "content": "Hello", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            {"role": "user", "content": "unmarked"},
+        ]
+        body = self._transform("gpt-5.6", messages)
+        assert body["messages"] == [
+            {"role": "system", "content": [_breakpoint(_text("You are helpful."))]},
+            {"role": "user", "content": [_breakpoint(_text("Hello"))]},
+            {"role": "user", "content": "unmarked"},
+        ]
+
+    def test_gpt_5_6_message_level_mark_on_list_content_marks_the_last_part(self):
+        messages: list[dict[str, object]] = [
+            {"role": "user", "content": [_text("first"), _text("last")], "cache_control": _EPHEMERAL},
+        ]
+        body = self._transform("gpt-5.6", messages)
+        assert body["messages"] == [{"role": "user", "content": [_text("first"), _breakpoint(_text("last"))]}]
+
+    def test_gpt_5_6_marked_message_with_null_content_still_goes_out_with_the_mark_stripped(self):
+        messages: list[dict[str, object]] = [
+            {"role": "user", "content": None, "cache_control": _EPHEMERAL},
+            {"role": "user", "content": "Hello"},
+        ]
+        body = self._transform("gpt-5.6", messages)
+        assert body["messages"] == [{"role": "user", "content": None}, {"role": "user", "content": "Hello"}]
+
+    def test_gpt_5_6_keeps_the_mark_on_a_tool_message_and_drops_the_tool_definition_mark(self):
+        messages: list[dict[str, object]] = [
+            {"role": "user", "content": "look it up"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": [_marked(_text("found it"))]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "found it again", "cache_control": _EPHEMERAL},
+        ]
+        body = self._transform("gpt-5.6", messages, optional_params={"tools": [_marked(dict(_LOOKUP_TOOL))]})
+        assert body["messages"][2:] == [
+            {"role": "tool", "tool_call_id": "call_1", "content": [_breakpoint(_text("found it"))]},
+            {"role": "tool", "tool_call_id": "call_1", "content": [_breakpoint(_text("found it again"))]},
+        ], "a breakpoint on a tool message part writes the cache on live gpt-5.6 Chat Completions (2026-10-12)"
+        assert body["tools"] == [_LOOKUP_TOOL]
+
+    def test_gpt_4o_on_openai_still_strips_every_mark(self):
+        body = self._transform(
+            "gpt-4o", self._marked_messages(), optional_params={"tools": [_marked(dict(_LOOKUP_TOOL))]}
+        )
+        assert body["messages"] == [
+            {"role": "system", "content": [_text("Answer briefly"), _text("Stable rules")]},
+            {
+                "role": "user",
+                "content": [
+                    _text("Describe this"),
+                    {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                    _text("and nothing else"),
+                ],
+            },
+            {"role": "assistant", "content": [_text("earlier answer")]},
+            {"role": "user", "content": "and again"},
+        ]
+        assert body["tools"] == [_LOOKUP_TOOL]
+
+    def test_custom_api_base_without_opt_in_keeps_cache_control_untouched(self):
+        body = self._transform("gpt-5.6", self._marked_messages(), api_base="http://localhost:4000/v1")
+        assert body["messages"] == self._marked_messages()
+
+    def test_custom_api_base_opted_in_through_prompt_cache_options_rewrites(self):
+        body = self._transform(
+            "gpt-5.6",
+            self._marked_messages(),
+            api_base="http://localhost:4000/v1",
+            optional_params={"extra_body": {"prompt_cache_options": {"mode": "explicit"}}},
+        )
+        assert body["messages"] == self._rewritten_messages()
+        assert body["extra_body"] == {"prompt_cache_options": {"mode": "explicit"}}
+
+    def test_non_openai_provider_still_strips(self):
+        body = self._transform(
+            "gpt-5.6",
+            self._marked_messages(),
+            custom_llm_provider="fireworks_ai",
+            api_base="https://api.fireworks.ai/inference/v1",
+        )
+        assert body["messages"] == [
+            {"role": "system", "content": [_text("Answer briefly"), _text("Stable rules")]},
+            {
+                "role": "user",
+                "content": [
+                    _text("Describe this"),
+                    {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                    _text("and nothing else"),
+                ],
+            },
+            {"role": "assistant", "content": [_text("earlier answer")]},
+            {"role": "user", "content": "and again"},
+        ]
+
+
 class TestToolChoiceWithoutToolsDropped:
     def setup_method(self):
         self.config = OpenAIGPTConfig()
@@ -1392,6 +1591,43 @@ class TestOpenAIPromptCacheBreakpointChatPath:
         assert request["messages"][1]["content"] == [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]
         assert request["extra_body"] == {"prompt_cache_options": self.EXPLICIT}
         assert "prompt_cache_options" not in request
+
+    @pytest.mark.parametrize(
+        ("model", "drop_params", "sent"),
+        [("gpt-4.1", True, False), ("gpt-4.1", False, True), ("gpt-5.6", True, True)],
+        ids=["unread-dropped", "unread-sent-through", "read-kept"],
+    )
+    def test_drop_params_strips_breakpoints_only_where_the_model_cannot_read_them(
+        self, model: str, drop_params: bool, sent: bool
+    ):
+        marked_part: Final = {"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}
+        part: Final = {"type": "text", "text": "hi"}
+        call: Final = {"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+        function: Final = {"name": "f", "parameters": {"type": "object"}}
+        marked: Final = {"prompt_cache_breakpoint": self.EXPLICIT}
+
+        request = OpenAIGPTConfig().transform_request(
+            model=model,
+            messages=[
+                {"role": "user", "content": [marked_part]},
+                {"role": "assistant", "content": "ok", **marked, "tool_calls": [{**call, **marked}]},
+                {"role": "tool", "tool_call_id": "c1", "content": "done"},
+            ],
+            optional_params={"tools": [{"type": "function", "function": {**function, **marked}}, {"type": "function", "function": function, **marked}]},
+            litellm_params={"custom_llm_provider": "openai", "drop_params": drop_params},
+            headers={},
+        )
+
+        mark: Final = marked if sent else {}
+        assert request["messages"] == [
+            {"role": "user", "content": [marked_part if sent else part]},
+            {"role": "assistant", "content": "ok", **mark, "tool_calls": [{**call, **mark}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "done"},
+        ]
+        assert request["tools"] == [
+            {"type": "function", "function": {**function, **mark}},
+            {"type": "function", "function": function, **mark},
+        ]
 
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'

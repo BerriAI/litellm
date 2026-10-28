@@ -532,6 +532,21 @@ def test_an_invalid_child_index_left_by_an_interrupted_build_is_rebuilt_and_atta
 
 
 @requires_db
+def test_partitioning_a_table_the_index_job_already_covered_moves_its_call_id_index_aside(scratch_database: str) -> None:
+    """The runbook renames the Prisma indexes off the legacy table so the partitioned table can take their
+    names. The call-id index is built by the index job, not Prisma, and a deployment that partitions after
+    that job ran kept the name on the legacy table, so every later job run reported it as on another table."""
+    assert ensure_request_log_indexes(scratch_database, "public") is True
+    assert _indexed_table(scratch_database, CALL_ID_INDEX) == "LiteLLM_SpendLogs"
+
+    _partition_spend_logs(scratch_database)
+
+    assert _indexed_table(scratch_database, "LiteLLM_SpendLogs_legacy_litellm_call_id_idx") == "LiteLLM_SpendLogs_legacy"
+    assert ensure_request_log_indexes(scratch_database, "public") is True
+    _assert_index_covers_every_partition(scratch_database, CALL_ID_INDEX, "litellm_call_id_idx")
+
+
+@requires_db
 def test_an_index_of_that_name_on_another_table_is_left_alone_and_reported(partitioned_database: str) -> None:
     with psycopg.connect(partitioned_database, autocommit=True) as conn:
         conn.execute(f'CREATE INDEX "{CALL_ID_INDEX}" ON "LiteLLM_ErrorLogs" ("request_id")')

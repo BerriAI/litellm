@@ -7,7 +7,7 @@ use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host::{call::HostedMachine, protocol::Protocol};
 use litellm_host_python::{PythonBinding, PythonHostCalls, from_py};
 use litellm_http::transport::Error as TransportError;
-use litellm_inference::RouteError;
+use litellm_inference::Error;
 use litellm_secrets::source::SecretSource;
 use pyo3::{
     exceptions::PyValueError,
@@ -21,10 +21,7 @@ use serde_json::{Map, Value};
 use super::{NativeCall, RequestView};
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
-    marshal::{
-        RouteOptions, optional_timeout, project_optional_fields, public_response,
-        python_timeout_seconds,
-    },
+    marshal::{RouteOptions, optional_timeout, public_response, python_timeout_seconds},
 };
 
 pub(super) struct InferenceHost {
@@ -115,24 +112,21 @@ impl InferenceHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Map<String, Value>> {
-        let names: Vec<String> = py.import(self.module)?.getattr("PARAMETERS")?.extract()?;
-        project_optional_fields(names.iter().map(String::as_str), |name| {
-            self.argument(py, arguments, name)
-        })
+        self.view.body_params(py, arguments, self.module)
     }
 
     pub fn response(&self, py: Python<'_>, response: &impl Serialize) -> PyResult<Py<PyAny>> {
         public_response(py, self.module, response)
     }
 
-    pub fn error(&self, py: Python<'_>, error: RouteError) -> PyResult<PyErr> {
-        if let RouteError::Secret(source) = &error
+    pub fn error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
+        if let Error::Secret(source) = &error
             && let Some(original) = crate::secrets::python_error(py, source.source_error())
         {
             return Ok(original);
         }
         let native = match error {
-            RouteError::Transport(TransportError::Http { status, body }) => {
+            Error::Transport(TransportError::Http { status, body }) => {
                 let error = RustUpstreamError::new_err((status, body));
                 error
                     .value(py)
@@ -150,7 +144,7 @@ impl InferenceHost {
 }
 
 pub(super) trait InferenceRoute: Sized + 'static {
-    type Protocol: Protocol<Error = RouteError>;
+    type Protocol: Protocol<Error = Error>;
     const OPERATION: LoggingOperation;
     const SYNC_CALL_TYPE: &'static str;
     const ASYNC_CALL_TYPE: &'static str;
@@ -183,7 +177,6 @@ where
     } else {
         R::SYNC_CALL_TYPE
     };
-    crate::cache::admit_native(py, &call.kwargs, call_type)?;
     let (arguments, hooks) = super::call_hooks(py, R::OPERATION, &call, asynchronous)?;
     super::run_public_call(
         py,

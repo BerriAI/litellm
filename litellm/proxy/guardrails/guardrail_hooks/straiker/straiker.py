@@ -7,7 +7,7 @@ import random
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
+from typing import TYPE_CHECKING, Final, Literal, NoReturn, Protocol
 from urllib.parse import urlsplit
 
 import httpx
@@ -27,6 +27,7 @@ from litellm.integrations.custom_guardrail import (
     get_session_id_from_request_data,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 from litellm.llms.custom_httpx.http_handler import (
@@ -176,6 +177,14 @@ def _error_response_text(response: httpx.Response) -> str:
         return ""
 
 
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
+
+
 def _as_dict(value: object) -> dict:
     return value if isinstance(value, dict) else {}
 
@@ -318,7 +327,7 @@ def _choice_terminal_reason(choice: object) -> str | None:
     )
 
 
-def _response_finish_reason(response: Any) -> str | None:
+def _response_finish_reason(response: object) -> str | None:
     if response is None:
         return None
     if isinstance(response, dict):
@@ -1083,7 +1092,7 @@ class StraikerGuardrail(CustomGuardrail):
             if last_failure is None or not last_failure.retryable:
                 return parsed, last_failure
             if attempt < attempts - 1:
-                backoff: float = min(self.initial_backoff * (2**attempt), self.max_backoff)
+                backoff: float = min(self.initial_backoff * (1 << attempt), self.max_backoff)
                 await asyncio.sleep(random.uniform(0, backoff))
 
         return None, last_failure or _WebhookFailure("unknown error", is_unreachable=True)
@@ -1107,13 +1116,16 @@ class StraikerGuardrail(CustomGuardrail):
 
     def _parse_verdict(self, resp: httpx.Response) -> tuple[StraikerWebhookResponse | None, _WebhookFailure | None]:
         try:
-            body: Final = resp.json()
-            if not isinstance(body, Mapping):
+            body: Final = _json_body(resp)
+            body_mapping: Final = as_str_mapping(body)
+            if body_mapping is None:
                 return None, _WebhookFailure(
                     f"invalid response schema: expected an object, got {type(body).__name__}", is_unreachable=False
                 )
             parsed: Final = (
-                _v3_response(body) if self.api_version == "v3" else StraikerWebhookResponse.model_validate(body)
+                _v3_response(body_mapping)
+                if self.api_version == "v3"
+                else StraikerWebhookResponse.model_validate(body_mapping)
             )
         except (ValidationError, json.JSONDecodeError) as ve:
             return None, _WebhookFailure(f"invalid response schema: {ve}", is_unreachable=False)

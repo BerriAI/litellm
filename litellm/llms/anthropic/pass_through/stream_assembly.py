@@ -1,16 +1,18 @@
 import codecs
 import json
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.pass_through.messages.utils import MESSAGE_DELTA_OPTIONAL_KEYS
 from litellm.types.utils import (
     Choices,
     Message,
@@ -444,6 +446,27 @@ def _anthropic_message_start(sse_stream: str) -> Mapping[str, object] | None:
             if event_data.get("type") == "message_start" and isinstance(message := event_data.get("message"), dict)
         ),
         None,
+    )
+
+
+def anthropic_message_delta_fields(all_chunks: Sequence[object]) -> Mapping[str, object]:
+    """The ``stop_details`` and ``safeguard_results`` of the stream's ``message_delta``.
+
+    The assembled OpenAI shape has no slot for them, and a client that asked to stream reads them
+    from that event and nowhere else (a Claude Code auto-mode session takes its classifier verdict
+    from ``safeguard_results``), so a caller re-emitting a rewritten response merges them back in.
+    """
+    sse_stream: Final = _joined_sse_stream(all_chunks)
+    if sse_stream is None:
+        return MappingProxyType({})
+    message_delta: Final = next(
+        (event for event in reversed(_parsed_sse_events(sse_stream)) if event.get("type") == "message_delta"), None
+    )
+    delta: Final = as_str_mapping(message_delta.get("delta")) if message_delta is not None else None
+    if delta is None:
+        return MappingProxyType({})
+    return MappingProxyType(
+        {key: value for key in MESSAGE_DELTA_OPTIONAL_KEYS if (value := delta.get(key)) is not None}
     )
 
 

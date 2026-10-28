@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { ArrowRight, Bot } from "lucide-react";
+import { ArrowRight, Bot, Monitor, Terminal } from "lucide-react";
 import { StackedUsageChart } from "@/components/shared/charts";
 import { Logo } from "@/components/molecules/logo/Logo";
 import type { DailyData } from "@/components/UsagePage/types";
@@ -34,33 +34,13 @@ const MONOGRAMS: Readonly<Record<string, { text: string; className: string }>> =
   node: { text: "JS", className: "bg-[#3c873a] text-white" },
   curl: { text: "cu", className: "bg-[#073551] text-white" },
 };
+const CLIENT_SURFACES: Readonly<Partial<Record<string, typeof Monitor>>> = {
+  "claude-desktop": Monitor,
+  "claude-code": Terminal,
+};
 
-/** Claude Code's mark: a white spark on Claude terracotta. Drawn here since no Claude asset ships in the repo. */
-function ClaudeSpark() {
-  const rays = Array.from({ length: 12 }, (_, i) => i * 30);
-  return (
-    <span className="flex size-full items-center justify-center bg-[#d97757]">
-      <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
-        {rays.map((angle) => (
-          <rect
-            key={angle}
-            x="11.1"
-            y="3"
-            width="1.8"
-            height="9"
-            rx="0.9"
-            fill="white"
-            transform={`rotate(${angle} 12 12)`}
-          />
-        ))}
-      </svg>
-    </span>
-  );
-}
-
-function AgentGlyph({ agent }: { agent: AgentRow }) {
-  if (agent.id === "claude-code") return <ClaudeSpark />;
-  if (agent.logo) return <Logo src={agent.logo} label={agent.label} className="size-5" />;
+function AgentGlyph({ agent }: { agent: Pick<AgentRow, "id" | "label" | "logo"> }) {
+  if (agent.logo) return <Logo src={agent.logo} label={agent.label} className="size-6 object-contain" />;
   const monogram = MONOGRAMS[agent.id];
   if (monogram) {
     return (
@@ -77,10 +57,16 @@ function AgentGlyph({ agent }: { agent: AgentRow }) {
   return <span className="text-sm font-semibold uppercase text-muted-foreground">{agent.label.charAt(0)}</span>;
 }
 
-function AgentMark({ agent }: { agent: AgentRow }) {
+export function AgentMark({ agent }: { agent: Pick<AgentRow, "id" | "label" | "logo"> }) {
+  const Surface = CLIENT_SURFACES[agent.id];
   return (
-    <span className="inline-flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-background">
+    <span className="relative inline-flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-background">
       <AgentGlyph agent={agent} />
+      {Surface && (
+        <span className="absolute top-0 right-0 rounded-bl border-b border-l bg-background p-0.5 text-foreground">
+          <Surface aria-hidden="true" className="size-2.5" />
+        </span>
+      )}
     </span>
   );
 }
@@ -98,8 +84,9 @@ function AgentItem({
   color: string | undefined;
   onOpen?: (agent: AgentRow) => void;
 }) {
-  return (
-    <li className="group grid grid-cols-[1.5rem_auto_minmax(0,1fr)_auto] items-center gap-3 py-2.5">
+  const openRow = onOpen && agent.tags.length > 0 ? () => onOpen(agent) : undefined;
+  const content = (
+    <>
       <span className="text-sm tabular-nums text-muted-foreground">{rank}.</span>
       <span className="relative">
         <AgentMark agent={agent} />
@@ -113,15 +100,11 @@ function AgentItem({
       </span>
       <span className="min-w-0">
         <span className="block truncate text-sm font-medium text-foreground">{agent.label}</span>
-        {onOpen ? (
-          <button
-            type="button"
-            onClick={() => onOpen(agent)}
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-          >
+        {openRow ? (
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground">
             View activity
             <ArrowRight aria-hidden="true" className="size-3 transition-transform group-hover:translate-x-0.5" />
-          </button>
+          </span>
         ) : (
           <span className="block truncate text-xs text-muted-foreground">{agent.description}</span>
         )}
@@ -132,6 +115,27 @@ function AgentItem({
           {formatCompactUsd(agent.spend)} · {share.toFixed(1)}%
         </span>
       </span>
+    </>
+  );
+  const rowClassName =
+    "group grid w-full grid-cols-[1.5rem_auto_minmax(0,1fr)_auto] items-center gap-3 py-2.5 text-left";
+  return (
+    <li>
+      {openRow ? (
+        <button
+          type="button"
+          aria-label={`View ${agent.label} usage`}
+          onClick={openRow}
+          className={cn(
+            rowClassName,
+            "cursor-pointer rounded-md transition-colors hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+          )}
+        >
+          {content}
+        </button>
+      ) : (
+        <div className={rowClassName}>{content}</div>
+      )}
     </li>
   );
 }

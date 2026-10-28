@@ -2,7 +2,7 @@ use litellm_core_utils::get_llm_provider_logic::{
     CustomLlmProvider, LlmProviders, get_custom_llm_provider,
 };
 
-use crate::error::RouteError as Error;
+use crate::error::Error;
 
 #[derive(Debug)]
 pub struct ResolvedProvider<'a> {

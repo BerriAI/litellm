@@ -16,7 +16,7 @@ use litellm_auth_aws::{
     resolve_bedrock_region,
 };
 use litellm_llms_types::formats::messages::{
-    MessagesRequest,
+    MessagesOptionalParams, MessagesRequest,
     streaming::{MessagesStreamEvent, MessagesStreamUsage},
 };
 use litellm_llms_types::providers::bedrock::{
@@ -146,6 +146,7 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         model: &str,
+        _optional_params: &MessagesOptionalParams,
         litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
@@ -332,7 +333,7 @@ mod tests {
     use litellm_auth_aws::constants::DEFAULT_BEDROCK_REGION;
 
     use super::*;
-    use crate::base_llm::messages::streaming::encode_anthropic_sse;
+    use crate::base_llm::messages::streaming;
 
     fn event(value: Value) -> MessagesStreamEvent {
         serde_json::from_value(value).unwrap()
@@ -493,7 +494,7 @@ mod tests {
         .boxed();
 
         let sse = bedrock_anthropic_messages_event_stream(bytes)
-            .map_ok(|event| encode_anthropic_sse(&event).unwrap())
+            .map_ok(|event| streaming::encode(&event).unwrap())
             .try_collect::<Vec<_>>()
             .await
             .unwrap()
@@ -508,7 +509,7 @@ mod tests {
             )),
         ]
         .iter()
-        .flat_map(|event| encode_anthropic_sse(event).unwrap())
+        .flat_map(|event| streaming::encode(event).unwrap())
         .collect();
         assert_eq!(sse, expected);
     }
@@ -618,6 +619,7 @@ mod tests {
                 Vec::new(),
                 None,
                 "anthropic.claude-3",
+                &MessagesOptionalParams::default(),
                 &litellm_params,
                 &|_| None,
             )
@@ -658,6 +660,7 @@ mod tests {
                 vec![("authorization".into(), "Bearer forwarded".into())],
                 api_key,
                 "anthropic.claude-3",
+                &MessagesOptionalParams::default(),
                 &LitellmParams::default(),
                 &env,
             )

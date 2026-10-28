@@ -795,6 +795,10 @@ class AktoGuardrail(CustomGuardrail):
         return main_task.result()
 
     @override
+    def supports_structured_messages(self) -> bool:
+        return False
+
+    @override
     @log_guardrail_information
     async def apply_guardrail(
         self,

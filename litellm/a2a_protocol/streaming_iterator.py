@@ -7,15 +7,20 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 if TYPE_CHECKING:
     from a2a.compat.v0_3.types import SendStreamingMessageRequest, SendStreamingMessageResponse
+
+_OPAQUE_PAYLOAD: Final = TypeAdapter(object)
 
 
 class A2AStreamingIterator:
@@ -36,7 +41,7 @@ class A2AStreamingIterator:
         self.request = request
         self.logging_obj = logging_obj
         self.agent_name = agent_name
-        self.start_time = datetime.now()
+        self.start_time = logging_obj.start_time
 
         # Collect chunks for token counting
         self.chunks: list[SendStreamingMessageResponse] = []
@@ -49,6 +54,8 @@ class A2AStreamingIterator:
     async def __anext__(self) -> "SendStreamingMessageResponse":
         try:
             chunk: Final = await self.stream.__anext__()
+            if self.logging_obj.completion_start_time is None:
+                self.logging_obj.update_completion_start_time(completion_start_time=datetime.now())
 
             # Store chunk
             self.chunks.append(chunk)
@@ -160,8 +167,11 @@ class A2AStreamingIterator:
         # Add final chunk result if available
         if self.final_chunk:
             try:
-                chunk_dict: Final = self.final_chunk.model_dump(mode="json", exclude_none=True)
-                result["result"] = chunk_dict.get("result", {})
+                chunk_dict: Final = as_str_mapping(
+                    _OPAQUE_PAYLOAD.validate_python(self.final_chunk.model_dump(mode="json", exclude_none=True))
+                )
+                if chunk_dict is not None:
+                    result["result"] = chunk_dict.get("result", {})
             except Exception:
                 pass
 

@@ -195,9 +195,7 @@ def test_update_model_params_with_health_check_tracking_information():
                 },
             }
 
-            result = HealthCheckHelpers.update_model_params_with_health_check_tracking_information(
-                initial_model_params
-            )
+            result = HealthCheckHelpers.update_model_params_with_health_check_tracking_information(initial_model_params)
 
             # Verify that litellm_metadata was added
             assert "litellm_metadata" in result
@@ -534,12 +532,12 @@ async def test_ocr_health_check_sends_the_document_kind_the_provider_config_acce
     assert document[expected_document_type].startswith(expected_uri_prefix)
 
 
-def test_realtime_health_check_azure_ad_params_drop_reserved_keys():
+async def test_realtime_health_check_azure_ad_params_drop_reserved_keys():
     from litellm.realtime_api import main as realtime_main
 
     seen = []
     with patch.object(realtime_main, "get_azure_ad_token", lambda params: seen.append(params) or "ad-token"):
-        headers = realtime_main._realtime_health_check_auth_headers(
+        headers = await realtime_main._realtime_health_check_auth_headers(
             "azure",
             None,
             MappingProxyType({"api_base": "https://x.openai.azure.com", "self": 1, "params": 2, "__class__": 3}),
@@ -753,9 +751,7 @@ async def test_ahealth_check_keeps_the_noul_probe_for_other_decisions_providers(
     assert "error" not in result, result
     assert upstream.called
     sent: Final = json.loads(upstream.calls[0].request.content)
-    assert sent["questions"] == {
-        "reachable": {"type": "noul", "instructions": "Is the service reachable?"}
-    }
+    assert sent["questions"] == {"reachable": {"type": "noul", "instructions": "Is the service reachable?"}}
 
 
 @pytest.mark.parametrize(
@@ -916,6 +912,7 @@ async def test_ahealth_check_without_mode_reports_the_real_failure(
     assert "Missing `mode`" not in result["error"]
     assert "raw_request_typed_dict" in result
 
+
 def test_update_litellm_params_for_health_check():
     """
     Test if update_litellm_params_for_health_check correctly:
@@ -1010,12 +1007,10 @@ def test_update_litellm_params_for_health_check():
             "model": f"bedrock/{prefix}anthropic.claude-3-haiku-20240307-v1:0",
             "api_key": "fake_key",
         }
-        updated_params = update_litellm_params_for_health_check(
-            model_info, litellm_params
+        updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
+        assert updated_params["model"] == f"{prefix}anthropic.claude-3-haiku-20240307-v1:0", (
+            f"Failed to preserve CRIS prefix: {prefix}"
         )
-        assert (
-            updated_params["model"] == f"{prefix}anthropic.claude-3-haiku-20240307-v1:0"
-        ), f"Failed to preserve CRIS prefix: {prefix}"
 
     litellm_params = {
         "model": "bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0",
@@ -1036,30 +1031,21 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
-    assert (
-        updated_params["model"]
-        == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
-    )
+    assert updated_params["model"] == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
 
     litellm_params = {
         "model": "bedrock/deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz",
         "api_key": "fake_key",
     }
     updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
-    assert (
-        updated_params["model"]
-        == "deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz"
-    )
+    assert updated_params["model"] == "deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz"
 
     litellm_params = {
         "model": "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "api_key": "fake_key",
     }
     updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
-    assert (
-        updated_params["model"]
-        == "converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
-    )
+    assert updated_params["model"] == "converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
     litellm_params = {
         "model": "bedrock/invoke/us-west-2/anthropic.claude-instant-v1",
@@ -1073,29 +1059,22 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
-    assert (
-        updated_params["model"]
-        == "arn:aws:bedrock:eu-central-1:000:application-inference-profile/abc"
-    )
+    assert updated_params["model"] == "arn:aws:bedrock:eu-central-1:000:application-inference-profile/abc"
 
     litellm_params = {
         "model": "bedrock/us-west-2/llama/arn:aws:bedrock:us-east-1:123:imported-model/abc",
         "api_key": "fake_key",
     }
     updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
-    assert (
-        updated_params["model"]
-        == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
-    )
+    assert updated_params["model"] == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
 
     litellm_params = {
         "model": "bedrock/converse/us-west-2/eu.anthropic.claude-3-sonnet-20240229-v1:0",
         "api_key": "fake_key",
     }
     updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
-    assert (
-        updated_params["model"] == "converse/eu.anthropic.claude-3-sonnet-20240229-v1:0"
-    )
+    assert updated_params["model"] == "converse/eu.anthropic.claude-3-sonnet-20240229-v1:0"
+
 
 @pytest.mark.asyncio
 async def test_perform_health_check_filters_by_model_id():
@@ -1142,6 +1121,7 @@ async def test_perform_health_check_filters_by_model_id():
     assert len(healthy_endpoints) == 1
     assert healthy_endpoints[0]["api_key"] == "fake-key-2"
 
+
 @pytest.mark.asyncio
 async def test_perform_health_check_skip_disabled_background_models():
     from litellm.proxy.health_check import perform_health_check
@@ -1180,6 +1160,7 @@ async def test_perform_health_check_skip_disabled_background_models():
     assert len(captured[0]) == 1
     assert captured[0][0]["model_name"] == "a"
 
+
 @pytest.mark.asyncio
 async def test_perform_health_check_with_health_check_model():
     """
@@ -1206,9 +1187,7 @@ async def test_perform_health_check_with_health_check_model():
         return {"status": "healthy"}
 
     with patch("litellm.ahealth_check", side_effect=mock_health_check):
-        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(
-            model_list
-        )
+        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(model_list)
         print("health check calls: ", health_check_calls)
 
         assert health_check_calls[0] == "openai/gpt-5-mini"
@@ -1216,6 +1195,7 @@ async def test_perform_health_check_with_health_check_model():
         assert healthy_endpoints[0]["model"] == "openai/gpt-5-mini"
         assert len(healthy_endpoints) == 1
         assert len(unhealthy_endpoints) == 0
+
 
 @pytest.mark.asyncio
 async def test_image_generation_health_check_prompt(monkeypatch):
@@ -1267,9 +1247,7 @@ async def test_image_generation_health_check_prompt(monkeypatch):
     health_check_calls = await run_health_check(reloaded_health_check)
 
     assert len(health_check_calls) == 1
-    assert (
-        health_check_calls[0]["prompt"] == reloaded_constants.DEFAULT_HEALTH_CHECK_PROMPT
-    )
+    assert health_check_calls[0]["prompt"] == reloaded_constants.DEFAULT_HEALTH_CHECK_PROMPT
 
     # Environment override should change the prompt without code changes
     override_prompt = "environment override prompt"
@@ -1293,9 +1271,7 @@ async def test_health_check_with_custom_llm_provider(
             "object": "chat.completion",
             "created": 0,
             "model": "deepseek-r1-distill-qwen-1.5B-q4",
-            "choices": [
-                {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
-            ],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         }
     )
@@ -1503,3 +1479,37 @@ async def test_audio_transcription_health_check_returns_transcribed_text(
     assert "error" not in response
     assert upstream.called
     assert b'name="file"' in upstream.calls.last.request.content
+
+
+@pytest.mark.parametrize("model", ("cloudflare/clairic", "cloudflare/@cf/cloudflare/clairic"))
+async def test_ahealth_check_probes_extraction_models_through_the_extraction_api(
+    model: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+    monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(
+        "https://api.cloudflare.com/client/v4/accounts/acct-1/ai/run/@cf/cloudflare/clairic"
+    ).respond(
+        json={
+            "result": {
+                "model": "clairic",
+                "answers": {"reachable": {"type": "text", "value": "health"}},
+                "truncated": False,
+                "usage": {"input_tokens": 20, "output_tokens": 0},
+            },
+            "success": True,
+            "errors": [],
+            "messages": [],
+        }
+    )
+
+    result: Final = await ahealth_check({"model": model, "api_key": "sk-test"}, mode=None)
+
+    assert "error" not in result, result
+    sent: Final = json.loads(upstream.calls[0].request.content)
+    assert sent["state"] == "health check"
+    assert sent["fields"]["reachable"]["type"] == "text"

@@ -11,7 +11,7 @@
 # beyond local evaluation, pin the image to a specific release tag.
 services:
   litellm:
-    image: docker.litellm.ai/berriai/litellm:main-stable
+    image: docker.litellm.ai/berriai/litellm:latest
     ports:
       # LITELLM_BIND is empty by default, so this stays "4000:4000". The quickstart
       # script sets it to "127.0.0.1:" so new installs listen on this machine only.

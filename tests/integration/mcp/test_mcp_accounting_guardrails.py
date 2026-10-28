@@ -36,6 +36,8 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 DEFAULT_COST: Final = 0.25
 ADD_COST: Final = 0.5
 FORBIDDEN: Final = "forbidden-integration-word"
@@ -628,7 +630,7 @@ def test_a_schema_past_the_scan_depth_is_not_published_while_one_at_the_limit_is
         assert scanned["texts"] == ["deepest leaf", "r-1"], scanned
         unpublished: Final = caller.call(f"{alias}-deep", {"record": "r-2"})
         assert _worker(pinned) == worker
-        assert unpublished.error is not None and "Tool 'deep' not found" in unpublished.raw, unpublished.raw
+        assert unpublished.error == "Error: Tool deep not found", unpublished.raw
         reached: Final = tool_calls(peer.drain())
         assert [object_value(JSON_OBJECT.validate_python(call["body"])["params"])["name"] for call in reached] == [
             "shallow"
@@ -643,7 +645,7 @@ def test_a_schema_past_the_scan_depth_is_not_published_while_one_at_the_limit_is
         ], rows
         assert [_tool_metadata(row)["name"] for row in rows[1:]] == ["shallow", "deep"], rows
         failed: Final = object_value(JSON_OBJECT.validate_python(rows[2]["metadata"])["error_information"])
-        assert failed["error_message"] == "404: Tool 'deep' not found", failed
+        assert failed["error_message"] == "Tool deep not found", failed
 
 
 def test_an_adapter_returning_the_wrong_number_of_texts_fails_closed_before_the_peer(hooks_rig: HooksRig) -> None:

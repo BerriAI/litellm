@@ -1,5 +1,5 @@
 use litellm_llms_types::formats::responses::{
-    ResponsesApiResponse, streaming_websocket::ResponsesWsEvent,
+    ResponsesApiResponse, streaming::ResponsesStreamEvent,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -38,11 +38,11 @@ pub trait BaseResponsesApiConfig: Sync {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResponsesWsTransformResult {
-    pub events: Vec<ResponsesWsEvent>,
+    pub events: Vec<ResponsesStreamEvent>,
 }
 
 impl ResponsesWsTransformResult {
-    pub fn passthrough(event: ResponsesWsEvent) -> Self {
+    pub fn passthrough(event: ResponsesStreamEvent) -> Self {
         Self {
             events: vec![event],
         }
@@ -58,18 +58,18 @@ pub trait ResponsesWebSocketProviderConfig: Sync {
 
     fn transform_ws_request(
         &self,
-        event: &ResponsesWsEvent,
+        event: &ResponsesStreamEvent,
         model: &str,
     ) -> Result<ResponsesWsTransformResult, Error>;
 
     fn transform_ws_response(
         &self,
-        event: &ResponsesWsEvent,
+        event: &ResponsesStreamEvent,
         model: &str,
     ) -> Result<ResponsesWsTransformResult, Error>;
 }
 
-pub fn enforce_model(event: &ResponsesWsEvent, model: &str) -> ResponsesWsEvent {
+pub fn enforce_model(event: &ResponsesStreamEvent, model: &str) -> ResponsesStreamEvent {
     if !event.is_response_create() {
         return event.clone();
     }
@@ -103,7 +103,7 @@ pub fn enforce_model(event: &ResponsesWsEvent, model: &str) -> ResponsesWsEvent 
 mod tests {
     use super::*;
 
-    fn event(value: serde_json::Value) -> ResponsesWsEvent {
+    fn event(value: serde_json::Value) -> ResponsesStreamEvent {
         serde_json::from_value(value).expect("valid event")
     }
 

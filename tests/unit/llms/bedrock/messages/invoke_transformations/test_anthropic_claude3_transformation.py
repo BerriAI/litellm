@@ -6,6 +6,7 @@ import os
 import struct
 import zlib
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Final
@@ -1050,6 +1051,7 @@ def test_bedrock_messages_forwards_output_config_with_output_format():
         "schema": {
             "type": "object",
             "properties": {"answer": {"type": "string"}},
+            "additionalProperties": False,
         },
     }
     optional_params = {
@@ -1098,7 +1100,7 @@ def test_bedrock_messages_converts_output_config_format_to_inline_schema():
 
     with patch(
         "litellm.llms.bedrock.common_utils._bedrock_model_supports",
-        side_effect=lambda _model, key: key == "supports_output_config",
+        side_effect=lambda _model, key, *_: key == "supports_output_config",
     ):
         result = cfg.transform_anthropic_messages_request(
             model="anthropic.claude-opus-4-7",
@@ -1170,7 +1172,7 @@ def test_bedrock_messages_does_not_mutate_callers_messages_when_embedding_schema
 
     with patch(
         "litellm.llms.bedrock.common_utils._bedrock_model_supports",
-        side_effect=lambda _model, key: key == "supports_output_config",
+        side_effect=lambda _model, key, *_: key == "supports_output_config",
     ):
         result = cfg.transform_anthropic_messages_request(
             model="anthropic.claude-opus-4-7",
@@ -1677,6 +1679,65 @@ def test_bedrock_messages_does_not_add_dangerous_tool_use_beta_without_safeguard
     assert "dangerous-tool-use-2026-09-03" not in result.get("anthropic_beta", [])
 
 
+_NAME_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}},
+    "required": ["name"],
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.parametrize(
+    "request_params",
+    [
+        {},
+        {"output_config": {"format": {"type": "json_schema", "schema": _NAME_SCHEMA}}},
+        {"tools": [{"name": "get_name", "strict": True, "input_schema": _NAME_SCHEMA}]},
+    ],
+    ids=["plain", "output_config_format", "strict_tool"],
+)
+def test_bedrock_messages_drops_client_dangerous_tool_use_beta_without_safeguards(
+    local_model_cost_map: None, local_beta_headers_config: None, request_params: dict[str, object]
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Name a color."}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 64, **request_params},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"},
+    )
+
+    assert all(result.get(key) == value for key, value in request_params.items())
+    assert "dangerous-tool-use-2026-09-03" not in result.get("anthropic_beta", [])
+
+
+def test_bedrock_messages_keeps_client_dangerous_tool_use_beta_with_safeguards_and_structured_outputs(
+    local_model_cost_map: None, local_beta_headers_config: None
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    safeguards: Final = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+    strict_tool: Final = {"name": "get_name", "strict": True, "input_schema": _NAME_SCHEMA}
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Name a color."}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 64,
+            "safeguards": safeguards,
+            "tools": [strict_tool],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"},
+    )
+
+    assert result["safeguards"] == safeguards
+    assert result["tools"] == [strict_tool]
+    assert result["anthropic_beta"].count("dangerous-tool-use-2026-09-03") == 1
+
+
 def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
     """Bedrock streams the classifier verdicts on message_start and on the final message_delta, exactly as api.anthropic.com does."""
     decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="us.anthropic.claude-sonnet-5")
@@ -2047,7 +2108,7 @@ def test_bedrock_clear_thinking_injects_adaptive_with_effort_for_adaptive_models
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
-        anthropic_messages_request=request, model=model
+        anthropic_messages_request=request, model=model, drop_params=False
     )
 
     assert changed is True
@@ -2070,7 +2131,7 @@ def test_bedrock_clear_thinking_converts_legacy_enabled_budget_to_effort():
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
-        anthropic_messages_request=request, model="us.anthropic.claude-opus-4-8"
+        anthropic_messages_request=request, model="us.anthropic.claude-opus-4-8", drop_params=False
     )
 
     assert changed is True
@@ -2098,7 +2159,7 @@ def test_bedrock_clear_thinking_keeps_enabled_for_non_adaptive_models():
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
-        anthropic_messages_request=request, model="anthropic.claude-opus-4-5-v1:0"
+        anthropic_messages_request=request, model="anthropic.claude-opus-4-5-v1:0", drop_params=False
     )
 
     assert changed is True
@@ -2605,7 +2666,9 @@ def test_inject_adaptive_thinking_preserves_existing_effort():
     cfg = AmazonAnthropicClaudeMessagesConfig()
     request = {"output_config": {"effort": "max", "other": "keep"}}
 
-    cfg._inject_adaptive_thinking_for_clear_thinking(request, budget_tokens=24000, model="us.anthropic.claude-fable-5")
+    cfg._inject_adaptive_thinking_for_clear_thinking(
+        request, budget_tokens=24000, model="us.anthropic.claude-fable-5", drop_params=False
+    )
 
     assert request["thinking"] == {"type": "adaptive"}
     assert request["output_config"] == {"effort": "max", "other": "keep"}
@@ -2622,7 +2685,7 @@ def test_bedrock_clear_thinking_noops_when_thinking_already_adaptive():
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
-        anthropic_messages_request=request, model="us.anthropic.claude-fable-5"
+        anthropic_messages_request=request, model="us.anthropic.claude-fable-5", drop_params=False
     )
 
     assert changed is False
@@ -2642,7 +2705,7 @@ def test_bedrock_clear_thinking_replaces_disabled_thinking_on_adaptive_model():
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
-        anthropic_messages_request=request, model="us.anthropic.claude-fable-5"
+        anthropic_messages_request=request, model="us.anthropic.claude-fable-5", drop_params=False
     )
 
     assert changed is True
@@ -2662,7 +2725,7 @@ def test_bedrock_clear_thinking_leaves_enabled_thinking_on_non_adaptive_model():
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
-        anthropic_messages_request=request, model="anthropic.claude-opus-4-5-v1:0"
+        anthropic_messages_request=request, model="anthropic.claude-opus-4-5-v1:0", drop_params=False
     )
 
     assert changed is False
@@ -3160,11 +3223,12 @@ def test_bedrock_messages_forwards_output_config_format_natively(local_model_cos
     assert "zebra_count" not in json.dumps(result["messages"])
 
 
-def test_bedrock_messages_inlines_schema_for_claude_5(local_model_cost_map):
-    """Bedrock rejects ``output_config.format`` for the Claude 5 family, so the
-    schema falls back to the inline-text path instead of a deterministic 400."""
+def test_bedrock_messages_inlines_schema_for_a_profile_without_native_output(set_native_structured_output):
+    """On a profile without native structured output the schema falls back to the
+    inline-text path instead of a deterministic 400."""
     from litellm.types.router import GenericLiteLLMParams
 
+    set_native_structured_output("us.anthropic.claude-sonnet-5", None)
     cfg = AmazonAnthropicClaudeMessagesConfig()
     schema = {
         "type": "object",
@@ -3187,6 +3251,115 @@ def test_bedrock_messages_inlines_schema_for_claude_5(local_model_cost_map):
     assert json.loads(last_content[-1]["text"]) == schema
 
 
+def _bedrock_messages_request_with_schema(model: str, schema: Mapping[str, object]) -> Mapping[str, object]:
+    from litellm.types.router import GenericLiteLLMParams
+
+    return AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_config": {"format": {"type": "json_schema", "schema": schema}},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+
+def test_bedrock_messages_native_output_drops_schema_keywords_bedrock_rejects(set_native_structured_output):
+    model: Final = "us.anthropic.claude-sonnet-5"
+    set_native_structured_output(model, "bedrock")
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            "count": {"type": "integer", "minimum": 1},
+            "ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
+        },
+        "required": ["count", "ids"],
+    }
+
+    result: Final = _bedrock_messages_request_with_schema(model, schema)
+
+    sent: Final = result["output_config"]["format"]["schema"]
+    assert "minimum" not in sent["properties"]["count"]
+    assert "uniqueItems" not in sent["properties"]["ids"]
+    assert sent["additionalProperties"] is False
+
+
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_bedrock_messages_shared_defs_reach_native_output_once_instead_of_inlined_per_use(
+    set_native_structured_output, native_key
+):
+    model: Final = "us.anthropic.claude-sonnet-5"
+    set_native_structured_output(model, native_key)
+    party_ref: Final = {"$ref": "#/$defs/Party"}
+    schema: Final = {
+        "type": "object",
+        "properties": {"buyer": party_ref, "seller": party_ref},
+        "required": ["buyer", "seller"],
+        "additionalProperties": False,
+        "$defs": {
+            "Party": {
+                "type": "object",
+                "properties": {"email": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+                "required": ["email"],
+                "additionalProperties": False,
+            }
+        },
+    }
+
+    result: Final = _bedrock_messages_request_with_schema(model, schema)
+
+    sent: Final = result["output_config"]["format"]["schema"]
+    assert sent["properties"]["buyer"] == party_ref
+    assert json.dumps(sent).count('"anyOf"') == 1
+
+
+MESSAGES_TREE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"root": {"$ref": "#/$defs/Node"}},
+    "$defs": {
+        "Node": {
+            "type": "object",
+            "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
+        }
+    },
+}
+MESSAGES_OPEN_OBJECT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"counts": {"type": "object", "additionalProperties": {"type": "integer"}}},
+}
+
+
+@pytest.mark.parametrize(
+    "schema", [MESSAGES_TREE_SCHEMA, MESSAGES_OPEN_OBJECT_SCHEMA], ids=["recursive", "open-object"]
+)
+def test_bedrock_messages_schema_native_output_cannot_hold_is_inlined_on_a_bedrock_native_profile(
+    set_native_structured_output, schema
+):
+    model: Final = "us.anthropic.claude-sonnet-5"
+    set_native_structured_output(model, "bedrock")
+
+    result: Final = _bedrock_messages_request_with_schema(model, schema)
+
+    assert "output_config" not in result
+    assert json.loads(result["messages"][-1]["content"][-1]["text"]) == schema
+
+
+@pytest.mark.parametrize(
+    "schema", [MESSAGES_TREE_SCHEMA, MESSAGES_OPEN_OBJECT_SCHEMA], ids=["recursive", "open-object"]
+)
+def test_bedrock_messages_schema_native_output_cannot_hold_is_forwarded_on_a_legacy_native_profile(
+    set_native_structured_output, schema
+):
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+    set_native_structured_output(model, "legacy")
+
+    result: Final = _bedrock_messages_request_with_schema(model, schema)
+
+    assert result["output_config"]["format"]["schema"] == schema
+
+
 def test_bedrock_messages_legacy_output_format_wins_over_output_config_format(local_model_cost_map):
     """When a request carries both schema forms, the legacy top-level
     ``output_format`` keeps winning, matching the pre-existing precedence."""
@@ -3195,7 +3368,11 @@ def test_bedrock_messages_legacy_output_format_wins_over_output_config_format(lo
     cfg = AmazonAnthropicClaudeMessagesConfig()
     legacy_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"legacy_field": {"type": "string"}}},
+        "schema": {
+            "type": "object",
+            "properties": {"legacy_field": {"type": "string"}},
+            "additionalProperties": False,
+        },
     }
     newer_format = {
         "type": "json_schema",
@@ -3229,7 +3406,7 @@ def test_bedrock_messages_drop_params_keeps_native_output_config_format(local_mo
     cfg = AmazonAnthropicClaudeMessagesConfig()
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}, "additionalProperties": False},
     }
 
     result = cfg.transform_anthropic_messages_request(
@@ -3254,7 +3431,7 @@ def test_bedrock_messages_strips_effort_but_keeps_format_for_sonnet_4_5(local_mo
     cfg = AmazonAnthropicClaudeMessagesConfig()
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}, "additionalProperties": False},
     }
 
     result = cfg.transform_anthropic_messages_request(
@@ -3690,6 +3867,100 @@ def test_bedrock_clear_thinking_preserves_display_updates() -> None:
     assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in result.get("anthropic_beta", [])
 
 
+BLOCK_BINDING: Final = {"prefix_mismatch_behavior": "error"}
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model", "requested_thinking", "extra_params"),
+    (
+        ("eu.anthropic.claude-opus-5", {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING}, {}),
+        (
+            "eu.anthropic.claude-opus-5",
+            {"type": "enabled", "budget_tokens": 24000, "display": "updates", "block_binding": BLOCK_BINDING},
+            {},
+        ),
+        (
+            "us.anthropic.claude-opus-4-6",
+            {"type": "enabled", "budget_tokens": 2048, "display": "updates", "block_binding": BLOCK_BINDING},
+            {"context_management": {"edits": [{"type": "clear_thinking_20251015"}]}},
+        ),
+    ),
+    ids=("adaptive", "legacy", "legacy_clear_thinking"),
+)
+def test_bedrock_messages_keeps_block_binding_with_display_updates(
+    model: str, requested_thinking: dict[str, object], extra_params: dict[str, object]
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        anthropic_messages_optional_request_params={"max_tokens": 512, "thinking": requested_thinking, **extra_params},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING}
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model", "requested_thinking", "rejected_keys", "extra_params", "expected_thinking"),
+    (
+        (
+            "eu.anthropic.claude-opus-5",
+            {"type": "enabled", "budget_tokens": 2048},
+            {"not_a_thinking_key": True},
+            {},
+            {"type": "adaptive"},
+        ),
+        (
+            "us.anthropic.claude-opus-4-6",
+            {"type": "enabled", "budget_tokens": 2048},
+            {"not_a_thinking_key": True},
+            {"context_management": {"edits": [{"type": "clear_thinking_20251015"}]}},
+            {"type": "adaptive"},
+        ),
+        (
+            "eu.anthropic.claude-opus-5",
+            {"type": "adaptive", "display": "updates"},
+            {"not_a_thinking_key": True, "budget_tokens": 2048},
+            {},
+            {"type": "adaptive", "display": "updates"},
+        ),
+    ),
+    ids=("legacy", "legacy_clear_thinking", "adaptive_display_updates"),
+)
+@pytest.mark.parametrize("drop_params_source", ("request", "global", None))
+def test_bedrock_messages_thinking_drops_unknown_keys_only_under_drop_params(
+    model: str,
+    requested_thinking: dict[str, object],
+    rejected_keys: dict[str, object],
+    extra_params: dict[str, object],
+    expected_thinking: dict[str, object],
+    drop_params_source: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "drop_params", drop_params_source == "global")
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 4096,
+            "thinking": {**requested_thinking, "block_binding": BLOCK_BINDING, **rejected_keys},
+            **extra_params,
+        },
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params_source == "request"),
+        headers={},
+    )
+
+    kept_rejected_keys: Final = {} if drop_params_source else rejected_keys
+    assert result.get("thinking") == {**expected_thinking, "block_binding": BLOCK_BINDING, **kept_rejected_keys}
+
+
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
 @pytest.mark.parametrize("action", (None, "tool_addition", "tool_removal"))
 @pytest.mark.parametrize("explicit_beta", (False, True))
@@ -3739,3 +4010,162 @@ def test_bedrock_removed_tool_change_does_not_add_beta(explicit_beta: bool) -> N
 
     assert result["messages"] == [{"role": "user", "content": "Reply with OK"}]
     assert result.get("anthropic_beta", []).count(beta) == int(explicit_beta)
+
+
+_NATIVE_OUTPUT_REJECTION: Final = {
+    "message": "The model returned the following errors: compilation exceeded limits: Schema is too complex."
+}
+_STALE_SIGNATURE_ERROR: Final = {"message": "messages.1.content.0: Invalid `signature` in `thinking` block"}
+_OPTED_OUT: Final = {"supports_bedrock_native_structured_output": False}
+_CONSTRAINED_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "maxLength": 50},
+        "kind": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
+    },
+    "required": ["summary", "kind"],
+    "additionalProperties": False,
+}
+_ANTHROPIC_MESSAGE: Final = {
+    "id": "msg_scripted",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-scripted",
+    "content": [{"type": "text", "text": '{"summary": "sunny", "kind": 1}'}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+_THINKING_HISTORY: Final = (
+    {"role": "user", "content": "Describe the weather."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "checking", "signature": "stale"},
+            {"type": "text", "text": "Sunny."},
+        ],
+    },
+    {"role": "user", "content": "Summarise it as JSON."},
+)
+
+
+@dataclass(slots=True)
+class ScriptedBedrockInvoke:
+    replies: tuple[tuple[int, Mapping[str, object]], ...]
+    bodies: tuple[dict[str, object], ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.bodies = (*self.bodies, REASONING_BODY_ADAPTER.validate_json(request.content))
+        status_code, body = self.replies[len(self.bodies) - 1]
+        return httpx.Response(status_code, json=body)
+
+
+async def _send_bedrock_messages(
+    model: str,
+    model_info: Mapping[str, object] | None,
+    replies: Sequence[tuple[int, Mapping[str, object]]],
+    messages: Sequence[Mapping[str, object]] = ({"role": "user", "content": "Summarise the weather as JSON."},),
+) -> tuple[ScriptedBedrockInvoke, Exception | None]:
+    bedrock: Final = ScriptedBedrockInvoke(replies=tuple(replies))
+    try:
+        await litellm.anthropic_messages(
+            model=f"bedrock/invoke/{model}",
+            messages=[dict(message) for message in messages],
+            max_tokens=4000,
+            system="Answer in French.",
+            thinking={"type": "adaptive"},
+            output_config={"format": {"type": "json_schema", "schema": _CONSTRAINED_SCHEMA}},
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+            aws_region_name="us-east-1",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+            **({} if model_info is None else {"model_info": model_info}),
+        )
+    except Exception as error:
+        return bedrock, error
+    return bedrock, None
+
+
+_OPT_IN_DEPLOYMENTS: Final = pytest.mark.parametrize(
+    ("model", "model_info"),
+    [
+        ("us.anthropic.claude-opus-4-8", None),
+        ("us.anthropic.claude-opus-5-5", {"supports_bedrock_native_structured_output": True}),
+    ],
+    ids=["mapped_opt_in", "deployment_opt_in"],
+)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@_OPT_IN_DEPLOYMENTS
+async def test_bedrock_messages_native_output_rejection_resends_the_body_an_opted_out_deployment_sends(
+    model: str, model_info: Mapping[str, object] | None
+) -> None:
+    opt_in, opt_in_error = await _send_bedrock_messages(
+        model, model_info, [(400, _NATIVE_OUTPUT_REJECTION), (200, _ANTHROPIC_MESSAGE)]
+    )
+    opted_out, opted_out_error = await _send_bedrock_messages(model, _OPTED_OUT, [(200, _ANTHROPIC_MESSAGE)])
+
+    assert opt_in_error is None and opted_out_error is None
+    native, retried = opt_in.bodies
+    assert "format" in REASONING_BODY_ADAPTER.validate_python(native["output_config"])
+    assert opted_out.bodies == (retried,)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model_info", [None, _OPTED_OUT], ids=["native_output", "opted_out"])
+async def test_bedrock_messages_thinking_signature_400_that_persists_reaches_bedrock_twice_as_before(
+    model_info: Mapping[str, object] | None,
+) -> None:
+    bedrock, error = await _send_bedrock_messages(
+        "us.anthropic.claude-opus-4-8", model_info, [(400, _STALE_SIGNATURE_ERROR)] * 3, _THINKING_HISTORY
+    )
+
+    assert isinstance(error, litellm.BadRequestError)
+    assert len(bedrock.bodies) == 2
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "first_error, second_error",
+    [(_NATIVE_OUTPUT_REJECTION, _STALE_SIGNATURE_ERROR), (_STALE_SIGNATURE_ERROR, _NATIVE_OUTPUT_REJECTION)],
+    ids=["rejection_first", "signature_first"],
+)
+async def test_bedrock_messages_native_output_rejection_and_signature_400_each_get_one_retry_like_an_opted_out_deployment(
+    first_error: Mapping[str, object], second_error: Mapping[str, object]
+) -> None:
+    opt_in, opt_in_error = await _send_bedrock_messages(
+        "us.anthropic.claude-opus-4-8",
+        None,
+        [(400, first_error), (400, second_error), (200, _ANTHROPIC_MESSAGE)],
+        _THINKING_HISTORY,
+    )
+    opted_out, opted_out_error = await _send_bedrock_messages(
+        "us.anthropic.claude-opus-4-8",
+        _OPTED_OUT,
+        [(400, _STALE_SIGNATURE_ERROR), (200, _ANTHROPIC_MESSAGE)],
+        _THINKING_HISTORY,
+    )
+
+    assert opt_in_error is None and opted_out_error is None
+    assert len(opt_in.bodies) == 3
+    assert opt_in.bodies[-1] == opted_out.bodies[-1]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "model_info", "error"),
+    [
+        ("us.anthropic.claude-opus-4-8", None, {"message": "messages.0.content: Field required"}),
+        ("us.anthropic.claude-sonnet-4-6", None, _NATIVE_OUTPUT_REJECTION),
+        ("us.anthropic.claude-opus-4-8", _OPTED_OUT, _NATIVE_OUTPUT_REJECTION),
+    ],
+    ids=["other_400", "native_model", "deployment_opt_out"],
+)
+async def test_bedrock_messages_400_is_not_retried_unless_it_rejects_opt_in_native_output(
+    model: str, model_info: Mapping[str, object] | None, error: Mapping[str, object]
+) -> None:
+    bedrock, raised = await _send_bedrock_messages(model, model_info, [(400, error), (200, _ANTHROPIC_MESSAGE)])
+
+    assert isinstance(raised, litellm.BadRequestError)
+    assert len(bedrock.bodies) == 1

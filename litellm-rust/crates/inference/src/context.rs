@@ -5,7 +5,7 @@ use litellm_host::{
     observation::ObservationSender,
 };
 
-use crate::{CallOptions, RouteError};
+use crate::{CallOptions, Error};
 
 pub struct CallContext<'a, I> {
     pub interceptors: &'a I,
@@ -13,7 +13,7 @@ pub struct CallContext<'a, I> {
     pub cache: CachePolicy,
 }
 
-impl<'a, I: Interceptors<RouteError>> CallContext<'a, I> {
+impl<'a, I: Interceptors<Error>> CallContext<'a, I> {
     pub fn new(interceptors: &'a I, options: CallOptions) -> Self {
         Self {
             interceptors,
@@ -22,7 +22,7 @@ impl<'a, I: Interceptors<RouteError>> CallContext<'a, I> {
         }
     }
 
-    pub async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), RouteError> {
+    pub async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), Error> {
         if let Some(observers) = &self.observers {
             observers.emit(CallEvent::Execution(ExecutionEvent::ResultReady {
                 facts: facts.clone(),
@@ -31,7 +31,7 @@ impl<'a, I: Interceptors<RouteError>> CallContext<'a, I> {
         self.interceptors.result_ready(facts).await
     }
 
-    pub async fn response_received(&self, body: &str) -> Result<(), RouteError> {
+    pub async fn response_received(&self, body: &str) -> Result<(), Error> {
         let raw = RawResponse {
             body: body.to_owned(),
         };
@@ -43,6 +43,6 @@ impl<'a, I: Interceptors<RouteError>> CallContext<'a, I> {
         self.interceptors
             .after_provider_response(raw)
             .await
-            .map_err(RouteError::post_call)
+            .map_err(Error::post_call)
     }
 }

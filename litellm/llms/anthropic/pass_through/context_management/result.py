@@ -6,7 +6,7 @@ attach ``iterations`` to ``usage``.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import Final
 
 from litellm.types.llms.anthropic import (
     AppliedEdit,
@@ -19,8 +19,8 @@ from .constants import COMPACT_EDIT_TYPE
 
 @dataclass
 class PolyfillResult:
-    messages: list[dict[str, Any]]
-    system: str | list[dict[str, Any]] | None
+    messages: list[dict[str, object]]
+    system: str | list[dict[str, object]] | None
     applied_edits: list[AppliedEdit] = field(default_factory=list)
     compaction_block: CompactionBlock | None = None
     iterations_usage: list[UsageIteration] | None = None

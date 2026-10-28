@@ -10,6 +10,7 @@ from mcp.types import Tool as MCPTool
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
 from openai.types.shared_params.function_definition import FunctionDefinition
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -19,6 +20,8 @@ from litellm.constants import (
 )
 from litellm.types.llms.anthropic import AnthropicMessagesTool
 from litellm.types.utils import ChatCompletionMessageToolCall
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 ########################################################
@@ -200,15 +203,18 @@ async def call_mcp_tool(
     return tool_result
 
 
+def _decode_json_arguments(arguments: str) -> object:
+    try:
+        return _DECODED_JSON.validate_python(json.loads(arguments))
+    except json.JSONDecodeError:
+        return {}
+
+
 def _get_function_arguments(function: FunctionDefinition) -> dict:
     """Helper to safely get and parse function arguments."""
-    arguments = function.get("arguments", {})
-    if isinstance(arguments, str):
-        try:
-            arguments = json.loads(arguments)
-        except json.JSONDecodeError:
-            arguments = {}
-    return arguments if isinstance(arguments, dict) else {}
+    arguments: Final = function.get("arguments", {})
+    decoded: Final = _decode_json_arguments(arguments) if isinstance(arguments, str) else arguments
+    return decoded if isinstance(decoded, dict) else {}
 
 
 def transform_openai_tool_call_request_to_mcp_tool_call_request(

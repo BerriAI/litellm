@@ -4,6 +4,7 @@ stamped from the request task while the root span is still recording, so Langfus
 import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
@@ -11,6 +12,7 @@ import pytest
 pytest.importorskip("opentelemetry")
 
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: E402
+from opentelemetry.trace import SpanKind  # noqa: E402
 
 import litellm  # noqa: E402
 from litellm.caching.dual_cache import DualCache  # noqa: E402
@@ -43,6 +45,7 @@ from litellm.types.utils import (  # noqa: E402
 INPUT_ATTR: Final = "langfuse.observation.input"
 OUTPUT_ATTR: Final = "langfuse.observation.output"
 TRACE_NAME_ATTR: Final = "langfuse.trace.name"
+COMPLETION_START_ATTR: Final = "langfuse.observation.completion_start_time"
 TRACE_CONTROL_ATTRS: Final = (TRACE_NAME_ATTR, "user.id", "session.id", "langfuse.trace.tags")
 CHAT_DATA: Final = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "ping"}]}
 
@@ -541,3 +544,53 @@ def test_langfuse_otel_preset_builds_a_logger_that_stamps_the_root(monkeypatch):
         assert INPUT_ATTR in attrs and OUTPUT_ATTR in attrs
     finally:
         is_otel_v2_enabled.cache_clear()
+
+
+def _llm_call_kwargs(optional_params: Mapping[str, object], completion_start: datetime | None) -> dict[str, object]:
+    return {
+        "standard_logging_object": {
+            "litellm_call_id": "call_1",
+            "call_type": "acompletion",
+            "custom_llm_provider": "openai",
+            "model": "gpt-5.4-mini",
+            "stream": bool(optional_params.get("stream")),
+            "status": "success",
+            "completionStartTime": datetime(2026, 10, 9, 12, 0, 9, tzinfo=timezone.utc).timestamp(),
+        },
+        "litellm_params": {"metadata": {}},
+        "optional_params": optional_params,
+        "api_call_start_time": datetime(2026, 10, 9, 12, 0, 0, tzinfo=timezone.utc),
+        "completion_start_time": completion_start,
+    }
+
+
+def _generation_attrs(kwargs: dict[str, object], *, fail: bool = False) -> Mapping[str, object]:
+    logger, exporter = _logger()
+    logger.log_pre_api_call(model="gpt-5.4-mini", messages=[], kwargs=kwargs)
+    hook: Final = logger.async_log_failure_event if fail else logger.async_log_success_event
+    asyncio.run(hook(kwargs, None, None, None))
+    (generation,) = [span for span in exporter.get_finished_spans() if span.kind is SpanKind.CLIENT]
+    return dict(generation.attributes or {})
+
+
+@pytest.mark.parametrize(
+    "optional_params",
+    [
+        pytest.param({"stream": True}, id="streamed"),
+        pytest.param({}, id="not_streamed_or_pass_through_stream"),
+    ],
+)
+def test_generation_carries_litellms_completion_start_time_like_the_default_emitter(
+    optional_params: Mapping[str, object],
+) -> None:
+    completion_start: Final = datetime(2026, 10, 9, 12, 0, 0, 250000, tzinfo=timezone.utc)
+
+    attrs: Final = _generation_attrs(_llm_call_kwargs(optional_params, completion_start))
+
+    assert datetime.fromisoformat(json.loads(attrs[COMPLETION_START_ATTR])) == completion_start
+
+
+def test_failed_generation_without_a_first_chunk_has_no_completion_start_time() -> None:
+    attrs: Final = _generation_attrs(_llm_call_kwargs({"stream": True}, None), fail=True)
+
+    assert COMPLETION_START_ATTR not in attrs

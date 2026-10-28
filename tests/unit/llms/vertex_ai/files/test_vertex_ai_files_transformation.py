@@ -6,13 +6,16 @@ Includes tests for Vertex AI batch output transformation to OpenAI format.
 import json
 import urllib.parse
 from collections.abc import Mapping
+from typing import Final
 from types import MappingProxyType
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 from unittest.mock import MagicMock
 
+import litellm
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
     _get_litellm_batch_custom_id_from_labels,
@@ -1638,6 +1641,45 @@ class TestVertexResponsesBatchInputTranslation:
         assert request["contents"] == [{"role": "user", "parts": [{"text": "ping"}]}]
 
 
+_PRIORITY_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "level": {"type": "integer", "enum": [1, 2, 5]},
+        "mode": {"type": "string", "enum": ["fast", "slow"]},
+    },
+}
+
+
+class TestVertexBatchIntegerEnums:
+    """
+    Vertex batch reads each row's string enum values back as numbers and then fails the
+    row, so batch rows drop integer enums on every model, as before Gemini 3 sent them.
+    """
+
+    @pytest.mark.parametrize("model", ["gemini-3.8-flash", "vertex-batch-alias"])
+    def test_tool_rows_drop_integer_enums_and_keep_string_enums(self, model: str):
+        (row,) = _wrap_entries(
+            [
+                {
+                    "custom_id": "enum-1",
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "model": model,
+                        "messages": [{"role": "user", "content": "Set priority 3"}],
+                        "tools": [
+                            {"type": "function", "function": {"name": "set_priority", "parameters": _PRIORITY_SCHEMA}}
+                        ],
+                    },
+                }
+            ]
+        )
+
+        properties: Final = row["request"]["tools"][0]["function_declarations"][0]["parameters"]["properties"]
+        assert "enum" not in properties["level"]
+        assert properties["mode"]["enum"] == ["fast", "slow"]
+
+
 class TestVertexEmbeddingsBatchOutputTranslation:
     """Vertex Gemini Embedding batch output rows must come back as OpenAI batch rows."""
 
@@ -1948,3 +1990,58 @@ class TestVertexEmbeddingsBatchOutputTranslation:
         content = json.dumps(legacy_row).encode("utf-8")
 
         assert config._try_transform_vertex_batch_output_to_openai(content) == content
+
+
+_SAMPLING_KNOBS: Final = MappingProxyType({"temperature": 0, "top_p": 0.5, "top_k": 3})
+
+
+def _chat_entry(model: str, knobs: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "custom_id": "request-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5, **knobs},
+        }
+    )
+
+
+def _generation_config(row: Mapping[str, object]) -> object:
+    request: Final = TypeAdapter(dict[str, object]).validate_python(row["request"])
+    return request["generationConfig"]
+
+
+def _flag_model_as_no_sampling(monkeypatch: pytest.MonkeyPatch, model: str) -> None:
+    monkeypatch.setitem(litellm.model_cost, model, {"supports_sampling_params": False})
+
+
+def test_batch_row_for_a_flagged_gemini_model_raises_a_400_naming_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A batch file row gets the same contract as a real-time call: the knobs Google ignores are refused
+    with a 400 that names drop_params instead of silently vanishing from the uploaded row"""
+    _flag_model_as_no_sampling(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"temperature, top_p, top_k.*drop_params"):
+        _wrap_entries([_chat_entry("gemini-zeta-9", _SAMPLING_KNOBS)])
+
+
+def test_batch_row_with_null_knobs_for_a_flagged_gemini_model_is_not_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A null knob means no override, the same as on a real-time call, so it must not fail the upload"""
+    _flag_model_as_no_sampling(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    (row,) = _wrap_entries([_chat_entry("gemini-zeta-9", {"temperature": None, "top_p": None, "top_k": None})])
+    assert _generation_config(row) == {"max_output_tokens": 5}
+
+
+def test_batch_row_for_a_flagged_gemini_model_drops_the_knobs_under_global_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _flag_model_as_no_sampling(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", True)
+    (row,) = _wrap_entries([_chat_entry("gemini-zeta-9", _SAMPLING_KNOBS)])
+    assert _generation_config(row) == {"max_output_tokens": 5}
+
+
+def test_batch_row_for_an_unflagged_gemini_model_keeps_the_knobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    (row,) = _wrap_entries([_chat_entry("gemini-2.5-flash", _SAMPLING_KNOBS)])
+    assert _generation_config(row) == {"max_output_tokens": 5, **_SAMPLING_KNOBS}

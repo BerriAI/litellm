@@ -7,6 +7,7 @@ from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 class UiDiscoveryEndpoints(LiteLLMBaseModel):
     server_root_path: str
     proxy_base_url: str | None
+    gateway_base_url: str | None = None
     auto_redirect_to_sso: bool
     admin_ui_disabled: bool
     sso_configured: bool
