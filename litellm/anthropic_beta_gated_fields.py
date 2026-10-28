@@ -23,10 +23,10 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
+    ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
 )
 
-ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER: Final = "thinking-binding-controls-2026-08-01"
 ANTHROPIC_MID_CONVERSATION_SYSTEM_CLEAR_AT_BETA_HEADER: Final = "mid-conversation-system-clear-at-2026-08-21"
 ANTHROPIC_INLINE_TOOLS_BETA_HEADER: Final = "inline-tools-2026-09-15"
 
@@ -156,7 +156,7 @@ def strip_beta_gated_thinking(thinking: object, active_betas: Set[str], *, drop_
 
 def _strip_beta_gated_system_message(message: Mapping[str, object], active_betas: Set[str]) -> StrippedMessages:
     """One mid-conversation ``role: system`` message. ``messages`` holds the rewritten message, or nothing
-    when the strip left it with no content, since an empty system turn is itself a 400."""
+    when the strip left it with neither content nor ``output_config``, since such a system turn is itself a 400."""
     clear_at_gated: Final = "clear_at" in message and field_is_gated(SYSTEM_CLEAR_AT, active_betas)
     output_config_gated: Final = "output_config" in message and field_is_gated(SYSTEM_OUTPUT_CONFIG, active_betas)
     content: Final = message.get("content")
@@ -184,7 +184,7 @@ def _strip_beta_gated_system_message(message: Mapping[str, object], active_betas
         *((SYSTEM_OUTPUT_CONFIG,) if output_config_gated else ()),
         *((SYSTEM_TOOL_CHANGES,) if tool_changes_gated else ()),
     )
-    if kept_content in (None, "", []):
+    if kept_content in (None, "", []) and "output_config" not in rewritten:
         return StrippedMessages(messages=(), stripped=(*stripped, SYSTEM_MESSAGE_EMPTIED))
     return StrippedMessages(messages=(rewritten,), stripped=stripped)
 
@@ -292,9 +292,10 @@ def log_beta_gated_strips(stripped: Sequence[str], model: str | None, provider: 
     if not stripped:
         return
     verbose_logger.warning(
-        "Stripped %s from the request for model=%s provider=%s because drop_params is on and the request "
-        "does not send the anthropic-beta that gates them on this provider (see anthropic_beta_headers_config.json). "
-        "Send that beta to keep them where the provider accepts it.",
+        "Dropped %s for model=%s provider=%s because drop_params is on and the provider would reject them on "
+        "this request, either since this provider leg does not send the anthropic-beta that unlocks them (see "
+        "anthropic_beta_headers_config.json) or since the model turns mid-conversation system messages into user "
+        "messages.",
         sorted(set(stripped)),
         model,
         provider,

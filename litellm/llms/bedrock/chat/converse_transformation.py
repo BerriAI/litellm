@@ -1829,7 +1829,15 @@ class AmazonConverseConfig(BaseConfig):
                 filtered_tools.append(tool)
 
         base_model: Final = BedrockModelInfo.get_base_model(model)
-        client_beta_list: Final = get_anthropic_beta_from_headers(headers or {})
+        header_beta_list: Final = get_anthropic_beta_from_headers(headers or {})
+        body_beta_list: Final = sorted(
+            active_beta_values(
+                {},
+                additional_request_params.get("anthropic_beta"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # additional_request_params is a bare dict
+            )
+            - set(header_beta_list)
+        )
+        client_beta_list: Final = [*header_beta_list, *body_beta_list]
         eager_beta: Final = (
             (ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,)
             if base_model.startswith("anthropic")
@@ -1837,7 +1845,15 @@ class AmazonConverseConfig(BaseConfig):
             and ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER not in client_beta_list
             else ()
         )
-        anthropic_beta_list: Final = [*client_beta_list, *eager_beta]
+        thinking_betas: Final = AnthropicModelInfo().thinking_betas(
+            additional_request_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # additional_request_params is a bare dict
+        )
+        missing_thinking_betas: Final = (
+            tuple(beta for beta in thinking_betas if beta not in client_beta_list)
+            if base_model.startswith("anthropic")
+            else ()
+        )
+        anthropic_beta_list: Final = [*client_beta_list, *eager_beta, *missing_thinking_betas]
 
         # Only separate tools if computer use tools are actually present
         if filtered_tools and self.is_computer_use_tool_used(filtered_tools, model):
@@ -1907,7 +1923,8 @@ class AmazonConverseConfig(BaseConfig):
                 else:
                     computer_use_header = "computer-use-2024-10-22"
 
-                anthropic_beta_list.append(computer_use_header)
+                if computer_use_header not in anthropic_beta_list:
+                    anthropic_beta_list.append(computer_use_header)
                 # Transform computer use tools to proper Bedrock format
                 transformed_computer_tools: Final = self._transform_computer_use_tools(computer_use_tools)
                 additional_request_params["tools"] = transformed_computer_tools

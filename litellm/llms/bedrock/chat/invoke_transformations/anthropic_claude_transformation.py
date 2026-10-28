@@ -303,7 +303,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         programmatic_tool_calling_used: Final = self.is_programmatic_tool_calling_used(tools)
         input_examples_used: Final = self.is_input_examples_used(tools)
         is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages)
-        is_thinking_display_updates_used: Final = self.is_thinking_display_updates_used(thinking)
 
         client_beta_set: Final = set(get_anthropic_beta_from_headers(headers))
         user_beta_set: Final = (
@@ -321,7 +320,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
             custom_llm_provider="bedrock",
             is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
-            is_thinking_display_updates_used=is_thinking_display_updates_used,
+            thinking=thinking,
         )
         beta_set.update(auto_betas)
 

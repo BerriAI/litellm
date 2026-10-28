@@ -7,11 +7,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_gated_fields import (
-    ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,
-    log_beta_gated_strips,
-    strip_beta_gated_native_request,
-)
+from litellm.anthropic_beta_gated_fields import log_beta_gated_strips, strip_beta_gated_native_request
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
@@ -589,17 +585,12 @@ class AmazonAnthropicClaudeMessagesConfig(
             ),
             custom_llm_provider="bedrock",
             is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
-            is_thinking_display_updates_used=anthropic_model_info.is_thinking_display_updates_used(
-                anthropic_messages_request.get("thinking")
-            ),
+            thinking=anthropic_messages_request.get("thinking"),
             is_mid_conversation_tool_change_used=anthropic_model_info.is_mid_conversation_tool_change_used(
                 outgoing_messages_typed
             ),
         )
         beta_set.update(auto_betas)
-
-        if "block_binding" in (anthropic_messages_request.get("thinking") or {}):  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the base signature types the request as a bare dict
-            beta_set.add(ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER)
 
         if injected_thinking_for_clear_thinking:
             beta_set.add("interleaved-thinking-2025-05-14")

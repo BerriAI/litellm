@@ -422,6 +422,22 @@ def test_drop_params_forwards_a_non_object_message_item_as_sent_on_the_native_re
 BINDING_AND_DISPLAY_BETAS: Final = "thinking-binding-controls-2026-08-01,thinking-display-updates-2026-08-18"
 
 
+def test_messages_headers_add_the_binding_beta_when_thinking_carries_block_binding() -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(
+        headers={},
+        optional_params={"thinking": {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}},
+        messages=[],
+    )
+    assert "thinking-binding-controls-2026-08-01" in headers["anthropic-beta"].split(",")
+
+
+def test_messages_headers_add_no_binding_beta_without_block_binding() -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(
+        headers={}, optional_params={"thinking": {"type": "adaptive"}}, messages=[]
+    )
+    assert "thinking-binding-controls-2026-08-01" not in headers.get("anthropic-beta", "")
+
+
 def _bound_adaptive_request(headers: dict[str, str], drop_params: bool | None = True) -> dict[str, object]:
     thinking: Final = {
         "type": "adaptive",

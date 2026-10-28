@@ -168,6 +168,30 @@ def test_system_message_emptied_by_the_strip_is_dropped() -> None:
     )
 
 
+def test_system_turn_emptied_by_the_strip_stays_as_a_directive_when_its_output_config_survives() -> None:
+    directive: Final = {
+        "role": "system",
+        "output_config": {"effort": "low"},
+        "content": [{"type": "tool_removal", "tool_names": ["lookup"]}],
+    }
+    result: Final = strip_beta_gated_system_messages(
+        [directive], frozenset({ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER}), drop_params=True
+    )
+    assert result.messages == [{"role": "system", "output_config": {"effort": "low"}, "content": []}]
+    assert result.stripped == ("messages[].system.content[].tool_addition|tool_removal",)
+
+
+def test_system_turn_emptied_by_the_strip_is_dropped_when_its_output_config_is_gated_too() -> None:
+    directive: Final = {
+        "role": "system",
+        "output_config": {"effort": "low"},
+        "content": [{"type": "tool_removal", "tool_names": ["lookup"]}],
+    }
+    result: Final = strip_beta_gated_system_messages([directive], frozenset(), drop_params=True)
+    assert result.messages == []
+    assert result.stripped[-1] == "messages[].system (emptied by the strip)"
+
+
 def test_request_strip_replaces_only_thinking_and_messages_and_keeps_the_dict_otherwise() -> None:
     request: Final = {
         "model": "claude",

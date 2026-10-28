@@ -277,7 +277,7 @@ def test_completion_surfaces_the_status_and_headers_of_a_rejected_request():
 
 @respx.mock
 @pytest.mark.parametrize("drop_params", [True, False])
-def test_completion_drops_block_binding_without_its_beta_only_under_drop_params(
+def test_completion_adds_the_binding_beta_so_block_binding_is_kept(
     drop_params: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
@@ -308,5 +308,5 @@ def test_completion_drops_block_binding_without_its_beta_only_under_drop_params(
     )
 
     sent: Final = json.loads(route.calls.last.request.content)
-    assert sent["thinking"]["budget_tokens"] == 1024
-    assert ("block_binding" in sent["thinking"]) is not drop_params
+    assert sent["thinking"] == {"type": "enabled", "budget_tokens": 1024, "block_binding": block_binding}
+    assert "thinking-binding-controls-2026-08-01" in route.calls.last.request.headers["anthropic-beta"].split(",")

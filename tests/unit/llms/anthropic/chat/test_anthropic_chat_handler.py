@@ -3617,9 +3617,9 @@ def test_streamed_end_turn_carries_no_stop_details():
     assert "stop_reason" not in provider_fields
 
 
-def _anthropic_chat_body_for_bound_thinking(
+def _anthropic_chat_request_for_bound_thinking(
     extra_headers: dict[str, str] | None, drop_params: bool | None = None
-) -> dict[str, object]:
+) -> httpx.Request:
     captured_requests: Final[list[httpx.Request]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -3653,7 +3653,13 @@ def _anthropic_chat_body_for_bound_thinking(
     finally:
         client.close()
     assert thinking == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
-    return json.loads(captured_requests[0].content)
+    return captured_requests[0]
+
+
+def _anthropic_chat_body_for_bound_thinking(
+    extra_headers: dict[str, str] | None, drop_params: bool | None = None
+) -> dict[str, object]:
+    return json.loads(_anthropic_chat_request_for_bound_thinking(extra_headers, drop_params).content)
 
 
 def test_anthropic_chat_keeps_block_binding_when_the_final_header_carries_the_binding_beta(
@@ -3666,12 +3672,18 @@ def test_anthropic_chat_keeps_block_binding_when_the_final_header_carries_the_bi
     assert body["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
 
 
-def test_anthropic_chat_drops_block_binding_when_no_header_carries_the_binding_beta(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_anthropic_chat_adds_the_binding_beta_so_block_binding_is_kept(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
-    body: Final = _anthropic_chat_body_for_bound_thinking(None, drop_params=True)
-    assert body["thinking"] == {"type": "adaptive"}
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _anthropic_chat_request_for_bound_thinking(None, drop_params=drop_params)
+    assert json.loads(request.content)["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+    }
+    assert "thinking-binding-controls-2026-08-01" in request.headers["anthropic-beta"].split(",")
 
 
 def test_anthropic_chat_sends_block_binding_as_is_without_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:

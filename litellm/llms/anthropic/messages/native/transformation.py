@@ -26,7 +26,6 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
-    ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     AnthropicMessagesRequest,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -895,17 +894,13 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if AnthropicModelInfo().is_tool_search_used(tools):
             beta_values.add(get_tool_search_beta_header(custom_llm_provider))
 
-        thinking_display_betas: Final = (
-            (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,)
-            if AnthropicModelInfo().is_thinking_display_updates_used(optional_params.get("thinking"))
-            else ()
-        )
+        thinking_betas: Final = AnthropicModelInfo().thinking_betas(optional_params.get("thinking"))
         tool_change_betas: Final = (
             (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,)
             if AnthropicModelInfo().is_mid_conversation_tool_change_used(messages)
             else ()
         )
-        all_beta_values: Final = beta_values.union(thinking_display_betas, tool_change_betas)
+        all_beta_values: Final = beta_values.union(thinking_betas, tool_change_betas)
         dangerous_tool_use: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
         forwarded_beta_values: Final = (  # pyright: ignore[reportUnknownVariableType]  # derived from the bare beta set
             all_beta_values - {dangerous_tool_use}
