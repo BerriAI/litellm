@@ -21,7 +21,7 @@ from openai import OpenAI
 from pydantic import JsonValue
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, object_value
-from tests.integration._support.process import graceful_stop_seconds, owned_proxy_process
+from tests.integration._support.process import OwnedState, graceful_stop_seconds, owned_proxy_process
 from tests.integration._support.upstream import ScenarioHandle
 from tests.integration.caching.response_cache_case import (
     CHAT,
@@ -175,7 +175,9 @@ def test_groups_in_one_caching_group_on_different_models_share_one_entry(
         first: Final = _configured_group(scenario, endpoint)
         second: Final = _configured_group(scenario, endpoint)
         config: Final = _caching_groups_config(tmp_path, endpoint, first, second)
-        with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=1) as owned:
+        with owned_proxy_process(
+            gateway, tmp_path, {}, config=config, workers=1, state=OwnedState.SHARED_WITH_WORKER
+        ) as owned:
             filled: Final = endpoint.ask(owned.gateway, first.name, text, {})
             await_entry(store, filled)
             assert endpoint.ask(owned.gateway, second.name, text, {}) == filled

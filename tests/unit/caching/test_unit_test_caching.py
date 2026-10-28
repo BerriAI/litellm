@@ -278,6 +278,35 @@ def test_get_model_param_value_reads_model_group_from_litellm_metadata():
     )
 
 
+def test_get_model_param_value_ignores_a_caller_model_group_outside_the_router_bucket():
+    cache = Cache()
+    request = {"model": "openai/gpt-5.6", "input": "search this text"}
+
+    assert (
+        cache._get_model_param_value(
+            {**request, "metadata": {"model_group": "target"}, "litellm_metadata": {"model_group": "caller"}}
+        )
+        == "caller"
+    )
+    assert (
+        cache._get_model_param_value({**request, "metadata": {"model_group": "target"}, "litellm_metadata": {}})
+        == "openai/gpt-5.6"
+    )
+    assert (
+        cache._get_model_param_value(
+            {
+                **request,
+                "metadata": {"model_group": "target"},
+                "litellm_metadata": {"user_api_key": "hashed"},
+                "litellm_params": {
+                    "metadata": {"model_group": "target"},
+                    "litellm_metadata": {"user_api_key": "hashed"},
+                },
+            }
+        )
+        == "openai/gpt-5.6"
+    )
+
 def test_preset_cache_key():
     """
     Test that the preset cache key is used if it is set in kwargs["litellm_params"]

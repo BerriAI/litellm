@@ -456,10 +456,8 @@ class Cache:
         """
         litellm_params: Final[dict] = kwargs.get("litellm_params", {}) or {}
         metadata_sources: Final[tuple[dict, ...]] = (
-            kwargs.get("metadata") or {},
-            kwargs.get("litellm_metadata") or {},
-            litellm_params.get("metadata") or {},
-            litellm_params.get("litellm_metadata") or {},
+            kwargs.get("litellm_metadata" if "litellm_metadata" in kwargs else "metadata") or {},
+            litellm_params.get("litellm_metadata") or litellm_params.get("metadata") or {},
         )
         model_group: Final[str | None] = next(
             (source["model_group"] for source in metadata_sources if source.get("model_group")), None
