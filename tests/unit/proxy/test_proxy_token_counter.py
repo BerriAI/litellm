@@ -11,6 +11,7 @@ import logging
 import threading
 import traceback
 from collections.abc import Callable, Coroutine, Mapping
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
@@ -1837,8 +1838,13 @@ async def test_uncountable_model_without_framing_raises():
             TokenCountModel(model="anthropic.claude-sonnet-5-5", region=None, litellm_provider="bedrock"),
             "bedrock/anthropic.claude-sonnet-5-5",
         ),
+        (_OPUS_IN_US_EAST_1, "us.anthropic.claude-opus-5-5"),
     ],
-    ids=["no_token_count_model", "token_count_model_in_the_deployment_region"],
+    ids=[
+        "no_token_count_model",
+        "shipped_token_count_model_in_the_deployment_region",
+        "shipped_token_count_model_pinned_to_a_region",
+    ],
 )
 @pytest.mark.asyncio
 async def test_uncountable_model_with_framing_falls_through_to_the_local_estimate(
@@ -1852,18 +1858,25 @@ async def test_uncountable_model_with_framing_falls_through_to_the_local_estimat
     assert [call[0] for call in counter.calls] == [counted_as]
 
 
+@pytest.mark.parametrize(
+    "count_model",
+    [replace(_OPUS_IN_US_EAST_1, configured=True), replace(_OPUS_IN_US_EAST_1, region=None, configured=True)],
+    ids=["pinned_to_a_region", "in_the_deployment_region"],
+)
 @pytest.mark.parametrize("status_code", [400, 404])
 @pytest.mark.asyncio
-async def test_token_count_model_error_stands_even_with_framing(status_code: int):
+async def test_configured_token_count_model_error_stands_even_with_framing(
+    count_model: TokenCountModel, status_code: int
+):
     counter: Final = _ScriptedCounter(
         {"us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=status_code)}
     )
 
     with pytest.raises(ProxyException) as raised:
-        await _ladder(counter, TokenCountSettings(framing=78, count_model=_OPUS_IN_US_EAST_1))
+        await _ladder(counter, TokenCountSettings(framing=78, count_model=count_model))
 
     assert raised.value.code == str(status_code)
-    assert "us.anthropic.claude-opus-5-5 in us-east-1" in raised.value.message
+    assert raised.value.message.startswith(f"scripted {status_code} for opus")
 
 
 @pytest.mark.asyncio
@@ -2890,7 +2903,9 @@ class _VaultWaitingForLoopProgress:
 async def test_region_lookup_for_a_shipped_count_model_leaves_the_event_loop_free(monkeypatch: pytest.MonkeyPatch):
     from litellm.proxy import proxy_server
 
-    counter: Final = _ScriptedCounter({"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)})
+    counter: Final = _ScriptedCounter(
+        {"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)}
+    )
 
     def bedrock_counter(deployment: object, model: str) -> tuple[_ScriptedCounter, str, str]:
         return counter, model, "bedrock"
@@ -3655,7 +3670,11 @@ async def test_responses_count_sends_openai_the_provider_file_id_inference_sends
         model_list=[
             {
                 "model_name": "gpt-files",
-                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key", "api_base": "https://count.test/v1"},
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                    "api_base": "https://count.test/v1",
+                },
                 "model_info": {"id": "deployment-a"},
             }
         ]
@@ -3835,9 +3854,7 @@ async def test_responses_count_on_claude_rejects_forced_tool_choice_without_drop
     monkeypatch.setitem(litellm.model_cost, "claude-zeta-9", {"supports_forced_tool_use": False})
 
     with pytest.raises(ProxyException) as rejected:
-        await _claude_count(
-            monkeypatch, {}, {"input": "Weather?", "tools": [_WEATHER_TOOL], "tool_choice": "required"}
-        )
+        await _claude_count(monkeypatch, {}, {"input": "Weather?", "tools": [_WEATHER_TOOL], "tool_choice": "required"})
 
     assert (rejected.value.code, "forced tool use" in rejected.value.message) == ("400", True)
 

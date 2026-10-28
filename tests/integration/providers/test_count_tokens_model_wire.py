@@ -221,13 +221,13 @@ def _url(port: int) -> str:
     return f"http://127.0.0.1:{port}"
 
 
-def _litellm_params(model: str, api_base: str) -> dict[str, JsonValue]:
+def _litellm_params(model: str, api_base: str, region: str = _REGION) -> dict[str, JsonValue]:
     return {
         "model": f"bedrock/{model}",
         "api_base": api_base,
         "aws_access_key_id": _ACCESS_KEY,
         "aws_secret_access_key": _SECRET_KEY,
-        "aws_region_name": _REGION,
+        "aws_region_name": region,
     }
 
 
@@ -261,9 +261,13 @@ def counting_proxy(tmp_path_factory: pytest.TempPathFactory, mantle_port: int) -
 
 
 def _deployment(
-    scenario: Scenario, runtime_port: int, model: str = _SONNET, model_info: Mapping[str, JsonValue] | None = None
+    scenario: Scenario,
+    runtime_port: int,
+    model: str = _SONNET,
+    model_info: Mapping[str, JsonValue] | None = None,
+    region: str = _REGION,
 ) -> str:
-    return scenario.model(model_info=model_info, api_key=None, **_litellm_params(model, _url(runtime_port)))
+    return scenario.model(model_info=model_info, api_key=None, **_litellm_params(model, _url(runtime_port), region))
 
 
 def _count(gateway: Gateway, model: str, status: int, count_model_status: int | None = None) -> MessageTokensCount:
@@ -411,6 +415,66 @@ def test_framing_is_added_to_the_local_estimate_when_a_shipped_runtime_count_mod
         assert framed.input_tokens - unframed.input_tokens == _FRAMING, (framed, unframed)
         assert _runtime_models(runtime) == (count_model, count_model)
         assert _mantle_models(mantle) == (count_model, count_model)
+
+
+@pytest.mark.parametrize(
+    ("model", "deployment_region", "count_region"),
+    [(_SONNET, _REGION, _COUNT_REGION), (_SONNET_BASE, "ca-central-1", "ca-central-1")],
+    ids=["in_its_pinned_region", "outside_the_pinned_geography"],
+)
+def test_framing_is_added_to_the_local_estimate_when_a_shipped_mantle_count_model_cannot_count(
+    counting_proxy: OwnedProxy,
+    runtime_port: int,
+    mantle_port: int,
+    model: str,
+    deployment_region: str,
+    count_region: str,
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    assert _shipped_token_count_model_field(model, "litellm_provider") == "bedrock_mantle"
+    with (
+        wire_server(_runtime, port=runtime_port) as runtime,
+        wire_server(_mantle, port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        framed: Final = _count(
+            gateway,
+            _deployment(scenario, runtime_port, model, {"token_count_framing": _FRAMING}, deployment_region),
+            200,
+            count_model_status=404,
+        )
+        unframed: Final = _count(
+            gateway,
+            _deployment(scenario, runtime_port, model, {"token_count_framing": 0}, deployment_region),
+            200,
+            count_model_status=404,
+        )
+        assert (framed.model_extra, unframed.model_extra) == (_LOCAL_SOURCE, _LOCAL_SOURCE), (framed, unframed)
+        assert framed.input_tokens - unframed.input_tokens == _FRAMING, (framed, unframed)
+        assert _runtime_counts(runtime) == ()
+        assert _mantle_count_requests(mantle) == (((_ACCESS_KEY, count_region), _mantle_body(_prompt(200, 404))),) * 2
+
+
+def test_configured_token_count_model_error_stands_with_framing(
+    counting_proxy: OwnedProxy, runtime_port: int, mantle_port: int
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    count_model: Final = _shipped_token_count_model_field(_RUNTIME_ROUTED, "model")
+    model_info: Final[dict[str, JsonValue]] = {
+        "token_count_framing": _FRAMING,
+        "token_count_model": {"model": count_model},
+    }
+    with (
+        wire_server(_runtime, port=runtime_port) as runtime,
+        wire_server(_mantle, port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        with pytest.raises(anthropic.NotFoundError, match=re.escape(f"scripted mantle 404 for {count_model}")):
+            _count(
+                gateway, _deployment(scenario, runtime_port, _RUNTIME_ROUTED, model_info), 400, count_model_status=404
+            )
+        assert _runtime_models(runtime) == (count_model,)
+        assert _mantle_models(mantle) == (count_model,)
 
 
 def test_configured_token_count_model_provider_counts_on_mantle_without_trying_the_runtime(

@@ -47,6 +47,7 @@ class TokenCountModel:
     model: str
     region: str | None
     litellm_provider: TokenCountProvider | None = None
+    configured: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +112,7 @@ def _count_provider(value: object) -> TokenCountProvider | None:
             return None
 
 
-def _count_model(value: Mapping[str, object]) -> TokenCountModel | None:
+def _count_model(value: Mapping[str, object], configured: bool) -> TokenCountModel | None:
     model: Final = _non_blank(value.get("model"))
     return (
         None
@@ -120,6 +121,7 @@ def _count_model(value: Mapping[str, object]) -> TokenCountModel | None:
             model=model,
             region=_non_blank(value.get("region")),
             litellm_provider=_count_provider(value.get("litellm_provider")),
+            configured=configured,
         )
     )
 
@@ -146,12 +148,12 @@ def _resolved_count_model(
 ) -> TokenCountModel | None:
     configured_mapping: Final = as_str_mapping(configured)
     if configured_mapping is not None:
-        return _count_model(configured_mapping)
+        return _count_model(configured_mapping, configured=True)
     default_mapping: Final = as_str_mapping(default)
     return (
         None
         if default_mapping is None
-        else _within_deployment_geography(_count_model(default_mapping), deployment_region)
+        else _within_deployment_geography(_count_model(default_mapping, configured=False), deployment_region)
     )
 
 
