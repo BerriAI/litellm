@@ -521,6 +521,14 @@ _OUTPUT_ITEMS_OPENAI_SENDS_WITHOUT_CREATED_BY: Final = (
         "output": [{"stdout": "a.py", "stderr": "", "outcome": {"type": "exit", "exit_code": 0}}],
     },
     {"id": "tsc_1", "type": "tool_search_call", "arguments": {}, "execution": "server", "status": "completed"},
+    {"id": "fco_1", "type": "function_call_output", "call_id": "call_3", "output": "42", "status": "completed"},
+    {
+        "id": "cco_1",
+        "type": "computer_call_output",
+        "call_id": "call_4",
+        "output": {"type": "computer_screenshot", "image_url": "data:image/png;base64,AAAA"},
+        "status": "completed",
+    },
 )
 
 

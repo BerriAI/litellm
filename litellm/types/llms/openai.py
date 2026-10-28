@@ -1520,6 +1520,13 @@ def replayable_responses_item(item: Mapping[str, object]) -> Mapping[str, object
     }
 
 
+def replayable_responses_input(value: object) -> object:
+    items: Final = _as_json_array(value)
+    if items is None:
+        return value
+    return [replayable_responses_item(obj) if (obj := _as_json_object(item)) is not None else item for item in items]
+
+
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     id: str
     created_at: int
@@ -1599,12 +1606,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
         reasoning items (the OpenAI C# SDK crashes on status=null, issue #16824).
         """
         serialized: Final[object] = handler(value)
-        items: Final = _as_json_array(serialized)
-        if items is None:
-            return serialized
-        return [
-            replayable_responses_item(obj) if (obj := _as_json_object(item)) is not None else item for item in items
-        ]
+        return replayable_responses_input(serialized)
 
     @property
     def output_text(self) -> str:

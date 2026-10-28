@@ -22,7 +22,7 @@ from litellm.llms.anthropic.messages.responses_adapters.transformation import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicOutputSchema
-from litellm.types.llms.openai import ResponsesAPIRequestParams
+from litellm.types.llms.openai import ResponsesAPIRequestParams, replayable_responses_input
 from litellm.types.utils import all_litellm_params
 
 
@@ -390,7 +390,9 @@ def _forwards(field: str, policy: DropPolicy) -> bool:
 def _restored(field: str, value: object) -> object:
     match field, value:
         case "input", _:
-            return ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(value))
+            return replayable_responses_input(
+                ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(value))
+            )
         case "previous_response_id", str():
             return ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(value)
         case _:

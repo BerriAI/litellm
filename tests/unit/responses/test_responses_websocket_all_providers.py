@@ -2200,7 +2200,7 @@ class TestNativeWebSocketDeploymentDefaults:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("nested", (False, True), ids=("flat", "nested"))
     async def test_saved_output_item_with_a_null_created_by_is_forwarded_without_it(self, nested: bool):
-        handler = _make_streaming(authorized_model="gpt-5-pro")
+        handler: Final = _make_streaming(authorized_model="gpt-5-pro")
         compaction: Final = {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"}
         user_turn: Final = {"role": "user", "content": "hi"}
         request: Final = {"model": "gpt-5-pro", "input": [{**compaction, "created_by": None}, user_turn]}
@@ -2208,13 +2208,13 @@ class TestNativeWebSocketDeploymentDefaults:
             {"type": "response.create", "response": request} if nested else {"type": "response.create", **request}
         )
 
-        forwarded = json.loads(await handler._mask_response_create(json.dumps(frame)))
+        forwarded: Final = json.loads(await handler._mask_response_create(json.dumps(frame)))
 
         assert (forwarded["response"] if nested else forwarded)["input"] == [compaction, user_turn]
 
     @pytest.mark.asyncio
     async def test_input_items_with_nothing_to_drop_pass_through_untouched(self):
-        handler = _make_streaming(authorized_model="gpt-5-pro")
+        handler: Final = _make_streaming(authorized_model="gpt-5-pro")
         frame: Final = json.dumps(
             {
                 "type": "response.create",
