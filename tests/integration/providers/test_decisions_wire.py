@@ -137,7 +137,7 @@ _PROVIDERS: Final = (
         "databricks-openjev-qwen35-4b",
         _API_KEY,
         False,
-        None,
+        "databricks/databricks-openjev-qwen35-4b",
     ),
 )
 _PERPLEXITY: Final = _PROVIDERS[0]
