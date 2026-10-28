@@ -118,7 +118,7 @@ async def test_cancel_responses_404_surfaces_openai_api_error_with_exact_url(
     assert str(requests[0].request.url) == expected_url
 
 
-StreamProvider: TypeAlias = Literal["openai", "azure"]
+StreamProvider: TypeAlias = Literal["openai", "azure", "azure_ai"]
 _STORED_RESPONSE_ID: Final = "resp_background"
 _STREAM_HEADERS: Final = {"content-type": "text/event-stream"}
 
@@ -168,6 +168,10 @@ def _retrieve_route(mock_router: respx.MockRouter, provider: StreamProvider) -> 
             return mock_router.get(f"https://api.openai.com/v1/responses/{_STORED_RESPONSE_ID}")
         case "azure":
             return mock_router.get(f"https://example-resource.openai.azure.com/openai/responses/{_STORED_RESPONSE_ID}")
+        case "azure_ai":
+            return mock_router.get(
+                f"https://example-resource.services.ai.azure.com/openai/v1/responses/{_STORED_RESPONSE_ID}"
+            )
 
 
 def _retrieve_kwargs(provider: StreamProvider) -> dict[str, object]:
@@ -180,6 +184,12 @@ def _retrieve_kwargs(provider: StreamProvider) -> dict[str, object]:
                 "api_key": "sk-test",
                 "api_base": "https://example-resource.openai.azure.com",
                 "api_version": "2025-03-01-preview",
+            }
+        case "azure_ai":
+            return {
+                "custom_llm_provider": "azure_ai",
+                "api_key": "sk-test",
+                "api_base": "https://example-resource.services.ai.azure.com",
             }
 
 
@@ -197,7 +207,7 @@ async def _event_types(stream: object) -> tuple[str, ...]:
 
 
 @pytest.mark.parametrize("sync_mode", (True, False))
-@pytest.mark.parametrize("provider", ("openai", "azure"))
+@pytest.mark.parametrize("provider", ("openai", "azure", "azure_ai"))
 @pytest.mark.parametrize(
     ("resume_kwargs", "expected_query"),
     (

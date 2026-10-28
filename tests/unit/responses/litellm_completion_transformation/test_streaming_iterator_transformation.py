@@ -702,6 +702,33 @@ async def test_streaming_events_share_the_chat_completion_response_id():
     assert decoded["custom_llm_provider"] == "anthropic"
 
 
+class _ClosableStreamWrapper(_FakeStreamWrapper):
+    def __init__(self, chunks):
+        super().__init__(chunks)
+        self.closed = False
+
+    async def aclose(self):
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_the_bridged_chat_completion_stream():
+    wrapper: Final = _ClosableStreamWrapper([_chunk("Hello"), _chunk("!", finish_reason="stop")])
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=wrapper,
+        request_input="What is the weather in San Francisco?",
+        responses_api_request={},
+        custom_llm_provider="anthropic",
+        litellm_metadata={},
+    )
+
+    await iterator.__anext__()
+    await iterator.aclose()
+
+    assert wrapper.closed is True
+
+
 def test_sync_streaming_events_share_the_chat_completion_response_id():
     iterator = _build_iterator([_chunk("Hello"), _chunk("!", finish_reason="stop")])
 

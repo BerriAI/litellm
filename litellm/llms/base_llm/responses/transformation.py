@@ -70,7 +70,7 @@ class BaseResponsesAPIConfig(ABC):
         return False
 
     def supports_streamed_retrieval(self) -> bool:
-        return self.custom_llm_provider in (LlmProviders.OPENAI, LlmProviders.AZURE)
+        return self.custom_llm_provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI)
 
     def sign_request(
         self,
