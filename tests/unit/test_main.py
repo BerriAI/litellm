@@ -6,24 +6,26 @@ import io
 import json
 import logging
 import os
+import queue
 import threading
 import urllib.parse
-from collections.abc import Callable, Mapping
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
-from typing import Final
+from types import MappingProxyType
+from typing import Final, NoReturn
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
-from openai import APITimeoutError, AsyncOpenAI, OpenAI
+from openai import APIConnectionError, APITimeoutError, AsyncOpenAI, OpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import (
@@ -35,20 +37,31 @@ from litellm import (
     responses_with_retries,
 )
 from litellm import main as litellm_main
+from litellm._logging import session_id_var, trace_id_var
 from litellm.caching.base_cache import BaseCache
 from litellm.caching.caching import Cache
-from litellm.constants import CONTROL_OPTIONS_KEY
+from litellm.constants import CONTROL_OPTIONS_KEY, INITIAL_RETRY_DELAY, JITTER
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
+from litellm.types.router import RetryPolicy
+from litellm.types.utils import (
+    Delta,
+    ModelResponse,
+    ModelResponseStream,
+    StandardCallbackDynamicParams,
+    StreamingChoices,
+    Usage,
+)
 from tests.unit.llms.bedrock.slow_upstream import (
     STREAM_TIMEOUT_SECONDS,
     UPSTREAM_FIRST_BYTE_SECONDS,
@@ -9861,6 +9874,1164 @@ async def test_atranscription_ignores_a_non_string_base_url_when_api_base_is_set
 
     assert route.called
     assert response.text == "four score"
+
+
+def _make_rate_limit_error(retry_after: str | None = None) -> litellm.RateLimitError:
+    headers: Final = {"retry-after": retry_after} if retry_after else {}
+    resp: Final = MagicMock()
+    resp.headers = headers
+    resp.status_code = 429
+    err: Final = litellm.RateLimitError(
+        message="Rate limit reached",
+        response=resp,
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+    err.status_code = 429
+    err.response = resp
+    return err
+
+
+def _make_auth_error() -> litellm.AuthenticationError:
+    resp: Final = MagicMock()
+    resp.headers = {}
+    resp.status_code = 401
+    err: Final = litellm.AuthenticationError(
+        message="Invalid API Key",
+        response=resp,
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+    err.status_code = 401
+    return err
+
+
+def _make_bad_request_error() -> litellm.BadRequestError:
+    resp: Final = MagicMock()
+    resp.headers = {}
+    resp.status_code = 400
+    err: Final = litellm.BadRequestError(
+        message="Invalid argument",
+        response=resp,
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+    err.status_code = 400
+    return err
+
+
+def _make_content_policy_error() -> litellm.ContentPolicyViolationError:
+    return litellm.ContentPolicyViolationError(
+        message="Output blocked by content filtering policy", model="gpt-4o", llm_provider="openai"
+    )
+
+
+def _make_service_unavailable_error() -> litellm.ServiceUnavailableError:
+    resp: Final = MagicMock()
+    resp.headers = {}
+    resp.status_code = 503
+    err: Final = litellm.ServiceUnavailableError(
+        message="The server is temporarily overloaded",
+        response=resp,
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+    err.status_code = 503
+    return err
+
+
+def _make_internal_server_error() -> litellm.InternalServerError:
+    resp: Final = MagicMock()
+    resp.headers = {}
+    resp.status_code = 500
+    err: Final = litellm.InternalServerError(
+        message="Internal server error",
+        response=resp,
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+    err.status_code = 500
+    return err
+
+
+def test_completion_with_retries_honors_retry_after():
+    """Verify completion_with_retries reads Retry-After and applies jitter."""
+    mock_completion: Final = MagicMock(side_effect=[_make_rate_limit_error(retry_after="2"), {"status": "ok"}])
+
+    with patch("time.sleep") as mock_sleep:
+        res: Final = completion_with_retries(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=3,
+            original_function=mock_completion,
+        )
+        assert res == {"status": "ok"}
+        assert mock_completion.call_count == 2
+        mock_sleep.assert_called_once()
+        sleep_arg: Final = mock_sleep.call_args[0][0]
+        assert 2.0 <= sleep_arg <= 2.8
+
+
+def test_completion_with_retries_non_transient_auth_error_fails_immediately():
+    """Non-transient errors like 401 should fail on attempt 1 without retrying."""
+    mock_completion: Final = MagicMock(side_effect=_make_auth_error())
+
+    with patch("time.sleep") as mock_sleep:
+        with pytest.raises(litellm.AuthenticationError):
+            completion_with_retries(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                num_retries=3,
+                original_function=mock_completion,
+            )
+        assert mock_completion.call_count == 1
+        mock_sleep.assert_not_called()
+
+
+def test_completion_with_retries_bad_request_fails_immediately():
+    """Non-transient errors like 400 Bad Request should fail on attempt 1 without retrying."""
+    mock_completion: Final = MagicMock(side_effect=_make_bad_request_error())
+
+    with patch("time.sleep") as mock_sleep:
+        with pytest.raises(litellm.BadRequestError):
+            completion_with_retries(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                num_retries=3,
+                original_function=mock_completion,
+            )
+        assert mock_completion.call_count == 1
+        mock_sleep.assert_not_called()
+
+
+def test_completion_with_retries_service_unavailable_503():
+    """503 Service Unavailable should be retried with exponential backoff."""
+    mock_completion: Final = MagicMock(
+        side_effect=[_make_service_unavailable_error(), _make_service_unavailable_error(), {"status": "recovered"}]
+    )
+
+    with patch("time.sleep") as mock_sleep:
+        res: Final = completion_with_retries(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=3,
+            original_function=mock_completion,
+        )
+        assert res == {"status": "recovered"}
+        assert mock_completion.call_count == 3
+        assert mock_sleep.call_count == 2
+
+
+def test_completion_with_retries_internal_server_error_500():
+    """500 Internal Server Error should be retried."""
+    mock_completion: Final = MagicMock(side_effect=[_make_internal_server_error(), {"status": "recovered"}])
+
+    with patch("time.sleep") as mock_sleep:
+        res: Final = completion_with_retries(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=2,
+            original_function=mock_completion,
+        )
+        assert res == {"status": "recovered"}
+        assert mock_completion.call_count == 2
+        mock_sleep.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_with_retries_backoff_starts_at_the_initial_retry_delay(sync_mode: bool):
+    outcomes: Final = [_make_internal_server_error(), _make_internal_server_error(), {"status": "recovered"}]
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    with patch("time.sleep") as sync_sleep, patch("asyncio.sleep", new_callable=AsyncMock) as async_sleep:
+        if sync_mode:
+            completion_with_retries(
+                model="gpt-4o", messages=messages, num_retries=3, original_function=MagicMock(side_effect=outcomes)
+            )
+        else:
+            await acompletion_with_retries(
+                model="gpt-4o", messages=messages, num_retries=3, original_function=AsyncMock(side_effect=outcomes)
+            )
+
+    first_wait, second_wait = [call.args[0] for call in (*sync_sleep.call_args_list, *async_sleep.call_args_list)]
+    assert INITIAL_RETRY_DELAY <= first_wait < INITIAL_RETRY_DELAY + JITTER
+    assert 2 * INITIAL_RETRY_DELAY <= second_wait < 2 * INITIAL_RETRY_DELAY + JITTER
+
+
+@pytest.mark.asyncio
+async def test_acompletion_with_retries_honors_retry_after():
+    """Verify acompletion_with_retries reads Retry-After and applies jitter."""
+    mock_acompletion: Final = AsyncMock(side_effect=[_make_rate_limit_error(retry_after="3"), {"status": "ok"}])
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        res: Final = await acompletion_with_retries(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=3,
+            original_function=mock_acompletion,
+        )
+        assert res == {"status": "ok"}
+        assert mock_acompletion.call_count == 2
+        mock_sleep.assert_called_once()
+        sleep_arg: Final = mock_sleep.call_args[0][0]
+        assert 3.0 <= sleep_arg <= 3.8
+
+
+@pytest.mark.asyncio
+async def test_acompletion_with_retries_non_transient_auth_error_fails_immediately():
+    """Async 401 should fail on attempt 1 without retrying."""
+    mock_acompletion: Final = AsyncMock(side_effect=_make_auth_error())
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        with pytest.raises(litellm.AuthenticationError):
+            await acompletion_with_retries(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                num_retries=3,
+                original_function=mock_acompletion,
+            )
+        assert mock_acompletion.call_count == 1
+        mock_sleep.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "retry_policy, make_error, expected_calls",
+    [
+        pytest.param(RetryPolicy(BadRequestErrorRetries=3), _make_bad_request_error, 4, id="count-retries-its-class"),
+        pytest.param({"BadRequestErrorRetries": 1}, _make_bad_request_error, 2, id="dict-policy"),
+        pytest.param(RetryPolicy(DefaultRetries=2), _make_auth_error, 3, id="default-retries-any-class"),
+        pytest.param(RetryPolicy(AuthenticationErrorRetries=2), _make_bad_request_error, 1, id="count-for-another-class"),
+        pytest.param(
+            RetryPolicy(RateLimitErrorRetries=0),
+            lambda: _make_rate_limit_error(retry_after="1"),
+            1,
+            id="zero-count-stops-a-transient-error",
+        ),
+    ],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_with_retries_honors_a_directly_passed_retry_policy(
+    retry_policy: RetryPolicy | Mapping[str, int], make_error: Callable[[], Exception], expected_calls: int, sync_mode: bool
+):
+    def raise_error(*args: object, **kwargs: object) -> NoReturn:
+        raise make_error()
+
+    mock_completion: Final = MagicMock(side_effect=raise_error)
+
+    async def mock_acompletion(*args: object, **kwargs: object) -> None:
+        mock_completion(*args, **kwargs)
+
+    request: Final = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "num_retries": 3,
+        "retry_policy": retry_policy,
+    }
+
+    async def call_with_retries() -> None:
+        if sync_mode:
+            completion_with_retries(original_function=mock_completion, **request)
+        else:
+            await acompletion_with_retries(original_function=mock_acompletion, **request)
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(type(make_error())):
+            await call_with_retries()
+    assert mock_completion.call_count == expected_calls
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_with_retries_keeps_the_first_errors_retry_policy_budget(sync_mode: bool):
+    errors: Final = iter((_make_bad_request_error(), *(_make_service_unavailable_error() for _ in range(4))))
+
+    def raise_next_error(*args: object, **kwargs: object) -> NoReturn:
+        raise next(errors)
+
+    mock_completion: Final = MagicMock(side_effect=raise_next_error)
+
+    async def mock_acompletion(*args: object, **kwargs: object) -> None:
+        mock_completion(*args, **kwargs)
+
+    request: Final = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "num_retries": 1,
+        "retry_policy": RetryPolicy(BadRequestErrorRetries=3),
+    }
+
+    async def call_with_retries() -> None:
+        if sync_mode:
+            completion_with_retries(original_function=mock_completion, **request)
+        else:
+            await acompletion_with_retries(original_function=mock_acompletion, **request)
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(litellm.ServiceUnavailableError):
+            await call_with_retries()
+    assert mock_completion.call_count == 4
+
+
+@pytest.mark.parametrize(
+    "retry_policy, outcomes, expected_error, expected_calls",
+    [
+        pytest.param(
+            RetryPolicy(AuthenticationErrorRetries=2),
+            (_make_service_unavailable_error, _make_auth_error, _make_auth_error),
+            litellm.AuthenticationError,
+            3,
+            id="retries-a-later-error-its-class-names",
+        ),
+        pytest.param(
+            RetryPolicy(RateLimitErrorRetries=0),
+            (_make_service_unavailable_error, lambda: _make_rate_limit_error(retry_after="1"), lambda: {"ok": True}),
+            litellm.RateLimitError,
+            2,
+            id="zero-count-stops-a-later-error",
+        ),
+        pytest.param(
+            RetryPolicy(BadRequestErrorRetries=3, ContentPolicyViolationErrorRetries=0),
+            (_make_bad_request_error, _make_content_policy_error, lambda: {"ok": True}),
+            litellm.ContentPolicyViolationError,
+            2,
+            id="zero-count-subclass-stops-after-its-parent-class",
+        ),
+    ],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_with_retries_applies_the_retry_policy_to_later_errors(
+    retry_policy: RetryPolicy,
+    outcomes: tuple[Callable[[], object], ...],
+    expected_error: type[Exception],
+    expected_calls: int,
+    sync_mode: bool,
+):
+    mock_completion: Final = MagicMock(side_effect=[make() for make in outcomes])
+
+    async def mock_acompletion(*args: object, **kwargs: object) -> object:
+        return mock_completion(*args, **kwargs)
+
+    request: Final = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "num_retries": 3,
+        "retry_policy": retry_policy,
+    }
+
+    async def call_with_retries() -> None:
+        if sync_mode:
+            completion_with_retries(original_function=mock_completion, **request)
+        else:
+            await acompletion_with_retries(original_function=mock_acompletion, **request)
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(expected_error):
+            await call_with_retries()
+    assert mock_completion.call_count == expected_calls
+
+
+def test_completion_with_retries_connection_error_with_constant_retry():
+    """Verify APIConnectionError (no status_code) retries and constant_retry waits 0.0s."""
+    mock_completion: Final = MagicMock(
+        side_effect=[
+            APIConnectionError(request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")),
+            {"status": "recovered"},
+        ]
+    )
+
+    with patch("time.sleep") as mock_sleep:
+        res: Final = completion_with_retries(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=2,
+            retry_strategy="constant_retry",
+            original_function=mock_completion,
+        )
+        assert res == {"status": "recovered"}
+        assert mock_completion.call_count == 2
+        mock_sleep.assert_called_once_with(0.0)
+
+
+_RETRY_HOST: Final = "https://retry-upstream.invalid"
+_RETRY_RESPONSES_OK: Final[Mapping[str, object]] = {
+    "id": "resp-retry",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "test-model",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg-retry",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+_RETRY_ANTHROPIC_OK: Final[Mapping[str, object]] = {
+    "id": "msg-retry",
+    "type": "message",
+    "role": "assistant",
+    "model": "test-model",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _RetryUpstream:
+    model: str
+    api_base: str
+    url: str
+    ok_body: Mapping[str, object]
+
+
+_RESPONSES_BRIDGE: Final = _RetryUpstream(
+    "openai/responses/test-model", f"{_RETRY_HOST}/v1", f"{_RETRY_HOST}/v1/responses", _RETRY_RESPONSES_OK
+)
+_ANTHROPIC: Final = _RetryUpstream(
+    "anthropic/test-model", _RETRY_HOST, f"{_RETRY_HOST}/v1/messages", _RETRY_ANTHROPIC_OK
+)
+
+
+@pytest.fixture
+def retry_upstream(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "num_retries", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with respx.mock(assert_all_called=False) as upstream:
+        yield upstream
+
+
+@pytest.fixture
+def logging_futures() -> Iterator[queue.SimpleQueue[Future[object]]]:
+    futures: Final = queue.SimpleQueue[Future[object]]()
+    real_submit: Final = logging_executor.submit
+
+    def submit_and_track(fn: Callable[..., object], *args: object) -> Future[object]:
+        future: Final = real_submit(fn, *args)
+        futures.put(future)
+        return future
+
+    with patch.object(  # test-quality-ok: wraps the real submit only to collect the futures to join, the pool still runs
+        logging_executor, "submit", side_effect=submit_and_track
+    ):
+        yield futures
+
+
+async def _finish_logging(logging_futures: queue.SimpleQueue[Future[object]]) -> None:
+    await asyncio.sleep(0)
+    await GLOBAL_LOGGING_WORKER.flush()
+    while not logging_futures.empty():
+        await asyncio.wrap_future(logging_futures.get())
+    await GLOBAL_LOGGING_WORKER.flush()
+
+
+async def _completion_with_retries_kwargs(sync_mode: bool, upstream: _RetryUpstream, **kwargs: object) -> object:
+    request: Final = {
+        "model": upstream.model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_base": upstream.api_base,
+        "api_key": "test-key",
+        **kwargs,
+    }
+    if sync_mode:
+        return litellm.completion(**request)
+    return await litellm.acompletion(**request)
+
+
+def _provider_error(status_code: int, headers: Mapping[str, str] | None = None) -> httpx.Response:
+    return httpx.Response(status_code, json={"error": {"message": "upstream says no", "type": "x"}}, headers=headers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("retry_strategy", [None, "constant_retry"])
+@pytest.mark.parametrize("upstream", [_RESPONSES_BRIDGE, _ANTHROPIC], ids=["responses-bridge", "anthropic"])
+async def test_completion_num_retries_waits_for_provider_retry_after(
+    retry_upstream: respx.MockRouter, sync_mode: bool, retry_strategy: str | None, upstream: _RetryUpstream
+):
+    route: Final = retry_upstream.post(upstream.url).mock(
+        side_effect=[_provider_error(429, {"retry-after": "7"}), httpx.Response(200, json=upstream.ok_body)]
+    )
+    strategy: Final = {} if retry_strategy is None else {"retry_strategy": retry_strategy}
+
+    with patch("time.sleep") as sync_sleep, patch("asyncio.sleep", new_callable=AsyncMock) as async_sleep:
+        await _completion_with_retries_kwargs(sync_mode, upstream, num_retries=1, **strategy)
+
+    waits: Final = [call.args[0] for call in (*sync_sleep.call_args_list, *async_sleep.call_args_list) if call.args[0]]
+    assert route.call_count == 2
+    assert len(waits) == 1
+    assert 7 <= waits[0] < 8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_num_retries_still_retries_when_the_caller_sends_an_initial_exception_key(
+    retry_upstream: respx.MockRouter, sync_mode: bool
+):
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(
+        side_effect=[_provider_error(429, {"retry-after": "0"}), httpx.Response(200, json=_ANTHROPIC.ok_body)]
+    )
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        response: Final = await _completion_with_retries_kwargs(
+            sync_mode, _ANTHROPIC, num_retries=1, _initial_exception="x"
+        )
+
+    assert route.call_count == 2
+    assert isinstance(response, ModelResponse)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "retry_kwargs",
+    [
+        {"num_retries": 2},
+        {"num_retries": 2, "retry_policy": RetryPolicy()},
+        {"num_retries": 2, "retry_policy": None},
+        {"num_retries": 2, "retry_policy": {}},
+    ],
+    ids=["num-retries", "unconfigured-retry-policy", "none-retry-policy", "empty-retry-policy"],
+)
+async def test_completion_num_retries_does_not_retry_auth_error(
+    retry_upstream: respx.MockRouter, sync_mode: bool, retry_kwargs: Mapping[str, object]
+):
+    route: Final = retry_upstream.post(_RESPONSES_BRIDGE.url).mock(return_value=_provider_error(401))
+
+    with pytest.raises(litellm.AuthenticationError):
+        await _completion_with_retries_kwargs(sync_mode, _RESPONSES_BRIDGE, **retry_kwargs)
+
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("status_code", "retry_kwargs", "expected_error"),
+    [
+        (500, {"num_retries": 3}, litellm.InternalServerError),
+        (400, {"retry_policy": RetryPolicy(BadRequestErrorRetries=3)}, litellm.BadRequestError),
+        (429, {"num_retries": 3, "retry_policy": RetryPolicy(BadRequestErrorRetries=1)}, litellm.RateLimitError),
+    ],
+    ids=["transient-500", "retry-policy-400", "retry-policy-for-another-error-keeps-num-retries"],
+)
+async def test_completion_num_retries_exhausts_configured_attempts(
+    retry_upstream: respx.MockRouter,
+    sync_mode: bool,
+    status_code: int,
+    retry_kwargs: Mapping[str, object],
+    expected_error: type[Exception],
+):
+    route: Final = retry_upstream.post(_RESPONSES_BRIDGE.url).mock(return_value=_provider_error(status_code))
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(expected_error):
+            await _completion_with_retries_kwargs(sync_mode, _RESPONSES_BRIDGE, **retry_kwargs)
+
+    assert route.call_count == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(("num_retries", "expected_requests"), [(2.0, 3), (2.5, 4)], ids=["whole", "fractional"])
+async def test_completion_float_num_retries_retries_the_rounded_up_count(
+    retry_upstream: respx.MockRouter, sync_mode: bool, num_retries: float, expected_requests: int
+):
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(return_value=_provider_error(500))
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(litellm.InternalServerError):
+            await _completion_with_retries_kwargs(sync_mode, _ANTHROPIC, num_retries=num_retries)
+
+    assert route.call_count == expected_requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_retry_policy_count_only_retries_its_own_error_class(
+    retry_upstream: respx.MockRouter, sync_mode: bool
+):
+    route: Final = retry_upstream.post(_RESPONSES_BRIDGE.url).mock(
+        side_effect=[_provider_error(429), _provider_error(401), httpx.Response(200, json=_RETRY_RESPONSES_OK)]
+    )
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(litellm.AuthenticationError):
+            await _completion_with_retries_kwargs(
+                sync_mode, _RESPONSES_BRIDGE, retry_policy=RetryPolicy(RateLimitErrorRetries=2)
+            )
+
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("positional_model", [False, True], ids=["model-keyword", "model-positional"])
+@pytest.mark.parametrize(
+    "retry_settings",
+    [{"num_retries": 2}, {"retry_policy": RetryPolicy(BadRequestErrorRetries=3)}],
+    ids=["num-retries", "retry-policy-for-400s"],
+)
+@pytest.mark.parametrize("fallback_map_type", [dict, MappingProxyType], ids=["dict", "read-only-mapping"])
+async def test_completion_retries_keep_the_context_window_fallback(
+    retry_upstream: respx.MockRouter,
+    sync_mode: bool,
+    positional_model: bool,
+    retry_settings: Mapping[str, object],
+    fallback_map_type: Callable[[Mapping[str, str]], Mapping[str, str]],
+):
+    def prompt_too_long_for_the_small_model(request: httpx.Request) -> httpx.Response:
+        if json.loads(request.content)["model"] == "test-model-large":
+            return httpx.Response(200, json=_ANTHROPIC.ok_body)
+        return httpx.Response(
+            400,
+            json={
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "prompt is too long: 250000 tokens > 200000 maximum",
+                },
+            },
+        )
+
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(side_effect=prompt_too_long_for_the_small_model)
+
+    request: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_base": _ANTHROPIC.api_base,
+        "api_key": "test-key",
+        **retry_settings,
+        "context_window_fallback_dict": fallback_map_type({_ANTHROPIC.model: "anthropic/test-model-large"}),
+    }
+    model_args: Final = (_ANTHROPIC.model,) if positional_model else ()
+    model_kwargs: Final = {} if positional_model else {"model": _ANTHROPIC.model}
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        response: Final = (
+            litellm.completion(*model_args, **model_kwargs, **request)
+            if sync_mode
+            else await litellm.acompletion(*model_args, **model_kwargs, **request)
+        )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "ok"
+    assert [json.loads(call.request.content)["model"] for call in route.calls] == ["test-model", "test-model-large"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_retry_policy_retries_a_later_error_its_policy_names(
+    retry_upstream: respx.MockRouter, sync_mode: bool
+):
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(
+        side_effect=[_provider_error(400), _provider_error(401), httpx.Response(200, json=_ANTHROPIC.ok_body)]
+    )
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        response: Final = await _completion_with_retries_kwargs(
+            sync_mode,
+            _ANTHROPIC,
+            retry_policy=RetryPolicy(BadRequestErrorRetries=3, AuthenticationErrorRetries=3),
+        )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert route.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_acompletion_logs_success_when_a_retry_succeeds(
+    retry_upstream: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    recorder: Final = _SuccessEventRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    retry_upstream.post(_ANTHROPIC.url).mock(
+        side_effect=[_provider_error(500), httpx.Response(200, json=_ANTHROPIC.ok_body)]
+    )
+
+    await _completion_with_retries_kwargs(False, _ANTHROPIC, num_retries=1, retry_strategy="constant_retry")
+
+    assert (await _wait_for_success_event(recorder, "acompletion")).call_type == "acompletion"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_retry_policy_count_retries_a_later_error_of_its_class(
+    retry_upstream: respx.MockRouter, sync_mode: bool
+):
+    route: Final = retry_upstream.post(_RESPONSES_BRIDGE.url).mock(
+        side_effect=[_provider_error(503), *(_provider_error(401) for _ in range(3))]
+    )
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(litellm.AuthenticationError):
+            await _completion_with_retries_kwargs(
+                sync_mode, _RESPONSES_BRIDGE, num_retries=3, retry_policy=RetryPolicy(AuthenticationErrorRetries=2)
+            )
+
+    assert route.call_count == 4
+
+
+class _CodeInterpreterRewriteHook(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tool_types_seen: list[tuple[str, ...]] = []  # mutable-ok: test recorder of deployment hook calls
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: object
+    ) -> dict[str, object] | None:
+        tools: Final = kwargs.get("tools")
+        tool_types: Final = (
+            tuple(str(tool.get("type")) for tool in tools if isinstance(tool, dict)) if isinstance(tools, list) else ()
+        )
+        self.tool_types_seen.append(tool_types)
+        if "code_interpreter" not in tool_types:
+            return None
+        return {
+            **kwargs,
+            "tools": [{"type": "function", "function": {"name": "run_code", "parameters": {"type": "object"}}}],
+        }
+
+
+@pytest.mark.asyncio
+async def test_acompletion_retry_runs_deployment_hooks_on_the_request_as_sent(
+    retry_upstream: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    hook: Final = _CodeInterpreterRewriteHook()
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(
+        side_effect=[_provider_error(429, {"retry-after": "1"}), httpx.Response(200, json=_ANTHROPIC.ok_body)]
+    )
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await _completion_with_retries_kwargs(False, _ANTHROPIC, num_retries=1, tools=[{"type": "code_interpreter"}])
+
+    assert hook.tool_types_seen == [("code_interpreter",), ("code_interpreter",)]
+    assert [[tool["name"] for tool in json.loads(call.request.content)["tools"]] for call in route.calls] == [
+        ["run_code"],
+        ["run_code"],
+    ]
+
+
+class _OutcomeRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.outcomes: list[str] = []  # mutable-ok: test recorder of success and failure callback events
+
+    def _record_failure(self, kwargs: dict[str, object]) -> None:
+        self.outcomes.append(f"failure:{type(kwargs.get('exception')).__name__}")
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.outcomes.append("success")
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.outcomes.append("success")
+
+    def log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record_failure(kwargs)
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record_failure(kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "second_response, expected_outcomes",
+    [
+        pytest.param(lambda: _provider_error(401), ("failure:AuthenticationError",), id="429-then-401"),
+        pytest.param(lambda: httpx.Response(200, json=_ANTHROPIC.ok_body), ("success",), id="429-then-200"),
+    ],
+)
+async def test_retried_completion_logs_only_the_outcome_the_caller_gets(
+    retry_upstream: respx.MockRouter,
+    logging_futures: queue.SimpleQueue[Future[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+    second_response: Callable[[], httpx.Response],
+    expected_outcomes: tuple[str, ...],
+):
+    recorder: Final = _OutcomeRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    retry_upstream.post(_ANTHROPIC.url).mock(side_effect=[_provider_error(429, {"retry-after": "1"}), second_response()])
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        try:
+            await _completion_with_retries_kwargs(sync_mode, _ANTHROPIC, num_retries=1)
+        except litellm.AuthenticationError:
+            pass
+    await _finish_logging(logging_futures)
+
+    assert tuple(recorder.outcomes) == expected_outcomes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "later_responses, expected_outcomes",
+    [
+        pytest.param(
+            lambda: [_provider_error(429), httpx.Response(200, json=_ANTHROPIC.ok_body)],
+            ("success",),
+            id="429-429-200",
+        ),
+        pytest.param(
+            lambda: [_provider_error(429), _provider_error(401)],
+            ("failure:AuthenticationError",),
+            id="429-429-401",
+        ),
+        pytest.param(
+            lambda: [_provider_error(429), _provider_error(429)],
+            ("failure:RateLimitError",),
+            id="429-429-429",
+        ),
+    ],
+)
+async def test_async_completion_retried_twice_logs_only_the_outcome_the_caller_gets(
+    retry_upstream: respx.MockRouter,
+    logging_futures: queue.SimpleQueue[Future[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    later_responses: Callable[[], list[httpx.Response]],
+    expected_outcomes: tuple[str, ...],
+):
+    recorder: Final = _OutcomeRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(side_effect=[_provider_error(429), *later_responses()])
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        try:
+            await _completion_with_retries_kwargs(False, _ANTHROPIC, num_retries=2)
+        except (litellm.AuthenticationError, litellm.RateLimitError):
+            pass
+    await _finish_logging(logging_futures)
+
+    assert route.call_count == 3
+    assert tuple(recorder.outcomes) == expected_outcomes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("retry_policy", "policy_error"),
+    [("not-a-policy", AttributeError), ({"AuthenticationErrorRetries": "bad"}, ValidationError)],
+    ids=["str", "bad-count"],
+)
+async def test_async_completion_with_a_malformed_retry_policy_still_logs_the_failure(
+    retry_upstream: respx.MockRouter,
+    logging_futures: queue.SimpleQueue[Future[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    retry_policy: object,
+    policy_error: type[Exception],
+):
+    recorder: Final = _OutcomeRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(return_value=_provider_error(401))
+
+    with pytest.raises(policy_error):
+        await _completion_with_retries_kwargs(False, _ANTHROPIC, num_retries=1, retry_policy=retry_policy)
+    await _finish_logging(logging_futures)
+
+    assert route.call_count == 1
+    assert tuple(recorder.outcomes) == ("failure:AuthenticationError",)
+
+
+@pytest.mark.asyncio
+async def test_async_completion_with_a_caller_sent_retry_marker_still_logs_the_failure(
+    retry_upstream: respx.MockRouter,
+    logging_futures: queue.SimpleQueue[Future[object]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    recorder: Final = _OutcomeRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(return_value=_provider_error(401))
+
+    with pytest.raises(litellm.AuthenticationError):
+        await _completion_with_retries_kwargs(False, _ANTHROPIC, _litellm_wrapper_retry_attempt=True)
+    await _finish_logging(logging_futures)
+
+    assert route.call_count == 1
+    assert tuple(recorder.outcomes) == ("failure:AuthenticationError",)
+
+
+_ANTHROPIC_STREAM_EVENTS: Final = (
+    {
+        "type": "message_start",
+        "message": {**_RETRY_ANTHROPIC_OK, "content": [], "stop_reason": None},
+    },
+    {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}},
+    {"type": "content_block_stop", "index": 0},
+    {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 1}},
+    {"type": "message_stop"},
+)
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_retry_keeps_the_call_ids_while_read_and_restores_the_callers_after(
+    retry_upstream: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    sse_body: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in _ANTHROPIC_STREAM_EVENTS)
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(
+        side_effect=[
+            _provider_error(429, {"retry-after": "0"}),
+            httpx.Response(200, content=sse_body.encode(), headers={"content-type": "text/event-stream"}),
+        ]
+    )
+    trace_id_var.set("outer-trace")
+    session_id_var.set("outer-session")
+    try:
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            stream: Final = await _completion_with_retries_kwargs(
+                False, _ANTHROPIC, num_retries=1, stream=True, litellm_session_id="retried-stream-session"
+            )
+        ids_while_reading: Final = (trace_id_var.get(), session_id_var.get())
+        text: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in stream])
+        ids_after_reading: Final = (trace_id_var.get(), session_id_var.get())
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+    assert route.call_count == 2
+    assert text == "ok"
+    assert ids_while_reading[1] == "retried-stream-session"
+    assert ids_while_reading[0] != "outer-trace"
+    assert ids_after_reading == ("outer-trace", "outer-session")
+
+
+def _drained(ids: queue.SimpleQueue[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
+    return tuple(ids.get() for _ in range(ids.qsize()))
+
+
+def _with_a_proxy_style_logging_obj(request: Mapping[str, object]) -> Mapping[str, object]:
+    logging_obj, data = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        is_async_call=True,
+        **{**request, "litellm_call_id": "proxy-call-id"},
+    )
+    return {**data, "litellm_logging_obj": logging_obj}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_logging_obj", [False, True], ids=["sdk", "proxy-style-logging-obj"])
+async def test_async_retried_failure_keeps_the_call_ids_on_every_attempt_and_its_failure_log(
+    retry_upstream: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, caller_logging_obj: bool
+):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    attempt_ids: Final = queue.SimpleQueue[tuple[str, str]]()
+    failure_log_ids: Final = queue.SimpleQueue[tuple[str, str]]()
+
+    def provider_says_retry_later(request: httpx.Request) -> httpx.Response:
+        attempt_ids.put((trace_id_var.get(), session_id_var.get()))
+        return _provider_error(429, {"retry-after": "0"})
+
+    def record_failure_log_ids(kwargs: object, response: object, start_time: object, end_time: object) -> None:
+        failure_log_ids.put((trace_id_var.get(), session_id_var.get()))
+
+    retry_upstream.post(_ANTHROPIC.url).mock(side_effect=provider_says_retry_later)
+    trace_id_var.set("outer-trace")
+    session_id_var.set("outer-session")
+    try:
+        request: Final = {
+            "model": _ANTHROPIC.model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "api_base": _ANTHROPIC.api_base,
+            "api_key": "test-key",
+            "num_retries": 2,
+            "litellm_session_id": "call-session",
+            "failure_callback": [record_failure_log_ids],
+        }
+        call_request: Final = _with_a_proxy_style_logging_obj(request) if caller_logging_obj else request
+        with patch("asyncio.sleep", new_callable=AsyncMock), pytest.raises(litellm.RateLimitError):
+            await litellm.acompletion(**call_request)
+        ids_after_the_call: Final = (trace_id_var.get(), session_id_var.get())
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+    attempts: Final = _drained(attempt_ids)
+    assert len(attempts) == 3
+    assert len(set(attempts)) == 1
+    assert attempts[0][0] not in ("", "outer-trace")
+    assert attempts[0][1] == "call-session"
+    assert _drained(failure_log_ids) == (attempts[0],)
+    assert ids_after_the_call == ("outer-trace", "outer-session")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_a_wrapper_rebound_onto_the_public_completion_runs_once_for_a_retried_call(
+    retry_upstream: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+):
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(
+        side_effect=[_provider_error(429, {"retry-after": "0"}), httpx.Response(200, json=_ANTHROPIC.ok_body)]
+    )
+    public_name: Final = "completion" if sync_mode else "acompletion"
+    public_function: Final = getattr(litellm, public_name)
+    wrapper_calls: Final = queue.SimpleQueue[object]()
+
+    def instrumented(*args: object, **kwargs: object) -> object:
+        wrapper_calls.put(kwargs)
+        return public_function(*args, **kwargs)
+
+    monkeypatch.setattr(litellm, public_name, instrumented)
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        response: Final = await _completion_with_retries_kwargs(sync_mode, _ANTHROPIC, num_retries=1)
+
+    assert route.call_count == 2
+    assert isinstance(response, ModelResponse)
+    assert wrapper_calls.qsize() == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("num_retries", [None, 2], ids=["policy-only", "policy-and-num-retries"])
+async def test_aresponses_bridged_to_chat_applies_its_retry_policy_only_on_the_first_attempt(
+    retry_upstream: respx.MockRouter, num_retries: int | None
+):
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(return_value=_provider_error(401))
+    retry_kwargs: Final = {} if num_retries is None else {"num_retries": num_retries}
+
+    with patch("asyncio.sleep", new_callable=AsyncMock), pytest.raises(litellm.AuthenticationError):
+        await litellm.aresponses(
+            model=_ANTHROPIC.model,
+            input="hi",
+            api_base=_ANTHROPIC.api_base,
+            api_key="test-key",
+            retry_policy=RetryPolicy(AuthenticationErrorRetries=2),
+            **retry_kwargs,
+        )
+
+    assert route.call_count == 5
+
+
+@pytest.mark.asyncio
+async def test_async_retry_runs_the_callers_async_success_callback_without_emptying_its_list(
+    retry_upstream: respx.MockRouter, logging_futures: queue.SimpleQueue[Future[object]]
+):
+    successes: Final = queue.SimpleQueue[object]()
+
+    async def record_success(kwargs: object, response: object, start_time: object, end_time: object) -> None:
+        successes.put(response)
+
+    success_callback: Final = [record_success]
+    retry_upstream.post(_ANTHROPIC.url).mock(
+        side_effect=[_provider_error(429, {"retry-after": "1"}), httpx.Response(200, json=_ANTHROPIC.ok_body)]
+    )
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await _completion_with_retries_kwargs(False, _ANTHROPIC, num_retries=1, success_callback=success_callback)
+    await _finish_logging(logging_futures)
+
+    assert successes.qsize() == 1
+    assert success_callback == [record_success]
+
+
+@pytest.mark.asyncio
+async def test_global_num_retries_is_spent_the_same_way_by_sync_and_async_calls(
+    retry_upstream: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    async def requests_sent(sync_mode: bool) -> tuple[int, int]:
+        monkeypatch.setattr(litellm, "num_retries", 2)
+        route: Final = retry_upstream.post(_ANTHROPIC.url).mock(
+            side_effect=[_provider_error(401), *(_provider_error(500) for _ in range(3))]
+        )
+        route.calls.clear()
+        with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(litellm.AuthenticationError):
+                await _completion_with_retries_kwargs(sync_mode, _ANTHROPIC)
+            auth_requests: Final = route.call_count
+            with pytest.raises(litellm.InternalServerError):
+                await _completion_with_retries_kwargs(sync_mode, _ANTHROPIC)
+        return auth_requests, route.call_count - auth_requests
+
+    sync_requests: Final = await requests_sent(sync_mode=True)
+    assert sync_requests[0] == 1
+    assert sync_requests == await requests_sent(sync_mode=False)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_keeps_provider_error_when_tenacity_is_missing(
+    retry_upstream: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "tenacity", None)
+    route: Final = retry_upstream.post(_RESPONSES_BRIDGE.url).mock(
+        return_value=_provider_error(429, {"retry-after": "7"})
+    )
+
+    with pytest.raises(litellm.RateLimitError):
+        await _completion_with_retries_kwargs(False, _RESPONSES_BRIDGE, num_retries=1)
+
+    assert route.call_count == 1
+
+
+class _WatchedReservation(dict[str, object]):
+    def __init__(self) -> None:
+        super().__init__(reserved_cost=0.5, entries=[], finalized=False, callback_bound=False)
+        self.handed_back: Final = asyncio.Event()
+
+    def __setitem__(self, key: str, value: object) -> None:
+        super().__setitem__(key, value)
+        if key == "callback_bound" and value is False:
+            self.handed_back.set()
+
+
+@pytest.mark.asyncio
+async def test_acompletion_hands_the_budget_reservation_back_while_it_waits_to_retry(
+    retry_upstream: respx.MockRouter,
+) -> None:
+    reservation: Final = _WatchedReservation()
+    route: Final = retry_upstream.post(_ANTHROPIC.url).mock(return_value=_provider_error(429, {"retry-after": "30"}))
+    call: Final = asyncio.create_task(
+        _completion_with_retries_kwargs(
+            False, _ANTHROPIC, num_retries=1, metadata={"user_api_key_budget_reservation": reservation}
+        )
+    )
+
+    await reservation.handed_back.wait()
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    assert route.call_count == 1
+    assert reservation["callback_bound"] is False
+
+
+@pytest.mark.asyncio
+async def test_acompletion_retry_that_succeeds_leaves_the_budget_reservation_to_the_cost_callback(
+    retry_upstream: respx.MockRouter,
+) -> None:
+    reservation: Final = {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+    retry_upstream.post(_ANTHROPIC.url).mock(
+        side_effect=[_provider_error(500), httpx.Response(200, json=_ANTHROPIC.ok_body)]
+    )
+
+    await _completion_with_retries_kwargs(
+        False,
+        _ANTHROPIC,
+        num_retries=1,
+        retry_strategy="constant_retry",
+        metadata={"user_api_key_budget_reservation": reservation},
+    )
+
+    assert reservation["callback_bound"] is True
 
 
 @pytest.mark.parametrize("stream", (False, True))
