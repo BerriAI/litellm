@@ -4864,6 +4864,23 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
             ),
             pytest.param(
                 (
+                    {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                    {"type": "function_call_output", "output": "orphan tool result"},
+                    {"type": "function_call_output", "call_id": "call_1", "output": "tool result"},
+                ),
+                None,
+                id="function_call_output_without_call_id",
+            ),
+            pytest.param(
+                (
+                    {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                    {"type": "tool_result", "call_id": "call_1", "output": "tool result"},
+                ),
+                None,
+                id="tool_result",
+            ),
+            pytest.param(
+                (
                     {"type": "computer_call", "call_id": "cu_1", "id": "cu_1", "action": {"type": "screenshot"}},
                     {
                         "type": "computer_call_output",

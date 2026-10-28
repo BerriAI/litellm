@@ -39,7 +39,6 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.llms.openai.responses.guardrail_translation.handler import (
-    TOOL_OUTPUT_ITEM_TYPES,
     scannable_instructions,
     tool_output_texts,
 )
@@ -48,6 +47,7 @@ from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_scan_id,
     add_guardrail_to_applied_guardrails_header,
 )
+from litellm.responses.litellm_completion_transformation.transformation import TOOL_CALL_OUTPUT_ITEM_TYPES
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
@@ -118,9 +118,10 @@ class _ResponsesInputItem(LiteLLMBaseModel):
     role: str | None = None
     content: str | tuple[_ResponsesContentPart, ...] | None = None
     output: object = None
+    call_id: object = None
 
     def text_count(self, *, skip_system: bool, skip_tool: bool) -> int:
-        is_tool_output: Final = self.type in TOOL_OUTPUT_ITEM_TYPES
+        is_tool_output: Final = self.type in TOOL_CALL_OUTPUT_ITEM_TYPES
         role: Final = "tool" if is_tool_output else (self.role or "").lower()
         if role_out_of_guardrail_scope(role, skip_system_message=skip_system, skip_tool_message=skip_tool):
             return 0
