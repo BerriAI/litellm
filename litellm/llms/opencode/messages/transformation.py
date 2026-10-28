@@ -3,7 +3,7 @@ from collections.abc import Mapping, Sequence
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.url_utils import ensure_api_route
-from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
+from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
 from litellm.llms.opencode.common_utils import go_api_base, go_headers
 
 

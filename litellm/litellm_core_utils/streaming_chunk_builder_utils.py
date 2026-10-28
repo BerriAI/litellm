@@ -14,6 +14,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import BEDROCK_TRACE_FIELDS, object_items, object_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
 )
@@ -1484,6 +1485,35 @@ def _simple_text_part(choices: Sequence[object]) -> str | None:
     return content if isinstance(content, str) else ""
 
 
+_NO_TRACE_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _carry_bedrock_guardrail_trace(chunks: Sequence[object], response: ModelResponse) -> None:
+    """Bedrock reports a guardrail trace once per stream, on the final metadata chunk, so the built response carries it
+    under the same field as the non-streaming response (``trace`` on Converse, ``amazon-bedrock-trace`` on Invoke)."""
+    traced: Final = map(_bedrock_trace_fields, reversed(chunks))
+    carried: Final = next((fields for fields in traced if fields), _NO_TRACE_FIELDS)
+    for field, trace in carried.items():
+        setattr(response, field, trace)
+
+
+def _record_bedrock_guardrail_trace(
+    chunks: Sequence[object], response: ModelResponse, logging_obj: Optional["Logging"]
+) -> None:
+    _carry_bedrock_guardrail_trace(chunks, response)
+    if logging_obj is not None:
+        logging_obj.record_native_bedrock_guardrail(response)
+
+
+def _bedrock_trace_fields(chunk: object) -> Mapping[str, object]:
+    as_mapping: Final = object_mapping(chunk)
+    raw: Final = (
+        as_mapping.get("provider_specific_fields") if as_mapping else getattr(chunk, "provider_specific_fields", None)
+    )
+    fields: Final[Mapping[str, object]] = object_mapping(raw) or {}
+    return {field: fields[field] for field in BEDROCK_TRACE_FIELDS if field in fields}
+
+
 def stream_chunk_builder(
     chunks: list,
     messages: Sequence | None = None,
@@ -1565,6 +1595,11 @@ def stream_chunk_builder(
                     )
                     break
 
+            _record_bedrock_guardrail_trace(
+                object_items(chunks),  # pyright: ignore[reportUnknownArgumentType]  # chunks is an untyped list param
+                response,
+                logging_obj,
+            )
             _stamp_streaming_usage_cost(usage, response, logging_obj)
             _set_stream_builder_response_cost(
                 response,
@@ -1760,6 +1795,11 @@ def stream_chunk_builder(
             chunks,  # pyright: ignore[reportUnknownArgumentType]  # legacy chunk list is untyped
         )
 
+        _record_bedrock_guardrail_trace(
+            object_items(chunks),  # pyright: ignore[reportUnknownArgumentType]  # chunks is an untyped list param
+            response,
+            logging_obj,
+        )
         processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
         return response
     except Exception as e:

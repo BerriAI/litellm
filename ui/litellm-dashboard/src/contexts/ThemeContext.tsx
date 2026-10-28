@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { getProxyBaseUrl } from "@/components/networking";
+import { z } from "zod";
 
 interface ThemeContextType {
   logoUrl: string | null;
@@ -8,6 +9,29 @@ interface ThemeContextType {
   setLogoUrlDark: (url: string | null) => void;
   faviconUrl: string | null;
   setFaviconUrl: (url: string | null) => void;
+}
+
+const themeImagesSchema = z.object({
+  values: z.object({
+    logo_url: z.string().nullish(),
+    logo_url_dark: z.string().nullish(),
+    favicon_url: z.string().nullish(),
+  }),
+  logo_url_via_proxy: z.boolean().optional(),
+  logo_url_dark_via_proxy: z.boolean().optional(),
+});
+
+export function resolveThemeImages(
+  data: unknown,
+  proxyBaseUrl: string | null,
+): Pick<ThemeContextType, "logoUrl" | "logoUrlDark" | "faviconUrl"> {
+  const settings = themeImagesSchema.parse(data);
+  const imageUrl = `${proxyBaseUrl ?? ""}/get_image`;
+  return {
+    logoUrl: settings.logo_url_via_proxy ? imageUrl : settings.values.logo_url || null,
+    logoUrlDark: settings.logo_url_dark_via_proxy ? `${imageUrl}?theme=dark` : settings.values.logo_url_dark || null,
+    faviconUrl: settings.values.favicon_url || null,
+  };
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
@@ -41,16 +65,10 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
         });
 
         if (response.ok) {
-          const data = await response.json();
-          if (data.values?.logo_url) {
-            setLogoUrl(data.values.logo_url);
-          }
-          if (data.values?.logo_url_dark) {
-            setLogoUrlDark(data.values.logo_url_dark);
-          }
-          if (data.values?.favicon_url) {
-            setFaviconUrl(data.values.favicon_url);
-          }
+          const images = resolveThemeImages(await response.json(), proxyBaseUrl);
+          setLogoUrl(images.logoUrl);
+          setLogoUrlDark(images.logoUrlDark);
+          setFaviconUrl(images.faviconUrl);
         }
       } catch (error) {
         console.warn("Failed to load theme settings from backend:", error);
