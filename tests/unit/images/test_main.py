@@ -3,20 +3,229 @@ import base64
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Final
+from collections.abc import Generator
+from queue import SimpleQueue
+from typing import Final, Literal, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
 from openai.types.image import Image
+from pydantic import JsonValue, TypeAdapter
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 import os
+
+
+class ImageRetryParameters(TypedDict, total=False):
+    max_retries: ReadOnly[int | None]
+
+
+@pytest.fixture
+def image_retry_delays() -> Generator[None, None, None]:
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        yield
+
+
+def _image_retry_transport(
+    requests: SimpleQueue[httpx.Request], outcome: Literal["503", "timeout", "success"]
+) -> httpx.MockTransport:
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.put(request)
+        assert request.method == "POST"
+        assert request.url.path == "/v1/images/generations"
+        body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(request.content)
+        assert body == {"model": "gpt-image-1-mini", "prompt": "a red circle"}
+        if outcome == "timeout":
+            raise httpx.ReadTimeout("scripted image timeout", request=request)
+        if outcome == "503":
+            return httpx.Response(503, json={"error": {"message": "scripted unavailable", "type": "server_error"}})
+        return httpx.Response(200, json={"created": 1700000000, "data": [{"b64_json": "aW1n"}]})
+
+    return httpx.MockTransport(respond)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("image_retry_delays")
+@pytest.mark.parametrize("is_async", (False, True), ids=("sync", "async"))
+@pytest.mark.parametrize("outcome", ("503", "timeout"))
+@pytest.mark.parametrize(
+    ("retries", "attempts"),
+    ((0, 1), (1, 2), (None, 3), ("unset", 3), ("global", 3)),
+    ids=("zero", "one", "none", "unset", "global"),
+)
+async def test_image_generation_honors_sdk_retry_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    is_async: bool,
+    outcome: Literal["503", "timeout"],
+    retries: int | None | Literal["unset", "global"],
+    attempts: int,
+) -> None:
+    requests: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
+    transport: Final = _image_retry_transport(requests, outcome)
+    if retries == "global":
+        monkeypatch.setattr(litellm, "max_retries", 0, raising=False)
+    retry_params: Final[ImageRetryParameters] = {} if isinstance(retries, str) else {"max_retries": retries}
+    error: Final = litellm.Timeout if outcome == "timeout" else litellm.ServiceUnavailableError
+    if is_async:
+        async with AsyncOpenAI(
+            api_key="synthetic-image-key",
+            base_url="https://image.test/v1",
+            max_retries=5,
+            http_client=httpx.AsyncClient(transport=transport),
+        ) as client:
+            with pytest.raises(error):
+                await litellm.aimage_generation(
+                    model="openai/gpt-image-1-mini",
+                    prompt="a red circle",
+                    api_key="synthetic-image-key",
+                    api_base="https://image.test/v1",
+                    client=client,
+                    **retry_params,
+                )
+    else:
+        with OpenAI(
+            api_key="synthetic-image-key",
+            base_url="https://image.test/v1",
+            max_retries=5,
+            http_client=httpx.Client(transport=transport),
+        ) as client:
+            with pytest.raises(error):
+                litellm.image_generation(
+                    model="openai/gpt-image-1-mini",
+                    prompt="a red circle",
+                    api_key="synthetic-image-key",
+                    api_base="https://image.test/v1",
+                    client=client,
+                    **retry_params,
+                )
+    assert requests.qsize() == attempts
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("image_retry_delays")
+@pytest.mark.parametrize("is_async", (False, True), ids=("sync", "async"))
+@pytest.mark.parametrize("provider", ("litellm_proxy", "hosted_vllm"))
+async def test_compatible_image_generation_honors_zero_retries(provider: str, is_async: bool) -> None:
+    requests: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
+    transport: Final = _image_retry_transport(requests, "503")
+    if is_async:
+        async with AsyncOpenAI(
+            api_key="synthetic-image-key",
+            base_url="https://image.test/v1",
+            http_client=httpx.AsyncClient(transport=transport),
+        ) as client:
+            with pytest.raises(litellm.ServiceUnavailableError):
+                await litellm.aimage_generation(
+                    model=f"{provider}/gpt-image-1-mini",
+                    prompt="a red circle",
+                    api_key="synthetic-image-key",
+                    api_base="https://image.test/v1",
+                    client=client,
+                    max_retries=0,
+                )
+    else:
+        with OpenAI(
+            api_key="synthetic-image-key",
+            base_url="https://image.test/v1",
+            http_client=httpx.Client(transport=transport),
+        ) as client:
+            with pytest.raises(litellm.ServiceUnavailableError):
+                litellm.image_generation(
+                    model=f"{provider}/gpt-image-1-mini",
+                    prompt="a red circle",
+                    api_key="synthetic-image-key",
+                    api_base="https://image.test/v1",
+                    client=client,
+                    max_retries=0,
+                )
+    assert requests.qsize() == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("image_retry_delays")
+@pytest.mark.parametrize("is_async", (False, True), ids=("sync", "async"))
+async def test_image_generation_rejects_non_integer_retries_before_sending(is_async: bool) -> None:
+    requests: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
+    transport: Final = _image_retry_transport(requests, "success")
+    if is_async:
+        async with AsyncOpenAI(
+            api_key="synthetic-image-key",
+            base_url="https://image.test/v1",
+            http_client=httpx.AsyncClient(transport=transport),
+        ) as client:
+            with pytest.raises(litellm.UnprocessableEntityError) as raised:
+                await litellm.aimage_generation(
+                    model="openai/gpt-image-1-mini",
+                    prompt="a red circle",
+                    api_key="synthetic-image-key",
+                    api_base="https://image.test/v1",
+                    client=client,
+                    max_retries="invalid",
+                )
+    else:
+        with OpenAI(
+            api_key="synthetic-image-key",
+            base_url="https://image.test/v1",
+            http_client=httpx.Client(transport=transport),
+        ) as client:
+            with pytest.raises(litellm.UnprocessableEntityError) as raised:
+                litellm.image_generation(
+                    model="openai/gpt-image-1-mini",
+                    prompt="a red circle",
+                    api_key="synthetic-image-key",
+                    api_base="https://image.test/v1",
+                    client=client,
+                    max_retries="invalid",
+                )
+    assert raised.value.status_code == 422
+    assert requests.qsize() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True), ids=("sync", "async"))
+async def test_image_generation_returns_success_without_forwarding_retry_control(is_async: bool) -> None:
+    requests: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
+    transport: Final = _image_retry_transport(requests, "success")
+    if is_async:
+        async with AsyncOpenAI(
+            api_key="synthetic-image-key",
+            base_url="https://image.test/v1",
+            http_client=httpx.AsyncClient(transport=transport),
+        ) as client:
+            async_response: Final = await litellm.aimage_generation(
+                model="openai/gpt-image-1-mini",
+                prompt="a red circle",
+                api_key="synthetic-image-key",
+                api_base="https://image.test/v1",
+                client=client,
+                max_retries=0,
+            )
+            async_data: Final = TypeAdapter(tuple[Image, ...]).validate_python(async_response.data)
+            assert async_data[0].b64_json == "aW1n"
+    else:
+        with OpenAI(
+            api_key="synthetic-image-key",
+            base_url="https://image.test/v1",
+            http_client=httpx.Client(transport=transport),
+        ) as client:
+            sync_response: Final = litellm.image_generation(
+                model="openai/gpt-image-1-mini",
+                prompt="a red circle",
+                api_key="synthetic-image-key",
+                api_base="https://image.test/v1",
+                client=client,
+                max_retries=0,
+            )
+            sync_data: Final = TypeAdapter(tuple[Image, ...]).validate_python(sync_response.data)
+            assert sync_data[0].b64_json == "aW1n"
+    assert requests.qsize() == 1
 
 
 def test_image_generation_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request(
