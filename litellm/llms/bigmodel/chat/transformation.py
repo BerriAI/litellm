@@ -29,7 +29,7 @@ class BigModelChatConfig(ZAIChatConfig):
     def get_openai_compatible_provider_info(self, api_base: str | None, api_key: str | None) -> tuple[str, str | None]:
         return get_bigmodel_url(api_base, "chat"), get_bigmodel_api_key(api_key)
 
-    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: inherited API requires a list
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: inherited interface requires a list
         return list(_SUPPORTED_PARAMS)
 
     def map_openai_params(
