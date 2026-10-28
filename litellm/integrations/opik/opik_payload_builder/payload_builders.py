@@ -57,9 +57,7 @@ def build_span_payload(
     span_id: Final = utils.create_uuid7()
 
     model: Final[str] = response_obj.get("model", "unknown-model")
-    obj_type: Final[str] = response_obj.get("object", "unknown-object")
-    created: Final[int] = response_obj.get("created", 0)
-    span_name: Final = f"{model}_{obj_type}_{created}"
+    span_name: Final = f"{model}_{response_obj.get('object', 'unknown-object')}_{response_obj.get('created', 0)}"
 
     _logging.verbose_logger.debug("OpikLogger creating span with id %s for trace %s", span_id, trace_id)
 

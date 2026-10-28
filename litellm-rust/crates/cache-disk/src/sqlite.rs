@@ -48,13 +48,13 @@ struct Row {
 impl DiskcacheSqliteStore {
     pub fn open(directory: impl AsRef<Path>) -> Result<Self, Error> {
         let directory = directory.as_ref().to_path_buf();
-        fs::create_dir_all(&directory).map_err(|_| Error::Unavailable)?;
-        let directory = std::path::absolute(&directory).map_err(|_| Error::Unavailable)?;
+        fs::create_dir_all(&directory).map_err(Error::unavailable)?;
+        let directory = std::path::absolute(&directory).map_err(Error::unavailable)?;
         let database = directory.join("cache.db");
-        let connection = Connection::open(database).map_err(|_| Error::Unavailable)?;
+        let connection = Connection::open(database).map_err(Error::unavailable)?;
         connection
             .busy_timeout(std::time::Duration::from_secs(60))
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(Error::unavailable)?;
 
         let mut settings = read_settings(&connection)?;
         for (key, value) in default_settings() {
@@ -74,7 +74,7 @@ impl DiskcacheSqliteStore {
                     value
                 )",
             )
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(Error::unavailable)?;
         for (key, value) in &settings {
             if !matches!(key.as_str(), "count" | "size" | "hits" | "misses") {
                 connection
@@ -82,7 +82,7 @@ impl DiskcacheSqliteStore {
                         "INSERT OR REPLACE INTO Settings VALUES (?, ?)",
                         params![key, value],
                     )
-                    .map_err(|_| Error::Unavailable)?;
+                    .map_err(Error::unavailable)?;
             }
         }
         for (key, value) in [
@@ -96,7 +96,7 @@ impl DiskcacheSqliteStore {
                     "INSERT OR IGNORE INTO Settings VALUES (?, ?)",
                     params![key, value],
                 )
-                .map_err(|_| Error::Unavailable)?;
+                .map_err(Error::unavailable)?;
         }
         connection
             .execute_batch(
@@ -117,7 +117,7 @@ impl DiskcacheSqliteStore {
                 CREATE UNIQUE INDEX IF NOT EXISTS Cache_key_raw ON Cache(key, raw);
                 CREATE INDEX IF NOT EXISTS Cache_expire_time ON Cache(expire_time);",
             )
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(Error::unavailable)?;
 
         let eviction_policy = setting_string(&settings, "eviction_policy")
             .unwrap_or_else(|| "least-recently-stored".to_string());
@@ -128,23 +128,27 @@ impl DiskcacheSqliteStore {
                     .execute_batch(
                         "CREATE INDEX IF NOT EXISTS Cache_store_time ON Cache(store_time)",
                     )
-                    .map_err(|_| Error::Unavailable)?;
+                    .map_err(Error::unavailable)?;
             }
             "least-recently-used" => {
                 connection
                     .execute_batch(
                         "CREATE INDEX IF NOT EXISTS Cache_access_time ON Cache(access_time)",
                     )
-                    .map_err(|_| Error::Unavailable)?;
+                    .map_err(Error::unavailable)?;
             }
             "least-frequently-used" => {
                 connection
                     .execute_batch(
                         "CREATE INDEX IF NOT EXISTS Cache_access_count ON Cache(access_count)",
                     )
-                    .map_err(|_| Error::Unavailable)?;
+                    .map_err(Error::unavailable)?;
             }
-            _ => return Err(Error::Unavailable),
+            _ => {
+                return Err(Error::unavailable(SettingFault::EvictionPolicy(
+                    eviction_policy,
+                )));
+            }
         }
         connection
             .execute_batch(
@@ -170,12 +174,12 @@ impl DiskcacheSqliteStore {
                     UPDATE Settings SET value = value - OLD.size
                     WHERE key = \"size\"; END;",
             )
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(Error::unavailable)?;
 
         let min_file_size = setting_i64(&settings, "disk_min_file_size")
             .unwrap_or(DEFAULT_DISK_MIN_FILE_SIZE)
             .try_into()
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(Error::unavailable)?;
         let size_limit = setting_i64(&settings, "size_limit").unwrap_or(DEFAULT_SIZE_LIMIT);
         let cull_limit = setting_i64(&settings, "cull_limit").unwrap_or(DEFAULT_CULL_LIMIT);
         let statistics = setting_i64(&settings, "statistics").unwrap_or_default() != 0;
@@ -207,7 +211,7 @@ impl DiskcacheSqliteStore {
                 |row| row.get::<_, Option<String>>(0),
             )
             .optional()
-            .map_err(|_| Error::Unavailable)?
+            .map_err(Error::unavailable)?
             .flatten()
         {
             cleanup.push(old_filename);
@@ -221,7 +225,7 @@ impl DiskcacheSqliteStore {
                 |row| row.get::<_, i64>(0),
             )
             .optional()
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(Error::unavailable)?;
         if let Some(rowid) = rowid {
             connection
                 .execute(
@@ -230,7 +234,7 @@ impl DiskcacheSqliteStore {
                         WHERE rowid = ?",
                     params![now, expire_time, now, size, mode, filename, value, rowid],
                 )
-                .map_err(|_| Error::Unavailable)?;
+                .map_err(Error::unavailable)?;
         } else {
             connection
                 .execute(
@@ -240,7 +244,7 @@ impl DiskcacheSqliteStore {
                     ) VALUES (?, 1, ?, ?, ?, 0, NULL, ?, ?, ?, ?)",
                     params![key, now, expire_time, now, size, mode, filename, value],
                 )
-                .map_err(|_| Error::Unavailable)?;
+                .map_err(Error::unavailable)?;
         }
         cleanup.extend(self.cull(connection, now)?);
         Ok(cleanup)
@@ -257,13 +261,13 @@ impl DiskcacheSqliteStore {
                  WHERE expire_time IS NOT NULL AND expire_time < ?
                  ORDER BY expire_time LIMIT ?",
             )
-            .map_err(|_| Error::Unavailable)?
+            .map_err(Error::unavailable)?
             .query_map(params![now, self.cull_limit], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
             })
-            .map_err(|_| Error::Unavailable)?
+            .map_err(Error::unavailable)?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(Error::unavailable)?;
         for (_, filename) in &expired {
             if let Some(filename) = filename {
                 cleanup.push(filename.clone());
@@ -272,7 +276,7 @@ impl DiskcacheSqliteStore {
         for (rowid, _) in &expired {
             connection
                 .execute("DELETE FROM Cache WHERE rowid = ?", params![rowid])
-                .map_err(|_| Error::Unavailable)?;
+                .map_err(Error::unavailable)?;
         }
         let remaining = self.cull_limit - i64::try_from(expired.len()).unwrap_or(self.cull_limit);
         if remaining <= 0 || self.volume(connection)? < self.size_limit {
@@ -283,19 +287,23 @@ impl DiskcacheSqliteStore {
             "least-recently-stored" => "store_time",
             "least-recently-used" => "access_time",
             "least-frequently-used" => "access_count",
-            _ => return Err(Error::Unavailable),
+            policy => {
+                return Err(Error::unavailable(SettingFault::EvictionPolicy(
+                    policy.to_owned(),
+                )));
+            }
         };
         let rows = connection
             .prepare(&format!(
                 "SELECT rowid, filename FROM Cache ORDER BY {order} LIMIT ?"
             ))
-            .map_err(|_| Error::Unavailable)?
+            .map_err(Error::unavailable)?
             .query_map(params![remaining], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
             })
-            .map_err(|_| Error::Unavailable)?
+            .map_err(Error::unavailable)?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(Error::unavailable)?;
         for (_, filename) in &rows {
             if let Some(filename) = filename {
                 cleanup.push(filename.clone());
@@ -304,7 +312,7 @@ impl DiskcacheSqliteStore {
         for (rowid, _) in rows {
             connection
                 .execute("DELETE FROM Cache WHERE rowid = ?", params![rowid])
-                .map_err(|_| Error::Unavailable)?;
+                .map_err(Error::unavailable)?;
         }
         Ok(cleanup)
     }
@@ -312,15 +320,15 @@ impl DiskcacheSqliteStore {
     fn volume(&self, connection: &Connection) -> Result<i64, Error> {
         let page_count: i64 = connection
             .query_row("PRAGMA page_count", [], |row| row.get(0))
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(Error::unavailable)?;
         let page_size: i64 = connection
             .query_row("PRAGMA page_size", [], |row| row.get(0))
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(Error::unavailable)?;
         let size: i64 = connection
             .query_row("SELECT value FROM Settings WHERE key = 'size'", [], |row| {
                 row.get(0)
             })
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(Error::unavailable)?;
         Ok(page_count.saturating_mul(page_size).saturating_add(size))
     }
 }
@@ -331,13 +339,13 @@ impl DiskStore for DiskcacheSqliteStore {
     }
 
     fn get(&self, key: &str, now: f64) -> Result<Option<StoredValue>, Error> {
-        let connection = self.connection.lock().map_err(|_| Error::Unavailable)?;
+        let connection = self.connection.lock()?;
         let select = "SELECT rowid, expire_time, mode, filename, value FROM Cache
             WHERE key = ? AND raw = 1 AND (expire_time IS NULL OR expire_time > ?)";
         let row = connection
             .query_row(select, params![key, now], row_from_query)
             .optional()
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(Error::unavailable)?;
         if !self.statistics && !has_get_update(&self.eviction_policy) {
             return row
                 .map(|row| fetch_row(&self.directory, row))
@@ -348,7 +356,7 @@ impl DiskStore for DiskcacheSqliteStore {
             let row = connection
                 .query_row(select, params![key, now], row_from_query)
                 .optional()
-                .map_err(|_| Error::Unavailable)?;
+                .map_err(Error::unavailable)?;
             let Some(row) = row else {
                 if self.statistics {
                     connection
@@ -356,7 +364,7 @@ impl DiskStore for DiskcacheSqliteStore {
                             "UPDATE Settings SET value = value + 1 WHERE key = 'misses'",
                             [],
                         )
-                        .map_err(|_| Error::Unavailable)?;
+                        .map_err(Error::unavailable)?;
                 }
                 return Ok(None);
             };
@@ -369,14 +377,14 @@ impl DiskStore for DiskcacheSqliteStore {
                         "UPDATE Settings SET value = value + 1 WHERE key = 'hits'",
                         [],
                     )
-                    .map_err(|_| Error::Unavailable)?;
+                    .map_err(Error::unavailable)?;
             } else if !hit && self.statistics {
                 connection
                     .execute(
                         "UPDATE Settings SET value = value + 1 WHERE key = 'misses'",
                         [],
                     )
-                    .map_err(|_| Error::Unavailable)?;
+                    .map_err(Error::unavailable)?;
             }
             if has_get_update(&self.eviction_policy) && hit {
                 let update = match self.eviction_policy.as_str() {
@@ -384,16 +392,20 @@ impl DiskStore for DiskcacheSqliteStore {
                     "least-frequently-used" => {
                         "UPDATE Cache SET access_count = access_count + 1 WHERE rowid = ?"
                     }
-                    _ => return Err(Error::Unavailable),
+                    policy => {
+                        return Err(Error::unavailable(SettingFault::EvictionPolicy(
+                            policy.to_owned(),
+                        )));
+                    }
                 };
                 if self.eviction_policy == "least-recently-used" {
                     connection
                         .execute(update, params![now, rowid])
-                        .map_err(|_| Error::Unavailable)?;
+                        .map_err(Error::unavailable)?;
                 } else {
                     connection
                         .execute(update, params![rowid])
-                        .map_err(|_| Error::Unavailable)?;
+                        .map_err(Error::unavailable)?;
                 }
             }
             value
@@ -409,7 +421,7 @@ impl DiskStore for DiskcacheSqliteStore {
     ) -> Result<(), Error> {
         let columns = store_value(&self.directory, self.min_file_size, value)?;
         let new_filename = columns.filename.clone();
-        let connection = self.connection.lock().map_err(|_| Error::Unavailable)?;
+        let connection = self.connection.lock()?;
         let result = transactional(&connection, |connection| {
             self.set_locked(connection, key, columns, expire_time, now)
         });
@@ -428,7 +440,7 @@ impl DiskStore for DiskcacheSqliteStore {
     }
 
     fn pop(&self, key: &str, now: f64) -> Result<Option<StoredValue>, Error> {
-        let connection = self.connection.lock().map_err(|_| Error::Unavailable)?;
+        let connection = self.connection.lock()?;
         let selected = transactional(&connection, |connection| {
             let row = connection
                 .query_row(
@@ -439,13 +451,13 @@ impl DiskStore for DiskcacheSqliteStore {
                     row_from_query,
                 )
                 .optional()
-                .map_err(|_| Error::Unavailable)?;
+                .map_err(Error::unavailable)?;
             let Some(row) = row else {
                 return Ok(None);
             };
             connection
                 .execute("DELETE FROM Cache WHERE rowid = ?", params![row.rowid])
-                .map_err(|_| Error::Unavailable)?;
+                .map_err(Error::unavailable)?;
             Ok(Some(row))
         })?;
         let Some(row) = selected else {
@@ -460,7 +472,7 @@ impl DiskStore for DiskcacheSqliteStore {
     }
 
     fn clear(&self) -> Result<(), Error> {
-        let connection = self.connection.lock().map_err(|_| Error::Unavailable)?;
+        let connection = self.connection.lock()?;
         let mut last_rowid = 0_i64;
         loop {
             let batch = transactional(&connection, |connection| {
@@ -469,13 +481,13 @@ impl DiskStore for DiskcacheSqliteStore {
                         "SELECT rowid, filename FROM Cache
                          WHERE rowid > ? ORDER BY rowid LIMIT 100",
                     )
-                    .map_err(|_| Error::Unavailable)?
+                    .map_err(Error::unavailable)?
                     .query_map(params![last_rowid], |row| {
                         Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
                     })
-                    .map_err(|_| Error::Unavailable)?
+                    .map_err(Error::unavailable)?
                     .collect::<Result<Vec<_>, _>>()
-                    .map_err(|_| Error::Unavailable)?;
+                    .map_err(Error::unavailable)?;
                 if rows.is_empty() {
                     return Ok(rows);
                 }
@@ -486,7 +498,7 @@ impl DiskStore for DiskcacheSqliteStore {
                     .join(",");
                 connection
                     .execute(&format!("DELETE FROM Cache WHERE rowid IN ({ids})"), [])
-                    .map_err(|_| Error::Unavailable)?;
+                    .map_err(Error::unavailable)?;
                 Ok(rows)
             })?;
             if batch.is_empty() {
@@ -509,7 +521,7 @@ impl DiskStore for DiskcacheSqliteStore {
         now: f64,
         apply: &mut dyn FnMut(Option<StoredValue>) -> Result<(StoredValue, Option<f64>), Error>,
     ) -> Result<(), Error> {
-        let connection = self.connection.lock().map_err(|_| Error::Unavailable)?;
+        let connection = self.connection.lock()?;
         let mut created_filename = None;
         let result = transactional(&connection, |connection| {
             let current = connection
@@ -521,7 +533,7 @@ impl DiskStore for DiskcacheSqliteStore {
                     row_from_query,
                 )
                 .optional()
-                .map_err(|_| Error::Unavailable)?
+                .map_err(Error::unavailable)?
                 .map(|row| fetch_row(&self.directory, row))
                 .transpose()?
                 .flatten();
@@ -582,21 +594,35 @@ fn read_settings(connection: &Connection) -> Result<HashMap<String, Value>, Erro
     };
     statement
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-        .map_err(|_| Error::Unavailable)?
+        .map_err(Error::unavailable)?
         .collect::<Result<HashMap<_, _>, _>>()
-        .map_err(|_| Error::Unavailable)
+        .map_err(Error::unavailable)
+}
+
+#[derive(Debug, thiserror::Error)]
+enum SettingFault {
+    #[error("unknown eviction policy {0:?}")]
+    EvictionPolicy(String),
+    #[error("setting {0:?} is not an SQLite pragma")]
+    NotPragma(String),
+    #[error("setting {0:?} has an unsupported value type")]
+    PragmaValue(String),
 }
 
 fn apply_pragma(connection: &Connection, key: &str, value: &Value) -> Result<(), Error> {
-    let pragma = key.strip_prefix("sqlite_").ok_or(Error::Unavailable)?;
+    let pragma = key
+        .strip_prefix("sqlite_")
+        .ok_or_else(|| Error::unavailable(SettingFault::NotPragma(key.to_owned())))?;
     match value {
         Value::Integer(value) => connection
             .pragma_update(None, pragma, value)
-            .map_err(|_| Error::Unavailable),
+            .map_err(Error::unavailable),
         Value::Text(value) => connection
             .pragma_update(None, pragma, value)
-            .map_err(|_| Error::Unavailable),
-        _ => Err(Error::Unavailable),
+            .map_err(Error::unavailable),
+        _ => Err(Error::unavailable(SettingFault::PragmaValue(
+            key.to_owned(),
+        ))),
     }
 }
 
@@ -634,7 +660,7 @@ fn fetch_row(directory: &Path, row: Row) -> Result<Option<StoredValue>, Error> {
             Value::Text(value) => Ok(Some(StoredValue::Text(value))),
             Value::Integer(value) => Ok(Some(StoredValue::Integer(value))),
             Value::Real(value) => Ok(Some(StoredValue::Float(value))),
-            Value::Null => Err(Error::InvalidEntry),
+            Value::Null => Err(Error::InvalidEntry(None)),
         },
         MODE_BINARY | MODE_PICKLE => {
             let bytes = match row.value {
@@ -645,7 +671,7 @@ fn fetch_row(directory: &Path, row: Row) -> Result<Option<StoredValue>, Error> {
                     };
                     value
                 }
-                _ => return Err(Error::InvalidEntry),
+                _ => return Err(Error::InvalidEntry(None)),
             };
             Ok(Some(if row.mode == MODE_BINARY {
                 StoredValue::Bytes(bytes)
@@ -663,24 +689,24 @@ fn fetch_row(directory: &Path, row: Row) -> Result<Option<StoredValue>, Error> {
                 }
                 Value::Blob(value) => value,
                 Value::Text(value) => value.into_bytes(),
-                _ => return Err(Error::InvalidEntry),
+                _ => return Err(Error::InvalidEntry(None)),
             };
             Ok(Some(StoredValue::Text(
-                String::from_utf8(bytes).map_err(|_| Error::InvalidEntry)?,
+                String::from_utf8(bytes).map_err(Error::invalid_entry)?,
             )))
         }
-        _ => Err(Error::InvalidEntry),
+        _ => Err(Error::InvalidEntry(None)),
     }
 }
 
 fn read_file(directory: &Path, filename: Option<&str>) -> Result<Option<Vec<u8>>, Error> {
     let Some(filename) = filename else {
-        return Err(Error::InvalidEntry);
+        return Err(Error::InvalidEntry(None));
     };
     match fs::read(directory.join(filename)) {
         Ok(value) => Ok(Some(value)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(_) => Err(Error::Unavailable),
+        Err(error) => Err(Error::unavailable(error)),
     }
 }
 
@@ -712,7 +738,7 @@ fn store_value(
             let bytes = value.into_bytes();
             let filename = write_file(directory, &bytes)?;
             Ok(StoredColumns {
-                size: i64::try_from(bytes.len()).map_err(|_| Error::Unavailable)?,
+                size: i64::try_from(bytes.len()).map_err(Error::unavailable)?,
                 mode: MODE_TEXT,
                 filename: Some(filename),
                 value: None,
@@ -727,7 +753,7 @@ fn store_value(
         StoredValue::Bytes(value) => {
             let filename = write_file(directory, &value)?;
             Ok(StoredColumns {
-                size: i64::try_from(value.len()).map_err(|_| Error::Unavailable)?,
+                size: i64::try_from(value.len()).map_err(Error::unavailable)?,
                 mode: MODE_BINARY,
                 filename: Some(filename),
                 value: None,
@@ -742,7 +768,7 @@ fn store_value(
         StoredValue::Pickle(value) => {
             let filename = write_file(directory, &value)?;
             Ok(StoredColumns {
-                size: i64::try_from(value.len()).map_err(|_| Error::Unavailable)?,
+                size: i64::try_from(value.len()).map_err(Error::unavailable)?,
                 mode: MODE_PICKLE,
                 filename: Some(filename),
                 value: None,
@@ -761,14 +787,14 @@ fn write_file(directory: &Path, bytes: &[u8]) -> Result<String, Error> {
     let filename = format!("{}/{}/{}.val", &hex[..2], &hex[2..4], &hex[4..]);
     let path = directory.join(&filename);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|_| Error::Unavailable)?;
+        fs::create_dir_all(parent).map_err(Error::unavailable)?;
     }
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
-        .map_err(|_| Error::Unavailable)?;
-    file.write_all(bytes).map_err(|_| Error::Unavailable)?;
+        .map_err(Error::unavailable)?;
+    file.write_all(bytes).map_err(Error::unavailable)?;
     Ok(filename)
 }
 
@@ -789,12 +815,12 @@ fn transactional<T>(
 ) -> Result<T, Error> {
     connection
         .execute_batch("BEGIN IMMEDIATE")
-        .map_err(|_| Error::Unavailable)?;
+        .map_err(Error::unavailable)?;
     match operation(connection) {
         Ok(value) => {
             connection
                 .execute_batch("COMMIT")
-                .map_err(|_| Error::Unavailable)?;
+                .map_err(Error::unavailable)?;
             Ok(value)
         }
         Err(error) => {
