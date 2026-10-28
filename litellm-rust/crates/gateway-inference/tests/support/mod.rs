@@ -102,6 +102,14 @@ fn configured_app(
         Some(cache) => gateway.with_cache(cache),
         None => gateway,
     };
+    authenticated_app(gateway, permissions, principal)
+}
+
+pub fn authenticated_app(
+    gateway: Gateway,
+    permissions: litellm_gateway_auth::Permissions,
+    principal: Option<litellm_gateway_auth::Principal>,
+) -> Router {
     router(Arc::new(gateway)).layer(axum::middleware::from_fn_with_state(
         (permissions, principal),
         test_identity,

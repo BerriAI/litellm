@@ -64,12 +64,14 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
         Arc::new(EnvironmentSecrets::python_compatible(client)),
     ));
     let resources = CoreResources::new(pool);
-    Ok(Arc::new(Gateway::new(
+    let gateway = Gateway::new(
         resources,
         http,
         secrets,
         ModelRouter::from_model_list(&config.model_list),
-    )?))
+    )?;
+    let gateway = gateway.with_auto_routing_models(&config.model_list)?;
+    Ok(Arc::new(gateway))
 }
 
 pub async fn build_redis(config: &Config) -> Result<RedisClients, Error> {

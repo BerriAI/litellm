@@ -19,4 +19,6 @@ pub enum Error {
     RedisConnect(#[from] litellm_redis_client::ConnectError),
     #[error("MCP requires a configured master key")]
     Auth(#[from] litellm_gateway_auth::Error),
+    #[error(transparent)]
+    AutoRouting(#[from] litellm_gateway_inference::AutoRoutingConfigError),
 }

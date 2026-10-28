@@ -4,6 +4,7 @@
 //! maps a public model name to its deployment and runs the core route.
 
 mod audio_transcription;
+pub mod auto_routing;
 mod caching;
 mod chat_completions;
 mod error;
@@ -25,12 +26,14 @@ use litellm_inference_transcription::AudioTranscriptionRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
+pub use error::AutoRoutingConfigError;
 pub use error::Error;
 pub use litellm_router::{Deployment, Router as ModelRouter};
 pub use request::{JsonObject, RequestId};
 
 pub struct Gateway {
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    auto_routing: auto_routing::Registry,
     pub audio_transcription: AudioTranscriptionRoute,
     pub chat_completions: ChatCompletionsRoute,
     pub messages: MessagesRoute,
@@ -60,6 +63,7 @@ impl Gateway {
         let auth = resources.auth.clone();
         Ok(Self {
             cache: None,
+            auto_routing: auto_routing::Registry::default(),
             audio_transcription: AudioTranscriptionRoute::new(
                 provider.clone(),
                 auth.clone(),
@@ -86,15 +90,38 @@ impl Gateway {
             http,
         })
     }
+
+    pub fn with_auto_routing_strategy(
+        mut self,
+        model: String,
+        strategy: Arc<dyn auto_routing::AutoRoutingStrategy>,
+    ) -> Result<Self, AutoRoutingConfigError> {
+        if self.models.get(&model).is_none() {
+            return Err(AutoRoutingConfigError {
+                model,
+                reason: "model is not configured".into(),
+            });
+        }
+        self.auto_routing.insert(model, strategy);
+        Ok(self)
+    }
+
+    pub fn with_auto_routing_models(
+        mut self,
+        models: &[litellm_config::Model],
+    ) -> Result<Self, AutoRoutingConfigError> {
+        self.auto_routing = auto_routing::Registry::from_models(models, &self.models)?;
+        Ok(self)
+    }
 }
 
 pub fn router(gateway: Arc<Gateway>) -> Router {
     Router::new()
-        .route("/v1/messages", post(messages::create))
+        .route("/v1/messages", post(auto_routing::messages))
         .route("/ocr", post(ocr::create))
         .route("/v1/ocr", post(ocr::create))
-        .route("/chat/completions", post(chat_completions::create))
-        .route("/v1/chat/completions", post(chat_completions::create))
+        .route("/chat/completions", post(auto_routing::chat))
+        .route("/v1/chat/completions", post(auto_routing::chat))
         .nest("/engines/{model}", model_routes())
         .nest("/openai/deployments/{model}", model_routes())
         .route("/audio/transcriptions", post(audio_transcription::create))
@@ -102,8 +129,8 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
             "/v1/audio/transcriptions",
             post(audio_transcription::create),
         )
-        .route("/responses", post(responses::create))
-        .route("/v1/responses", post(responses::create))
+        .route("/responses", post(auto_routing::responses))
+        .route("/v1/responses", post(auto_routing::responses))
         .route("/embeddings", post(request::unsupported))
         .route("/v1/embeddings", post(request::unsupported))
         .route("/completions", post(request::unsupported))
@@ -118,7 +145,7 @@ fn model_routes() -> Router<Arc<Gateway>> {
     Router::new()
         .route(
             "/chat/completions",
-            post(chat_completions::create_from_model_path),
+            post(auto_routing::chat_from_model_path),
         )
         .route("/embeddings", post(request::unsupported))
         .route("/completions", post(request::unsupported))
