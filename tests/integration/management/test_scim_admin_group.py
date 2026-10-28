@@ -691,9 +691,6 @@ def test_scim_group_put_returns_the_updated_members(gateway: Gateway, tmp_path: 
 
 @pytest.mark.timeout(300)
 def test_scim_admin_group_delete_revokes_the_members_admin_key(gateway: Gateway, tmp_path: Path) -> None:
-    pytest.skip(
-        "BUG: DELETE /scim/v2/Groups/{id} demotes the admin group's members in the DB but their existing keys keep proxy_admin access on /key/generate"
-    )
     group_name: Final = f"scim-admin-delete-{uuid.uuid4().hex}"
     config: Final = _owned_scim_config(tmp_path / "scim-admin-group-delete.yaml", {"scim_admin_group": group_name})
     with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned, owned.gateway.scenario() as scenario:
