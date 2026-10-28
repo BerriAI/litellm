@@ -33,7 +33,7 @@ def _requested_version(headers: Mapping[str, object]) -> str:
     return requested.strip() if isinstance(requested, str) else ""
 
 
-def _vertex_version(headers: Mapping[str, object], model: str, drop_params: bool) -> str:
+def _vertex_version(headers: Mapping[str, object], model: str, drop_params: bool) -> str | UnsupportedParamsError:
     requested: Final = _requested_version(headers)
     if requested in _VERSIONS_SERVED_AS_VERTEX_DEFAULT:
         return _VERTEX_DEFAULT_VERSION
@@ -41,7 +41,7 @@ def _vertex_version(headers: Mapping[str, object], model: str, drop_params: bool
         return requested
     if drop_params:
         return _VERTEX_DEFAULT_VERSION
-    raise UnsupportedParamsError(
+    return UnsupportedParamsError(
         message=(
             f"{model} does not support {_VERSION_HEADER_VERTEX_READS_FROM_BODY}={requested}. "
             "To drop unsupported params, set `litellm.drop_params = True`."
@@ -249,9 +249,12 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
         self._remove_scope_from_cache_control(anthropic_messages_request)
 
-        anthropic_messages_request["anthropic_version"] = _vertex_version(
+        version: Final = _vertex_version(
             headers, model=model, drop_params=drops_unsupported_params(litellm_params.drop_params)
         )
+        if isinstance(version, UnsupportedParamsError):
+            raise version
+        anthropic_messages_request["anthropic_version"] = version
 
         anthropic_messages_request.pop("model", None)  # do not pass model in request body to vertex ai
 

@@ -63,3 +63,46 @@ impl FromIterator<(String, Deployment)> for Router {
         Self(entries.into_iter().collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use litellm_config::Config;
+    use rstest::rstest;
+
+    use super::Router;
+
+    #[rstest]
+    #[case::unset("", "", false)]
+    #[case::deployment_flag("", "\n      drop_params: true", true)]
+    #[case::deployment_word("", "\n      drop_params: \" True \"", true)]
+    #[case::deployment_off("", "\n      drop_params: false", false)]
+    #[case::deployment_unknown_word("", "\n      drop_params: maybe", false)]
+    #[case::global_flag("litellm_settings:\n  drop_params: true\n", "", true)]
+    #[case::global_word("litellm_settings:\n  drop_params: \"true\"\n", "", true)]
+    #[case::global_off("litellm_settings:\n  drop_params: false\n", "", false)]
+    #[case::global_over_deployment_off(
+        "litellm_settings:\n  drop_params: true\n",
+        "\n      drop_params: false",
+        true
+    )]
+    fn configured_drop_params_reach_the_deployment(
+        #[case] settings: &str,
+        #[case] deployment: &str,
+        #[case] expected: bool,
+    ) {
+        let config = Config::from_yaml(&format!(
+            "{settings}model_list:\n  - model_name: public-model\n    litellm_params:\n      model: provider/model{deployment}"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            Router::from_config(&config)
+                .get("public-model")
+                .unwrap()
+                .shaping
+                .settings
+                .drop_params,
+            expected
+        );
+    }
+}

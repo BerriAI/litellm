@@ -118,38 +118,3 @@ fn programmatic_deployments_preserve_overrides_and_last_entry_wins() {
     assert_eq!(selected.timeout, deployment.timeout);
     assert_eq!(selected.shaping, deployment.shaping);
 }
-
-#[rstest]
-#[case::unset("", "", false)]
-#[case::deployment_flag("", "\n      drop_params: true", true)]
-#[case::deployment_word("", "\n      drop_params: \" True \"", true)]
-#[case::deployment_off("", "\n      drop_params: false", false)]
-#[case::deployment_unknown_word("", "\n      drop_params: maybe", false)]
-#[case::global_flag("litellm_settings:\n  drop_params: true\n", "", true)]
-#[case::global_word("litellm_settings:\n  drop_params: \"true\"\n", "", true)]
-#[case::global_off("litellm_settings:\n  drop_params: false\n", "", false)]
-#[case::global_over_deployment_off(
-    "litellm_settings:\n  drop_params: true\n",
-    "\n      drop_params: false",
-    true
-)]
-fn configured_drop_params_reach_the_deployment(
-    #[case] settings: &str,
-    #[case] deployment: &str,
-    #[case] expected: bool,
-) {
-    let config = Config::from_yaml(&format!(
-        "{settings}model_list:\n  - model_name: public-model\n    litellm_params:\n      model: provider/model{deployment}"
-    ))
-    .unwrap();
-
-    assert_eq!(
-        Router::from_config(&config)
-            .get("public-model")
-            .unwrap()
-            .shaping
-            .settings
-            .drop_params,
-        expected
-    );
-}

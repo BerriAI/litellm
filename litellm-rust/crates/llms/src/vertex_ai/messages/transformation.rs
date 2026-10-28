@@ -39,26 +39,6 @@ const WEB_SEARCH_TOOL_PREFIX: &str = "web_search";
 const VERSIONS_SERVED_AS_VERTEX_DEFAULT: [&str; 3] = ["", "2023-01-01", "2023-06-01"];
 const VERSIONS_VERTEX_ACCEPTS_IN_BODY: [&str; 2] = [ANTHROPIC_VERSION, "2026-10-21"];
 
-fn vertex_version<'a>(
-    model: &str,
-    requested: Option<&'a str>,
-    drop_params: bool,
-) -> Result<&'a str, Error> {
-    match requested.map(str::trim).unwrap_or_default() {
-        version if VERSIONS_SERVED_AS_VERTEX_DEFAULT.contains(&version) => Ok(ANTHROPIC_VERSION),
-        version if VERSIONS_VERTEX_ACCEPTS_IN_BODY.contains(&version) => Ok(version),
-        _ if drop_params => Ok(ANTHROPIC_VERSION),
-        version => Err(Error::InvalidRequest(
-            crate::ErrorDetail::UnsupportedParameter {
-                model: model.into(),
-                param: VERSION_HEADER.into(),
-                value: version.into(),
-                hint: String::new(),
-            },
-        )),
-    }
-}
-
 /// Claude on Vertex AI, Python's `VertexAIPartnerModelsAnthropicMessagesConfig`: the Anthropic
 /// payload addressed to a project and location, authenticated with a Google access token.
 pub struct VertexAiPartnerModelsAnthropicMessagesConfig;
@@ -267,6 +247,26 @@ fn vertex_feature_betas(request: &MessagesRequest) -> BetaSet {
             .into_iter()
             .collect(),
     )
+}
+
+fn vertex_version<'a>(
+    model: &str,
+    requested: Option<&'a str>,
+    drop_params: bool,
+) -> Result<&'a str, Error> {
+    match requested.map(str::trim).unwrap_or_default() {
+        version if VERSIONS_SERVED_AS_VERTEX_DEFAULT.contains(&version) => Ok(ANTHROPIC_VERSION),
+        version if VERSIONS_VERTEX_ACCEPTS_IN_BODY.contains(&version) => Ok(version),
+        _ if drop_params => Ok(ANTHROPIC_VERSION),
+        version => Err(Error::InvalidRequest(
+            crate::ErrorDetail::UnsupportedParameter {
+                model: model.into(),
+                param: VERSION_HEADER.into(),
+                value: version.into(),
+                hint: String::new(),
+            },
+        )),
+    }
 }
 
 #[cfg(test)]
