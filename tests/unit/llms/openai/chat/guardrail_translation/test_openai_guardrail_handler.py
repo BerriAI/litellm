@@ -1520,6 +1520,73 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert request_data["visited_choices"] == (0, 1)
 
     @pytest.mark.asyncio
+    async def test_buffered_stream_without_finish_reason_takes_the_ended_path(self) -> None:
+        """A buffered stream has no finish_reason yet, so the ended path must key off the opt-in.
+
+        Dropping ``deliver_ended_stream_rewrites`` from that condition leaves the buffered
+        caller on the in-flight path, where rewrites are never written back.
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class PathProbe(CustomGuardrail):
+            saw_assembled_response: bool = False
+
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                # Only the ended-stream inspection loop hands the guardrail an assembled
+                # "response"; the in-flight branch passes raw chunks under "responses" alone.
+                type(self).saw_assembled_response = isinstance(request_data.get("response"), ModelResponse)
+                return inputs
+
+        chunks: Final = [
+            ModelResponseStream(
+                choices=[StreamingChoices(index=0, delta=Delta(content="secret"), finish_reason=None)]
+            )
+        ]
+        assert OpenAIChatCompletionsHandler()._first_choice_has_finished(chunks) is False
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=PathProbe(guardrail_name="probe"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+        assert PathProbe.saw_assembled_response is True
+
+    @pytest.mark.asyncio
+    async def test_diff_mode_keeps_each_choice_holdback_with_two_choices(self) -> None:
+        """The per-choice sinks are merged, so an n=2 diff round must keep both holdbacks.
+
+        Reporting an empty holdback here would release text the guardrail asked to withhold.
+        """
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class HoldingGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                texts: Final = inputs.get("texts") or ()
+                return {**inputs, "stream_holdback_chars": [len(text) for text in texts]}
+
+        chunks: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=index, delta=Delta(content=text, tool_calls=[{
+                "index": 0, "id": f"call_{index}", "type": "function",
+                "function": {"name": "contact", "arguments": "{}"},
+            }]), finish_reason="tool_calls",
+        ) for index, text in enumerate(("alpha", "bravo-long"))])]
+        sink: Final = StreamTransformSink()
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=HoldingGuardrail(guardrail_name="holding"),
+            litellm_logging_obj=None,
+            stream_transform_sink=sink,
+        )
+        assert sink.holdback_per_choice == {0: len("alpha"), 1: len("bravo-long")}
+
+    @pytest.mark.asyncio
     async def test_deliver_ended_stream_tool_rewrites_keep_choice_indices(self) -> None:
         handler: Final = OpenAIChatCompletionsHandler()
         chunks: Final = self._two_choice_tool_call_stream_chunks()
