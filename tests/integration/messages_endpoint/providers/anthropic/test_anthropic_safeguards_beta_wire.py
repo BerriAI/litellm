@@ -13,7 +13,7 @@ import anthropic
 import httpx
 import openai
 import pytest
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.vertex import service_account_json
@@ -38,6 +38,9 @@ _CLIENT_BETAS: Final = ",".join(_CLAUDE_CODE_BETAS)
 _CLIENT_BETAS_WITH_DANGEROUS: Final = ",".join((*_CLAUDE_CODE_BETAS, BETA))
 _MERGED_BETAS: Final = ",".join(sorted((*_CLAUDE_CODE_BETAS, BETA)))
 _FOUNDRY_MODEL: Final = "azure_ai/claude-sonnet-4-6"
+_FOUNDRY_BETA_COLUMN: Final = object_value(
+    object_value(json.loads(Path("litellm/anthropic_beta_headers_config.json").read_text()))["azure_ai"]
+)
 _FOUNDRY_KEY: Final = "synthetic-foundry-key"
 _FOUNDRY_TARGET: Final = "/anthropic/v1/messages"
 _FOUNDRY_ARRAY_ERROR: Final = "safeguards: Input should be a valid array"
@@ -284,15 +287,23 @@ _ANTHROPIC_SHAPES: Final = MappingProxyType(
         "D6_missing_safeguards": _ShapeCase(OMITTED, OMITTED, None, None),
     }
 )
+
+
+def _foundry_betas(*client_betas: str) -> str:
+    return ",".join(
+        sorted({mapped for beta in client_betas if isinstance(mapped := _FOUNDRY_BETA_COLUMN.get(beta), str)})
+    )
+
+
 _FOUNDRY_SHAPES: Final = MappingProxyType(
     {
         "D9_streamed_safeguards_with_claude_code_header": _ShapeCase(
-            SAFEGUARDS, SAFEGUARDS, _CLIENT_BETAS_WITH_DANGEROUS, BETA, stream=True
+            SAFEGUARDS, SAFEGUARDS, _CLIENT_BETAS_WITH_DANGEROUS, _foundry_betas(*_CLAUDE_CODE_BETAS, BETA), stream=True
         ),
         "D11_empty_safeguards": _ShapeCase([], [], None, BETA),
         "D12_null_safeguards": _ShapeCase(None, OMITTED, None, None),
         "D13_missing_safeguards_with_claude_code_header_lacking_the_beta": _ShapeCase(
-            OMITTED, OMITTED, _CLIENT_BETAS, None
+            OMITTED, OMITTED, _CLIENT_BETAS, _foundry_betas(*_CLAUDE_CODE_BETAS)
         ),
     }
 )
@@ -407,7 +418,7 @@ def test_a_deployment_dropping_context_management_sends_neither_the_field_nor_it
 
 
 @pytest.mark.parametrize("row", tuple(_FOUNDRY_SHAPES))
-def test_azure_ai_messages_derive_the_beta_instead_of_forwarding_the_client_header(gateway: Gateway, row: str) -> None:
+def test_azure_ai_messages_forward_the_mapped_client_betas_beside_the_derived_one(gateway: Gateway, row: str) -> None:
     case: Final = _FOUNDRY_SHAPES[row]
     marker: Final = uuid.uuid4().hex
     with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:

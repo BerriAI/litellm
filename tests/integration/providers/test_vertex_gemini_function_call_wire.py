@@ -197,7 +197,7 @@ def test_vertex_gemini_kwargs_extra_param_reaches_generation_config(gateway: Gat
     def respond(request: Request) -> Reply:
         assert request.target == f"{_MODEL_PATH}:generateContent"
         body: Final = _JSON_OBJECT.validate_json(request.body)
-        assert body["generationConfig"]["top_k"] == 3, body
+        assert body["generationConfig"]["candidate_count"] == 3, body
         return Reply(
             body=json.dumps(
                 {
@@ -219,7 +219,7 @@ def test_vertex_gemini_kwargs_extra_param_reaches_generation_config(gateway: Gat
             "/v1/chat/completions",
             json={
                 "model": model,
-                "top_k": 3,
+                "candidate_count": 3,
                 "messages": [{"role": "user", "content": "hi"}],
             },
             headers={"Authorization": f"Bearer {gateway.key}"},
