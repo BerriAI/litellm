@@ -215,6 +215,7 @@ async def acompletion_with_mcp(
 
         # Create a custom async generator that collects chunks and handles tool execution
         from litellm.main import stream_chunk_builder
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import hold_request_slot_for_tool_loop
         from litellm.types.utils import ModelResponseStream
 
         class MCPStreamingIterator:
@@ -258,6 +259,7 @@ async def acompletion_with_mcp(
                 self.follow_up_stream = None
                 self.follow_up_iterator = None
                 self.follow_up_exhausted = False
+                self.holds_request_slot = hold_request_slot_for_tool_loop() is not None
 
             def __aiter__(self):
                 return self
@@ -332,7 +334,17 @@ async def acompletion_with_mcp(
                         "Error draining inner MCP stream after final chunk; spend logging may be incomplete"
                     )
 
-            async def __anext__(self):
+            async def __anext__(self) -> ModelResponseStream:
+                try:
+                    return await self._next_chunk()
+                except StopAsyncIteration:
+                    if self.holds_request_slot:
+                        from litellm.proxy.proxy_server import proxy_logging_obj
+
+                        await proxy_logging_obj.arelease_max_parallel_requests(self.user_api_key_auth)
+                    raise
+
+            async def _next_chunk(self) -> ModelResponseStream:
                 # Phase 1: Collect and yield initial stream chunks
                 if not self.stream_exhausted:
                     # Get the iterator from the stream wrapper

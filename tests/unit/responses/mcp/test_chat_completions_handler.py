@@ -1712,3 +1712,116 @@ async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follo
     assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71, 19)
     assert recorder.failed[0]["response_cost"] == pytest.approx(_chat_round_cost(_CHAT_ROUND_ONE))
     assert recorder.failed[0]["response_cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_streamed_mcp_auto_exec_keeps_the_requests_parallel_slot_until_the_stream_ends(monkeypatch):
+    import contextvars
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.utils import InternalUsageCache, hash_token
+    from litellm.types.utils import CallTypes, Delta, ModelResponseStream, StreamingChoices
+    from litellm.utils import CustomStreamWrapper
+
+    local_cache: Final = DualCache()
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(local_cache))
+    key: Final = UserAPIKeyAuth(api_key=hash_token("sk-chat-stream-tool-loop"), max_parallel_requests=1)
+    tools: Final = [{"type": "function", "function": {"name": "get_weather"}}]
+    tool_call: Final = {"id": "call-1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+
+    async def admit(data: dict[str, object]) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=key, cache=local_cache, data=data, call_type=CallTypes.acompletion.value
+        )
+
+    async def second_request_status() -> int:
+        try:
+            await contextvars.Context().run(asyncio.create_task, admit({"model": "gpt-x", "messages": []}))
+        except HTTPException as rejected:
+            return rejected.status_code
+        return 200
+
+    def chunk(content: str, finish_reason: str | None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="stream",
+            model="gpt-x",
+            created=0,
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(index=0, delta=Delta(content=content, role="assistant"), finish_reason=finish_reason)
+            ],
+        )
+
+    logging_obj: Final = MagicMock()
+    logging_obj.model_call_details = {}
+
+    class FixedStream(CustomStreamWrapper):
+        def __init__(self, chunks: tuple[ModelResponseStream, ...]):
+            super().__init__(completion_stream=None, model="gpt-x", logging_obj=logging_obj)
+            self.pending = iter(chunks)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self.pending)
+            except StopIteration:
+                raise StopAsyncIteration
+
+    async def run_tool_after_the_first_round_logs(**_):
+        await limiter.async_log_success_event(
+            kwargs={"litellm_call_id": "chat-owner", "stream": True},
+            response_obj=None,
+            start_time=None,
+            end_time=datetime.now(),
+        )
+        assert await second_request_status() == 429, "The first round's stream log must not free the request's slot"
+        return [{"tool_call_id": "call-1", "result": "sunny"}]
+
+    acompletion: Final = AsyncMock(
+        side_effect=[FixedStream((chunk("", "tool_calls"),)), FixedStream((chunk("Sunny", None), chunk(".", "stop")))]
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        types.SimpleNamespace(arelease_max_parallel_requests=limiter.async_release_max_parallel_requests_on_disconnect),
+    )
+    monkeypatch.setattr(LiteLLM_Proxy_MCP_Handler, "should_use_litellm_mcp_gateway", staticmethod(lambda tools: True))
+    monkeypatch.setattr(LiteLLM_Proxy_MCP_Handler, "_parse_mcp_tools", staticmethod(lambda tools: (tools, [])))
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "process_mcp_tools_without_openai_transform",
+        AsyncMock(return_value=(tools, {"get_weather": "weather"})),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler, "transform_mcp_tools_to_openai", staticmethod(lambda *_, **__: tools)
+    )
+    monkeypatch.setattr(LiteLLM_Proxy_MCP_Handler, "should_auto_execute_tools", staticmethod(lambda **_: True))
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler, "extract_tool_calls_from_chat_response", staticmethod(lambda **_: [tool_call])
+    )
+    monkeypatch.setattr(LiteLLM_Proxy_MCP_Handler, "execute_tool_calls", run_tool_after_the_first_round_logs)
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "create_follow_up_messages_for_chat",
+        staticmethod(lambda **_: [{"role": "tool", "tool_call_id": "call-1", "content": "sunny"}]),
+    )
+    monkeypatch.setattr(
+        ResponsesAPIRequestUtils, "extract_mcp_headers_from_request", staticmethod(lambda **_: (None, None, None, None))
+    )
+
+    await admit({"model": "gpt-x", "messages": [{"role": "user", "content": "hi"}], "litellm_call_id": "chat-owner"})
+    with patch("litellm.acompletion", acompletion):
+        stream = await acompletion_with_mcp(
+            model="gpt-x", messages=[{"role": "user", "content": "hi"}], tools=tools, stream=True
+        )
+        streamed_text: Final = "".join([part.choices[0].delta.content or "" async for part in stream])
+
+        assert await second_request_status() == 200, "The request's slot must be freed once its stream ends"
+
+    assert streamed_text == "Sunny."
