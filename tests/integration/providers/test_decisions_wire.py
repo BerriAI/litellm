@@ -262,6 +262,26 @@ def _upstream_calls(gateway: Gateway, handle: ScenarioHandle) -> list[dict[str, 
     return _calls_to(_observed_requests(gateway), handle)
 
 
+def _sdk_inference_call(gateway: Gateway, handle: ScenarioHandle, provider: _Provider) -> dict[str, JsonValue]:
+    observed: Final = _upstream_calls(gateway, handle)
+    inference_path: Final = f"/{handle.scenario_id}/v1/systemone"
+    (call,) = tuple(request for request in observed if request["path"] == inference_path)
+    metadata_calls: Final = tuple(request for request in observed if request["path"] != inference_path)
+    assert metadata_calls in (
+        (),
+        (
+            {
+                "path": f"{inference_path}/api/show",
+                "authorization": "",
+                "body": {"name": provider.body_model},
+                "method": "POST",
+                "api_key": "",
+            },
+        ),
+    ), observed
+    return call
+
+
 def _spend_row(call_id: str) -> dict[str, JsonValue]:
     rows: Final = eventually(lambda: read_rows(_SPEND_QUERY, (call_id,)), lambda found: len(found) == 1, seconds=70)
     return rows[0]
@@ -458,7 +478,7 @@ async def test_local_systemone_sdk_preserves_native_wire(
             )
         )
         assert response.model_dump(mode="json") == _answer_body(provider)
-        (call,) = _upstream_calls(gateway, handle)
+        call: Final = _sdk_inference_call(gateway, handle, provider)
         assert (call["path"], call["authorization"], call["body"]) == (
             f"/{handle.scenario_id}/v1/systemone",
             "",
@@ -493,7 +513,7 @@ async def test_local_decisions_sdk_translates_openai_format(
             "answers": list(_LOCAL_OPENAI_ANSWERS),
             "usage": dict(_LOCAL_OPENAI_USAGE),
         }
-        (call,) = _upstream_calls(gateway, handle)
+        call: Final = _sdk_inference_call(gateway, handle, provider)
         assert (call["path"], call["authorization"], call["body"]) == (
             f"/{handle.scenario_id}/v1/systemone",
             "",
@@ -536,7 +556,7 @@ def test_ollama_decisions_sdk_respects_environment_and_explicit_auth(
             api_key=api_key,
         )
         assert response.model_dump(mode="json") == _answer_body(provider)
-        (call,) = _upstream_calls(gateway, handle)
+        call: Final = _sdk_inference_call(gateway, handle, provider)
         assert (call["path"], call["authorization"], call["body"]) == (
             f"/{handle.scenario_id}/v1/systemone",
             authorization,
