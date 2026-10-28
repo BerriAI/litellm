@@ -37,12 +37,28 @@ def _google_repeated_field(value: JsonValue) -> JsonValue:
             return value
 
 
+def _google_content(value: JsonValue) -> JsonValue:
+    match value:
+        case {"parts": parts}:
+            return {**value, "parts": _google_repeated_field(parts)}
+        case _:
+            return value
+
+
+def _google_contents(value: JsonValue) -> JsonValue:
+    match _google_repeated_field(value):
+        case list() as contents:
+            return [_google_content(content) for content in contents]
+        case other:
+            return other
+
+
 _GOOGLE_REPEATED_FIELD: Final = BeforeValidator(_google_repeated_field)
 
 
 class _GoogleCountTokensTextPart(BaseModel):
     model_config = ConfigDict(frozen=True)
-    text: str
+    text: str | None
 
 
 class _GoogleCountTokensSystemInstruction(BaseModel):
@@ -67,7 +83,7 @@ class _GoogleCountTokensTool(BaseModel):
 
 class _GoogleCountTokensRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
-    contents: tuple[Mapping[str, JsonValue], ...] = ()
+    contents: Annotated[tuple[Mapping[str, JsonValue], ...], BeforeValidator(_google_contents)] = ()
     system_instruction: _GoogleCountTokensSystemInstruction | None = Field(default=None, alias="systemInstruction")
     tools: Annotated[tuple[_GoogleCountTokensTool, ...], _GOOGLE_REPEATED_FIELD] = ()
 
@@ -125,7 +141,11 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
         GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
     )
     system: Final = (
-        [{"type": "text", "text": part.text} for part in validated_data.system_instruction.parts]
+        [
+            {"type": "text", "text": part.text}
+            for part in validated_data.system_instruction.parts
+            if part.text is not None
+        ]
         if validated_data.system_instruction is not None
         else None
     )

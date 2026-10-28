@@ -110,6 +110,8 @@ _DECLARATION: Final = {"name": "lookup", "description": "Find a record"}
 _SYSTEM: Final = {"systemInstruction": {"parts": [{"text": "Follow these rules"}]}}
 _NO_SYSTEM_PARTS: Final = {"systemInstruction": {"parts": []}}
 _TOOLS: Final = {"tools": [{"functionDeclarations": [_DECLARATION]}]}
+_TURN: Final = {"role": "user", "parts": [{"text": "Count this request"}]}
+_CONTENTS: Final = {"contents": [_TURN]}
 
 
 @pytest.mark.parametrize(
@@ -119,6 +121,8 @@ _TOOLS: Final = {"tools": [{"functionDeclarations": [_DECLARATION]}]}
         ({"system_instruction": {"parts": {"text": "Follow these rules"}}}, _SYSTEM),
         ({"systemInstruction": {"parts": [{"text": "Follow these rules"}, None]}}, _SYSTEM),
         ({"systemInstruction": {"parts": None}}, _NO_SYSTEM_PARTS),
+        ({"systemInstruction": {"parts": [{"text": None}, {"text": "Follow these rules"}]}}, _SYSTEM),
+        ({"systemInstruction": {"parts": {"text": None}}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {}}, _NO_SYSTEM_PARTS),
         ({"tools": None}, {}),
         ({"tools": [None]}, {}),
@@ -126,6 +130,12 @@ _TOOLS: Final = {"tools": [{"functionDeclarations": [_DECLARATION]}]}
         ({"tools": {"functionDeclarations": [_DECLARATION]}}, _TOOLS),
         ({"tools": [{"functionDeclarations": _DECLARATION}]}, _TOOLS),
         ({"tools": {"functionDeclarations": _DECLARATION}}, _TOOLS),
+        ({"contents": _TURN}, _CONTENTS),
+        ({"contents": [None, _TURN]}, _CONTENTS),
+        ({"contents": None}, {"contents": []}),
+        ({"contents": [{"role": "user", "parts": {"text": "Count this request"}}]}, _CONTENTS),
+        ({"contents": [{"role": "user", "parts": [None, {"text": "Count this request"}]}]}, _CONTENTS),
+        ({"contents": [{"role": "user", "parts": None}]}, {"contents": [{"role": "user", "parts": []}]}),
     ),
 )
 def test_google_count_tokens_counts_every_google_spelling_of_a_repeated_field_like_its_list_form(
