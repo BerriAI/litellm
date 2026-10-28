@@ -13,6 +13,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import BEDROCK_EMBEDDING_PROVIDERS_LITERAL
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.cohere.embed.handler import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
@@ -37,7 +38,7 @@ from ..base_aws_llm import (
     pop_aws_auth_params,
     run_aws_signing,
 )
-from ..common_utils import BedrockError, get_all_bedrock_regions, split_bedrock_region_path
+from ..common_utils import BedrockError, split_bedrock_region_path
 from .amazon_nova_transformation import AmazonNovaEmbeddingConfig
 from .amazon_titan_g1_transformation import AmazonTitanG1Config
 from .amazon_titan_multimodal_transformation import (
@@ -71,14 +72,6 @@ _OPTIONAL_STR: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 def _without_region_path(model: str) -> str:
     region, model_id = split_bedrock_region_path(model)
     return model if region is None else model_id
-
-
-def _response_model(model: str, path_region: str | None, routed_region: str, bedrock_model: str) -> str:
-    if path_region is None:
-        return model.replace("async_invoke/", "", 1)
-    if routed_region in get_all_bedrock_regions():
-        return f"{routed_region}/{bedrock_model}"
-    return bedrock_model
 
 
 class BedrockEmbedding(BaseAWSLLM):
@@ -204,15 +197,17 @@ class BedrockEmbedding(BaseAWSLLM):
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         is_async_invoke: bool | None = False,
         batch_data: list[dict] | None = None,
+        aws_region_name: str | None = None,
     ) -> EmbeddingResponse | None:
         """
         Transforms the response from the Bedrock embedding provider to the OpenAI format.
         """
         returned_response: EmbeddingResponse | None = None
         bedrock_model: Final = _without_region_path(model)
+        is_async_job: Final = bool(is_async_invoke) and len(response_list) == 1 and "invocationArn" in response_list[0]
 
         # Handle async invoke responses (single response with invocationArn)
-        if is_async_invoke and len(response_list) == 1 and "invocationArn" in response_list[0]:
+        if is_async_job:
             if provider == "twelvelabs":
                 returned_response = TwelveLabsMarengoEmbeddingConfig().transform_async_invoke_response(
                     response=response_list[0], model=model
@@ -272,6 +267,8 @@ class BedrockEmbedding(BaseAWSLLM):
         ##########################################################
         if returned_response is None:
             raise Exception(f"Unable to map model response to known provider format. model={model}")
+        if aws_region_name is not None and not is_async_job:
+            set_hidden_param(returned_response, "region_name", aws_region_name)
         return returned_response
 
     def _single_func_embeddings(
@@ -340,6 +337,7 @@ class BedrockEmbedding(BaseAWSLLM):
             provider=provider,
             is_async_invoke=is_async_invoke,
             batch_data=batch_data,
+            aws_region_name=aws_region_name,
         )
 
     async def _async_single_func_embeddings(
@@ -411,6 +409,7 @@ class BedrockEmbedding(BaseAWSLLM):
             provider=provider,
             is_async_invoke=is_async_invoke,
             batch_data=batch_data,
+            aws_region_name=aws_region_name,
         )
 
     def embeddings(
@@ -433,12 +432,12 @@ class BedrockEmbedding(BaseAWSLLM):
         model_id_param: Final = _OPTIONAL_STR.validate_python(optional_params.pop("model_id", None)) or None
         has_async_invoke: Final = "async_invoke/" in model
         model_without_async_route: Final = model.replace("async_invoke/", "", 1)
-        path_region: Final = split_bedrock_region_path(model_without_async_route)[0] if model_id_param is None else None
+        path_region: Final = split_bedrock_region_path(model_without_async_route)[0]
         bedrock_model: Final = _without_region_path(model_without_async_route)
         credentials, aws_region_name = self._load_credentials(
             optional_params,
             bearer_token=bedrock_bearer_token(api_key),
-            region_from_model=path_region or self._get_aws_region_from_model_arn(model_id_param),
+            region_from_model=self._get_aws_region_from_model_arn(model_id_param) or path_region,
         )
 
         ### TRANSFORMATION ###
@@ -449,7 +448,6 @@ class BedrockEmbedding(BaseAWSLLM):
             model=bedrock_model,
             model_id=unencoded_model_id,
         )
-        response_model: Final = _response_model(model, path_region, aws_region_name, bedrock_model)
         provider: Final = self.get_bedrock_embedding_provider(bedrock_model)
         if provider is None:
             raise Exception(
@@ -552,7 +550,7 @@ class BedrockEmbedding(BaseAWSLLM):
                     extra_headers=extra_headers,
                     endpoint_url=endpoint_url,
                     aws_region_name=aws_region_name,
-                    model=response_model,
+                    model=model_without_async_route,
                     logging_obj=logging_obj,
                     api_key=api_key,
                     provider=provider,
@@ -566,7 +564,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 extra_headers=extra_headers,
                 endpoint_url=endpoint_url,
                 aws_region_name=aws_region_name,
-                model=response_model,
+                model=model_without_async_route,
                 logging_obj=logging_obj,
                 api_key=api_key,
                 provider=provider,
@@ -595,8 +593,9 @@ class BedrockEmbedding(BaseAWSLLM):
         ## ROUTING ##
         # Convert CaseInsensitiveDict to regular dict for httpx compatibility
         headers_for_request: Final = dict(prepped.headers) if hasattr(prepped, "headers") else {}
+        set_hidden_param(model_response, "region_name", aws_region_name)
         return cohere_embedding(
-            model=response_model,
+            model=model_without_async_route,
             input=input,
             model_response=model_response,
             logging_obj=logging_obj,

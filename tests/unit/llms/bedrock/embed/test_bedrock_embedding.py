@@ -283,6 +283,25 @@ def test_bedrock_embedding_model_id_arn_region_wins_over_the_model_path_region_a
     assert route.call_count == 1
 
 
+def test_bedrock_embedding_plain_model_id_calls_the_model_path_region_over_env(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    route = respx_mock.post(f"{GOVCLOUD_WEST_RUNTIME}/model/amazon.titan-embed-text-v2:0/invoke").mock(
+        return_value=httpx.Response(200, json=titan_embedding_response)
+    )
+
+    litellm.embedding(
+        model="bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0",
+        input=[test_input],
+        api_key="test-bearer-token",
+        model_id="amazon.titan-embed-text-v2:0",
+    )
+
+    assert route.call_count == 1
+
+
 @pytest.mark.parametrize(
     "model,extra_params",
     [
@@ -328,6 +347,83 @@ def test_bedrock_embedding_explicit_region_outside_the_known_list_returns_the_ve
     assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
     assert response._hidden_params["response_cost"] == pytest.approx(
         response.usage.prompt_tokens * litellm.model_cost["amazon.titan-embed-text-v2:0"]["input_cost_per_token"]
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_bedrock_embedding_without_a_region_path_bills_the_row_of_the_region_it_calls(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route = respx_mock.post(f"{GOVCLOUD_WEST_RUNTIME}/model/amazon.titan-embed-text-v2:0/invoke").mock(
+        return_value=httpx.Response(200, json=titan_embedding_response)
+    )
+    request: Final = {
+        "model": "bedrock/amazon.titan-embed-text-v2:0",
+        "input": [test_input],
+        "api_key": "test-bearer-token",
+        "aws_region_name": "us-gov-west-1",
+    }
+
+    response: Final = litellm.embedding(**request) if sync_mode else await litellm.aembedding(**request)
+
+    assert route.call_count == 1
+    assert response.model == "amazon.titan-embed-text-v2:0"
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        response.usage.prompt_tokens
+        * litellm.model_cost["bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0"]["input_cost_per_token"]
+    )
+
+
+def test_bedrock_cohere_embedding_bills_the_row_of_the_region_it_calls(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    regional_key: Final = "bedrock/us-gov-west-1/cohere.embed-english-v3"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        regional_key,
+        {**litellm.model_cost["cohere.embed-english-v3"], "input_cost_per_token": 7e-07},
+    )
+    respx_mock.post(f"{GOVCLOUD_WEST_RUNTIME}/model/cohere.embed-english-v3/invoke").mock(
+        return_value=httpx.Response(200, json=cohere_embedding_response)
+    )
+
+    response: Final = litellm.embedding(
+        model="bedrock/cohere.embed-english-v3",
+        input=[test_input],
+        api_key="test-bearer-token",
+        aws_region_name="us-gov-west-1",
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        response.usage.prompt_tokens * litellm.model_cost[regional_key]["input_cost_per_token"]
+    )
+
+
+def test_bedrock_embedding_with_a_govcloud_arn_model_id_bills_at_the_arn_region_row(
+    respx_mock: respx.MockRouter,
+) -> None:
+    arn: Final = "arn:aws-us-gov:bedrock:us-gov-west-1::foundation-model/amazon.nova-2-multimodal-embeddings-v1:0"
+    route = respx_mock.post(url__startswith=f"{GOVCLOUD_WEST_RUNTIME}/model/").mock(
+        return_value=httpx.Response(
+            200, json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2, 0.3]}]}
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
+        input=[test_input],
+        api_key="test-bearer-token",
+        model_id=arn,
+    )
+
+    assert route.call_count == 1
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        response.usage.prompt_tokens
+        * litellm.model_cost["bedrock/us-gov-west-1/amazon.nova-2-multimodal-embeddings-v1:0"]["input_cost_per_token"]
     )
 
 
