@@ -4272,6 +4272,71 @@ async def test_mcp_tool_call_inside_admitted_request_reuses_its_parallel_slot() 
 
 
 @pytest.mark.asyncio
+async def test_failed_mcp_tool_call_keeps_its_requests_parallel_slot_and_reservation(monkeypatch) -> None:
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    api_key: Final = hash_token("sk-mcp-auto-execute-tool-failure")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1, tpm_limit=10_000)
+    parallel_key: Final = f"{{api_key:{api_key}}}:max_parallel_requests"
+    tokens_key: Final = handler.create_rate_limit_keys(key="api_key", value=api_key, rate_limit_type="tokens")
+    owner_call_id: Final = "mcp-tool-failure-owner"
+    owner_data: Final[dict[str, object]] = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "weather in Paris"}],
+        "max_tokens": 50,
+        "litellm_call_id": owner_call_id,
+    }
+
+    async def in_flight() -> int:
+        return handler._gauge_in_flight_from_cache_value(
+            await local_cache.async_get_cache(key=parallel_key)
+        )
+
+    async def reserved_tokens() -> int:
+        return int(await local_cache.async_get_cache(key=tokens_key) or 0)
+
+    async def pre_call(data: dict[str, object], call_type: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type=call_type,
+        )
+
+    await pre_call(owner_data, CallTypes.acompletion.value)
+    await pre_call(
+        {"model": "MCP: get_weather", "messages": [{"role": "user", "content": "Tool: get_weather"}]},
+        CallTypes.call_mcp_tool.value,
+    )
+    reserved_before_tool_failure: Final = await reserved_tokens()
+
+    await handler.async_post_call_failure_hook(
+        request_data={"call_type": CallTypes.call_mcp_tool.value, "litellm_call_id": f"{owner_call_id}_call_1"},
+        original_exception=HTTPException(status_code=504, detail="MCP tool call timed out after 3.0s"),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert reserved_before_tool_failure > 0
+    assert await reserved_tokens() == reserved_before_tool_failure
+    with pytest.raises(HTTPException) as rejected:
+        await contextvars.Context().run(
+            asyncio.create_task, pre_call({"model": "gpt-4o-mini", "input": "next"}, CallTypes.aresponses.value)
+        )
+    assert rejected.value.status_code == 429
+
+    await handler.async_post_call_failure_hook(
+        request_data=owner_data,
+        original_exception=Exception("request failed"),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert await in_flight() == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("stream", "in_flight_after_first_round_logs"),
     [(False, 1), (True, 0)],

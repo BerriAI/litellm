@@ -5716,7 +5716,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     @with_service_target("rate_limits")
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
@@ -5739,7 +5739,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         that usage instead of refunding it.
         """
         try:
-            stash: Final = get_request_stash()
+            stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(request_data))
             if stash is None:
                 return
             await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
@@ -5780,7 +5780,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             ptu_ops: Final = (
                 self._build_ptu_failure_settlement_ops(
                     stash,
-                    request_data,  # pyright: ignore[reportUnknownArgumentType]  # request_data is a bare dict
+                    request_data,
                     tpm_actual,
                 )
                 if reserved_tokens > 0
