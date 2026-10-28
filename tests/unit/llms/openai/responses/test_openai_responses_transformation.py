@@ -1430,8 +1430,12 @@ class TestOpenAIResponsesAPIConfig:
                 },
                 {"type": "shell_call_output", "call_id": "call_1", "output": [{"stdout": "a.py", "stderr": ""}]},
             ),
+            (
+                {"id": "rs_1", "type": "reasoning", "summary": [], "created_by": "user_1"},
+                {"id": "rs_1", "type": "reasoning", "summary": []},
+            ),
         ],
-        ids=("compaction", "sdk-compaction-item", "shell-call-output-entries"),
+        ids=("compaction", "sdk-compaction-item", "shell-call-output-entries", "reasoning"),
     )
     def test_a_set_created_by_is_dropped_under_drop_params(self, item: object, expected: dict[str, object]):
         request: Final = self.config.transform_responses_api_request(
