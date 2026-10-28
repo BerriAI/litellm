@@ -27,7 +27,7 @@ from integration._support.client import (
 from integration._support import responses_ws_peer
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, chat_reply, responses_reply
-from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.process import OwnedState, graceful_stop_seconds, owned_proxy_process
 from integration._support.tls import write_self_signed_cert
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -878,7 +878,12 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Routed]:
         wire_server(answering_model_discovery(_respond)) as wire,
         gateway_from_environment() as rig_gateway,
         owned_proxy_process(
-            rig_gateway, directory, {}, config=_routed_config(directory, wire.url + "/v1", names), workers=2
+            rig_gateway,
+            directory,
+            {},
+            config=_routed_config(directory, wire.url + "/v1", names),
+            workers=2,
+            state=OwnedState.SHARED_WITH_WORKER,
         ) as owned,
     ):
         eventually(
@@ -1027,6 +1032,7 @@ def rewritten(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rewritten]:
             {},
             config=_rewritten_config(directory, wire.url + "/v1", source, target, module),
             workers=2,
+            state=OwnedState.SHARED_WITH_WORKER,
         ) as owned,
     ):
         eventually(
@@ -1145,6 +1151,7 @@ def _addressed_proxy(tmp_path_factory: pytest.TempPathFactory, with_wildcards: b
             {},
             config=_addressed_config(directory, wire.url + "/v1", names, suffix, with_wildcards),
             workers=2,
+            state=OwnedState.SHARED_WITH_WORKER,
         ) as owned,
     ):
         eventually(
@@ -1386,7 +1393,13 @@ def test_responses_websocket_uses_a_chat_fallback_without_calling_the_embedding_
         responses_ws_peer.responses_peer(
             certificate, lambda identity: responses_ws_peer.events(identity, _SERVED_TEXT)
         ) as peer,
-        owned_proxy_process(rig.gateway, tmp_path, {"SSL_CERT_FILE": str(certificate[0])}, workers=2) as owned,
+        owned_proxy_process(
+            rig.gateway,
+            tmp_path,
+            {"SSL_CERT_FILE": str(certificate[0])},
+            workers=2,
+            state=OwnedState.SHARED_WITH_WORKER,
+        ) as owned,
         owned.gateway.scenario() as scenario,
     ):
         fallback, fallback_ids = _deploy(scenario, peer.url, "ws-chat", _single({"mode": "chat"}))
@@ -1456,7 +1469,9 @@ def test_local_rate_limit_fallbacks_resolve_saved_aliases(rig: _Rig, tmp_path: P
     path.write_text(yaml.safe_dump(config, sort_keys=False))
     aliases: Final = {names["alias"]: names["target"]}
     with (
-        owned_proxy_process(rig.gateway, tmp_path, {}, config=path, workers=2) as owned,
+        owned_proxy_process(
+            rig.gateway, tmp_path, {}, config=path, workers=2, state=OwnedState.SHARED_WITH_WORKER
+        ) as owned,
         owned.gateway.scenario() as scenario,
     ):
         team: Final = (
