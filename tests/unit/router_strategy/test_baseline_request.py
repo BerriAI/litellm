@@ -1,6 +1,6 @@
 from typing import Final
 
-from litellm.router_utils.baseline_request import baseline_request, capture_baseline_parameters
+from litellm.router_strategy.auto_router.baseline_request import baseline_request, capture_baseline_parameters
 
 
 def test_baseline_snapshot_owns_nested_caller_settings_and_overrides_routed_settings() -> None:

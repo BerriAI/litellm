@@ -4342,6 +4342,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-router-core"
+version = "0.1.0"
+
+[[package]]
 name = "litellm-router-types"
 version = "0.1.0"
 dependencies = [

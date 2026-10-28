@@ -24,14 +24,6 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import StandardLoggingRoutingDecision
-from litellm.router_utils.auto_router_model_naming import (
-    CUSTOMIZATION_CAPABILITY,
-    GATED_AUTO_ROUTER_CAPABILITIES,
-    HEURISTIC_V2_CAPABILITY,
-    count_capability_routers,
-)
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -42,7 +34,19 @@ from litellm.constants import (
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router import as_output_cap, stamped_client_ceiling
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
+    CUSTOMIZATION_CAPABILITY,
+    GATED_AUTO_ROUTER_CAPABILITIES,
+    HEURISTIC_V2_CAPABILITY,
+    count_capability_routers,
+)
+from litellm.router_strategy.complexity_router.capability_classifier import (
+    CAPABILITY_CLASSIFIER_SYSTEM_PROMPT,
+    CapabilityClassifierVerdict,
+)
 from litellm.router_strategy.complexity_router.complexity_router import (
     _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
     _CLASSIFICATION_WITH_CONVERSATION,
@@ -58,18 +62,14 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     classification_system_prompt,
     custom_tier_classification_prompt,
 )
-from litellm.router_strategy.complexity_router.capability_classifier import (
-    CAPABILITY_CLASSIFIER_SYSTEM_PROMPT,
-    CapabilityClassifierVerdict,
-)
 from litellm.router_strategy.complexity_router.config import (
-    CapabilityCalibrationConfig,
-    CapabilityClassifierConfig,
     DEFAULT_CLASSIFICATION_RUBRIC,
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     DEFAULT_COMPLEXITY_CONFIG,
     DEFAULT_TECHNICAL_KEYWORDS,
     TIER_SEVERITY_ORDER,
+    CapabilityCalibrationConfig,
+    CapabilityClassifierConfig,
     ClassificationRubric,
     ClassifierLLMConfig,
     ComplexityRouterConfig,
@@ -83,10 +83,12 @@ from litellm.router_strategy.complexity_router.jev_classifier import (
     JevUsage,
 )
 from litellm.router_strategy.complexity_router.llm_v2 import LLM_V2_PROMPT_VERSION
+from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
 from litellm.router_strategy.complexity_router.tier_predictor import (
     TierGlobalStatistic,
     TrainedTierArtifact,
 )
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
@@ -94,10 +96,7 @@ from litellm.types.router import (
     RouterErrors,
     TaggedPreRoutingStrategy,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
+from litellm.types.utils import StandardLoggingRoutingDecision
 
 requires_semantic_router = pytest.mark.skipif(
     sys.version_info >= (3, 14), reason="The semantic-router extra excludes Python 3.14"
@@ -16129,7 +16128,6 @@ class TestTierHealthFailover:
         tests can prove the probe passes a kwargs copy and forwards the prompt arguments.
         """
         import litellm as litellm_module
-
         from litellm.types.router import RouterRateLimitError
 
         probed_kwargs = []

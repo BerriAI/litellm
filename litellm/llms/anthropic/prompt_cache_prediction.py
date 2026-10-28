@@ -29,7 +29,7 @@ from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.anthropic.messages.native.utils import AnthropicMessagesRequestUtils, prepare_native_messages
-from litellm.router_utils.baseline_request import (
+from litellm.router_strategy.auto_router.baseline_request import (
     BASELINE_PARAMETERS,
     capture_baseline_parameters,
 )

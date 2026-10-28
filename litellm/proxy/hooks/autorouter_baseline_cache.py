@@ -37,8 +37,8 @@ from litellm.proxy.spend_tracking.savings import (
     _effective_model_info,  # pyright: ignore[reportPrivateUsage]  # existing deployment-price owner
     _proxy_llm_router,  # pyright: ignore[reportPrivateUsage]  # existing optional proxy-router owner
 )
+from litellm.router_strategy.auto_router.baseline_request import baseline_request
 from litellm.router_strategy.complexity_router.context_compaction import compaction_applied
-from litellm.router_utils.baseline_request import baseline_request
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import CallTypes, ModelInfo, Usage

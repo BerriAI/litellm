@@ -27,7 +27,7 @@ from litellm.constants import (
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.health_check_helpers import native_health_check_mode
-from litellm.router_utils.auto_router_model_naming import (
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
     StrategyRouterDependency,
     classify_strategy_router_model,
     strategy_router_dependencies,

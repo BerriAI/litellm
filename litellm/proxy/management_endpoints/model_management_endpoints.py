@@ -114,6 +114,23 @@ from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ModelTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
+    GATED_AUTO_ROUTER_CAPABILITIES,
+    STRATEGY_ROUTER_PARAM_FIELDS,
+    GatedAutoRouterCapability,
+    capability_limit_violation,
+    carries_complexity_router_settings,
+    count_capability_routers,
+    gated_capabilities_of,
+    is_complexity_router_model,
+    validate_complexity_router_config_placement,
+    validate_complexity_router_config_write,
+    validate_strategy_router_model_write,
+)
+from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
+    is_mutable_tuned_candidate,
+    tuning_quota_violation,
+)
 from litellm.router_strategy.complexity_router import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     ClassificationRubric,
@@ -127,20 +144,6 @@ from litellm.router_strategy.complexity_router import (
     normalize_classification_prompt,
 )
 from litellm.router_strategy.complexity_router.config import resolve_complexity_router_config_write
-from litellm.router_utils.auto_router_model_naming import (
-    GATED_AUTO_ROUTER_CAPABILITIES,
-    STRATEGY_ROUTER_PARAM_FIELDS,
-    GatedAutoRouterCapability,
-    capability_limit_violation,
-    carries_complexity_router_settings,
-    count_capability_routers,
-    gated_capabilities_of,
-    is_complexity_router_model,
-    validate_complexity_router_config_placement,
-    validate_complexity_router_config_write,
-    validate_strategy_router_model_write,
-)
-from litellm.router_utils.auto_router_tuning_baseline import is_mutable_tuned_candidate, tuning_quota_violation
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsSessionTag
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (

@@ -34,12 +34,15 @@ from litellm.repositories.prisma_protocols import DatabaseClient
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.router import Router
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
+    classify_strategy_router_model,
+    strategy_router_dependencies,
+)
 from litellm.router_strategy.complexity_router.config import (
     ComplexityRouterConfigWrite,
     resolve_complexity_router_config_write,
 )
 from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
-from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model, strategy_router_dependencies
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import Deployment, updateDeployment
 

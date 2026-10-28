@@ -20,8 +20,8 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm import verbose_logger
+from litellm.litellm_core_utils.batch_utils import InMemoryFile
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
