@@ -23,7 +23,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.responses.utils import COMPARISON_RESPONSE_ID_ROUTING_HINT
+from litellm.responses.utils import COMPARISON_RESPONSE_ID_ROUTING_HINT, ComparisonRoutingHint
 from litellm.types.llms.openai import ResponsesAPIResponse
 from tests.unit.llms.bedrock.slow_upstream import (
     STREAM_TIMEOUT_SECONDS,
@@ -663,7 +663,7 @@ async def test_aresponses_websocket_keeps_routing_hints_out_of_the_relay_kwargs(
             litellm_logging_obj=MagicMock(),
             input=[{"type": "message", "role": "user", "content": "hi"}],
             previous_response_id="resp_prev",
-            **{COMPARISON_RESPONSE_ID_ROUTING_HINT: "resp_compared"},
+            **{COMPARISON_RESPONSE_ID_ROUTING_HINT: ComparisonRoutingHint("resp_compared")},
         )
 
         mock_ws.assert_awaited_once()
@@ -689,7 +689,7 @@ async def test_aresponses_websocket_fills_a_deployment_prompt_cache_options_next
             api_key="sk-test",
             litellm_logging_obj=MagicMock(),
             prompt_cache_options={"ttl": "12h"},
-            **{COMPARISON_RESPONSE_ID_ROUTING_HINT: "resp_compared"},
+            **{COMPARISON_RESPONSE_ID_ROUTING_HINT: ComparisonRoutingHint("resp_compared")},
         )
 
     request_defaults: Final = mock_ws.call_args.kwargs["request_defaults"]

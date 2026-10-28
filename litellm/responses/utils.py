@@ -1,6 +1,7 @@
 import base64
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import reduce
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
@@ -37,6 +38,12 @@ from litellm.types.utils import (
 )
 
 COMPARISON_RESPONSE_ID_ROUTING_HINT: Final = "comparison_response_id_routing_hint"
+
+
+@dataclass(frozen=True, slots=True)
+class ComparisonRoutingHint:
+    response_id: str
+
 
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]
@@ -807,8 +814,8 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def comparison_response_id(request: Mapping[str, object]) -> str | None:
         routing_hint: Final = request.get(COMPARISON_RESPONSE_ID_ROUTING_HINT)
-        if isinstance(routing_hint, str) and routing_hint:
-            return routing_hint
+        if isinstance(routing_hint, ComparisonRoutingHint) and routing_hint.response_id:
+            return routing_hint.response_id
         extra_body: Final = as_str_mapping(request.get("extra_body"))
         container: Final = extra_body if extra_body is not None and "prompt_cache_options" in extra_body else request
         options: Final = as_str_mapping(container.get("prompt_cache_options"))

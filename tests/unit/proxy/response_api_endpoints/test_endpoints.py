@@ -20,7 +20,7 @@ from httpx import Response
 
 import litellm
 from litellm.proxy._types import ProxyException
-from litellm.responses.utils import COMPARISON_RESPONSE_ID_ROUTING_HINT
+from litellm.responses.utils import COMPARISON_RESPONSE_ID_ROUTING_HINT, ComparisonRoutingHint
 from litellm.proxy.proxy_server import app
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.router import RouterErrors
@@ -2106,7 +2106,7 @@ class TestResponsesWSFirstFrameModelAuth:
     @pytest.mark.parametrize(
         "caller_id, routed_comparison_id",
         [
-            ("owner", "resp_compared"),
+            ("owner", ComparisonRoutingHint("resp_compared")),
             ("stranger", None),
         ],
     )
@@ -2115,7 +2115,7 @@ class TestResponsesWSFirstFrameModelAuth:
         monkeypatch: pytest.MonkeyPatch,
         nested: bool,
         caller_id: str,
-        routed_comparison_id: str | None,
+        routed_comparison_id: ComparisonRoutingHint | None,
     ):
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint

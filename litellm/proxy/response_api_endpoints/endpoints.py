@@ -84,7 +84,7 @@ from litellm.proxy.utils import count_request_input_tokens, handle_exception_on_
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.responses.litellm_completion_transformation.count_request import MODEL_FILE_ID_MAPPING_FIELD
 from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
-from litellm.responses.utils import COMPARISON_RESPONSE_ID_ROUTING_HINT
+from litellm.responses.utils import COMPARISON_RESPONSE_ID_ROUTING_HINT, ComparisonRoutingHint
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -1508,14 +1508,14 @@ def _with_authorized_comparison_id(
 def _with_routable_comparison_id(
     hints: Mapping[str, object], security: ResponsesIDSecurity | None, user_api_key_dict: UserAPIKeyAuth
 ) -> Mapping[str, object]:
-    comparison_id: Final = hints.get(COMPARISON_RESPONSE_ID_ROUTING_HINT)
-    if security is None or not isinstance(comparison_id, str):
+    routing_hint: Final = hints.get(COMPARISON_RESPONSE_ID_ROUTING_HINT)
+    if security is None or not isinstance(routing_hint, ComparisonRoutingHint):
         return hints
     try:
-        authorized_id: Final = security.authorize_comparison_id(comparison_id, user_api_key_dict)
+        authorized_id: Final = security.authorize_comparison_id(routing_hint.response_id, user_api_key_dict)
     except HTTPException:
         return {key: value for key, value in hints.items() if key != COMPARISON_RESPONSE_ID_ROUTING_HINT}
-    return {**hints, COMPARISON_RESPONSE_ID_ROUTING_HINT: authorized_id}
+    return {**hints, COMPARISON_RESPONSE_ID_ROUTING_HINT: ComparisonRoutingHint(authorized_id)}
 
 
 def _responses_invalid_request_response(message: str, param: str | None, code: str | None) -> JSONResponse:
@@ -1986,7 +1986,9 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
         "previous_response_id": (
             frame.previous_response_id if nested.previous_response_id is None else nested.previous_response_id
         ),
-        COMPARISON_RESPONSE_ID_ROUTING_HINT: comparison_id if isinstance(comparison_id, str) else None,
+        COMPARISON_RESPONSE_ID_ROUTING_HINT: (
+            ComparisonRoutingHint(comparison_id) if isinstance(comparison_id, str) else None
+        ),
     }
     return MappingProxyType({key: value for key, value in hints.items() if value is not None})
 

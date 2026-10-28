@@ -9,7 +9,11 @@ import pytest
 
 import litellm
 from litellm.caching.dual_cache import DualCache
-from litellm.responses.utils import COMPARISON_RESPONSE_ID_ROUTING_HINT, ResponsesAPIRequestUtils
+from litellm.responses.utils import (
+    COMPARISON_RESPONSE_ID_ROUTING_HINT,
+    ComparisonRoutingHint,
+    ResponsesAPIRequestUtils,
+)
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
@@ -1309,11 +1313,11 @@ def _response_id_from(model_id: str) -> str:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("request_kwargs", "pinned_model_id"),
+    ("request_kwargs", "pinned_model_ids"),
     [
         pytest.param(
             {"prompt_cache_options": {"comparison_response_id": _response_id_from("B")}},
-            "B",
+            ("B",),
             id="top-level-comparison",
         ),
         pytest.param(
@@ -1321,7 +1325,7 @@ def _response_id_from(model_id: str) -> str:
                 "prompt_cache_options": {"comparison_response_id": _response_id_from("A")},
                 "extra_body": {"prompt_cache_options": {"comparison_response_id": _response_id_from("B")}},
             },
-            "B",
+            ("B",),
             id="extra-body-comparison-wins",
         ),
         pytest.param(
@@ -1329,18 +1333,23 @@ def _response_id_from(model_id: str) -> str:
                 "previous_response_id": _response_id_from("A"),
                 "prompt_cache_options": {"comparison_response_id": _response_id_from("B")},
             },
-            "A",
+            ("A",),
             id="previous-response-wins",
         ),
         pytest.param(
-            {COMPARISON_RESPONSE_ID_ROUTING_HINT: _response_id_from("C")},
-            "C",
+            {COMPARISON_RESPONSE_ID_ROUTING_HINT: ComparisonRoutingHint(_response_id_from("C"))},
+            ("C",),
             id="websocket-first-frame-routing-hint",
+        ),
+        pytest.param(
+            {COMPARISON_RESPONSE_ID_ROUTING_HINT: _response_id_from("C")},
+            ("A", "B", "C"),
+            id="request-body-key-named-like-the-routing-hint",
         ),
     ],
 )
 async def test_comparison_response_id_pins_its_deployment_unless_a_previous_response_id_does(
-    request_kwargs: dict[str, object], pinned_model_id: str
+    request_kwargs: dict[str, object], pinned_model_ids: tuple[str, ...]
 ) -> None:
     callback: Final = DeploymentAffinityCheck(
         cache=DualCache(),
@@ -1361,7 +1370,7 @@ async def test_comparison_response_id_pins_its_deployment_unless_a_previous_resp
         parent_otel_span=None,
     )
 
-    assert [deployment["model_info"]["id"] for deployment in pinned] == [pinned_model_id]
+    assert tuple(deployment["model_info"]["id"] for deployment in pinned) == pinned_model_ids
 
 
 @pytest.mark.asyncio
