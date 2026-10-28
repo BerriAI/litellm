@@ -2,7 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize, de::Unexpected};
 use serde_json::Value;
 use veil::Redact;
 
-use super::ParamSpec;
+use super::{ParamKind, ParamSpec};
 
 /// The Vertex AI fields of Python's `GenericLiteLLMParams`, both the current names and the
 /// `vertex_ai_*` spellings `VertexBase.safe_get_vertex_ai_*` still read.
@@ -27,18 +27,21 @@ pub struct VertexParams {
 impl VertexParams {
     pub const CREDENTIALS: ParamSpec = ParamSpec {
         setting: "credentials",
+        kind: ParamKind::Credential,
         wire: &["vertex_credentials", "vertex_ai_credentials"],
         module_global: None,
         env: &["VERTEXAI_CREDENTIALS"],
     };
     pub const PROJECT: ParamSpec = ParamSpec {
         setting: "project",
+        kind: ParamKind::Setting,
         wire: &["vertex_project", "vertex_ai_project"],
         module_global: Some("vertex_project"),
         env: &["VERTEXAI_PROJECT"],
     };
     pub const LOCATION: ParamSpec = ParamSpec {
         setting: "location",
+        kind: ParamKind::Setting,
         wire: &["vertex_location", "vertex_ai_location"],
         module_global: Some("vertex_location"),
         env: &["VERTEXAI_LOCATION", "VERTEX_LOCATION"],

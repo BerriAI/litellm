@@ -16,7 +16,7 @@ impl CacheCodec for TaggedByteCodec {
 
     fn encode(&self, value: &u8) -> Result<Vec<u8>, Error> {
         if *value > 127 {
-            return Err(Error::InvalidEntry);
+            return Err(Error::InvalidEntry(None));
         }
         Ok(vec![self.0, *value])
     }
@@ -24,7 +24,7 @@ impl CacheCodec for TaggedByteCodec {
     fn decode(&self, bytes: &[u8]) -> Result<u8, Error> {
         match bytes {
             [tag, value] if *tag == self.0 => Ok(*value),
-            _ => Err(Error::InvalidEntry),
+            _ => Err(Error::InvalidEntry(None)),
         }
     }
 }

@@ -7,8 +7,10 @@ repository.workspace = true
 
 [dependencies]
 litellm-cache.workspace = true
+litellm-error.workspace = true
 redis = { workspace = true, features = ["cluster", "tls-rustls"] }
 r2d2 = "0.8.10"
+thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
