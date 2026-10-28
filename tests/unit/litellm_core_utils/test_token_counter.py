@@ -2475,15 +2475,15 @@ _MULTILINGUAL_SAMPLE: Final = "日本語のテキストとहिन्दी प
 
 
 @pytest.mark.parametrize(
-    "model", ["gpt-5.1", "gpt-5.5", "gpt-6.1-sol", "azure/gpt-41", "azure/gpt-5.1", "openai/gpt-5.1", "openai/gpt-4o"]
+    "model", ["gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra", "azure/gpt-41", "azure/gpt-5.1", "openai/gpt-5.1", "openai/gpt-4o"]
 )
 def test_token_counter_counts_openai_models_newer_than_tiktokens_table_with_o200k(model: str):
     expected: Final = len(tiktoken.get_encoding("o200k_base").encode(_MULTILINGUAL_SAMPLE))
 
     assert expected != len(tiktoken.get_encoding("cl100k_base").encode(_MULTILINGUAL_SAMPLE))
     assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == expected, (
-        f"{model} should count with o200k_base. OpenAI's /v1/responses/input_tokens gave gpt-5 and gpt-5.1 through "
-        "gpt-6.1-sol the same count on this sample, checked 2026-10-20"
+        f"{model} should count with o200k_base. OpenAI's /v1/responses/input_tokens gave gpt-5, gpt-5.1, gpt-6-sol, "
+        "gpt-6-luna, gpt-6-astra, gpt-6.1-sol and gpt-6.1-terra the same count on this sample, checked 2026-10-28"
     )
 
 
