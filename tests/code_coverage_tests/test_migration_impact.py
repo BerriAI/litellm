@@ -13,6 +13,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Final
 
+import pytest
+
 ROOT: Final = Path(__file__).resolve().parents[2]
 CI_CD: Final = ROOT / "ci_cd"
 
@@ -369,6 +371,23 @@ def test_not_null_is_judged_per_add_column_clause() -> None:
         'ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN "a" TEXT NOT NULL DEFAULT \'x\', ADD COLUMN "b" TEXT NOT NULL'
     )
     assert one_default_is_not_enough.severity == impact.BREAKING
+
+
+@pytest.mark.parametrize("benign", ['DROP COLUMN "unknown"', 'ALTER COLUMN "token" SET NOT NULL'])
+@pytest.mark.parametrize(
+    "change,severity,effect",
+    [
+        ('ADD COLUMN "required_new" TEXT NOT NULL', impact.BREAKING, "no default"),
+        ('ALTER COLUMN "token" TYPE INTEGER', impact.BREAKING, "to INTEGER"),
+        ('ADD COLUMN "optional_new" TEXT', impact.PREPARED_PLAN, "cached plan"),
+    ],
+)
+def test_compound_alter_keeps_the_worst_effect(benign: str, change: str, severity: str, effect: str) -> None:
+    statement: Final = f'ALTER TABLE "LiteLLM_VerificationToken" {benign}, {change}'
+    finding: Final = _classify(statement, schema=_base_schema(), reads=(_auth_read(),))
+    assert finding.severity == severity
+    assert effect in finding.effect
+    assert finding.statement == statement
 
 
 def test_drop_not_null_beside_an_add_column_is_not_breaking() -> None:

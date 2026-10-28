@@ -572,6 +572,8 @@ def _rule_rename(site: _Site) -> Finding | None:
 
 
 def _rule_not_null(site: _Site) -> Finding | None:
+    if _ADD_COLUMN.search(site.statement) is not None and _adds_not_null_without_default(site.statement):
+        return site.rate(BREAKING, "Adds a NOT NULL column with no default, so inserts from the previous version fail.")
     required: Final = [match.group("column") for match in _SET_NOT_NULL_COLUMN.finditer(site.statement)]
     if required:
         unguarded: Final = [
@@ -586,8 +588,6 @@ def _rule_not_null(site: _Site) -> Finding | None:
                 "Those writes are now rejected.",
             )
         return site.rate(INFO, "The previous version already always writes this column, so nothing changes for it.")
-    if _ADD_COLUMN.search(site.statement) is not None and _adds_not_null_without_default(site.statement):
-        return site.rate(BREAKING, "Adds a NOT NULL column with no default, so inserts from the previous version fail.")
     return None
 
 
@@ -687,9 +687,7 @@ def _rule_rest(site: _Site) -> Finding:
     return site.rate(INFO, "No effect on the previous version.")
 
 
-# Worst-first: the first rule that has something to say about a statement decides its rating.
 RULES: Final = (
-    _rule_new_table,
     _rule_drop,
     _rule_rename,
     _rule_not_null,
@@ -704,11 +702,11 @@ def classify(migration: str, statement: str, context: UpgradeContext) -> Finding
     """Rate one statement by what it does to a pod still running the base version."""
     table: Final = statement_table(statement)
     site: Final = _Site(migration, statement, table, context, _star_read_for(table, context.star_reads))
-    for rule in RULES:
-        found: Final = rule(site)
-        if found is not None:
-            return found
-    return _rule_rest(site)
+    new_table: Final = _rule_new_table(site)
+    if new_table is not None:
+        return new_table
+    findings: Final = tuple(found for rule in RULES if (found := rule(site)) is not None)
+    return min(findings, key=lambda finding: SEVERITY_ORDER.index(finding.severity), default=_rule_rest(site))
 
 
 def _adds_not_null_without_default(statement: str) -> bool:
