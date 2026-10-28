@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Final
@@ -10,15 +11,21 @@ from litellm.accounting import (
     AggregateQuery,
     AggregateRow,
     CostEvent,
+    DeliveryState,
+    DeliveryTarget,
     Dimension,
     DimensionFilter,
     DimensionName,
+    EventKind,
     Granularity,
     InboundUsageEvent,
     Metric,
     MetricName,
+    Multiplier,
     Outcome,
     OutboundUsageEvent,
+    PricingSnapshot,
+    Rate,
     validate_aggregate_rows,
 )
 from litellm.types.utils import CallTypes
@@ -225,3 +232,81 @@ def test_admission_decision_preserves_a_denial_reason():
     decision = AdmissionDecision(allowed=False, reason="Team budget exhausted")
     assert not decision.allowed
     assert decision.reason == "Team budget exhausted"
+
+
+def _snapshot(**changes: object):
+    return PricingSnapshot.model_validate(
+        {
+            "calculator_version": "1.80.0",
+            "model": "gpt-4o",
+            "provider": "openai",
+            "pricing_source": "cost_map",
+            "priced_model_key": "openai/gpt-4o",
+            "multipliers": (Multiplier(name="data_residency", value="eu", factor=Decimal("1.1")),),
+            "rates": (Rate(token_type="input", usd_per_token=Decimal("0.0000025")),),
+            "usage": (_TOKEN,),
+            "input_cost": Decimal("0.000025"),
+            "total_cost": _SPEND.value,
+            **changes,
+        }
+    )
+
+
+def test_cost_event_carries_a_snapshot_whose_total_matches_the_spend():
+    event = CostEvent(
+        event_id="cost:attempt",
+        usage_event_id="outbound:attempt",
+        occurred_at=_START,
+        dimensions=(_TEAM,),
+        charges=(_SPEND,),
+        snapshot=_snapshot(),
+    )
+    assert event.snapshot is not None
+    assert event.snapshot.total_cost == _SPEND.value
+    assert event.snapshot.multipliers[0].factor == Decimal("1.1")
+    with pytest.raises(ValidationError, match="Snapshot total must equal the authoritative spend"):
+        CostEvent(
+            event_id="cost:attempt",
+            usage_event_id="outbound:attempt",
+            occurred_at=_START,
+            dimensions=(_TEAM,),
+            charges=(_SPEND,),
+            snapshot=_snapshot(total_cost=Decimal("0.5")),
+        )
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    (
+        (
+            {
+                "rates": (
+                    Rate(token_type="input", usd_per_token=Decimal(1)),
+                    Rate(token_type="input", usd_per_token=Decimal(2)),
+                )
+            },
+            "Duplicate rate token types",
+        ),
+        ({"usage": (_SPEND,)}, "only the token metrics that were priced"),
+        ({"usage": (_REQUEST,)}, "only the token metrics that were priced"),
+        ({"pricing_source": "guess"}, "pricing_source"),
+        ({"multipliers": ({"name": "x", "value": "y", "factor": Decimal(0)},)}, "factor"),
+        ({"schema_version": 2}, "schema_version"),
+        (
+            {"additional_costs": ({"name": "fee", "amount": Decimal(1)}, {"name": "fee", "amount": Decimal(2)})},
+            "Duplicate additional cost names",
+        ),
+    ),
+)
+def test_snapshots_reject_ambiguous_rates_wrong_usage_and_unknown_sources(changes: Mapping[str, object], message: str):
+    with pytest.raises(ValidationError, match=message):
+        _snapshot(**changes)
+
+
+def test_delivery_targets_name_existing_tables_once_each():
+    values = tuple(target.value for target in DeliveryTarget)
+    assert len(frozenset(values)) == len(values)
+    assert all(value.startswith("LiteLLM_") for value in values)
+    assert DeliveryTarget.DAILY_TAG_SPEND.value == "LiteLLM_DailyTagSpend"
+    assert tuple(state.value for state in DeliveryState) == ("pending", "applied", "parked")
+    assert tuple(kind.value for kind in EventKind) == ("inbound_usage", "outbound_usage", "cost")

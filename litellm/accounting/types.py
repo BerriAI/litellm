@@ -46,6 +46,10 @@ class DimensionName(str, Enum):
     PROVIDER = "provider"
     TOOL = "tool"
     AGENT = "agent"
+    PROJECT = "project"
+    MODEL_ACCESS_GROUP = "model_access_group"
+    API_BASE = "api_base"
+    SERVICE_TIER = "service_tier"
     TAG = "tag"
 
 
@@ -57,6 +61,44 @@ class Outcome(str, Enum):
 
 class Granularity(str, Enum):
     DAY = "day"
+
+
+class EventKind(str, Enum):
+    INBOUND_USAGE = "inbound_usage"
+    OUTBOUND_USAGE = "outbound_usage"
+    COST = "cost"
+
+
+class DeliveryState(str, Enum):
+    PENDING = "pending"
+    APPLIED = "applied"
+    PARKED = "parked"
+
+
+class DeliveryTarget(str, Enum):
+    """One member per existing table the projector writes; each is applied and receipted independently."""
+
+    KEY_SPEND = "LiteLLM_VerificationToken"
+    USER_SPEND = "LiteLLM_UserTable"
+    TEAM_SPEND = "LiteLLM_TeamTable"
+    TEAM_MEMBER_SPEND = "LiteLLM_TeamMembership"
+    ORGANIZATION_SPEND = "LiteLLM_OrganizationTable"
+    ORGANIZATION_MEMBER_SPEND = "LiteLLM_OrganizationMembership"
+    END_USER_SPEND = "LiteLLM_EndUserTable"
+    TAG_SPEND = "LiteLLM_TagTable"
+    PROJECT_SPEND = "LiteLLM_ProjectTable"
+    MODEL_ACCESS_GROUP_SPEND = "LiteLLM_ModelAccessGroupBudgetTable"
+    BUDGET_SPEND = "LiteLLM_BudgetTable"
+    BUDGET_WINDOW_SPEND = "LiteLLM_BudgetWindowSpend"
+    DAILY_USER_SPEND = "LiteLLM_DailyUserSpend"
+    DAILY_TEAM_SPEND = "LiteLLM_DailyTeamSpend"
+    DAILY_ORGANIZATION_SPEND = "LiteLLM_DailyOrganizationSpend"
+    DAILY_END_USER_SPEND = "LiteLLM_DailyEndUserSpend"
+    DAILY_AGENT_SPEND = "LiteLLM_DailyAgentSpend"
+    DAILY_TAG_SPEND = "LiteLLM_DailyTagSpend"
+    DAILY_MODEL_USAGE = "LiteLLM_DailyModelUsage"
+    DAILY_TOOL_SPEND = "LiteLLM_DailyToolSpend"
+    AUTOROUTER_DAILY_SPEND = "LiteLLM_AutoRouterDailySpend"
 
 
 class Metric(BaseModel):
@@ -162,6 +204,78 @@ class OutboundUsageEvent(BaseModel):
         return self
 
 
+class Rate(BaseModel):
+    model_config = _CONFIG
+
+    token_type: Literal["input", "output", "cache_read", "cache_creation", "reasoning"]
+    usd_per_token: Quantity
+
+
+class Multiplier(BaseModel):
+    """A regional or tier factor applied on top of the priced key, e.g. data_residency=eu or vertex_location=us-east5."""
+
+    model_config = _CONFIG
+
+    name: Identifier
+    value: Identifier
+    factor: Annotated[Decimal, Field(strict=True, gt=0, allow_inf_nan=False)]
+
+
+class NamedCost(BaseModel):
+    """A free-form extra charge by name, e.g. azure_model_router_flat_cost."""
+
+    model_config = _CONFIG
+
+    name: Identifier
+    amount: Quantity
+
+
+class PricingSnapshot(BaseModel):
+    """Everything the compiler used to price one usage event, so the charge can be reproduced after rates change.
+
+    Component and adjustment names match ``litellm.types.utils.CostBreakdown``. Components are not required to
+    sum to ``total_cost``: today's values originate as floats and tolerance checks belong to reconciliation.
+    """
+
+    model_config = _CONFIG
+
+    schema_version: Literal[1] = 1
+    calculator_version: Identifier
+    model: Identifier
+    provider: Identifier | None
+    pricing_source: Literal["cost_map", "deployment", "per_request", "upstream_header"]
+    priced_model_key: Identifier
+    multipliers: tuple[Multiplier, ...] = ()
+    rates: tuple[Rate, ...] = ()
+    usage: Metrics = ()
+    input_cost: Quantity | None = None
+    output_cost: Quantity | None = None
+    cache_read_cost: Quantity | None = None
+    cache_creation_cost: Quantity | None = None
+    reasoning_cost: Quantity | None = None
+    tool_usage_cost: Quantity | None = None
+    guardrail_cost: Quantity | None = None
+    additional_costs: tuple[NamedCost, ...] = ()
+    original_cost: Quantity | None = None
+    discount_percent: Quantity | None = None
+    discount_amount: Quantity | None = None
+    margin_percent: Quantity | None = None
+    margin_fixed_amount: Quantity | None = None
+    margin_total_amount: Quantity | None = None
+    upstream_reported_cost: Quantity | None = None
+    total_cost: Quantity
+
+    @model_validator(mode="after")
+    def validate_snapshot(self) -> Self:
+        if len(frozenset(rate.token_type for rate in self.rates)) != len(self.rates):
+            raise ValueError("Duplicate rate token types")
+        if len(frozenset(cost.name for cost in self.additional_costs)) != len(self.additional_costs):
+            raise ValueError("Duplicate additional cost names")
+        if any(metric.name in _CALLER_METRICS or metric.name is MetricName.SPEND for metric in self.usage):
+            raise ValueError("Snapshot usage holds only the token metrics that were priced")
+        return self
+
+
 class CostEvent(BaseModel):
     model_config = _CONFIG
 
@@ -170,6 +284,7 @@ class CostEvent(BaseModel):
     occurred_at: Instant
     dimensions: Dimensions
     charges: Metrics
+    snapshot: PricingSnapshot | None = None
 
     @model_validator(mode="after")
     def validate_charge(self) -> Self:
@@ -177,6 +292,8 @@ class CostEvent(BaseModel):
             raise ValueError("A cost event requires one authoritative USD spend metric")
         if self.event_id == self.usage_event_id:
             raise ValueError("Cost and usage events require distinct identities")
+        if self.snapshot is not None and self.snapshot.total_cost != self.charges[0].value:
+            raise ValueError("Snapshot total must equal the authoritative spend")
         return self
 
 
