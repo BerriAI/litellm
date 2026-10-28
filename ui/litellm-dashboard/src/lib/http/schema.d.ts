@@ -23366,9 +23366,10 @@ export interface paths {
          *         -H "Authorization: Bearer sk-..." \
          *         -H "Content-Type: application/json" \
          *         -d '{
-         *             "name": "my-custom-slides-agent",
-         *             "base_agent": "waverunner",
-         *             "instructions": "You are a helpful assistant that creates slides.",
+         *             "id": "my-custom-slides-agent",
+         *             "base_agent": "antigravity-preview-09-2026",
+         *             "system_instruction": "You are a helpful assistant that creates slides.",
+         *             "agent_config": {"type": "antigravity", "model": "gemini-3.8-flash"},
          *             "base_environment": {
          *                 "type": "remote",
          *                 "sources": [
@@ -59856,6 +59857,8 @@ export interface operations {
                 purpose?: string | null;
                 limit?: number | null;
                 after?: string | null;
+                after_id?: string | null;
+                before_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -79052,6 +79055,8 @@ export interface operations {
                 purpose?: string | null;
                 limit?: number | null;
                 after?: string | null;
+                after_id?: string | null;
+                before_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -86387,6 +86392,8 @@ export interface operations {
                 purpose?: string | null;
                 limit?: number | null;
                 after?: string | null;
+                after_id?: string | null;
+                before_id?: string | null;
             };
             header?: never;
             path: {
