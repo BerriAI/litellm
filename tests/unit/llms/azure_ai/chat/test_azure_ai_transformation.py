@@ -1100,7 +1100,7 @@ def test_map_azure_model_group(model_group_header, expected_model):
     assert config._map_azure_model_group(model_group_header) == expected_model
 
 
-def test_azure_ai_sends_file_parts_instead_of_flattening_them_to_text():
+def test_azure_ai_sends_file_parts_instead_of_flattening_them_to_text() -> None:
     file_part: Final = {
         "type": "file",
         "file": {"filename": "document.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
@@ -1118,7 +1118,7 @@ def test_azure_ai_sends_file_parts_instead_of_flattening_them_to_text():
     assert request["messages"] == [{"role": "user", "content": content}]
 
 
-def test_azure_ai_passes_dict_message_content_through_for_the_provider_to_judge():
+def test_azure_ai_passes_dict_message_content_through_for_the_provider_to_judge() -> None:
     content: Final = {"type": "text", "text": "Say hi"}
 
     request: Final = AzureAIStudioConfig().transform_request(
@@ -1140,7 +1140,7 @@ def test_azure_ai_passes_dict_message_content_through_for_the_provider_to_judge(
     ],
     ids=["text_data_url", "file_id_only"],
 )
-def test_azure_ai_flattens_a_non_pdf_file_part_to_its_text_as_before(file: dict[str, str]):
+def test_azure_ai_flattens_a_non_pdf_file_part_to_its_text_as_before(file: dict[str, str]) -> None:
     request: Final = AzureAIStudioConfig().transform_request(
         model="Llama-3.3-70B-Instruct",
         messages=[{"role": "user", "content": [{"type": "text", "text": "summarize"}, {"type": "file", "file": file}]}],

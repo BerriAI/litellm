@@ -5275,9 +5275,11 @@ def test_eager_input_streaming_tool_reaches_bedrock_converse_as_beta():
     ("title", "expected_filename"),
     [(None, "document.pdf"), ("Quarterly report", "Quarterly report")],
 )
-def test_user_pdf_document_reaches_openai_compatible_providers_as_file_part(title, expected_filename):
-    document = _base64_pdf_block() | ({"title": title} if title else {})
-    request_messages = _run_chat_completions_pipeline(
+def test_user_pdf_document_reaches_openai_compatible_providers_as_file_part(
+    title: str | None, expected_filename: str
+) -> None:
+    document: Final = _base64_pdf_block() | ({"title": title} if title else {})
+    request_messages: Final = _run_chat_completions_pipeline(
         [
             AnthropicMessagesUserMessageParam(
                 role="user",

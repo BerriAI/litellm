@@ -6,6 +6,8 @@ annotation chunk, losing any annotations that arrived in later chunks.
 This fix merges annotations from ALL chunks.
 """
 
+from typing import Final
+
 from litellm import stream_chunk_builder
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
@@ -191,13 +193,13 @@ def test_stream_chunk_builder_no_annotations():
     assert not hasattr(message, "annotations") or message.annotations is None
 
 
-def test_stream_chunk_builder_moves_typed_provider_annotations_like_non_streaming():
-    url_citation = {
+def test_stream_chunk_builder_moves_typed_provider_annotations_like_non_streaming() -> None:
+    url_citation: Final = {
         "type": "url_citation",
         "url_citation": {"url": "https://example.com", "title": "Example", "start_index": 0, "end_index": 5},
     }
-    file_annotation = {"type": "file", "file": {"hash": "abc123", "name": "report.pdf"}}
-    chunks = [
+    file_annotation: Final = {"type": "file", "file": {"hash": "abc123", "name": "report.pdf"}}
+    chunks: Final = [
         ModelResponseStream(
             id="chatcmpl-test",
             created=1700000000,
@@ -226,9 +228,9 @@ def test_stream_chunk_builder_moves_typed_provider_annotations_like_non_streamin
         ),
     ]
 
-    response = stream_chunk_builder(chunks=chunks)
+    response: Final = stream_chunk_builder(chunks=chunks)
     assert response is not None
 
-    message = response["choices"][0]["message"]
+    message: Final = response["choices"][0]["message"]
     assert message.annotations == [url_citation]
     assert message.provider_specific_fields == {"region": "eu", "annotations": [file_annotation]}

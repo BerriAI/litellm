@@ -3006,7 +3006,7 @@ def _message_with_annotations(annotations: list[dict[str, object]]) -> Message:
     ).choices[0].message
 
 
-def test_annotations_typed_other_than_url_citation_move_to_provider_specific_fields():
+def test_annotations_typed_other_than_url_citation_move_to_provider_specific_fields() -> None:
     untyped_annotation: Final = {"start_index": 0, "end_index": 4}
     message: Final = _message_with_annotations([_URL_CITATION, untyped_annotation, _FILE_ANNOTATION])
 
@@ -3014,7 +3014,7 @@ def test_annotations_typed_other_than_url_citation_move_to_provider_specific_fie
     assert message.provider_specific_fields["annotations"] == [_FILE_ANNOTATION]
 
 
-def test_url_citation_annotations_keep_provider_keys():
+def test_url_citation_annotations_keep_provider_keys() -> None:
     message: Final = _message_with_annotations([_URL_CITATION])
 
     assert message.annotations == [_URL_CITATION]

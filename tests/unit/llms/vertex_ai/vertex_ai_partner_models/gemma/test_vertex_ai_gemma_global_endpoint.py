@@ -13,6 +13,7 @@ These tests verify that:
 
 import json
 import os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -425,9 +426,9 @@ async def test_vertex_ai_gemma_vision_passthrough():
 
 
 @pytest.mark.asyncio
-async def test_vertex_ai_gemma_pdf_file_part_is_sent_as_image_url():
-    pdf_data_url = "data:application/pdf;base64,JVBERi0xLjQKJcfsj6IKMSAwIG9iago8PD4+CmVuZG9iagp0cmFpbGVyCjw8Pj4KJSVFT0YK"
-    messages = [
+async def test_vertex_ai_gemma_pdf_file_part_is_sent_as_image_url() -> None:
+    pdf_data_url: Final = "data:application/pdf;base64,JVBERi0xLjQKJcfsj6IKMSAwIG9iago8PD4+CmVuZG9iagp0cmFpbGVyCjw8Pj4KJSVFT0YK"
+    messages: Final = [
         {
             "role": "user",
             "content": [
@@ -437,12 +438,12 @@ async def test_vertex_ai_gemma_pdf_file_part_is_sent_as_image_url():
         }
     ]
 
-    mock_response = MagicMock()
+    mock_response: Final = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {}
     mock_response.json.return_value = _MOCK_RESPONSE_JSON
 
-    mock_vertexai = MagicMock()
+    mock_vertexai: Final = MagicMock()
     mock_vertexai.preview = MagicMock()
 
     with (
@@ -465,8 +466,8 @@ async def test_vertex_ai_gemma_pdf_file_part_is_sent_as_image_url():
             vertex_ai_project="test-project",
         )
 
-        body = json.loads(mock_http_handler.return_value.post.call_args.kwargs["data"])
-        user_msg = next(m for m in body["messages"] if m["role"] == "user")
+        body: Final = json.loads(mock_http_handler.return_value.post.call_args.kwargs["data"])
+        user_msg: Final = next(m for m in body["messages"] if m["role"] == "user")
         assert user_msg["content"] == [
             {"type": "text", "text": "What does the PDF say?"},
             {"type": "image_url", "image_url": {"url": pdf_data_url}},
