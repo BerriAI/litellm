@@ -3,13 +3,10 @@ import hashlib
 import json
 import os
 import re
-import threading
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import closing
-from dataclasses import dataclass, field
-from functools import lru_cache
 from types import MappingProxyType
-from typing import Final, Generic, Literal, NamedTuple, ParamSpec, TypeVar, cast
+from typing import Final, Literal, NamedTuple, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -20,6 +17,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.litellm_core_utils.single_flight import SingleFlight, single_flight_lru_cache
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -34,32 +32,6 @@ from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
 _LAST_OPENAI_PATH_SEGMENT: Final = re.compile(r"^(.*/openai)(?=/|$)")
-
-_P: Final = ParamSpec("_P")
-_R: Final = TypeVar("_R")
-
-
-@dataclass(frozen=True, slots=True)
-class _SingleFlightCache(Generic[_P, _R]):
-    cached: Callable[..., _R]
-    clear: Callable[[], None]
-    lock: threading.Lock = field(default_factory=threading.Lock)
-
-    def __call__(
-        self,
-        *args: _P.args,
-        **kwargs: _P.kwargs,  # kwargs-ok: forwarded verbatim to the cached builder, typed by its own signature
-    ) -> _R:
-        with self.lock:
-            return self.cached(*args, **kwargs)
-
-    def cache_clear(self) -> None:
-        self.clear()
-
-
-def _single_flight_lru_cache(build: Callable[_P, _R]) -> _SingleFlightCache[_P, _R]:
-    cached: Final = lru_cache(maxsize=128)(build)
-    return _SingleFlightCache[_P, _R](cached, cached.cache_clear)
 
 
 class _AzureAdTokenJson(TypedDict, total=False):
@@ -123,7 +95,7 @@ def process_azure_headers(headers: httpx.Headers | dict) -> dict:
     return {**llm_response_headers, **openai_headers}
 
 
-@_single_flight_lru_cache
+@single_flight_lru_cache
 def _cached_entra_id_token_provider(
     tenant_id: str,
     client_id: str,
@@ -141,7 +113,7 @@ def _cached_entra_id_token_provider(
     return single_flight_bearer_token_provider(ClientSecretCredential(tenant_id, client_id, client_secret), scope)
 
 
-@_single_flight_lru_cache
+@single_flight_lru_cache
 def _cached_username_password_token_provider(
     client_id: str,
     azure_username: str,
@@ -158,7 +130,7 @@ def _cached_username_password_token_provider(
     return single_flight_bearer_token_provider(credential, scope)
 
 
-@_single_flight_lru_cache
+@single_flight_lru_cache
 def _cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
     return get_azure_ad_token_provider(azure_scope=scope)
 
@@ -269,6 +241,58 @@ def get_azure_ad_token_from_username_password(
     return token_provider
 
 
+@single_flight_lru_cache
+def _oidc_token_exchange(cache_key: str) -> SingleFlight[str]:
+    return SingleFlight()
+
+
+def _cached_oidc_token(cache_key: str) -> str | None:
+    cached: Final = azure_ad_cache.get_cache(cache_key)
+    return cached if isinstance(cached, str) else None
+
+
+def _exchange_oidc_token(cache_key: str, token_url: str, client_id: str, scope: str, oidc_token: str) -> str:
+    cached_access_token: Final = _cached_oidc_token(cache_key)
+    if cached_access_token is not None:
+        return cached_access_token
+
+    with closing(HTTPHandler(timeout=litellm.request_timeout)) as client:
+        req_token: Final = client.post(
+            token_url,
+            data={
+                "client_id": client_id,
+                "grant_type": "client_credentials",
+                "scope": scope,
+                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                "client_assertion": oidc_token,
+            },
+        )
+
+    if req_token.status_code != 200:
+        raise AzureOpenAIError(
+            status_code=req_token.status_code,
+            message=req_token.text,
+        )
+
+    azure_ad_token_json: Final[_AzureAdTokenJson] = req_token.json()
+    azure_ad_token_access_token: Final = azure_ad_token_json.get("access_token", None)
+    azure_ad_token_expires_in: Final = azure_ad_token_json.get("expires_in", None)
+
+    if azure_ad_token_access_token is None:
+        raise AzureOpenAIError(status_code=422, message="Azure AD Token access_token not returned")
+
+    if azure_ad_token_expires_in is None:
+        raise AzureOpenAIError(status_code=422, message="Azure AD Token expires_in not returned")
+
+    azure_ad_cache.set_cache(
+        key=cache_key,
+        value=azure_ad_token_access_token,
+        ttl=azure_ad_token_expires_in,
+    )
+
+    return azure_ad_token_access_token
+
+
 def get_azure_ad_token_from_oidc(
     azure_ad_token: str,
     azure_client_id: str | None = None,
@@ -315,45 +339,19 @@ def get_azure_ad_token_from_oidc(
         }
     )
 
-    azure_ad_token_access_token = azure_ad_cache.get_cache(azure_ad_token_cache_key)
-    if azure_ad_token_access_token is not None:
-        return azure_ad_token_access_token
+    cached_access_token: Final = _cached_oidc_token(azure_ad_token_cache_key)
+    if cached_access_token is not None:
+        return cached_access_token
 
-    with closing(HTTPHandler(timeout=litellm.request_timeout)) as client:
-        req_token: Final = client.post(
-            f"{azure_authority_host}/{azure_tenant_id}/oauth2/v2.0/token",
-            data={
-                "client_id": azure_client_id,
-                "grant_type": "client_credentials",
-                "scope": scope,
-                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-                "client_assertion": oidc_token,
-            },
+    return _oidc_token_exchange(azure_ad_token_cache_key).run(
+        lambda: _exchange_oidc_token(
+            azure_ad_token_cache_key,
+            token_url=f"{azure_authority_host}/{azure_tenant_id}/oauth2/v2.0/token",
+            client_id=azure_client_id,
+            scope=scope,
+            oidc_token=oidc_token,
         )
-
-    if req_token.status_code != 200:
-        raise AzureOpenAIError(
-            status_code=req_token.status_code,
-            message=req_token.text,
-        )
-
-    azure_ad_token_json: Final[_AzureAdTokenJson] = req_token.json()
-    azure_ad_token_access_token = azure_ad_token_json.get("access_token", None)
-    azure_ad_token_expires_in: Final = azure_ad_token_json.get("expires_in", None)
-
-    if azure_ad_token_access_token is None:
-        raise AzureOpenAIError(status_code=422, message="Azure AD Token access_token not returned")
-
-    if azure_ad_token_expires_in is None:
-        raise AzureOpenAIError(status_code=422, message="Azure AD Token expires_in not returned")
-
-    azure_ad_cache.set_cache(
-        key=azure_ad_token_cache_key,
-        value=azure_ad_token_access_token,
-        ttl=azure_ad_token_expires_in,
     )
-
-    return azure_ad_token_access_token
 
 
 def select_azure_base_url_or_endpoint(azure_client_params: dict):

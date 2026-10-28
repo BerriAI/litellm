@@ -1,17 +1,17 @@
 import json
 import os
 import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from queue import SimpleQueue
 from typing import Final, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 
 import pytest
-from azure.core.credentials import AccessToken
+from azure.core.credentials import AccessToken, AccessTokenInfo, TokenRequestOptions
 from azure.core.exceptions import ClientAuthenticationError
 
 from litellm.secret_managers.get_azure_ad_token_provider import (
@@ -197,7 +197,7 @@ class TestGetAzureAdTokenProvider:
             tenant_id="test-tenant-id",
         )
         mock_get_bearer_token_provider.assert_called_once_with(
-            mock_credential_instance, "https://cognitiveservices.azure.com/.default"
+            ANY, "https://cognitiveservices.azure.com/.default"
         )
 
         # Test that the returned callable works
@@ -235,7 +235,7 @@ class TestGetAzureAdTokenProvider:
             client_id="test-client-id"
         )
         mock_get_bearer_token_provider.assert_called_once_with(
-            mock_credential_instance, "https://cognitiveservices.azure.com/.default"
+            ANY, "https://cognitiveservices.azure.com/.default"
         )
 
         # Test that the returned callable works
@@ -277,7 +277,7 @@ class TestGetAzureAdTokenProvider:
             certificate_path="/path/to/cert.pem",
         )
         mock_get_bearer_token_provider.assert_called_once_with(
-            mock_credential_instance, "https://cognitiveservices.azure.com/.default"
+            ANY, "https://cognitiveservices.azure.com/.default"
         )
 
         # Test that the returned callable works
@@ -321,7 +321,7 @@ class TestGetAzureAdTokenProvider:
             password="pwd4cert.pem",
         )
         mock_get_bearer_token_provider.assert_called_once_with(
-            mock_credential_instance, "https://cognitiveservices.azure.com/.default"
+            ANY, "https://cognitiveservices.azure.com/.default"
         )
 
         # Test that the returned callable works
@@ -355,7 +355,7 @@ class TestGetAzureAdTokenProvider:
         assert callable(result)
         mock_certificate_credential.assert_called_once_with()
         mock_get_bearer_token_provider.assert_called_once_with(
-            mock_credential_instance, "https://cognitiveservices.azure.com/.default"
+            ANY, "https://cognitiveservices.azure.com/.default"
         )
 
         # Test that the returned callable works
@@ -424,7 +424,7 @@ class TestGetAzureAdTokenProvider:
         assert callable(result)
         mock_default_azure_credential.assert_called_once_with()
         mock_get_bearer_token_provider.assert_called_once_with(
-            mock_credential_instance, "https://cognitiveservices.azure.com/.default"
+            ANY, "https://cognitiveservices.azure.com/.default"
         )
 
         # Test that the returned callable works
@@ -433,32 +433,104 @@ class TestGetAzureAdTokenProvider:
 
 
 _CONCURRENT_CALLERS: Final = 4
+_SCOPE: Final = "api://audit/.default"
+_YEAR_2100: Final = 4_102_444_800
+_LONG_EXPIRED: Final = 1
 
 
 @dataclass(frozen=True, slots=True)
 class _HeldCredential:
+    expires_on: int = _YEAR_2100
+    failure: Exception | None = None
     requests: SimpleQueue[tuple[str, ...]] = field(default_factory=SimpleQueue)
     everyone_asked: threading.Event = field(default_factory=threading.Event)
     release: threading.Event = field(default_factory=threading.Event)
 
-    def get_token(self, *scopes: str, **_: object) -> AccessToken:
+    def get_token_info(self, *scopes: str, options: TokenRequestOptions | None = None) -> AccessTokenInfo:
         self.requests.put(scopes)
         if self.requests.qsize() >= _CONCURRENT_CALLERS:
             self.everyone_asked.set()
         self.release.wait(5)
-        return AccessToken("shared-token", int(time.time()) + 3600)
+        if self.failure is not None:
+            raise self.failure
+        return AccessTokenInfo("shared-token", self.expires_on)
+
+
+def _call_together(provider: Callable[[], str], credential: _HeldCredential) -> tuple[Future[str], ...]:
+    start: Final = threading.Barrier(_CONCURRENT_CALLERS)
+
+    def call() -> str:
+        start.wait(5)
+        return provider()
+
+    with ThreadPoolExecutor(max_workers=_CONCURRENT_CALLERS) as pool:
+        calls: Final = tuple(pool.submit(call) for _ in range(_CONCURRENT_CALLERS))
+        assert credential.requests.get(timeout=5) == (_SCOPE,)
+        credential.everyone_asked.wait(0.5)
+        credential.release.set()
+    return calls
 
 
 def test_concurrent_cold_callers_share_one_token_request() -> None:
     credential: Final = _HeldCredential()
-    provider: Final = single_flight_bearer_token_provider(credential, "api://audit/.default")
+    provider: Final = single_flight_bearer_token_provider(credential, _SCOPE)
 
-    with ThreadPoolExecutor(max_workers=_CONCURRENT_CALLERS) as pool:
-        calls: Final = tuple(pool.submit(provider) for _ in range(_CONCURRENT_CALLERS))
-        assert credential.requests.get(timeout=5) == ("api://audit/.default",)
-        credential.everyone_asked.wait(0.5)
-        credential.release.set()
-        tokens: Final = tuple(call.result(timeout=5) for call in calls)
+    calls: Final = _call_together(provider, credential)
 
-    assert tokens == ("shared-token",) * _CONCURRENT_CALLERS
+    assert tuple(call.result() for call in calls) == ("shared-token",) * _CONCURRENT_CALLERS
     assert credential.requests.qsize() == 0
+
+
+def test_concurrent_callers_after_the_token_expired_share_one_token_request() -> None:
+    credential: Final = _HeldCredential(expires_on=_LONG_EXPIRED)
+    provider: Final = single_flight_bearer_token_provider(credential, _SCOPE)
+    credential.release.set()
+    provider()
+    credential.requests.get_nowait()
+    credential.release.clear()
+
+    calls: Final = _call_together(provider, credential)
+
+    assert tuple(call.result() for call in calls) == ("shared-token",) * _CONCURRENT_CALLERS
+    assert credential.requests.qsize() == 0
+
+
+def test_concurrent_cold_callers_share_one_failed_token_request() -> None:
+    credential: Final = _HeldCredential(failure=ClientAuthenticationError("Entra is down"))
+    provider: Final = single_flight_bearer_token_provider(credential, _SCOPE)
+
+    calls: Final = _call_together(provider, credential)
+
+    assert all(isinstance(call.exception(), ClientAuthenticationError) for call in calls)
+    assert credential.requests.qsize() == 0
+
+
+@dataclass(frozen=True, slots=True)
+class _SlowRefreshCredential:
+    requests: SimpleQueue[None] = field(default_factory=SimpleQueue)
+    refresh_started: threading.Event = field(default_factory=threading.Event)
+    release: threading.Event = field(default_factory=threading.Event)
+
+    def get_token_info(self, *_: str, options: TokenRequestOptions | None = None) -> AccessTokenInfo:
+        self.requests.put(None)
+        if self.requests.qsize() == 2:
+            self.refresh_started.set()
+            self.release.wait(5)
+        return AccessTokenInfo("valid-token", _YEAR_2100, refresh_on=_LONG_EXPIRED)
+
+
+def test_a_slow_refresh_leaves_other_callers_on_the_still_valid_token() -> None:
+    credential: Final = _SlowRefreshCredential()
+    provider: Final = single_flight_bearer_token_provider(credential, _SCOPE)
+    assert provider() == "valid-token"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        refresh: Final = pool.submit(provider)
+        assert credential.refresh_started.wait(5)
+        other_caller: Final = pool.submit(provider)
+        try:
+            assert other_caller.result(timeout=2) == "valid-token"
+        finally:
+            credential.release.set()
+
+    assert refresh.result() == "valid-token"

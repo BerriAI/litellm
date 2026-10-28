@@ -1,15 +1,18 @@
 import os
-import threading
+import time
 from collections.abc import Callable
+from dataclasses import dataclass
+from types import TracebackType
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.single_flight import SingleFlight
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
 )
 
 if TYPE_CHECKING:
-    from azure.core.credentials import TokenProvider
+    from azure.core.credentials import AccessTokenInfo, SupportsTokenInfo, TokenRequestOptions
 
 
 def infer_credential_type_from_environment() -> AzureCredentialType:
@@ -38,17 +41,44 @@ def infer_credential_type_from_environment() -> AzureCredentialType:
         return AzureCredentialType.DefaultAzureCredential
 
 
-def single_flight_bearer_token_provider(credential: "TokenProvider", scope: str) -> Callable[[], str]:
+@dataclass(slots=True)
+class _ExpiryWatchingCredential:
+    credential: "SupportsTokenInfo"
+    expires_on: int = 0
+
+    def get_token_info(self, *scopes: str, options: "TokenRequestOptions | None" = None) -> "AccessTokenInfo":
+        token: Final = self.credential.get_token_info(*scopes, options=options)
+        self.expires_on = token.expires_on
+        return token
+
+    def close(self) -> None:
+        self.credential.close()
+
+    def __enter__(self) -> "SupportsTokenInfo":
+        return self.credential.__enter__()
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.credential.__exit__(exc_type, exc_value, traceback)
+
+
+def single_flight_bearer_token_provider(credential: "SupportsTokenInfo", scope: str) -> Callable[[], str]:
     from azure.identity import get_bearer_token_provider
 
-    provider: Final = get_bearer_token_provider(credential, scope)
-    lock: Final = threading.Lock()
+    watched: Final = _ExpiryWatchingCredential(credential)
+    provider: Final = get_bearer_token_provider(watched, scope)
+    cold_fetch: Final[SingleFlight[str]] = SingleFlight()
 
-    def single_flight() -> str:
-        with lock:
+    def bearer_token() -> str:
+        if watched.expires_on > time.time():
             return provider()
+        return cold_fetch.run(provider)
 
-    return single_flight
+    return bearer_token
 
 
 def get_azure_ad_token_provider(
@@ -90,7 +120,7 @@ def get_azure_ad_token_provider(
         else None or os.environ.get("AZURE_CREDENTIAL") or infer_credential_type_from_environment()
     )
     verbose_logger.info("For Azure AD Token Provider, choosing credential type: %s", cred)
-    credential: TokenProvider | None = None
+    credential: SupportsTokenInfo | None = None
     if cred == AzureCredentialType.ClientSecretCredential:
         credential = ClientSecretCredential(
             client_id=os.environ["AZURE_CLIENT_ID"],

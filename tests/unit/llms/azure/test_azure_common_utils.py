@@ -2,11 +2,12 @@ import json
 import os
 import threading
 import traceback
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from queue import SimpleQueue
 from typing import Callable, Final, Optional
 from urllib.parse import parse_qs
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import httpx
 import pytest
@@ -1538,9 +1539,7 @@ def test_get_azure_ad_token_provider_with_default_azure_credential():
         mock_default_cred.assert_called_once_with()
 
         # Verify get_bearer_token_provider was called with the right parameters
-        mock_token_provider.assert_called_once_with(
-            mock_credential_instance, "https://cognitiveservices.azure.com/.default"
-        )
+        mock_token_provider.assert_called_once_with(ANY, "https://cognitiveservices.azure.com/.default")
 
         # Verify the returned token provider works
         token = token_provider()
@@ -2327,6 +2326,44 @@ def test_oidc_token_exchange_closes_its_own_http_client(monkeypatch: pytest.Monk
 
     assert token == "minted-for-workload-jwt"
     assert token_endpoint.closed
+
+
+def test_concurrent_oidc_callers_share_one_token_exchange(monkeypatch: pytest.MonkeyPatch) -> None:
+    callers: Final = 8
+    start: Final = threading.Barrier(callers)
+    exchanges: Final = SimpleQueue[None]()
+    everyone_exchanging: Final = threading.Event()
+    release: Final = threading.Event()
+
+    class HeldTokenEndpoint(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            exchanges.put(None)
+            if exchanges.qsize() >= callers:
+                everyone_exchanging.set()
+            release.wait(5)
+            return httpx.Response(200, json={"access_token": "exchanged-token", "expires_in": 3600})
+
+    monkeypatch.setattr(litellm, "sync_transport", HeldTokenEndpoint(), raising=False)
+    monkeypatch.setenv("AZURE_TEST_OIDC_BURST_ASSERTION", "burst-jwt")
+    tenant: Final = f"tenant-{uuid.uuid4().hex}"
+
+    def exchange() -> str:
+        start.wait(5)
+        return get_azure_ad_token_from_oidc(
+            azure_ad_token="os.environ/AZURE_TEST_OIDC_BURST_ASSERTION",
+            azure_client_id="client",
+            azure_tenant_id=tenant,
+        )
+
+    with ThreadPoolExecutor(max_workers=callers) as pool:
+        calls: Final = tuple(pool.submit(exchange) for _ in range(callers))
+        exchanges.get(timeout=5)
+        everyone_exchanging.wait(0.5)
+        release.set()
+        tokens: Final = tuple(call.result(timeout=5) for call in calls)
+
+    assert tokens == ("exchanged-token",) * callers
+    assert exchanges.qsize() == 0
 
 
 def test_evicting_an_azure_client_built_on_the_callers_session_leaves_it_open(monkeypatch):

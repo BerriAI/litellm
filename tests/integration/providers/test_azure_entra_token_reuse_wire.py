@@ -347,25 +347,33 @@ def test_concurrent_cold_requests_share_one_managed_identity_fetch(rig: _Rig, su
     ] * _HERD
 
 
+def _oidc_model(scenario: Scenario, rig: _Rig, audience: str) -> str:
+    return scenario.model(
+        model=f"azure/{_DEPLOYMENT}",
+        api_base=rig.edge,
+        api_key=None,
+        api_version=_DATED_API_VERSION,
+        azure_ad_token=f"oidc/azure/{audience}",
+        tenant_id=_TENANT,
+        client_id=_APP_CLIENT,
+    )
+
+
+def _exchanges(requests: tuple[Request, ...]) -> tuple[Request, ...]:
+    return tuple(request for request in requests if request.target.endswith(_EXCHANGE_SUFFIX))
+
+
 def test_an_oidc_federated_deployment_fetches_its_assertion_once_across_responses_calls(rig: _Rig) -> None:
     audience: Final = f"api://audit-oidc-{uuid.uuid4().hex}"
     with wire_server(_edge(_azure_openai), port=rig.port) as wire, rig.gateway.scenario() as scenario:
-        model: Final = scenario.model(
-            model=f"azure/{_DEPLOYMENT}",
-            api_base=rig.edge,
-            api_key=None,
-            api_version=_DATED_API_VERSION,
-            azure_ad_token=f"oidc/azure/{audience}",
-            tenant_id=_TENANT,
-            client_id=_APP_CLIENT,
-        )
+        model: Final = _oidc_model(scenario, rig, audience)
         key: Final = scenario.key()
         responses: Final = tuple(_post(_Surface.RESPONSES, rig.gateway, key, model) for _ in range(3))
         requests: Final = wire.drain()
 
     assert [response.status_code for response in responses] == [200] * 3, [r.text for r in responses]
     assert _identity_fetches(requests, audience) == 1
-    exchanges: Final = tuple(request for request in requests if request.target.endswith(_EXCHANGE_SUFFIX))
+    exchanges: Final = _exchanges(requests)
     assert [request.target for request in exchanges] == [f"/{_TENANT}{_EXCHANGE_SUFFIX}"]
     assert {name: values[-1] for name, values in parse_qs(exchanges[0].body.decode()).items()} == {
         "client_id": _APP_CLIENT,
@@ -377,6 +385,37 @@ def test_an_oidc_federated_deployment_fetches_its_assertion_once_across_response
     assert [call.headers.get("authorization") for call in _provider_calls(requests)] == [
         f"Bearer aad:{_identity_token(audience)}"
     ] * 3
+
+
+def test_concurrent_cold_oidc_requests_share_one_assertion_fetch_and_one_exchange(rig: _Rig) -> None:
+    audience: Final = f"api://audit-oidc-herd-{uuid.uuid4().hex}"
+    hold: Final = _Hold(audience)
+    with (
+        wire_server(_edge(_azure_openai, hold), port=rig.port) as wire,
+        rig.gateway.scenario() as scenario,
+        ThreadPoolExecutor(max_workers=_HERD) as pool,
+    ):
+        model: Final = _oidc_model(scenario, rig, audience)
+        key: Final = scenario.key()
+        calls: Final = tuple(pool.submit(_post, _Surface.RESPONSES, rig.gateway, key, model) for _ in range(_HERD))
+        try:
+            eventually(
+                hold.arrivals.qsize,
+                lambda arrived: arrived >= _HERD,
+                seconds=_HERD_WINDOW_SECONDS,
+                return_last_on_timeout=True,
+            )
+        finally:
+            hold.release.set()
+        responses: Final = tuple(call.result(timeout=_HOLD_SECONDS) for call in calls)
+        requests: Final = wire.drain()
+
+    assert [response.status_code for response in responses] == [200] * _HERD, [r.text for r in responses]
+    assert _identity_fetches(requests, audience) == 1
+    assert len(_exchanges(requests)) == 1
+    assert [call.headers.get("authorization") for call in _provider_calls(requests)] == [
+        f"Bearer aad:{_identity_token(audience)}"
+    ] * _HERD
 
 
 def _foundry(request: Request) -> Reply:
