@@ -66,6 +66,7 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     Field,
+    FieldSerializationInfo,
     NonNegativeInt,
     PrivateAttr,
     SerializerFunctionWrapHandler,
@@ -1616,7 +1617,9 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
 
     @field_serializer("output", mode="wrap")
     @classmethod
-    def _serialize_output_as_replayable(cls, value, handler: SerializerFunctionWrapHandler, _info):
+    def _serialize_output_as_replayable(
+        cls, value: builtins.object, handler: SerializerFunctionWrapHandler, _info: FieldSerializationInfo
+    ):
         """
         Drop the nulls the SDK types default in but providers never send: created_by on every output item
         (OpenAI rejects it when `output` is replayed as `input`), and status/content/encrypted_content on
