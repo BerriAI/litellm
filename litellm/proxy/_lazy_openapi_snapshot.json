@@ -3867,6 +3867,11 @@
               "default": 0.0,
               "title": "Spend",
               "type": "number"
+            },
+            "untracked_units": {
+              "default": 0,
+              "title": "Untracked Units",
+              "type": "integer"
             }
           },
           "title": "GuardrailSpendMetrics",

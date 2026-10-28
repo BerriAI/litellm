@@ -69,6 +69,7 @@ class GuardrailSpendMetrics(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     spend: float = 0.0
+    untracked_units: int = 0
 
 
 class GuardrailKeyMetric(LiteLLMBaseModel):

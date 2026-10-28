@@ -245,12 +245,20 @@ async def test_get_daily_activity_aggregated_model_group_rollups_fall_back_to_mo
         _clean(day)
 
 
-def _seed_guardrail_units(day: str, rows: Sequence[tuple[str, str, str, float | None]]) -> None:
-    for guardrail_id, api_key, usage_unit, cost in rows:
+def _seed_guardrail_units(day: str, rows: Sequence[tuple[str, str, str, float | None, int, int]]) -> None:
+    for guardrail_id, api_key, usage_unit, cost, units, untracked_units in rows:
         write_rows(
             'INSERT INTO "LiteLLM_DailyGuardrailUsageUnits" (guardrail_id, date, team_id, api_key, usage_unit,'
-            " units, cost, updated_at) VALUES (%s, %s, '', %s, %s, 1, %s, now())",
-            (guardrail_id, day, api_key, usage_unit, None if cost is None else str(cost)),
+            " units, cost, untracked_units, updated_at) VALUES (%s, %s, '', %s, %s, %s, %s, %s, now())",
+            (
+                guardrail_id,
+                day,
+                api_key,
+                usage_unit,
+                str(units),
+                None if cost is None else str(cost),
+                str(untracked_units),
+            ),
         )
 
 
@@ -286,12 +294,13 @@ async def test_get_daily_activity_aggregated_breaks_down_guardrail_spend(gateway
     _seed_guardrail_units(
         day,
         [
-            ("pii-filter", "key-a", "contentPolicyUnits", 0.10),
-            ("pii-filter", "key-a", "sensitiveInformationPolicyUnits", 0.05),
-            ("pii-filter", "key-b", "contentPolicyUnits", 0.20),
-            ("topic-filter", "key-a", "topicPolicyUnits", 0.01),
-            ("topic-filter", "key-b", "topicPolicyUnits", None),
-            ("pii-filter", "orphan-key", "contentPolicyUnits", 9.0),
+            ("pii-filter", "key-a", "contentPolicyUnits", 0.10, 5, 2),
+            ("pii-filter", "key-a", "sensitiveInformationPolicyUnits", 0.05, 1, 0),
+            ("pii-filter", "key-b", "contentPolicyUnits", 0.20, 1, 0),
+            ("pii-filter", "key-b", "legacyUnits", None, 7, 0),
+            ("topic-filter", "key-a", "topicPolicyUnits", 0.01, 1, 0),
+            ("topic-filter", "key-b", "topicPolicyUnits", None, 1, 0),
+            ("pii-filter", "orphan-key", "contentPolicyUnits", 9.0, 1, 0),
         ],
     )
     try:
@@ -301,15 +310,30 @@ async def test_get_daily_activity_aggregated_breaks_down_guardrail_spend(gateway
             "topic-filter": (pytest.approx(0.01), {"key-a": pytest.approx(0.01), "key-b": 0.0}),
         }
         api_keys: Final = object_value(everyone["api_keys"])
+        pii_filter: Final = object_value(object_value(everyone["guardrails"])["pii-filter"])
+        assert object_value(pii_filter["metrics"]) == {"spend": pytest.approx(0.35), "untracked_units": 9}
+        pii_api_keys: Final = object_value(pii_filter["api_key_breakdown"])
+        assert object_value(object_value(pii_api_keys["key-a"])["metrics"]) == {
+            "spend": pytest.approx(0.15),
+            "untracked_units": 2,
+        }
+        assert object_value(object_value(pii_api_keys["key-b"])["metrics"]) == {
+            "spend": pytest.approx(0.20),
+            "untracked_units": 7,
+        }
+
         assert object_value(everyone["guardrails"])["topic-filter"] == {
-            "metrics": {"spend": pytest.approx(0.01)},
+            "metrics": {"spend": pytest.approx(0.01), "untracked_units": 1},
             "metadata": {"guardrail_name": "topic-filter"},
             "api_key_breakdown": {
                 "key-a": {
-                    "metrics": {"spend": pytest.approx(0.01)},
+                    "metrics": {"spend": pytest.approx(0.01), "untracked_units": 0},
                     "metadata": object_value(api_keys["key-a"])["metadata"],
                 },
-                "key-b": {"metrics": {"spend": 0.0}, "metadata": object_value(api_keys["key-b"])["metadata"]},
+                "key-b": {
+                    "metrics": {"spend": 0.0, "untracked_units": 1},
+                    "metadata": object_value(api_keys["key-b"])["metadata"],
+                },
             },
         }
         assert object_value(object_value(object_value(everyone["models"])["gpt-5"])["metrics"])["spend"] == 3.0
@@ -322,6 +346,11 @@ async def test_get_daily_activity_aggregated_breaks_down_guardrail_spend(gateway
             "pii-filter": (pytest.approx(0.35), {"key-b": pytest.approx(0.20)}),
             "topic-filter": (pytest.approx(0.01), {"key-b": 0.0}),
         }
+        limited_pii_filter: Final = object_value(
+            object_value(_day_breakdown(gateway, day, api_key_limit="1")["guardrails"])["pii-filter"]
+        )
+        assert object_value(limited_pii_filter["metrics"])["untracked_units"] == 9
+        assert set(object_value(limited_pii_filter["api_key_breakdown"])) == {"key-b"}
         assert _guardrail_spend(_day_breakdown(gateway, day, model="gpt-5")) == {}
         assert _guardrail_spend(_day_breakdown(gateway, day, model="")) == _guardrail_spend(everyone)
     finally:
@@ -370,10 +399,10 @@ async def test_team_and_organization_activity_break_down_guardrail_spend_by_name
     _seed_guardrail_units(
         day,
         [
-            (db_guardrail_id, "key-a", "contentPolicyUnits", 0.10),
-            (db_guardrail_id, "key-b", "contentPolicyUnits", 0.20),
-            ("config-topic-filter", "key-a", "topicPolicyUnits", 0.05),
-            (db_guardrail_id, "orphan-key", "contentPolicyUnits", 9.0),
+            (db_guardrail_id, "key-a", "contentPolicyUnits", 0.10, 1, 0),
+            (db_guardrail_id, "key-b", "contentPolicyUnits", 0.20, 1, 0),
+            ("config-topic-filter", "key-a", "topicPolicyUnits", 0.05, 1, 0),
+            (db_guardrail_id, "orphan-key", "contentPolicyUnits", 9.0, 1, 0),
         ],
     )
     try:

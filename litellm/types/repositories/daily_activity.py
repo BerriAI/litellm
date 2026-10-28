@@ -175,6 +175,7 @@ class GuardrailSpendRow:
     guardrail_name: str
     api_key: str
     spend: float
+    untracked_units: int
 
 
 @dataclass(frozen=True, slots=True)

@@ -1021,11 +1021,15 @@ def _fold_entity_rollups_sync(
 
 def _guardrail_metric(day: DailySpendData, rows: Sequence[GuardrailSpendRow]) -> GuardrailMetric:
     return GuardrailMetric(
-        metrics=GuardrailSpendMetrics(spend=sum(row.spend for row in rows)),
+        metrics=GuardrailSpendMetrics(
+            spend=sum(row.spend for row in rows),
+            untracked_units=sum(row.untracked_units for row in rows),
+        ),
         metadata=GuardrailMetadata(guardrail_name=rows[0].guardrail_name),
         api_key_breakdown={
             row.api_key: GuardrailKeyMetric(
-                metrics=GuardrailSpendMetrics(spend=row.spend), metadata=day.breakdown.api_keys[row.api_key].metadata
+                metrics=GuardrailSpendMetrics(spend=row.spend, untracked_units=row.untracked_units),
+                metadata=day.breakdown.api_keys[row.api_key].metadata,
             )
             for row in rows
             if row.api_key in day.breakdown.api_keys

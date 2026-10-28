@@ -33252,6 +33252,11 @@ export interface components {
              * @default 0
              */
             spend: number;
+            /**
+             * Untracked Units
+             * @default 0
+             */
+            untracked_units: number;
         };
         /** GuardrailSubmissionItem */
         GuardrailSubmissionItem: {
