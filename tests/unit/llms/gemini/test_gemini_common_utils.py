@@ -1,13 +1,19 @@
+import contextlib
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+import respx
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.llms.gemini.common_utils import GeminiModelInfo, GoogleAIStudioTokenCounter
+from litellm.llms.gemini.common_utils import (
+    GeminiModelInfo,
+    GoogleAIStudioTokenCounter,
+    map_openai_image_params_to_gemini,
+)
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter as GeminiCountTokensHandler
 
@@ -153,6 +159,83 @@ async def test_google_ai_studio_count_tokens_answers_with_the_status_google_reje
     assert "Invalid function name" in (result.error_message or "")
 
 
+def _weather_tool_result_messages(text: JsonValue) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Paris"}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": [{"type": "text", "text": text}, {"type": "text", "text": "partly cloudy"}],
+                }
+            ],
+        },
+    ]
+
+
+_COUNT_TOKENS_URL: Final = "https://count-tokens.test/v1beta/models/gemini-2.5-flash:countTokens"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", (None, 5))
+async def test_google_ai_studio_count_tokens_rejects_a_non_string_tool_result_text_without_request(
+    text: JsonValue, respx_mock: respx.MockRouter
+) -> None:
+    count_route: Final = respx_mock.post(_COUNT_TOKENS_URL).respond(200, json={"totalTokens": 11})
+
+    result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+        model_to_use="gemini-2.5-flash",
+        messages=_weather_tool_result_messages(text),
+        contents=None,
+        deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test"}},
+        request_model="gemini/gemini-2.5-flash",
+        messages_format="anthropic",
+    )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert result.error_message == "tool_result toolu_01 content.0.text: Input should be a valid string"
+    assert not count_route.called
+
+
+@pytest.mark.asyncio
+async def test_google_ai_studio_count_tokens_leaves_out_a_numeric_tool_result_text_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    count_route: Final = respx_mock.post(_COUNT_TOKENS_URL).respond(200, json={"totalTokens": 11})
+
+    result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+        model_to_use="gemini-2.5-flash",
+        messages=_weather_tool_result_messages(5),
+        contents=None,
+        deployment={
+            "litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test", "drop_params": True}
+        },
+        request_model="gemini/gemini-2.5-flash",
+        messages_format="anthropic",
+    )
+
+    assert result is not None
+    assert result.error is False
+    assert result.total_tokens == 11
+    assert _JSON_BODY.validate_json(count_route.calls.last.request.content)["contents"] == [
+        {"role": "user", "parts": [{"text": "What is the weather in Paris?"}]},
+        {"role": "model", "parts": [{"function_call": {"name": "get_weather", "args": {"city": "Paris"}}}]},
+        {
+            "role": "user",
+            "parts": [{"function_response": {"name": "get_weather", "response": {"content": "partly cloudy"}}}],
+        },
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("system_instruction", "tools", "expected_body"),
@@ -270,6 +353,25 @@ class TestGeminiModelInfo:
         ]
 
         assert result == expected
+
+
+@pytest.mark.parametrize(
+    ("body", "error", "message"),
+    [
+        ([], TypeError, "list indices must be integers or slices, not str"),
+        ({"models": None}, TypeError, "'NoneType' object is not iterable"),
+        ({"models": [{"name": 1}]}, AttributeError, "'int' object has no attribute 'replace'"),
+    ],
+)
+def test_get_models_malformed_listing_raises_the_error_of_the_failing_lookup(
+    body: JsonValue, error: type[Exception], message: str, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.get("https://models.test/v1beta/models").respond(200, json=body)
+
+    with pytest.raises(error, match=message) as raised:
+        GeminiModelInfo().get_models(api_key="test-key", api_base="https://models.test")
+
+    assert raised.type is error
 
 
 class TestGoogleAIStudioTokenCounter:
@@ -395,3 +497,22 @@ class TestGoogleAIStudioTokenCounter:
 
         # Verify the contents are unchanged
         assert cleaned_contents == contents_without_function_response
+
+
+def _map_image_config(raw_image_config: str) -> dict[str, object]:
+    return map_openai_image_params_to_gemini(
+        {"imageConfig": raw_image_config},
+        "gemini-3.1-flash-image",
+        ["imageConfig"],
+        parse_image_config_string=True,
+    )
+
+
+def test_map_openai_image_params_to_gemini_forwards_a_json_object_image_config():
+    assert _map_image_config('{"aspectRatio": "1:1"}') == {"imageConfig": {"aspectRatio": "1:1"}}
+
+
+@pytest.mark.parametrize("raw_image_config", ["[1, 2]", '"16:9"', "null"])
+def test_map_openai_image_params_to_gemini_drops_or_refuses_a_non_object_image_config(raw_image_config: str):
+    with contextlib.suppress(litellm.UnsupportedParamsError):
+        assert "imageConfig" not in _map_image_config(raw_image_config)

@@ -4,6 +4,8 @@ Test to verify the Google GenAI generate_content adapter functionality
 """
 
 import json
+from collections.abc import Iterator
+from typing import Final
 
 import pytest
 
@@ -286,3 +288,97 @@ def test_vertex_generate_content_routes_by_deployment_base_model(base_model, use
     )
 
     assert (setup.generate_content_provider_config is not None) is uses_native_api
+
+
+_UPLIFT_PROBE: Final = "gemini-regional-uplift-probe"
+_UPLIFT_INPUT_RATE: Final = 1e-06
+_UPLIFT_OUTPUT_RATE: Final = 2e-06
+_UPLIFT_MULTIPLIER: Final = 1.1
+
+
+@pytest.fixture
+def vertex_regional_uplift_rate_card(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    rates: Final = {
+        "input_cost_per_token": _UPLIFT_INPUT_RATE,
+        "output_cost_per_token": _UPLIFT_OUTPUT_RATE,
+        "mode": "chat",
+    }
+    monkeypatch.setitem(litellm.model_cost, _UPLIFT_PROBE, {**rates, "litellm_provider": "vertex_ai-language-models"})
+    monkeypatch.setattr(litellm, "vertex_language_models", {*litellm.vertex_language_models, _UPLIFT_PROBE})
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"vertex_ai/{_UPLIFT_PROBE}",
+        {
+            **rates,
+            "litellm_provider": "vertex_ai-language-models",
+            "regional_endpoint_uplift_multiplier": _UPLIFT_MULTIPLIER,
+        },
+    )
+    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+    monkeypatch.delenv("VERTEX_LOCATION", raising=False)
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
+async def _logged_vertex_generate_content_cost(location: str, *, stream: bool) -> float:
+    import asyncio
+    import datetime
+
+    from litellm.google_genai.main import GenerateContentHelper
+    from litellm.google_genai.streaming_iterator import BaseGoogleGenAIGenerateContentStreamingIterator
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.google_genai.main import GenerateContentResponse
+
+    reply: Final = {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 1, "totalTokenCount": 8},
+        "modelVersion": _UPLIFT_PROBE,
+    }
+    logging_obj: Final = Logging(
+        model=f"vertex_ai/{_UPLIFT_PROBE}",
+        messages=[],
+        stream=stream,
+        call_type="agenerate_content_stream" if stream else "agenerate_content",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="uplift-test",
+        function_id="uplift-test",
+    )
+    setup: Final = GenerateContentHelper.setup_generate_content_call(
+        model=f"vertex_ai/{_UPLIFT_PROBE}",
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        litellm_logging_obj=logging_obj,
+        vertex_location=location,
+        stream=stream,
+    )
+    if stream:
+        iterator: Final = BaseGoogleGenAIGenerateContentStreamingIterator(
+            litellm_logging_obj=logging_obj,
+            request_body={},
+            model=setup.model,
+            custom_llm_provider=setup.custom_llm_provider,
+        )
+        iterator.collected_chunks.append(f"data: {json.dumps(reply)}\n\n".encode())
+        await iterator._handle_async_streaming_logging()
+        await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
+    else:
+        logging_obj._process_hidden_params_and_response_cost(
+            GenerateContentResponse(**reply),
+            datetime.datetime(2026, 1, 1),
+            datetime.datetime(2026, 1, 1),
+            build_logging_payload=False,
+        )
+    return logging_obj.model_call_details["response_cost"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
+@pytest.mark.parametrize("location, multiplier", [("global", 1.0), ("us", _UPLIFT_MULTIPLIER)])
+async def test_vertex_generate_content_spend_follows_the_deployment_location(
+    vertex_regional_uplift_rate_card: None, stream: bool, location: str, multiplier: float
+) -> None:
+    expected: Final = (7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE) * multiplier
+
+    recorded: Final = await _logged_vertex_generate_content_cost(location, stream=stream)
+
+    assert recorded == pytest.approx(expected), (location, stream)

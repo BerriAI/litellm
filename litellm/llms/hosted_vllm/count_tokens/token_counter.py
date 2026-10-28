@@ -6,6 +6,7 @@ consumes for the same prompt, including image blocks the local estimator only ap
 """
 
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -14,6 +15,11 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
+from litellm.llms.anthropic.count_tokens.transformation import (
+    AnthropicCountFields,
+    ChatCountTranslationError,
+    anthropic_count_fields,
+)
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
@@ -71,9 +77,28 @@ class HostedVLLMTokenCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat = "anthropic",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         if not messages:
             return None
+
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        translated: Final = await anthropic_count_fields(
+            model_to_use, messages, system, tools, messages_format, AnthropicConfig(), chat_params
+        )
+        if isinstance(translated, ChatCountTranslationError):
+            return translated.response(request_model, model_to_use, "hosted_vllm_api")
+        counted: Final = (
+            translated
+            if isinstance(translated, AnthropicCountFields)
+            else AnthropicCountFields(
+                messages=tuple(messages),
+                system=system,
+                tools=None if tools is None else tuple(tools),
+                options=MappingProxyType({}),
+            )
+        )
 
         deployment_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
         api_base: Final = None if deployment_params is None else deployment_params.get("api_base")
@@ -84,11 +109,12 @@ class HostedVLLMTokenCounter(BaseTokenCounter):
         try:
             result: Final = await hosted_vllm_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
-                messages=[dict(message) for message in messages],
+                messages=[dict(message) for message in counted.messages],
                 auth_header=_auth_header(api_key),
                 api_base=api_base,
-                tools=None if tools is None else [dict(tool) for tool in tools],
-                system=system,
+                tools=None if counted.tools is None else [dict(tool) for tool in counted.tools],
+                system=counted.system,
+                optional_params=counted.options,
             )
         except AnthropicError as e:
             if _is_absent_endpoint_error(e.status_code, str(e.message)):
