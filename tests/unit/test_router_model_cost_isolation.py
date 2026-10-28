@@ -20,7 +20,7 @@ import sys
 import threading
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, cast
+from typing import Final, Literal, cast
 from unittest.mock import Mock, patch
 
 import httpx
@@ -860,6 +860,61 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
         assert bridge_model_info["mode"] == "responses"
     finally:
         _restore_model_cost_entries(model_keys)
+
+
+@pytest.mark.parametrize(
+    "mode",
+    (
+        "audio_speech", "audio_transcription", "chat", "completion", "container",
+        "decisions", "embedding", "evaluation", "extraction", "guardrail",
+        "image_edit", "image_generation", "moderation", "ocr", "realtime",
+        "rerank", "responses", "search", "vector_store", "video_generation",
+    ),
+)
+@pytest.mark.parametrize("registration_path", ("startup", "add", "reload"))
+@pytest.mark.parametrize("ignore_invalid_deployments", (False, True))
+def test_bedrock_profile_keeps_deployments_and_prices_for_catalog_modes(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    registration_path: Literal["startup", "add", "reload"],
+    ignore_invalid_deployments: bool,
+) -> None:
+    base_model: Final = "cohere.rerank-mode-test"
+    deployment_id: Final = f"catalog-mode-{mode}"
+    custom_price: Final = 0.00175
+    catalog_row: Final = {
+        "litellm_provider": "bedrock",
+        "mode": mode,
+        "input_cost_per_query": 0.01,
+        "output_cost_per_token": 0.02,
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, base_model: dict(catalog_row)})
+    deployment: Final = Deployment(
+        model_name="profile-priced",
+        litellm_params=LiteLLM_Params(
+            model="bedrock/arn:aws:bedrock:eu-central-1::foundation-model/cohere.rerank-v3-5:0",
+            model_id="arn:aws:bedrock:eu-central-1:123456789012:application-inference-profile/test",
+            aws_region_name="eu-central-1",
+            aws_access_key_id="unit-test-key",
+            aws_secret_access_key="unit-test-secret",
+        ),
+        model_info=ModelInfo(id=deployment_id, base_model=base_model, input_cost_per_query=custom_price),
+    )
+    router: Final = Router(
+        model_list=[] if registration_path == "add" else [deployment.to_json(exclude_none=True)],
+        ignore_invalid_deployments=ignore_invalid_deployments,
+    )
+    if registration_path == "add":
+        router.add_deployment(deployment)
+    elif registration_path == "reload":
+        _simulate_price_data_reload({base_model: dict(catalog_row)})
+
+    assert len(router.model_list) == 1
+    assert router.has_model_id(deployment_id)
+    registered: Final = litellm.model_cost[deployment_id]
+    assert registered["input_cost_per_query"] == custom_price
+    assert registered["output_cost_per_token"] == catalog_row["output_cost_per_token"]
+    assert litellm.model_cost[base_model] == catalog_row
 
 
 @pytest.mark.parametrize("service_tier", ("default", "priority", "flex"))
