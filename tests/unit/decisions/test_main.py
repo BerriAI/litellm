@@ -578,8 +578,14 @@ async def test_unknown_provider_is_rejected_before_http(respx_mock: respx.MockRo
 
 
 @pytest.mark.asyncio
-async def test_provider_without_decisions_support_is_rejected_before_http(respx_mock: respx.MockRouter) -> None:
-    with pytest.raises(litellm.BadRequestError, match=r"Unknown Decisions provider 'anthropic'\. Supported providers"):
+async def test_provider_without_decisions_support_is_rejected_before_http(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    with pytest.raises(
+        litellm.BadRequestError, match=r"Unknown Decisions provider 'anthropic'\. Supported providers"
+    ) as error:
         await litellm.asystemone(
             model="anthropic/claude-sonnet-4-5",
             state="review",
@@ -587,6 +593,8 @@ async def test_provider_without_decisions_support_is_rejected_before_http(respx_
             api_key="caller-key",
         )
 
+    supported: Final = str(error.value).split("Supported providers: ", 1)[1].split(", ")
+    assert {"ollama", "ollama_chat"} <= set(supported)
     assert len(respx_mock.calls) == 0
 
 
@@ -1536,6 +1544,8 @@ _PROVIDERS_WHOSE_CHAT_MODELS_ALSO_DECIDE: Final = frozenset(
         LlmProviders.OPENROUTER.value,
         LlmProviders.HOSTED_VLLM.value,
         LlmProviders.LM_STUDIO.value,
+        LlmProviders.OLLAMA.value,
+        LlmProviders.OLLAMA_CHAT.value,
     }
 )
 _DEDICATED_DECIDER_PROVIDERS: Final[tuple[str, ...]] = tuple(
@@ -3909,6 +3919,185 @@ async def test_native_decisions_distinguishes_missing_usage_from_reported_zero(
         expected = litellm.completion_cost(completion_response=response)
         assert response._hidden_params["response_cost"] == pytest.approx(expected)
         assert (expected == 0) == (usage["input_tokens"] == usage["output_tokens"] == 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+@pytest.mark.parametrize("use_async", (True, False), ids=("asystemone", "systemone"))
+@pytest.mark.parametrize("api_base", ("http://ollama.local:11434", "http://ollama.local:11434/v1"))
+@pytest.mark.parametrize("api_key", (None, "fake-api-key"))
+async def test_ollama_systemone_preserves_questions_without_unrelated_or_placeholder_auth(
+    provider: str,
+    use_async: bool,
+    api_base: str,
+    api_key: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    monkeypatch.setattr(litellm, "api_key", "unrelated-global-key")
+    monkeypatch.setattr(litellm, "openai_key", "unrelated-global-openai-key")
+    route: Final = respx_mock.post("http://ollama.local:11434/v1/systemone").respond(json=_RESPONSE)
+    kwargs: Final = {
+        "model": f"{provider}/d3:4b",
+        "state": "review",
+        "questions": _QUESTIONS,
+        "api_base": api_base,
+        "api_key": api_key,
+    }
+
+    response: Final = await litellm.asystemone(**kwargs) if use_async else litellm.systemone(**kwargs)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "d3:4b",
+        "state": "review",
+        "questions": dict(_QUESTIONS),
+    }
+    assert "authorization" not in route.calls.last.request.headers
+    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+    assert response.answers["sentiment"].choice == "positive"
+    assert response.answers["severity"].score == 1
+    assert response.usage == DecisionsUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+@pytest.mark.parametrize("use_async", (True, False), ids=("adecisions", "decisions"))
+async def test_ollama_decisions_translates_openai_questions_and_answers(
+    provider: str, use_async: bool, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    route: Final = respx_mock.post("http://ollama.local:11434/v1/systemone").respond(json=_RESPONSE)
+    kwargs: Final = {
+        "model": f"{provider}/d3:4b",
+        "input": "review",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        "api_base": "http://ollama.local:11434/v1",
+    }
+
+    response: Final = await litellm.adecisions(**kwargs) if use_async else litellm.decisions(**kwargs)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "d3:4b",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert "authorization" not in route.calls.last.request.headers
+    assert response.answers[0].type == "predicate"
+    assert response.answers[0].name == "is_defect"
+    assert response.answers[0].probability == 0.9
+    assert response.usage is not None
+    assert response.usage.input_tokens == _INPUT_TOKENS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+@pytest.mark.parametrize("environment_base", (None, "http://ollama.local:11434/v1"))
+async def test_ollama_decisions_resolves_environment_base_or_localhost_default(
+    provider: str, environment_base: str | None, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    if environment_base is not None:
+        monkeypatch.setenv("OLLAMA_API_BASE", environment_base)
+    url: Final = f"{environment_base or 'http://localhost:11434/v1'}/systemone"
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
+
+    response: Final = await litellm.asystemone(model=f"{provider}/d3:4b", state="review", questions=_QUESTIONS)
+
+    assert route.call_count == 1
+    assert "authorization" not in route.calls.last.request.headers
+    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+@pytest.mark.parametrize("explicit_key", (None, "deployment-key"))
+async def test_ollama_decisions_resolves_environment_key_and_explicit_connection_overrides(
+    provider: str, explicit_key: str | None, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://ignored.local:11434")
+    monkeypatch.setenv("OLLAMA_API_KEY", "environment-key")
+    route: Final = respx_mock.post("http://ollama.local:11434/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.asystemone(
+        model=f"{provider}/d3:4b",
+        state="review",
+        questions=_QUESTIONS,
+        api_base="http://ollama.local:11434",
+        api_key=explicit_key,
+    )
+
+    assert route.calls.last.request.headers["authorization"] == f"Bearer {explicit_key or 'environment-key'}"
+    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+async def test_ollama_decisions_maps_upstream_bad_requests(
+    provider: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    route: Final = respx_mock.post("http://ollama.local:11434/v1/systemone").respond(
+        400, json={"error": "decision rejected"}
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="decision rejected") as error:
+        await litellm.asystemone(
+            model=f"{provider}/d3:4b",
+            state="review",
+            questions=_QUESTIONS,
+            api_base="http://ollama.local:11434",
+            num_retries=0,
+        )
+
+    assert error.value.status_code == 400
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+@pytest.mark.parametrize("drop_params", (False, True))
+@pytest.mark.parametrize("image", ("data:image/png;base64,AA==", "https://images.example/input.png"))
+async def test_ollama_decisions_rejects_input_images_before_http_or_drops_them(
+    provider: str, drop_params: bool, image: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    kwargs: Final = {
+        "model": f"{provider}/d3:4b",
+        "input": [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "review"}, {"type": "input_image", "image_url": image}],
+            }
+        ],
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        "api_base": "http://ollama.local:11434",
+        "drop_params": drop_params,
+    }
+    if not drop_params:
+        with pytest.raises(litellm.UnsupportedParamsError, match=r"\['input_image'\].*drop_params"):
+            await litellm.adecisions(**kwargs)
+        assert len(respx_mock.calls) == 0
+        return
+    route: Final = respx_mock.post("http://ollama.local:11434/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(**kwargs)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "d3:4b",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert response.answers[0].probability == 0.9
 
 
 @pytest.mark.asyncio
