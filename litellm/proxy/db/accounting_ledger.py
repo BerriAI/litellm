@@ -6,7 +6,7 @@ from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, assert_never
 
 from pydantic import AwareDatetime, ConfigDict, JsonValue, TypeAdapter
 
@@ -114,8 +114,8 @@ AND (root.kind = 'inbound_usage' OR EXISTS (
 ))
 AND NOT EXISTS (
     SELECT 1 FROM "LiteLLM_AccountingEvent" AS member
-    WHERE (member.event_id = root.event_id OR member.source_event_id = root.event_id)
-    AND (member.recorded_at >= $1::timestamp OR (member.source_event_id IS NOT NULL AND member.kind != 'cost')
+    WHERE (member.event_id = root.event_id OR (member.kind = 'cost' AND member.source_event_id = root.event_id))
+    AND (member.recorded_at >= $1::timestamp
         OR EXISTS (SELECT 1 FROM "LiteLLM_AccountingDelivery" AS delivery
             WHERE delivery.event_id = member.event_id AND delivery.state != 'applied'))
 )
@@ -130,22 +130,25 @@ _ELIGIBLE_GROUP: Final = (
 )
 _DELETE_DELIVERIES: Final = """
 DELETE FROM "LiteLLM_AccountingDelivery" WHERE event_id IN (
-    SELECT event_id FROM "LiteLLM_AccountingEvent" WHERE event_id = $1 OR source_event_id = $1
+    SELECT event_id FROM "LiteLLM_AccountingEvent" WHERE event_id = $1 OR (kind = 'cost' AND source_event_id = $1)
 )
 """
 _DELETE_EVENTS: Final = """
-DELETE FROM "LiteLLM_AccountingEvent" WHERE event_id = $1 OR source_event_id = $1
+DELETE FROM "LiteLLM_AccountingEvent" WHERE event_id = $1 OR (kind = 'cost' AND source_event_id = $1)
 """
 
 
-async def _accept(db: Prisma, record: _AcceptedEvent) -> Literal["inserted", "duplicate"]:
+_Conflict: TypeAlias = Literal["missing_source", "competing_cost", "identity_conflict"]
+
+
+async def _accept(db: Prisma, record: _AcceptedEvent) -> Literal["inserted", "duplicate"] | _Conflict:
     if record.source_event_id is not None:
         source: Final = _STRINGS.validate_python(await db.query_raw(_LOCK_SOURCE, record.source_event_id))
         if not source:
-            raise AccountingConflictError("Cost source must be a durably accepted outbound usage event")
+            return "missing_source"
         costs: Final = _STRINGS.validate_python(tuple(await db.query_raw(_EXISTING_COST, record.source_event_id)))
         if any(cost["event_id"] != record.event_id for cost in costs):
-            raise AccountingConflictError("Usage event already has an authoritative cost")
+            return "competing_cost"
     inserted: Final = _STRINGS.validate_python(
         await db.query_raw(
             _INSERT_EVENT,
@@ -161,7 +164,7 @@ async def _accept(db: Prisma, record: _AcceptedEvent) -> Literal["inserted", "du
     if not inserted:
         existing: Final = _STRINGS.validate_python(tuple(await db.query_raw(_LOCK_EVENT, record.event_id)))
         if not existing or existing[0]["payload_hash"] != record.payload_hash:
-            raise AccountingConflictError("Event identity conflicts with its accepted content or delivery set")
+            return "identity_conflict"
         return "duplicate"
     await db.execute_raw(_INSERT_DELIVERIES, record.event_id, _json(record.targets), record.version)
     return "inserted"
@@ -221,7 +224,17 @@ class AccountingLedger:
         record: Final = _prepare(event, targets, envelope, schema_version, version)
         async with self._transaction() as db:
             result: Final = await _accept(db, record)
-        return result
+        match result:
+            case "inserted" | "duplicate":
+                return result
+            case "missing_source":
+                raise AccountingConflictError("Cost source must be a durably accepted outbound usage event")
+            case "competing_cost":
+                raise AccountingConflictError("Usage event already has an authoritative cost")
+            case "identity_conflict":
+                raise AccountingConflictError("Event identity conflicts with its accepted content or delivery set")
+            case _:
+                assert_never(result)
 
     async def purge_completed(
         self,

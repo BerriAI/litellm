@@ -23,11 +23,12 @@ from litellm.accounting import (
     InboundUsageEvent,
     Metric,
     MetricName,
-    Outcome,
     OutboundUsageEvent,
+    Outcome,
     PricingSnapshot,
 )
-from litellm.proxy.db.accounting_ledger import AccountingConflictError, AccountingLedger
+from litellm.proxy.db import accounting_ledger
+from litellm.proxy.db.accounting_ledger import AccountingConflictError, AccountingEvent, AccountingLedger
 from litellm.types.utils import CallTypes
 from tests.integration._support.database import scratch_database
 from tests.integration._support.prisma_clients import connected_proxy_prisma
@@ -153,7 +154,7 @@ _CUTOFF = datetime(2026, 2, 1, tzinfo=timezone.utc)
 _TARGETS = (DeliveryTarget.USER_SPEND, DeliveryTarget.TEAM_SPEND)
 
 
-def _usage(event_id="usage", *, inbound=False):
+def _usage(event_id: str = "usage", *, inbound: bool = False) -> InboundUsageEvent | OutboundUsageEvent:
     fields = dict(
         event_id=event_id,
         request_id="request",
@@ -168,7 +169,7 @@ def _usage(event_id="usage", *, inbound=False):
     return OutboundUsageEvent(**fields, attempt_id=event_id, retry_of_attempt_id=None, metrics=None)
 
 
-def _cost(source="usage", event_id="cost", amount="0.125"):
+def _cost(source: str = "usage", event_id: str = "cost", amount: str = "0.125") -> CostEvent:
     return CostEvent(
         event_id=event_id,
         usage_event_id=source,
@@ -186,21 +187,23 @@ def _cost(source="usage", event_id="cost", amount="0.125"):
     )
 
 
-def _envelope(event, **context):
+def _envelope(event: AccountingEvent, **context: object) -> str:
     return json.dumps({"event": event.model_dump(mode="json"), "context": context})
 
 
-async def _insert(store, event, targets=_TARGETS, **context):
+async def _insert(
+    store: AccountingLedger, event: AccountingEvent, targets: tuple[DeliveryTarget, ...] = _TARGETS, **context: object
+) -> str:
     return await store.insert_event(event, targets, envelope=_envelope(event, **context))
 
 
-def _rows(database_url, statement, parameters=()):
+def _rows(database_url: str, statement: str, parameters: tuple[object, ...] = ()) -> list[tuple[object, ...]]:
     with psycopg.connect(database_url) as connection:
         cursor = connection.execute(statement, parameters)
         return cursor.fetchall() if cursor.description is not None else []
 
 
-def _complete_and_age(database_url):
+def _complete_and_age(database_url: str) -> None:
     with psycopg.connect(database_url) as connection:
         connection.execute('UPDATE "LiteLLM_AccountingEvent" SET recorded_at = %s', (_AT,))
         connection.execute("UPDATE \"LiteLLM_AccountingDelivery\" SET state = 'applied', applied_at = %s", (_AT,))
@@ -474,3 +477,25 @@ async def test_ledger_reads_and_writes_use_primary_when_replica_is_configured(wr
             _complete_and_age(ledger_database)
             assert await store.purge_completed(redelivery_before=_CUTOFF, recovery_before=_CUTOFF) == 2
         assert _rows(replica_url, "SELECT to_regclass('public.\"LiteLLM_AccountingEvent\"')") == [(None,)]
+
+
+def _index_conditions(plan: object) -> list[tuple[object, object]]:
+    if isinstance(plan, dict):
+        own = [(plan.get("Index Name"), plan.get("Index Cond"))] if "Index Name" in plan else []
+        children = [plan.get("Plan"), *plan.get("Plans", [])]
+        return own + [pair for child in children if child is not None for pair in _index_conditions(child)]
+    return [pair for item in plan for pair in _index_conditions(item)] if isinstance(plan, list) else []
+
+
+@pytest.mark.parametrize("statement", [accounting_ledger._DELETE_EVENTS, accounting_ledger._DELETE_DELIVERIES])
+def test_family_cleanup_lookups_use_the_kind_source_index(ledger_database: str, statement: str) -> None:
+    explained = "EXPLAIN (FORMAT JSON) " + statement.replace("$1", "%s")
+    with psycopg.connect(ledger_database) as connection:
+        connection.execute("SET enable_seqscan = off")
+        plan = connection.execute(explained, ("usage",) * statement.count("$1")).fetchone()
+    assert plan is not None
+    conditions = _index_conditions(plan[0])
+    assert any(
+        name == "LiteLLM_AccountingEvent_kind_source_event_id_idx" and "source_event_id" in str(condition)
+        for name, condition in conditions
+    ), conditions
