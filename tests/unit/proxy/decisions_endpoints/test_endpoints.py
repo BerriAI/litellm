@@ -126,6 +126,51 @@ def test_proxy_decisions_route_returns_answers_and_cost(
     assert upstream.calls[0].request.headers["authorization"] == "Bearer test-key"
 
 
+@pytest.mark.parametrize("endpoint", ("/v1/systemone", "/systemone"))
+@pytest.mark.parametrize("question_count", (128, 129, 154))
+def test_proxy_systemone_preserves_large_question_batches(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    question_count: int,
+) -> None:
+    questions: Final = {
+        f"q{index}": {"type": "noul", "instructions": f"Question {index}?"} for index in range(question_count)
+    }
+    answers: Final = {f"q{index}": {"type": "noul", "noul": index / question_count} for index in range(question_count)}
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(
+        json={**_RESPONSE, "answers": answers}
+    )
+
+    response: Final = client.post(endpoint, json={**_REQUEST, "questions": questions})
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        **_REQUEST,
+        "model": "pplx-decider-v1-27b",
+        "questions": questions,
+    }
+    assert response.json()["answers"] == answers
+
+
+@pytest.mark.parametrize("endpoint", ("/v1/systemone", "/systemone"))
+@pytest.mark.parametrize(
+    "questions",
+    ({}, {"": {"type": "noul", "instructions": "Is this a defect?"}}, {"is_defect": {"type": "noul"}}),
+    ids=("empty", "empty_name", "missing_instructions_or_criteria"),
+)
+def test_proxy_systemone_rejects_invalid_questions_before_http(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    questions: Mapping[str, object],
+) -> None:
+    response: Final = client.post(endpoint, json={**_REQUEST, "questions": questions})
+
+    assert response.status_code == 400, response.text
+    assert len(respx_mock.calls) == 0
+
+
 def test_proxy_decisions_dispatches_typesafe_deployment(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -1739,3 +1784,53 @@ def test_a_whole_number_request_size_limit_is_named_as_configured_in_the_413(
     assert response.status_code == 413, response.text
     assert response.json() == {"error": "Request size is too large. Max size is 1 MB"}
     assert not upstream.called
+
+
+@pytest.mark.parametrize("endpoint", ("/v1/systemone", "/v1/decisions"))
+@pytest.mark.parametrize("api_key", (None, "deployment-key"))
+def test_proxy_routes_lm_studio_decisions_with_optional_authentication(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    api_key: str | None,
+) -> None:
+    monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
+    deployment_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "local-decision",
+                "litellm_params": {
+                    "model": "lm_studio/served-decision",
+                    "api_base": "http://lmstudio.local:1234/v1",
+                    "api_key": api_key,
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", deployment_router)
+    upstream: Final = respx_mock.post("http://lmstudio.local:1234/v1/systemone").respond(json=_RESPONSE)
+    fields: Final = (
+        {"state": "review", "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}}
+        if endpoint.endswith("systemone")
+        else {
+            "input": "review",
+            "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        }
+    )
+
+    response: Final = client.post(endpoint, json={"model": "local-decision", **fields})
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls.last.request.content) == {
+        "model": "served-decision",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert upstream.calls.last.request.headers.get("authorization") == (f"Bearer {api_key}" if api_key else None)
+    expected: Final = (
+        _RESPONSE["answers"]
+        if endpoint.endswith("systemone")
+        else [{"type": "predicate", "name": "is_defect", "probability": 0.9}]
+    )
+    assert response.json()["answers"] == expected
