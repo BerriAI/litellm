@@ -56,6 +56,7 @@ import {
 } from "@/lib/decisionModels";
 import DecisionModelGarden from "@/components/AIHub/DecisionModelGarden";
 import { ModelCustomMetadata } from "./ModelCustomMetadata";
+import { ModelExtraPrices } from "./ModelExtraPrices";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -788,6 +789,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                         : "Not specified"}
                     </p>
                   </div>
+                  <ModelExtraPrices model={selectedModel} />
                 </div>
               </div>
 

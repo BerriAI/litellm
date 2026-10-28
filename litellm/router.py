@@ -80,6 +80,7 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
+from litellm.cost_calculator import raw_cost_map_entry
 from litellm.integrations.custom_guardrail import CustomGuardrail, is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
@@ -508,6 +509,12 @@ RouterStrategySelector: TypeAlias = (
     | LowestTPMLoggingHandler
     | LowestTPMLoggingHandler_v2
 )
+
+
+def _cost_map_prices(model_info: Mapping[str, object]) -> Mapping[str, float]:
+    cost_map_key: Final = model_info.get("key")
+    entry: Final = raw_cost_map_entry(cost_map_key) if isinstance(cost_map_key, str) else None
+    return model_info_prices(entry) if entry is not None else MappingProxyType({})
 
 
 def model_info_is_active_for_environment(model_info: Mapping[str, object] | None) -> bool:
@@ -12585,6 +12592,7 @@ class Router:
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
                         "description": model_group_description,
+                        **_cost_map_prices(model_info),
                         **model_info,
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
@@ -12619,14 +12627,7 @@ class Router:
                     )
                 ):
                     model_group_info.max_output_tokens = model_info["max_output_tokens"]
-                group_prices = model_group_info.prices
-                model_group_info = model_group_info.model_copy(
-                    update={
-                        key: price
-                        for key, price in model_info_prices(model_info).items()
-                        if key not in group_prices or price > group_prices[key]
-                    }
-                )
+                model_group_info = model_group_info.with_higher_prices({**_cost_map_prices(model_info), **model_info})
                 if (
                     model_info.get("supports_parallel_function_calling", None) is not None
                     and model_info["supports_parallel_function_calling"] is True

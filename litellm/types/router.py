@@ -4,6 +4,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+import math
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -69,9 +70,6 @@ from .utils import (
     MirroredPricingParams,
     ModelResponse,
     StandardLoggingRoutingDecision,
-)
-from .utils import (
-    ModelInfo as _CostMapModelInfo,
 )
 from .utils import (
     server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
@@ -976,11 +974,6 @@ def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
     return get_type_hints(model_class)
 
 
-_MODEL_INFO_PRICE_KEYS: Final[frozenset[str]] = frozenset(
-    key for key in _CostMapModelInfo.__required_keys__ | _CostMapModelInfo.__optional_keys__ if "cost" in key
-)
-
-
 _RAW_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -988,15 +981,14 @@ def price_as_float(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float | str):
         return None
     try:
-        return float(value)
+        price: Final = float(value)
     except ValueError:
         return None
+    return price if math.isfinite(price) else None
 
 
 def model_info_prices(model_info: Mapping[str, object]) -> Mapping[str, float]:
-    candidates: Final = (
-        (key, price_as_float(value)) for key, value in model_info.items() if key in _MODEL_INFO_PRICE_KEYS
-    )
+    candidates: Final = ((key, price_as_float(value)) for key, value in model_info.items() if "cost" in key)
     return MappingProxyType({key: price for key, price in candidates if price is not None})
 
 
@@ -1006,7 +998,7 @@ class ModelGroupClientsideAuthParam(ConfigurableClientsideParamsCustomAuth):
 
 
 class ModelGroupInfo(LiteLLMBaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", json_schema_extra={"additionalProperties": True})
     __pydantic_extra__: dict[str, float] = Field(init=False)  # pyright: ignore[reportIncompatibleVariableOverride]  # pydantic's documented way to type extras  # mutable-ok: pydantic only types extras via a dict
 
     model_group: str
@@ -1050,12 +1042,22 @@ class ModelGroupInfo(LiteLLMBaseModel):
         if not isinstance(data, Mapping):
             return data
         fields: Final = _RAW_FIELDS.validate_python(data)
-        declared: Final = {key: value for key, value in fields.items() if key in cls.model_fields}
-        return {**model_info_prices(fields), **declared}
+        declared: Final = {key: value for key, value in fields.items() if key in cls.model_fields and "cost" not in key}
+        return {**declared, **model_info_prices(fields)}
 
     @property
     def prices(self) -> Mapping[str, float]:
         return model_info_prices({**vars(self), **self.__pydantic_extra__})
+
+    def with_higher_prices(self, model_info: Mapping[str, object]) -> "ModelGroupInfo":
+        current: Final = self.prices
+        return self.model_copy(
+            update={
+                key: price
+                for key, price in model_info_prices(model_info).items()
+                if key not in current or price > current[key]
+            }
+        )
 
 
 class AssistantsTypedDict(TypedDict):

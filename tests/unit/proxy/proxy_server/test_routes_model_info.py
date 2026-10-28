@@ -973,7 +973,11 @@ def _serve_model_groups_from(router: litellm.Router, monkeypatch: pytest.MonkeyP
 
 @pytest.mark.parametrize(("team_id", "lists_batch"), [(None, False), ("team-a", True)])
 def test_model_group_info_lists_batch_only_to_the_team_that_owns_the_batch_deployment(
-    client, auth_as, monkeypatch, team_id: str | None, lists_batch: bool
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    team_id: str | None,
+    lists_batch: bool,
 ):
     from litellm.proxy._types import LitellmUserRoles
 
@@ -994,7 +998,7 @@ def test_model_group_info_lists_batch_only_to_the_team_that_owns_the_batch_deplo
 
 
 def test_model_group_info_reports_every_price_the_proxy_bills_at_the_highest_deployment_price(
-    client, auth_as, monkeypatch
+    client: TestClient, auth_as: Callable[..., AbstractContextManager[object]], monkeypatch: pytest.MonkeyPatch
 ):
     from litellm.proxy._types import LitellmUserRoles
 
@@ -1008,6 +1012,9 @@ def test_model_group_info_reports_every_price_the_proxy_bills_at_the_highest_dep
                     "output_cost_per_image": 0.5,
                     "output_cost_per_image_token": 2e-05,
                     "input_cost_per_token_priority": 6e-06,
+                    "output_cost_per_image_4K": 0.16,
+                    "output_cost_per_image_2K": "Infinity",
+                    "input_cost_per_token": "NaN",
                     "custom_tags": ["images"],
                 },
             },
@@ -1038,16 +1045,23 @@ def test_model_group_info_reports_every_price_the_proxy_bills_at_the_highest_dep
             "output_cost_per_image_token",
             "input_cost_per_token_priority",
             "input_cost_per_token_above_272k_tokens",
+            "output_cost_per_image_4K",
+            "output_cost_per_image_2K",
         )
     } == {
         "output_cost_per_image": 0.5,
         "output_cost_per_image_token": 4e-05,
         "input_cost_per_token_priority": 6e-06,
         "input_cost_per_token_above_272k_tokens": 8e-06,
+        "output_cost_per_image_4K": 0.16,
+        "output_cost_per_image_2K": None,
     }
+    assert group["input_cost_per_token"] is None
 
 
-def test_model_group_info_lists_only_the_api_base_of_a_clientside_auth_param(client, auth_as, monkeypatch):
+def test_model_group_info_lists_only_the_api_base_of_a_clientside_auth_param(
+    client: TestClient, auth_as: Callable[..., AbstractContextManager[object]], monkeypatch: pytest.MonkeyPatch
+):
     from litellm.proxy._types import LitellmUserRoles
 
     router: Final = litellm.Router(

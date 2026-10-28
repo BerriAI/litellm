@@ -909,7 +909,7 @@ def _bedrock_pricing_info(
 
 
 def cost_map_key_prices_anything(key: str) -> bool:
-    entry: Final = _raw_cost_map_entry(key)
+    entry: Final = raw_cost_map_entry(key)
     return entry is not None and _cost_map_entry_prices_anything(entry)
 
 
@@ -2358,7 +2358,7 @@ def _deployment_model_info(
 ) -> ModelInfo | None:
     if not custom_pricing:
         return None
-    registered_deployment_info: Final = _raw_cost_map_entry(router_model_id) if router_model_id is not None else None
+    registered_deployment_info: Final = raw_cost_map_entry(router_model_id) if router_model_id is not None else None
     if registered_deployment_info is not None:
         return cast(ModelInfo, registered_deployment_info)  # cast-ok: router registers deployment prices under its id
     if litellm_logging_obj is None:
@@ -2431,7 +2431,7 @@ def _priced_candidates_before_unpriced_rules(candidates: tuple[_CostCandidate, .
     )
 
 
-def _raw_cost_map_entry(key: str) -> Mapping[str, object] | None:
+def raw_cost_map_entry(key: str) -> Mapping[str, object] | None:
     raw_entry: Final = litellm.model_cost.get(key)
     return raw_entry if isinstance(raw_entry, Mapping) else None
 
@@ -2475,7 +2475,7 @@ def pricing_entry_for_cost_calc(
     )
     if resolved is None:
         return None
-    return resolved["key"], _raw_cost_map_entry(resolved["key"]) or resolved
+    return resolved["key"], raw_cost_map_entry(resolved["key"]) or resolved
 
 
 def ocr_cost(

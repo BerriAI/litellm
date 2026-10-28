@@ -38521,7 +38521,7 @@ export interface components {
             /** Tpm */
             tpm?: number | null;
         } & {
-            [key: string]: number;
+            [key: string]: unknown;
         };
         /** ModelInfoDelete */
         ModelInfoDelete: {
