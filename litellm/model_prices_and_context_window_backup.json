@@ -76140,6 +76140,128 @@
             "max"
         ]
     },
+    "augure/ossington-5": {
+        "cache_read_input_token_cost": 4.274e-07,
+        "input_cost_per_token": 1.0685e-06,
+        "litellm_provider": "augure",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 2.1371e-06,
+        "source": "https://augureai.ca/docs/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "augure/rosedale-1": {
+        "input_cost_per_token": 1.7809e-06,
+        "litellm_provider": "augure",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 4.2741e-06,
+        "source": "https://augureai.ca/docs/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "augure/tofino-3": {
+        "input_cost_per_token": 4.274e-07,
+        "litellm_provider": "augure",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.4247e-06,
+        "source": "https://augureai.ca/docs/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_pdf_input": true,
+        "supports_reasoning": false,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "augure/ossington-4-1": {
+        "input_cost_per_token": 1.7809e-06,
+        "litellm_provider": "augure",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 4.2741e-06,
+        "source": "https://augureai.ca/docs/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "augure/open-glm-5-3": {
+        "input_cost_per_token": 2.1371e-06,
+        "litellm_provider": "augure",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 49152,
+        "mode": "chat",
+        "output_cost_per_token": 4.9865e-06,
+        "source": "https://augureai.ca/docs/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "augure/open-qwen-3.8-flash-next": {
+        "input_cost_per_token": 1.4247e-06,
+        "litellm_provider": "augure",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 2.8494e-06,
+        "source": "https://augureai.ca/docs/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
     "bedrock_mantle/openai.gpt-6.1-terra": {
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 2.75e-06,

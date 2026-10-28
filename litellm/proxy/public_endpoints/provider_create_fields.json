@@ -539,6 +539,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "AUGURE",
+    "provider_display_name": "Augure",
+    "litellm_provider": "augure",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.augureai.ca/v1",
+        "tooltip": "Optional. Leave blank to use the provider's default endpoint.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "augure/ossington-5"
+  },
+  {
     "provider": "AUTO_ROUTER",
     "provider_display_name": "Auto Router",
     "litellm_provider": "auto_router",

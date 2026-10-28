@@ -257,5 +257,14 @@
       "/v1/chat/completions",
       "/v1/responses"
     ]
+  },
+  "augure": {
+    "base_url": "https://api.augureai.ca/v1",
+    "api_key_env": "AUGURE_API_KEY",
+    "api_base_env": "AUGURE_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
