@@ -5,7 +5,7 @@ import pytest
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.llms.microsoft_365_copilot.chat.transformation import (
     Microsoft365CopilotChatConfig,
     build_chat_request,

@@ -15,14 +15,6 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 
 
-def _get_a2a_message_role(msg: AllMessageValues) -> str:
-    if isinstance(msg, BaseModel):
-        return f"{msg.model_dump().get('role', 'user')}"
-    if isinstance(msg, dict):
-        return f"{msg.get('role', 'user')}"
-    return f"{dict(msg).get('role', 'user')}"
-
-
 class A2AError(BaseLLMException):
     """Base exception for A2A protocol errors"""
 
@@ -37,6 +29,10 @@ class A2AError(BaseLLMException):
             message=message,
             headers=headers,
         )
+
+
+def _message_role(message: Mapping[str, object]) -> object:
+    return message.get("role", "user")
 
 
 def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
@@ -58,7 +54,12 @@ def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
         content_text = convert_content_list_to_str(message=msg)
 
         # Get role
-        role = _get_a2a_message_role(msg)
+        if isinstance(msg, BaseModel):
+            role = _message_role(msg.model_dump())
+        elif isinstance(msg, dict):
+            role = msg.get("role", "user")
+        else:
+            role = dict(msg).get("role", "user")
 
         if content_text:
             conversation_parts.append(f"{role}: {content_text}")

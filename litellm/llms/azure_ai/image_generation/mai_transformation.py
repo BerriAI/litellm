@@ -6,6 +6,7 @@ from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -72,9 +73,9 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
         if "/mai/" in path:
             prefix, _, _ = path.partition("/images/")
-            path = f"{prefix}/images/generations"
+            path = join_api_base(prefix, "images/generations")
         else:
-            path = f"{path}/mai/v1/images/generations"
+            path = join_api_base(path, "mai/v1/images/generations")
 
         if separator:
             return f"{path}?{query}"
@@ -94,9 +95,9 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
         if "/mai/" in path:
             prefix, _, _ = path.partition("/images/")
-            path = f"{prefix}/images/edits"
+            path = join_api_base(prefix, "images/edits")
         else:
-            path = f"{path}/mai/v1/images/edits"
+            path = join_api_base(path, "mai/v1/images/edits")
 
         if separator:
             return f"{path}?{query}"
