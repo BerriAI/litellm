@@ -23,6 +23,7 @@ import httpx
 import pytest
 import respx
 from jsonschema import Draft7Validator, validate
+from pydantic import ValidationError
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
@@ -7000,6 +7001,126 @@ class TestVerboseRequestLineRedaction:
         output: Final = caplog.text + captured.out + captured.err
         assert adapter.call_count == 0
         assert "litellm.completion(" not in output
+        assert self.FAKE_API_KEY not in output
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    @pytest.mark.parametrize("verbose", [False, True])
+    @pytest.mark.parametrize("stage", ["args", "kwargs"])
+    @pytest.mark.parametrize("error_type", [TypeError, ValueError, ValidationError])
+    async def test_shape_validation_failure_keeps_mock_operation_and_drops_error_details(
+        self,
+        asynchronous: bool,
+        verbose: bool,
+        stage: str,
+        error_type: type[Exception],
+        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from pydantic import TypeAdapter
+
+        rendered: Final = Mock()
+
+        class UnrenderedInput:
+            def __repr__(self) -> str:
+                rendered()
+                return "SYNTHETIC-INPUT-REPR"
+
+        signed_url: Final = "https://audio.example.test/result.wav?sig=SYNTHETIC-URL-SECRET"
+        diagnostic: Final = f"SYNTHETIC-INPUT-REPR {self.FAKE_API_KEY} {signed_url}"
+        unrendered: Final = UnrenderedInput()
+
+        def fail_validation(value: object, *, strict: bool) -> None:
+            assert strict is True
+            assert isinstance(value, tuple if stage == "args" else dict)
+            if error_type is ValidationError:
+                TypeAdapter(int).validate_python({"diagnostic": diagnostic, "input": unrendered}, strict=True)
+                pytest.fail("Expected a real Pydantic validation failure")
+            raise error_type(diagnostic, unrendered)
+
+        broken: Final = Mock()
+        broken.validate_python.side_effect = fail_validation
+
+        def adapter_factory(annotation: object) -> object:
+            if annotation == (tuple[object, ...] if stage == "args" else Mapping[str, object]):
+                return broken
+            return TypeAdapter(annotation)
+
+        monkeypatch.setattr(litellm, "set_verbose", verbose)
+        monkeypatch.setattr("litellm._logging.set_verbose", verbose)
+        with monkeypatch.context() as validation:
+            validation.setattr("litellm.utils.TypeAdapter", adapter_factory)
+            with caplog.at_level(logging.DEBUG if not verbose else logging.WARNING, logger=verbose_logger.name):
+                response: Final = (
+                    await litellm.acompletion(
+                        model="openai/synthetic-model",
+                        messages=[{"role": "user", "content": "synthetic input"}],
+                        api_key=self.FAKE_API_KEY,
+                        mock_response="synthetic output",
+                    )
+                    if asynchronous
+                    else litellm.completion(
+                        model="openai/synthetic-model",
+                        messages=[{"role": "user", "content": "synthetic input"}],
+                        api_key=self.FAKE_API_KEY,
+                        mock_response="synthetic output",
+                    )
+                )
+        captured: Final = capsys.readouterr()
+        output: Final = caplog.text + captured.out + captured.err
+        assert response.choices[0].message.content == "synthetic output"
+        assert broken.validate_python.call_count >= 1
+        assert rendered.call_count == 0
+        assert "Skipped malformed request debug logging" in output
+        assert self.FAKE_API_KEY not in output
+        assert signed_url not in output
+        assert "SYNTHETIC-INPUT-REPR" not in output
+        assert all(record.exc_info is None for record in caplog.records)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    async def test_disabled_wrapper_logging_does_not_construct_shape_validators(
+        self,
+        asynchronous: bool,
+        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from pydantic import TypeAdapter
+
+        constructed: Final = Mock()
+
+        def adapter_factory(annotation: object) -> object:
+            if annotation in (tuple[object, ...], Mapping[str, object]):
+                constructed(annotation)
+            return TypeAdapter(annotation)
+
+        monkeypatch.setattr(litellm, "set_verbose", False)
+        monkeypatch.setattr("litellm._logging.set_verbose", False)
+        with monkeypatch.context() as validation:
+            validation.setattr("litellm.utils.TypeAdapter", adapter_factory)
+            with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+                response: Final = (
+                    await litellm.acompletion(
+                        model="openai/synthetic-model",
+                        messages=[{"role": "user", "content": "synthetic input"}],
+                        api_key=self.FAKE_API_KEY,
+                        mock_response="synthetic output",
+                    )
+                    if asynchronous
+                    else litellm.completion(
+                        model="openai/synthetic-model",
+                        messages=[{"role": "user", "content": "synthetic input"}],
+                        api_key=self.FAKE_API_KEY,
+                        mock_response="synthetic output",
+                    )
+                )
+        captured: Final = capsys.readouterr()
+        output: Final = caplog.text + captured.out + captured.err
+        assert response.choices[0].message.content == "synthetic output"
+        assert constructed.call_count == 0
+        assert "Skipped malformed request debug logging" not in output
         assert self.FAKE_API_KEY not in output
 
     @pytest.mark.parametrize(

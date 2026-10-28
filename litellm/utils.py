@@ -1911,8 +1911,8 @@ def client(original_function):
                     TypeAdapter(tuple[object, ...]).validate_python(args, strict=True),
                     TypeAdapter(Mapping[str, object]).validate_python(kwargs, strict=True),
                 )
-            except Exception:
-                pass
+            except (TypeError, ValueError):
+                print_verbose("Skipped malformed request debug logging")
         start_time: Final = datetime.datetime.now()
         result = None
         logging_obj: LiteLLMLoggingObject | None = kwargs.get("litellm_logging_obj", None)
@@ -2188,8 +2188,8 @@ def client(original_function):
                     TypeAdapter(tuple[object, ...]).validate_python(args, strict=True),
                     TypeAdapter(Mapping[str, object]).validate_python(kwargs, strict=True),
                 )
-            except Exception:
-                pass
+            except (TypeError, ValueError):
+                print_verbose("Skipped malformed request debug logging")
         start_time: Final = datetime.datetime.now()
         call_type: Final = _get_call_type_from_public_name(original_function.__name__)
         result = None
