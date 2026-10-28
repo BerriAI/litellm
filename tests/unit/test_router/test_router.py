@@ -27633,38 +27633,89 @@ def test_router_get_model_group_info() -> None:
     assert model_group_info.output_cost_per_token > 0
 
 
-def test_router_rpm_pre_call_check():
-    """
-    - for a given model not in model cost map
-    - with rpm set
-    - check if rpm check is run
-    """
-    try:
-        model_list = [
+def test_pre_call_checks_keep_deployment_whose_rpm_is_reached():
+    model_list: Final = [
+        {
+            "model_name": "fake-openai-endpoint",
+            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "rpm": 0},
+            "model_info": {"id": "rpm-zero"},
+        },
+        {
+            "model_name": "fake-openai-endpoint",
+            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key"},
+            "model_info": {"id": "uncapped"},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    kept: Final = router._pre_call_checks(
+        model="fake-openai-endpoint",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in kept] == ["rpm-zero", "uncapped"]
+
+
+@pytest.mark.asyncio
+async def test_enable_pre_call_checks_alone_serves_past_deployment_rpm():
+    router: Final = Router(
+        model_list=[
             {
-                "model_name": "fake-openai-endpoint",  # openai model name
-                "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "openai/my-fake-model",
-                    "api_key": "my-fake-key",
-                    "api_base": "https://openai-function-calling-workers.tasslexyz.workers.dev/",
-                    "rpm": 0,
-                },
-            },
-        ]
+                "model_name": "fake-openai-endpoint",
+                "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "rpm": 1},
+                "model_info": {"id": "rpm-one"},
+            }
+        ],
+        enable_pre_call_checks=True,
+        num_retries=0,
+    )
 
-        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
+    served: Final = [
+        await router.acompletion(
+            model="fake-openai-endpoint",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_response="served",
+        )
+        for _ in range(3)
+    ]
 
-        try:
-            router._pre_call_checks(
+    assert [response.choices[0].message.content for response in served] == ["served"] * 3
+
+
+@pytest.mark.asyncio
+async def test_enforce_model_rate_limits_returns_429_at_deployment_rpm():
+    frozen_minute: Final = datetime(2026, 1, 1, 12, 30, 15, tzinfo=timezone.utc)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "fake-openai-endpoint",
+                "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "rpm": 1},
+                "model_info": {"id": "rpm-one"},
+            }
+        ],
+        enable_pre_call_checks=True,
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=0,
+    )
+
+    with patch(
+        "litellm.router_utils.pre_call_checks.model_rate_limit_check.get_utc_datetime", return_value=frozen_minute
+    ):
+        first: Final = await router.acompletion(
+            model="fake-openai-endpoint",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_response="served",
+        )
+        with pytest.raises(litellm.RateLimitError) as rate_limited:
+            await router.acompletion(
                 model="fake-openai-endpoint",
-                healthy_deployments=model_list,
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                mock_response="served",
             )
-            pytest.fail("Expected this to fail")
-        except Exception:
-            pass
-    except Exception as e:
-        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
+
+    assert first.choices[0].message.content == "served"
+    assert rate_limited.value.status_code == 429
 
 
 @pytest.mark.parametrize(
@@ -29492,26 +29543,6 @@ def test_pre_call_checks_filters_deployment_when_token_count_exceeds_limit():
     )
 
     assert [d["model_info"]["id"] for d in filtered] == ["large"]
-
-
-def test_pre_call_checks_rpm_check_still_enforced_when_token_counting_fails():
-    from litellm.types.router import RouterRateLimitErrorBasic
-
-    model_list: Final = [
-        {
-            "model_name": "fake-openai-endpoint",
-            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "rpm": 0},
-            "model_info": {"max_input_tokens": 100},
-        },
-    ]
-    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
-
-    with pytest.raises(RouterRateLimitErrorBasic):
-        router._pre_call_checks(
-            model="fake-openai-endpoint",
-            healthy_deployments=model_list,
-            messages=_PRE_CALL_CHECK_UNPARSEABLE_MESSAGES,
-        )
 
 
 def test_pre_call_checks_context_window_check_is_skipped_but_not_fatal_when_token_counting_fails():
