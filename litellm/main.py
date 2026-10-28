@@ -6127,7 +6127,18 @@ def completion(
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
-            if isinstance(resolved_reasoning_effort, dict) and "summary" in resolved_reasoning_effort:
+            if custom_llm_provider == "openai" and isinstance(resolved_reasoning_effort, dict):
+                from litellm.responses.utils import openai_bridge_reasoning
+
+                optional_params["reasoning_effort"] = openai_bridge_reasoning(
+                    requested=resolved_reasoning_effort,
+                    effort_kept="reasoning_effort" in optional_params,
+                    summary_alias=rs_val,
+                    model=model,
+                    drop_params=drop_unsupported_reasoning,
+                    additional_drop_params=routing_kwargs.get("additional_drop_params"),
+                )
+            elif isinstance(resolved_reasoning_effort, dict) and "summary" in resolved_reasoning_effort:
                 optional_params["reasoning_effort"] = resolved_reasoning_effort
             elif rs_val is not None:
                 eff: Final = optional_params.get("reasoning_effort", resolved_reasoning_effort)
@@ -8394,7 +8405,7 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
     )
 
-    response: TranscriptionResponse | Coroutine[object, object, TranscriptionResponse] | None = None
+    response: TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]
 
     provider_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
         model=model,
@@ -8556,10 +8567,16 @@ def transcription(
             provider_config=provider_config,
             shared_session=shared_session,
         )
+    else:
+        raise litellm.UnsupportedEndpointError(
+            message=f"{custom_llm_provider}/{model} does not support audio transcription.",
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
 
     # Store duration in _hidden_params for cost calculation without
     # exposing it in the response body (see sync path comment above).
-    if response is not None and not isinstance(response, Coroutine):
+    if not isinstance(response, Coroutine):
         existing_duration: Final = getattr(response, "duration", None)
         if existing_duration is None:
             calculated_duration: Final = calculate_request_duration(file)
@@ -8569,8 +8586,6 @@ def transcription(
                 )
                 response_hidden_params["audio_transcription_duration"] = calculated_duration
 
-    if response is None:
-        raise ValueError("Unmapped provider passed in. Unable to get the response.")
     return response
 
 
