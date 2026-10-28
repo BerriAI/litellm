@@ -27,11 +27,15 @@ COMPREHEND_MEDICAL_COST_PER_UNIT_USD: Final[Mapping[str, float]] = MappingProxyT
 COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS: Final = frozenset(COMPREHEND_MEDICAL_COST_PER_UNIT_USD)
 
 
+def _operation_from_headers(headers: Mapping[str, str]) -> str:
+    target: Final = headers.get("x-amz-target", "")
+    return target.split(".")[-1]
+
+
 class ComprehendMedicalPassthroughLoggingHandler:
     @staticmethod
     def _operation_from_response(httpx_response: httpx.Response) -> str:
-        target: Final[str] = httpx_response.request.headers.get("x-amz-target", "")
-        return target.split(".")[-1]
+        return _operation_from_headers(httpx_response.request.headers)
 
     @staticmethod
     def get_cost_for_operation(operation: str, text: str) -> float:

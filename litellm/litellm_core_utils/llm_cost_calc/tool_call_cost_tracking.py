@@ -450,7 +450,7 @@ class StandardBuiltInToolCostTracking:
     def _get_code_interpreter_cost(
         model_info: ModelInfo | None,
         custom_llm_provider: str | None,
-        standard_built_in_tools_params: StandardBuiltInToolsParams,
+        standard_built_in_tools_params: Mapping[str, object],
     ) -> float:
         """Calculate code interpreter cost."""
         code_interpreter_sessions: Final = standard_built_in_tools_params.get("code_interpreter_sessions", None)

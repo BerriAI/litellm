@@ -121,7 +121,7 @@ class BaseTranslation(ABC):
 
     @staticmethod
     def merge_user_api_key_metadata_into_request(
-        request_data: dict[str, Any],  # mutable-ok: proxy hooks share and mutate the request payload dict in place
+        request_data: dict[str, object],  # mutable-ok: proxy hooks share and mutate the request payload dict in place
         user_api_key_dict: Optional["UserAPIKeyAuth"],
     ) -> None:
         """
@@ -185,7 +185,7 @@ class BaseTranslation(ABC):
         request_data: dict | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
-    ) -> Any:
+    ) -> object:
         """
         Process output streaming response with guardrails.
 

@@ -14,6 +14,8 @@ from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _BACKEND: Final = "claude-sonnet-4-6"
 _API_KEY: Final = "synthetic-anthropic-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])

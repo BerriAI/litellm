@@ -23,9 +23,17 @@ class TestTryShortCircuitSearch:
     """Tests for WebSearchInterceptionLogger.try_short_circuit_search"""
 
     @pytest.mark.asyncio
-    async def test_short_circuits_single_web_search_tool(self):
+    @pytest.mark.parametrize(
+        ("provider", "model"),
+        [
+            ("github_copilot", "github_copilot/claude-sonnet-5.5"),
+            ("databricks", "databricks/databricks-claude-sonnet-5-5"),
+            ("databricks", "databricks/system.ai.claude-sonnet-5-5"),
+        ],
+    )
+    async def test_short_circuits_single_web_search_tool(self, provider, model):
         """Single web_search_20250305 tool → short-circuit fires"""
-        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+        logger = WebSearchInterceptionLogger(enabled_providers=[provider])
 
         with patch.object(logger, "_execute_search", new_callable=AsyncMock) as mock_search:
             mock_search.return_value = (
@@ -34,14 +42,14 @@ class TestTryShortCircuitSearch:
             )
 
             result = await logger.try_short_circuit_search(
-                model="github_copilot/claude-sonnet-5.5",
+                model=model,
                 messages=[
                     {"role": "user", "content": "Search for Claude Code releases"}
                 ],
                 tools=[
                     {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
                 ],
-                custom_llm_provider="github_copilot",
+                custom_llm_provider=provider,
             )
 
         assert result is not None
@@ -296,7 +304,7 @@ class TestShortCircuitEntryPoint:
     @pytest.mark.asyncio
     async def test_returns_none_when_no_callbacks(self):
         """No callbacks configured → returns None"""
-        from litellm.llms.anthropic.pass_through.messages.handler import (
+        from litellm.llms.anthropic.messages.native.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -313,7 +321,7 @@ class TestShortCircuitEntryPoint:
     @pytest.mark.asyncio
     async def test_returns_dict_when_not_streaming(self):
         """Non-streaming short-circuit → returns dict"""
-        from litellm.llms.anthropic.pass_through.messages.handler import (
+        from litellm.llms.anthropic.messages.native.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -336,10 +344,10 @@ class TestShortCircuitEntryPoint:
     @pytest.mark.asyncio
     async def test_returns_stream_iterator_when_streaming(self):
         """Streaming short-circuit → returns FakeAnthropicMessagesStreamIterator"""
-        from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
+        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
             FakeAnthropicMessagesStreamIterator,
         )
-        from litellm.llms.anthropic.pass_through.messages.handler import (
+        from litellm.llms.anthropic.messages.native.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -376,7 +384,7 @@ class TestShortCircuitEntryPoint:
         """Non-WebSearchInterceptionLogger callbacks are ignored"""
         from unittest.mock import MagicMock
 
-        from litellm.llms.anthropic.pass_through.messages.handler import (
+        from litellm.llms.anthropic.messages.native.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -399,10 +407,10 @@ class TestShortCircuitEntryPoint:
         loop. The short-circuit must use the ORIGINAL stream value so streaming
         callers get SSE events instead of a plain dict.
         """
-        from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
+        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
             FakeAnthropicMessagesStreamIterator,
         )
-        from litellm.llms.anthropic.pass_through.messages.handler import (
+        from litellm.llms.anthropic.messages.native.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -430,7 +438,7 @@ class TestShortCircuitEntryPoint:
         still fire the short-circuit when the caller propagates the derived
         provider.
         """
-        from litellm.llms.anthropic.pass_through.messages.handler import (
+        from litellm.llms.anthropic.messages.native.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -497,7 +505,7 @@ class TestShortCircuitSafeguardResults:
     NO_TOOL_USES_AVAILABLE = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {}}}]
 
     async def _short_circuit(self, *, stream: bool, kwargs: dict | None):
-        from litellm.llms.anthropic.pass_through.messages.handler import (
+        from litellm.llms.anthropic.messages.native.handler import (
             _try_websearch_short_circuit,
         )
 

@@ -22,6 +22,8 @@ from pydantic import BaseModel, JsonValue
 
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 AUDIENCE: Final = "litellm-integration"
 KEY_ID: Final = "integration-signing-key"
 CLIENT_CLAIM: Final = "client_id"

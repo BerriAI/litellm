@@ -61,6 +61,7 @@ from pydantic import BaseModel, JsonValue
 pytestmark: Final = [
     pytest.mark.timeout(2 * graceful_stop_seconds() + 120),
     pytest.mark.xdist_group("anthropic_refusal_stop_details_wire"),
+    pytest.mark.shares_worker_state,
 ]
 
 _ANTHROPIC_BASE: Final = "http://api.anthropic.com"
@@ -895,7 +896,7 @@ def test_failing_sinks_get_one_attempt_each_and_the_proxy_stays_healthy(rig: Rig
         assert (readiness.status_code, readiness.json()["status"]) == (200, "healthy"), readiness.text
 
 
-def test_unauthenticated_refusal_request_never_reaches_the_upstream_or_the_sink(rig: Rig) -> None:
+def test_unauthenticated_refusal_request_never_reaches_upstream_and_logs_failure(rig: Rig) -> None:
     with rig.gateway.scenario() as scenario:
         model: Final = _deployment(scenario, "anthropic", rig)
         stranger: Final = "sk-not-a-virtual-key-" + _marker()
@@ -907,7 +908,9 @@ def test_unauthenticated_refusal_request_never_reaches_the_upstream_or_the_sink(
         )
         assert response.status_code == 401, response.text
         assert _targets(rig.wire) == ()
-        assert rig.sink.for_key(stranger) == ()
+        failures: Final = rig.sink.await_key(stranger)
+        assert len(failures) == 1, failures
+        assert failures[0]["status"] == "failure", failures[0]
 
 
 @pytest.mark.parametrize("fixture", ["null", "missing"])

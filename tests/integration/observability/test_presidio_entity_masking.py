@@ -169,7 +169,7 @@ def test_pre_call_masks_only_the_configured_entities_before_the_provider_sees_th
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
         model: Final = scenario.model()
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         user_text: Final = f"{uuid.uuid4().hex} card {CARD}, email {EMAIL}, phone {PHONE}"
         response: Final = gateway.request(
             "POST",

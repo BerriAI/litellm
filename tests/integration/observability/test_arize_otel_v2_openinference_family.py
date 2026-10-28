@@ -43,6 +43,7 @@ _GENAI_B3_KEYS_WITHOUT_BAGGAGE: Final = frozenset(
         "gen_ai.usage.prompt_tokens",
         "gen_ai.usage.total_tokens",
         "litellm.api_key.hash",
+        "litellm.cache_hit",
         "litellm.call_id",
         "litellm.call_type",
         "litellm.cost.discount_amount",
@@ -85,6 +86,7 @@ _LANGFUSE_B3_KEYS: Final = frozenset(
         "gen_ai.usage.output_tokens",
         "gen_ai.usage.prompt_tokens",
         "gen_ai.usage.total_tokens",
+        "langfuse.observation.completion_start_time",
         "langfuse.observation.cost_details",
         "langfuse.observation.id",
         "langfuse.observation.input",
@@ -94,6 +96,7 @@ _LANGFUSE_B3_KEYS: Final = frozenset(
         "langfuse.observation.type",
         "langfuse.observation.usage_details",
         "litellm.api_key.hash",
+        "litellm.cache_hit",
         "litellm.call_id",
         "litellm.call_type",
         "litellm.cost.discount_amount",
@@ -296,6 +299,7 @@ def test_arize_otel_v2_b3_non_openinference_callback_family(callback: str, gatew
         assert _json_object(response.content) == _chat_caller_response(_chat_response(marker), rig.model), response.text
         attributes: Final = _matching_genai_marker_span(rig.destination, marker)
         assert frozenset(attributes) == _B3_ATTRIBUTE_KEYS[callback], attributes
+        assert attributes["litellm.cache_hit"] == "False", attributes
         assert "metadata" not in attributes, attributes
         assert not any(".tool_calls." in key for key in attributes), attributes
         baggage: Final = tuple(

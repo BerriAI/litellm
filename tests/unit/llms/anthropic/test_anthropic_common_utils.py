@@ -436,7 +436,7 @@ class TestPassthroughOAuth:
 
     def test_passthrough_oauth_no_x_api_key(self):
         """Passthrough endpoint should not add x-api-key for OAuth tokens."""
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -459,7 +459,7 @@ class TestPassthroughOAuth:
 
     def test_passthrough_regular_key_uses_x_api_key(self):
         """Passthrough endpoint should still use x-api-key for regular API keys."""
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -1265,7 +1265,7 @@ class TestPassthroughAuthToken:
         """Passthrough endpoint should use Bearer auth when only ANTHROPIC_AUTH_TOKEN is set."""
         from unittest.mock import patch as mock_patch
 
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -1289,7 +1289,7 @@ class TestPassthroughAuthToken:
         """Passthrough endpoint should prefer ANTHROPIC_API_KEY over ANTHROPIC_AUTH_TOKEN."""
         from unittest.mock import patch as mock_patch
 
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -1320,7 +1320,7 @@ class TestPassthroughAuthToken:
         from unittest.mock import patch as mock_patch
 
         import litellm
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -1342,7 +1342,7 @@ class TestPassthroughAuthToken:
         """A client-forwarded x-api-key header, whatever its casing, should satisfy validation without env credentials."""
         from unittest.mock import patch as mock_patch
 
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -1365,7 +1365,7 @@ class TestPassthroughAuthToken:
         """get_complete_url should use ANTHROPIC_BASE_URL when api_base is None."""
         from unittest.mock import patch as mock_patch
 
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -2043,7 +2043,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
     def test_anthropic_messages_config_http_retry_helpers(self):
         import httpx
 
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -2113,7 +2113,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
     def test_anthropic_messages_retry_honors_thinking_block_binding(
         self, thinking: Mapping[str, object], error_message: str, expected: bool
     ) -> None:
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -2865,7 +2865,7 @@ class TestWifServerOwnedAuthHeaderStrip:
         """The passthrough surface hands the caller's own credential upstream rather than minting.
         That check was case-sensitive, so X-Api-Key slipped past it and the caller's key would have
         travelled beside a minted Bearer."""
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -3084,7 +3084,7 @@ class TestMessagesEnvAuthBetaMerge:
     def test_client_beta_survives_env_auth_injection(self, monkeypatch, clean_anthropic_env):
         """Regression: headers.update(auth_header) silently clobbered the client's
         anthropic-beta on the native /v1/messages route."""
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -3166,7 +3166,7 @@ class TestWifLitellmParamsPlumbing:
         assert len(poster.requests) == 1
 
     def test_messages_mints_from_litellm_params(self, wif_engine):
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -3245,7 +3245,7 @@ class TestWifAsyncSeam:
 
     @pytest.mark.asyncio
     async def test_avalidate_messages_environment_mints_off_loop(self, wif_async_engine, monkeypatch):
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -3268,7 +3268,7 @@ class TestWifAsyncSeam:
     async def test_avalidate_delegates_to_subclass_sync_override(self):
         """A provider subclass that only overrides the sync method must keep its
         behavior when the handler goes through the async variant."""
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -4491,3 +4491,34 @@ def test_anthropic_error_frame_exception_classes_an_overloaded_frame_as_internal
     error: Final = anthropic_error_frame_exception("overloaded_error", "Overloaded", 503, "claude-sonnet-4-5")
 
     assert type(error) is litellm.InternalServerError
+
+
+_NON_NUMERIC_BUDGETS: Final = (True, False, None, "", "lots", [4096])
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("budget_tokens", _NON_NUMERIC_BUDGETS)
+def test_shared_legacy_thinking_translation_rejects_a_non_numeric_budget(budget_tokens: object) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"thinking\.budget_tokens must be a number"):
+        AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+            model="claude-opus-5",
+            optional_params={"thinking": {"type": "enabled", "budget_tokens": budget_tokens}},
+            custom_llm_provider="azure_ai",
+            drop_params=False,
+        )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("budget_tokens", _NON_NUMERIC_BUDGETS)
+def test_shared_legacy_thinking_translation_drops_a_non_numeric_budget_under_drop_params(budget_tokens: object) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    optional_params: Final = {"thinking": {"type": "enabled", "budget_tokens": budget_tokens}}
+
+    AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+        model="claude-opus-5", optional_params=optional_params, custom_llm_provider="azure_ai", drop_params=True
+    )
+
+    assert optional_params == {"thinking": {"type": "adaptive"}}

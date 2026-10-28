@@ -25,6 +25,8 @@ from openai.types.chat import ChatCompletion
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 CONFIG_STORE_ID: Final = "vs_integration_config_store"
 PROXY_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 REMOVE_OPENAI_API_BASE: Final = ("OPENAI_API_BASE",)
@@ -732,14 +734,21 @@ def test_explicit_false_flag_keeps_legacy_vector_store_outcomes(tmp_path: Path) 
                     models=_json_array(model), object_permission=_permission_for_stores("vs_some_other_store")
                 )
 
-                allowed: Final = _rag_query(gateway, model, allowed_marker, no_permission_key)
                 denied: Final = _rag_query(gateway, model, denied_marker, excluding_key)
+                allowed: Final = _rag_query(gateway, model, allowed_marker, no_permission_key)
 
-            assert allowed.status_code == 200, allowed.text
-            assert len(_searches_for_marker(upstream_gateway, allowed_marker)) == 1
             assert denied.status_code == 401, denied.text
             assert denied.json()["error"]["type"] == "key_vector_store_access_denied"
-            assert _searches_for_marker(upstream_gateway, denied_marker) == ()
+            assert allowed.status_code == 200, allowed.text
+            searches: Final = tuple(
+                str(observation["body"])
+                for observation in upstream_observations(upstream_gateway)
+                if observation["path"] == f"/vector_stores/{CONFIG_STORE_ID}/search"
+            )
+            assert (
+                sum(allowed_marker in body for body in searches),
+                sum(denied_marker in body for body in searches),
+            ) == (1, 0), searches
 
 
 def _strict_no_registry_config(directory: Path) -> Path:
