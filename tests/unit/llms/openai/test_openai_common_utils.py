@@ -338,8 +338,8 @@ def test_mapped_response_still_bills_the_prompt_the_provider_processed(provider)
 )
 @pytest.mark.asyncio
 async def test_mapped_response_bills_a_custom_named_deployment_with_its_base_model_only_when_it_is_openai(
-    provider, base_model, counted_as
-):
+    provider: str, base_model: str, counted_as: str
+) -> None:
     messages: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
     overrides: Final = {"model": f"{provider}/my-gpt-6", "messages": messages, "base_model": base_model}
 
