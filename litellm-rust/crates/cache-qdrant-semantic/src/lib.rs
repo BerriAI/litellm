@@ -1,7 +1,7 @@
+mod cache;
+mod config;
 mod embedder;
-mod prompt;
-mod semantic;
 
+pub use cache::QdrantSemanticCache;
+pub use config::{QdrantSemanticConfig, Quantization};
 pub use embedder::{OpenAiEmbedder, OpenAiEmbedderConfig};
-pub use prompt::prompt_from_messages;
-pub use semantic::{Embedder, QdrantSemanticCache, QdrantSemanticConfig, Quantization};

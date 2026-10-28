@@ -166,7 +166,7 @@ class AliceGuardrail(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = unreachable_fallback
 
         if "supported_event_hooks" not in kwargs:
-            kwargs["supported_event_hooks"] = [  # mutable-ok: CustomGuardrail.__init__ requires a list here
+            kwargs["supported_event_hooks"] = [
                 GuardrailEventHooks.pre_call,
                 GuardrailEventHooks.during_call,
                 GuardrailEventHooks.post_call,
@@ -218,15 +218,16 @@ class AliceGuardrail(CustomGuardrail):
     ) -> AliceVerdict:
         response: Final = await self.async_handler.post(
             url=self.api_base,
-            json={  # mutable-ok: one-shot HTTP request body, never mutated after construction
+            json={
                 "input_type": input_type,
                 "inputs": _json_safe(inputs),
                 "request_data": _json_safe(request_data, strip_keys=_CREDENTIAL_KEYS_TO_STRIP),
             },
-            headers={  # mutable-ok: one-shot HTTP headers, never mutated after construction
+            headers={
                 "Content-Type": "application/json",
                 "af-api-key": self.alice_api_key,
             },
+            timeout=self.timeout,
         )
         response.raise_for_status()
         body = response.json()
@@ -275,8 +276,8 @@ class AliceGuardrail(CustomGuardrail):
         rather than being silently skipped, so content Alice meant to replace can never reach the
         model unmasked alongside content that was replaced.
         """
-        texts: Final = inputs.get("texts") or []  # mutable-ok: empty-list fallback, replaced wholesale below
-        replacements: Final = verdict.get("replacements") or []  # mutable-ok: empty-list fallback for iteration only
+        texts: Final = inputs.get("texts") or []
+        replacements: Final = verdict.get("replacements") or []
 
         if not replacements:
             raise self._mask_rejected(verdict)
@@ -286,7 +287,7 @@ class AliceGuardrail(CustomGuardrail):
             text = replacement.get("text")
             if not (isinstance(index, int) and isinstance(text, str) and 0 <= index < len(texts)):
                 raise self._mask_rejected(verdict)
-            texts[index] = text  # mutable-ok: item assignment into the local working copy above
+            texts[index] = text
 
         inputs["texts"] = texts
 
@@ -357,9 +358,7 @@ def _json_safe(
         }
 
     if isinstance(value, (list, tuple, set, frozenset)):
-        return [  # mutable-ok: return value is a one-shot list, discarded by the caller after use
-            _json_safe(item, depth + 1, nested, strip_keys) for item in islice(value, _MAX_ITEMS)
-        ]
+        return [_json_safe(item, depth + 1, nested, strip_keys) for item in islice(value, _MAX_ITEMS)]
 
     dump: Final = getattr(value, "model_dump", None)
     if callable(dump):

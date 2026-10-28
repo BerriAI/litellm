@@ -30,7 +30,7 @@ def _restamped_event(event: Mapping[str, object], requested_model: str) -> Mappi
         return None
     if message.get("model") == requested_model:
         return None
-    return {**event, "message": {**message, "model": requested_model}}  # mutable-ok: SSE payload, re-serialized as is
+    return {**event, "message": {**message, "model": requested_model}}
 
 
 def _restamped_data_line(line: str, requested_model: str) -> str | None:

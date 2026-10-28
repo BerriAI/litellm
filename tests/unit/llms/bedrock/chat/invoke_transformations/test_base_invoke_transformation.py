@@ -1,42 +1,48 @@
 import json
-from unittest.mock import MagicMock
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+import respx
 
-
-from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
-    AmazonAnthropicClaudeConfig,
-)
+import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from tests._support.stream_chunk_size import DEFAULT_CHUNKING_REQUESTS, ROUTER_CHUNK_SIZE_CASES, keys_at_every_depth
 
 
 @pytest.mark.parametrize(
-    "config,model",
+    "model",
     [
-        (AmazonInvokeConfig, "anthropic.claude-3-sonnet-20240229-v1:0"),
-        (AmazonInvokeConfig, "amazon.titan-text-express-v1"),
-        (AmazonInvokeConfig, "mistral.mistral-7b-instruct-v0:2"),
-        (AmazonAnthropicClaudeConfig, "anthropic.claude-sonnet-4-6"),
+        "anthropic.claude-sonnet-4-6",
+        "amazon.titan-text-express-v1",
+        "mistral.mistral-7b-instruct-v0:2",
     ],
 )
-def test_transform_request_drops_stream_chunk_size(config, model):
-    """stream_chunk_size is a LiteLLM-internal knob for re-chunking the HTTP
-    response stream. Leaking it into the provider request body makes Bedrock
-    reject the whole request: ValidationException 'stream_chunk_size: Extra
-    inputs are not permitted'."""
-    request_body = config().transform_request(
-        model=model,
+def test_completion_keeps_stream_chunk_size_out_of_invoke_bodies(model: str) -> None:
+    send: Final = MagicMock(return_value=httpx.Response(200))
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(send)))
+
+    litellm.completion(
+        model=f"bedrock/invoke/{model}",
         messages=[{"role": "user", "content": "hi"}],
-        optional_params={"stream": True, "stream_chunk_size": 2048, "max_tokens": 10},
-        litellm_params={},
-        headers={},
+        stream=True,
+        max_tokens=10,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        stream_chunk_size=2048,
     )
 
-    assert "stream_chunk_size" not in json.dumps(request_body)
+    request: Final = send.call_args.args[0]
+    assert "stream_chunk_size" not in keys_at_every_depth(json.loads(request.content)), request.content
 
 
 def test_validate_environment_maps_guardrail_config_to_invoke_headers():
@@ -234,3 +240,254 @@ def test_transform_response_hands_json_mode_to_nova():
 
     assert result.choices[0].message.tool_calls is None
     assert json.loads(result.choices[0].message.content) == {"city": "Paris", "temperature": 21}
+
+
+def _stream_invoke_completion_with_spied_client(**kwargs: object) -> tuple[MagicMock, MagicMock]:
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.iter_bytes = MagicMock(return_value=iter([]))
+    client = HTTPHandler()
+    client.post = MagicMock(return_value=mock_response)
+
+    litellm.completion(
+        model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        **kwargs,
+    )
+    return mock_response.iter_bytes, client.post
+
+
+def test_completion_stream_chunk_size_reaches_iter_bytes_but_not_invoke_body() -> None:
+    iter_bytes_spy, post_spy = _stream_invoke_completion_with_spied_client(stream_chunk_size=64)
+
+    iter_bytes_spy.assert_called_once_with(chunk_size=64)
+    data: Final = post_spy.call_args.kwargs["data"]
+    assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
+
+
+@pytest.mark.parametrize("request_kwargs", DEFAULT_CHUNKING_REQUESTS)
+def test_completion_uses_default_chunking_unless_a_valid_size_is_requested(
+    request_kwargs: Mapping[str, object],
+) -> None:
+    iter_bytes_spy, _ = _stream_invoke_completion_with_spied_client(**request_kwargs)
+
+    iter_bytes_spy.assert_called_once_with(chunk_size=None)
+
+
+async def _astream_invoke_completion_with_spied_client(**kwargs: object) -> tuple[MagicMock, AsyncMock]:
+    async def _no_bytes():
+        return
+        yield b""
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.aiter_bytes = MagicMock(return_value=_no_bytes())
+    aiter_bytes_spy = mock_response.aiter_bytes
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=mock_response)
+
+    await litellm.acompletion(
+        model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        **kwargs,
+    )
+    return aiter_bytes_spy, client.post
+
+
+@pytest.mark.asyncio
+async def test_acompletion_stream_chunk_size_reaches_aiter_bytes_but_not_invoke_body() -> None:
+    aiter_bytes_spy, post_spy = await _astream_invoke_completion_with_spied_client(stream_chunk_size=64)
+
+    aiter_bytes_spy.assert_called_once_with(chunk_size=64)
+    data: Final = post_spy.call_args.kwargs["data"]
+    assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_kwargs", DEFAULT_CHUNKING_REQUESTS)
+async def test_acompletion_uses_default_chunking_unless_a_valid_size_is_requested(
+    request_kwargs: Mapping[str, object],
+) -> None:
+    aiter_bytes_spy, _ = await _astream_invoke_completion_with_spied_client(**request_kwargs)
+
+    aiter_bytes_spy.assert_called_once_with(chunk_size=None)
+
+
+INVOKE_DEPLOYMENT: Final = MappingProxyType(
+    {
+        "model": "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+        "aws_access_key_id": "fake",
+        "aws_secret_access_key": "fake",
+        "aws_region_name": "us-east-1",
+    }
+)
+
+
+@pytest.mark.parametrize("deployment_extras,expected_chunk_size", ROUTER_CHUNK_SIZE_CASES)
+def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
+    deployment_extras: Mapping[str, object], expected_chunk_size: int | None
+) -> None:
+    mock_response: Final = MagicMock()
+    mock_response.status_code = 200
+    mock_response.iter_bytes = MagicMock(return_value=iter([]))
+    client: Final = HTTPHandler()
+    client.post = MagicMock(return_value=mock_response)
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "invoke-chunked", "litellm_params": {**INVOKE_DEPLOYMENT, **deployment_extras}}],
+        num_retries=0,
+    )
+
+    # the empty body is a stream that ends before its first chunk, which the Router now reports from the call
+    with pytest.raises(litellm.BadGatewayError):
+        router.completion(
+            model="invoke-chunked",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+        )
+
+    mock_response.iter_bytes.assert_called_once_with(chunk_size=expected_chunk_size)
+    data: Final = client.post.call_args.kwargs["data"]
+    assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
+
+
+def test_invoke_stream_rejects_non_int_stream_chunk_size_before_calling_bedrock() -> None:
+    send: Final = MagicMock(return_value=httpx.Response(200))
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(send)))
+
+    with pytest.raises(litellm.BadRequestError):
+        litellm.completion(
+            model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            stream_chunk_size="sixty-four",
+        )
+
+    send.assert_not_called()
+
+
+def test_router_deployment_with_a_non_numeric_stream_chunk_size_gets_a_400_before_calling_bedrock() -> None:
+    send: Final = MagicMock(return_value=httpx.Response(200))
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(send)))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "invoke-chunked",
+                "litellm_params": {**INVOKE_DEPLOYMENT, "stream_chunk_size": "sixty-four"},
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        router.completion(
+            model="invoke-chunked",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+        )
+
+    assert exc_info.value.status_code == 400
+    send.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_provider"),
+    [
+        pytest.param("us.anthropic.claude-3-5-sonnet-20240620-v1:0", "anthropic", id="region-prefixed-model-id"),
+        pytest.param(
+            "arn:aws:bedrock:us-east-1:123:inference-profile/us.meta.llama3-2-90b-instruct-v1:0",
+            "meta",
+            id="inference-profile-arn",
+        ),
+        pytest.param("my-anthropic-and-cohere-model", "cohere", id="two-providers-named-earliest-listed-wins"),
+        pytest.param("us.twelvelabs.pegasus-1-2-v1:0", "twelvelabs", id="provider-listed-late"),
+        pytest.param("unknown-model", None, id="no-provider-named"),
+        pytest.param("", None, id="empty-model"),
+    ],
+)
+def test_get_bedrock_invoke_provider_finds_a_provider_named_anywhere_in_the_model(
+    model: str, expected_provider: str | None
+) -> None:
+    assert AmazonInvokeConfig.get_bedrock_invoke_provider(model) == expected_provider
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_transform_request_meta_llama(monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm, "known_tokenizer_config", dict(litellm.known_tokenizer_config))
+    respx_mock.get(host="huggingface.co").respond(404, text="Entry not found")
+    bedrock_transformer = AmazonInvokeConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    result = bedrock_transformer.transform_request(
+        model="meta.llama2-70b",
+        messages=messages,
+        optional_params={"max_gen_len": 2048},
+        litellm_params={},
+        headers={},
+    )
+
+    expected_result = {"prompt": "Hello", "max_gen_len": 2048}
+    assert result == expected_result
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_custom_prompt_roles_wrap_the_mistral_invoke_prompt(respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/mistral.OpenOrca/invoke"
+    ).mock(return_value=httpx.Response(200, json={"outputs": [{"text": "ok", "stop_reason": "stop"}]}))
+    response: Final = litellm.completion(
+        model="bedrock/mistral.OpenOrca",
+        messages=[{"role": "user", "content": "What's AWS?"}],
+        roles={
+            "system": {"pre_message": "<|im_start|>system\n", "post_message": "<|im_end|>"},
+            "assistant": {"pre_message": "<|im_start|>assistant\n", "post_message": "<|im_end|>"},
+            "user": {"pre_message": "<|im_start|>user\n", "post_message": "<|im_end|>"},
+        },
+        bos_token="<s>",
+        eos_token="<|im_end|>",
+        aws_access_key_id="AKIAEXAMPLEKEY",
+        aws_secret_access_key="example-secret-key",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+
+    assert json.loads(route.calls[0].request.content)["prompt"] == "<|im_start|>user\nWhat's AWS?<|im_end|>"
+    assert response.choices[0].message.content == "ok"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_imported_llama_model_arn_is_encoded_and_max_tokens_become_max_gen_len(respx_mock: respx.Router) -> None:
+    expected_url: Final = (
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+        "arn%3Aaws%3Abedrock%3Aus-east-1%3A086734376398%3Aimported-model%2Fr4c4kewx2s0n/invoke"
+    )
+    route: Final = respx_mock.post(expected_url).mock(
+        return_value=httpx.Response(200, json={"generation": "Here's a joke...", "stop_reason": "stop"})
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n",
+        messages=[{"role": "user", "content": "Tell me a joke"}],
+        max_tokens=100,
+        aws_access_key_id="AKIALLAMAKEY",
+        aws_secret_access_key="llama-secret",
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.content == "Here's a joke..."
+    assert str(route.calls[0].request.url) == expected_url
+    assert json.loads(route.calls[0].request.content) == {"prompt": "Tell me a joke", "max_gen_len": 100}

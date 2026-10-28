@@ -2,22 +2,37 @@
 Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if the cost has been tracked.
 """
 
-from collections.abc import Sequence
+import asyncio
+import json
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Protocol, Tuple, cast
 
+from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
+    ManagedObjectCreatorAttribution,
+    ManagedObjectRow,
+    row_metadata,
+)
+
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
+    BATCH_LINE_ITEMS_MAX_PART_BYTES,
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
 )
+from litellm.repositories.table_repositories import ManagedObjectRepository
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
 
+    from litellm.batches.batch_line_items import BatchFileProvider
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.repositories.prisma_protocols import TableActions
@@ -26,7 +41,12 @@ if TYPE_CHECKING:
     from litellm.types.utils import LiteLLMBatch
 
 
+def _error_names_resource(error: Exception, resource_id: str) -> bool:
+    return resource_id in re.findall(r"""[^\s"'`]+""", str(error))
+
+
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
+RECENT_BATCH_POLL_WINDOW: Final = timedelta(hours=48)
 
 PROVIDER_TERMINAL_BATCH_STATUSES: Final[Tuple[str, ...]] = (
     "completed",
@@ -42,40 +62,33 @@ TERMINAL_MANAGED_OBJECT_STATUSES: Final[Tuple[str, ...]] = (
 )
 
 
-class _ManagedObjectRow(Protocol):
+class _ReadableFileContent(Protocol):
+    async def read(self) -> bytes: ...
+
+
+class _HasFileContent(Protocol):
     @property
-    def id(self) -> str: ...
-
-    @property
-    def unified_object_id(self) -> str: ...
-
-    @property
-    def created_by(self) -> str | None: ...
-
-    @property
-    def file_object(self) -> object: ...
+    def content(self) -> bytes: ...
 
 
-def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[_ManagedObjectRow]":
-    table: Final[TableActions[_ManagedObjectRow]] = prisma_client.db.litellm_managedobjecttable
-    return table
+async def _file_content_bytes(file_content: object) -> bytes:
+    if hasattr(file_content, "content"):
+        return cast(_HasFileContent, file_content).content
+    if hasattr(file_content, "read"):
+        return await cast(_ReadableFileContent, file_content).read()
+    return cast(bytes, file_content)
 
 
-def _user_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_UserTable]":
-    table: Final[TableActions[prisma_models.LiteLLM_UserTable]] = prisma_client.db.litellm_usertable
-    return table
+def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[ManagedObjectRow]":
+    return ManagedObjectRepository(prisma_client).table
 
 
 def _token_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_VerificationToken]":
-    table: Final[TableActions[prisma_models.LiteLLM_VerificationToken]] = (
-        prisma_client.db.litellm_verificationtoken
-    )
-    return table
+    return VerificationTokenRepository(prisma_client).table
 
 
 def _team_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
-    table: Final[TableActions[prisma_models.LiteLLM_TeamTable]] = prisma_client.db.litellm_teamtable
-    return table
+    return TeamRepository(prisma_client).table
 
 
 class CheckBatchCost:
@@ -93,10 +106,20 @@ class CheckBatchCost:
         self.prisma_client: PrismaClient = prisma_client
         self.llm_router: Router = llm_router
         self._track_unmanaged_batch_cost = track_unmanaged_batch_cost
+        self._creator_attribution: Final = ManagedObjectCreatorAttribution(prisma_client, "CheckBatchCost")
         # Cached after the first poll cycle. Once we know the column is absent we skip
         # the guaranteed-failing primary query on every subsequent cycle.
         self._has_batch_processed_column: bool = True
         self.batch_processed_support_confirmed: bool = False
+        self._poll_cursor: tuple[datetime, str] | None = None
+        self._poll_before: datetime = datetime.now(timezone.utc)
+        self._arrival_cursor: tuple[datetime, str] | None = None
+        self._arrival_before: datetime = self._poll_before
+        self._poll_arrivals: bool = False
+        self._line_item_stores: Final[set[asyncio.Task[None]]] = set()
+        self._line_item_store_turn: Final = asyncio.Lock()
+        self._poll_idle: Final = asyncio.Event()
+        self._poll_idle.set()
 
     @staticmethod
     def _is_missing_batch_processed_column_error(err: Exception) -> bool:
@@ -124,127 +147,6 @@ class CheckBatchCost:
             return
         self.batch_processed_support_confirmed = True
 
-    async def _get_user_info(self, batch_id: str, user_id: Optional[str]) -> dict[str, str | None]:
-        """
-        Look up user email and key alias by user_id for enriching the S3 callback metadata.
-        Returns a dict with user_api_key_user_email and user_api_key_alias (both may be None).
-        Returns an empty dict when user_id is None: batches created by a team or service
-        account key carry no user id, and find_unique(where={"user_id": None}) raises.
-        """
-        if not user_id:
-            return {}
-        try:
-            user_row: prisma_models.LiteLLM_UserTable | None = await _user_table(self.prisma_client).find_unique(
-                where={"user_id": user_id}
-            )
-            if user_row is None:
-                return {}
-            return {
-                "user_api_key_user_email": getattr(user_row, "user_email", None),
-                "user_api_key_alias": getattr(user_row, "user_alias", None),
-            }
-        except Exception as e:
-            verbose_proxy_logger.error(f"CheckBatchCost: could not look up user {user_id} for batch {batch_id}: {e}")
-            return {}
-
-    async def _get_key_alias(self, batch_id: str, api_key: str | None) -> str | None:
-        """Resolve the creating virtual key's alias from its hashed token."""
-        if not api_key:
-            return None
-        try:
-            key_row: prisma_models.LiteLLM_VerificationToken | None = await _token_table(
-                self.prisma_client
-            ).find_unique(where={"token": api_key})
-            return getattr(key_row, "key_alias", None) if key_row is not None else None
-        except Exception as e:
-            verbose_proxy_logger.error(f"CheckBatchCost: could not look up key alias for batch {batch_id}: {e}")
-            return None
-
-    async def _get_team_alias(self, team_id: str | None) -> str | None:
-        """Resolve a team's alias from its id."""
-        if not team_id:
-            return None
-        try:
-            team_row: prisma_models.LiteLLM_TeamTable | None = await _team_table(self.prisma_client).find_unique(
-                where={"team_id": team_id}
-            )
-            return getattr(team_row, "team_alias", None) if team_row is not None else None
-        except Exception as e:
-            verbose_proxy_logger.error(f"CheckBatchCost: could not look up team alias for team {team_id}: {e}")
-            return None
-
-    async def _get_org_id(self, job: "_ManagedObjectRow", batch_id: str) -> str | None:
-        org_id = getattr(job, "org_id", None)
-        if org_id:
-            return org_id
-        api_key = getattr(job, "api_key", None)
-        team_id = getattr(job, "team_id", None)
-        if api_key:
-            try:
-                key_row: prisma_models.LiteLLM_VerificationToken | None = await _token_table(
-                    self.prisma_client
-                ).find_unique(where={"token": api_key})
-                key_org_id = getattr(key_row, "organization_id", None) if key_row is not None else None
-                if key_org_id:
-                    return key_org_id
-            except Exception as e:
-                verbose_proxy_logger.error(
-                    f"CheckBatchCost: could not resolve the key's org for batch {batch_id}, "
-                    f"still trying the team's: {e}"
-                )
-        if not team_id:
-            return None
-        try:
-            team_row: prisma_models.LiteLLM_TeamTable | None = await _team_table(self.prisma_client).find_unique(
-                where={"team_id": team_id}
-            )
-            return getattr(team_row, "organization_id", None) if team_row is not None else None
-        except Exception as e:
-            verbose_proxy_logger.error(f"CheckBatchCost: could not resolve the team's org for batch {batch_id}: {e}")
-            return None
-
-    async def _build_creator_attribution_metadata(
-        self, job: "_ManagedObjectRow", batch_id: str
-    ) -> dict[str, object]:
-        """
-        Rebuild the spend-tracking metadata for the key, team, and tags that created the
-        batch so the batch-cost spend log is attributed the same way a non-batch request
-        is. Rows created before api_key and request_tags were persisted carry only
-        created_by and team_id, and fall back to those. A named creating key owns
-        user_api_key_alias; when it has no alias, or the key has since been rotated or
-        deleted, the field keeps the creating user's alias that _get_user_info filled in,
-        because a resolvable name is more useful on the spend row than a null.
-
-        user_api_key_org_id must be resolved here too: the spend update writer reads it
-        off this metadata to increment organization spend, so leaving it out silently
-        drops batch cost from org accounting for keys and teams that belong to one.
-        """
-        api_key = getattr(job, "api_key", None)
-        team_id = getattr(job, "team_id", None)
-        request_tags = getattr(job, "request_tags", None)
-
-        metadata: dict[str, object] = {
-            "user_api_key_user_id": job.created_by,
-            "user_api_key": api_key,
-            "user_api_key_hash": api_key,
-            "user_api_key_team_id": team_id,
-            **(await self._get_user_info(batch_id, job.created_by)),
-        }
-
-        key_alias = await self._get_key_alias(batch_id, api_key)
-        if key_alias is not None:
-            metadata["user_api_key_alias"] = key_alias
-        team_alias = await self._get_team_alias(team_id)
-        if team_alias is not None:
-            metadata["user_api_key_team_alias"] = team_alias
-        org_id: Final = await self._get_org_id(job, batch_id)
-        if org_id is not None:
-            metadata["user_api_key_org_id"] = org_id
-        if isinstance(request_tags, list) and request_tags:
-            metadata["tags"] = [tag for tag in request_tags if isinstance(tag, str)]
-
-        return metadata
-
     async def _cleanup_stale_managed_objects(self) -> None:
         """
         Mark managed objects older than MANAGED_OBJECT_STALENESS_CUTOFF_DAYS days
@@ -266,29 +168,9 @@ class CheckBatchCost:
                 f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
             )
 
-        if not self._has_batch_processed_column:
-            return
-
-        # A row already in a terminal status is never rewritten by the sweep above, so
-        # without this it keeps a poll-page slot forever and starves newer batches.
-        retired: Final = await _managed_object_table(self.prisma_client).update_many(
-            where={
-                "file_purpose": "batch",
-                "batch_processed": False,
-                "status": {"in": ["complete", "completed"]},
-                "created_at": {"lt": cutoff},
-            },
-            data={"batch_processed": True},
-        )
-        if retired > 0:
-            verbose_proxy_logger.warning(
-                f"CheckBatchCost: gave up on {retired} completed managed objects older than "
-                f"{MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days that were never costed"
-            )
-
-    async def _fallback_find_jobs(self) -> "Sequence[_ManagedObjectRow]":
+    async def _fallback_find_jobs(self) -> "Sequence[ManagedObjectRow]":
         """Query batch jobs without the batch_processed filter (for older schemas)."""
-        return await _managed_object_table(self.prisma_client).find_many(
+        return await self._find_jobs(
             where={
                 "file_purpose": "batch",
                 "status": {
@@ -302,38 +184,82 @@ class CheckBatchCost:
                     ]
                 },
             },
-            take=MAX_OBJECTS_PER_POLL_CYCLE,
-            order={"created_at": "asc"},
         )
 
-    async def _retire_job(self, job: "_ManagedObjectRow", reason: str) -> None:
+    async def _find_jobs(self, where: Mapping[str, object]) -> Sequence[ManagedObjectRow]:
+        arrivals: Final = self._poll_arrivals
+        page: Final = await self._find_job_page(where, arrivals=arrivals)
+        self._poll_arrivals = not arrivals if page else arrivals
+        if page:
+            return page
+        return await self._find_job_page(where, arrivals=not arrivals)
+
+    async def _find_job_page(self, where: Mapping[str, object], *, arrivals: bool) -> Sequence[ManagedObjectRow]:
+        cursor: Final = self._arrival_cursor if arrivals else self._poll_cursor
+        if cursor is None:
+            if arrivals:
+                self._arrival_before = datetime.now(timezone.utc)
+            else:
+                self._poll_before = datetime.now(timezone.utc) - RECENT_BATCH_POLL_WINDOW
+        before: Final = self._arrival_before if arrivals else self._poll_before
+        page: Final = await _managed_object_table(self.prisma_client).find_many(
+            where={
+                **where,
+                "created_at": {
+                    "lte": before,
+                    **({"gt": before - RECENT_BATCH_POLL_WINDOW} if arrivals else {}),
+                },
+                **(
+                    {
+                        "OR": [
+                            {"created_at": {"gt": cursor[0]}},
+                            {"created_at": cursor[0], "id": {"gt": cursor[1]}},
+                        ]
+                    }
+                    if cursor is not None
+                    else {}
+                ),
+            },
+            take=MAX_OBJECTS_PER_POLL_CYCLE,
+            order=[{"created_at": "asc"}, {"id": "asc"}],
+        )
+        next_cursor: Final = (page[-1].created_at, page[-1].id) if len(page) == MAX_OBJECTS_PER_POLL_CYCLE else None
+        if arrivals:
+            self._arrival_cursor = next_cursor
+        else:
+            self._poll_cursor = next_cursor
+        return page
+
+    def _unprocessed_snapshot(self, job: ManagedObjectRow) -> Mapping[str, object]:
+        return {
+            "id": job.id,
+            "updated_at": job.updated_at,
+            **({"batch_processed": False} if self._has_batch_processed_column else {}),
+        }
+
+    async def _retire_job(self, job: "ManagedObjectRow", reason: str) -> None:
         """
         Take a row that can never be costed out of the poll page. Leaving it selectable
         would burn one of the MAX_OBJECTS_PER_POLL_CYCLE slots on every future cycle, and
         once enough such rows accumulate no newer batch is ever reached. Older schemas
         without batch_processed can only be excluded through the status filter.
         """
-        data: Final = (
-            {"batch_processed": True}
-            if self._has_batch_processed_column
-            else {"status": "stale_expired"}
-        )
+        data: Final = {"batch_processed": True} if self._has_batch_processed_column else {"status": "stale_expired"}
         try:
-            await _managed_object_table(self.prisma_client).update(
-                where={"id": job.id},
+            retired: Final = await _managed_object_table(self.prisma_client).update_many(
+                where=self._unprocessed_snapshot(job),
                 data=data,
             )
         except Exception as db_err:
-            verbose_proxy_logger.error(
-                f"CheckBatchCost: failed to retire uncostable job {job.id} ({reason}): {db_err}"
-            )
+            verbose_proxy_logger.error(f"CheckBatchCost: failed to retire uncostable job {job.id} ({reason}): {db_err}")
+            return
+        if retired == 0:
             return
         verbose_proxy_logger.warning(
-            f"CheckBatchCost: job {job.id} can never be costed ({reason}), "
-            "so it will no longer be polled"
+            f"CheckBatchCost: job {job.id} can never be costed ({reason}), so it will no longer be polled"
         )
 
-    async def _claim_job_for_costing(self, job: "_ManagedObjectRow") -> bool:
+    async def _claim_job_for_costing(self, job: "ManagedObjectRow", response: "LiteLLMBatch") -> bool:
         """
         Atomically flip batch_processed from false to true, returning whether this pod won
         the row. Every pod and uvicorn worker schedules its own poller against the shared
@@ -347,10 +273,16 @@ class CheckBatchCost:
         """
         if not self._has_batch_processed_column:
             return True
+        from litellm_enterprise.proxy.hooks.managed_files import postgres_storable_json
+
         try:
             claimed: Final = await _managed_object_table(self.prisma_client).update_many(
                 where={"id": job.id, "batch_processed": False},
-                data={"batch_processed": True},
+                data={
+                    "batch_processed": True,
+                    "status": response.status if response.status != "completed" else "complete",
+                    "file_object": postgres_storable_json(response),
+                },
             )
         except Exception as db_err:
             verbose_proxy_logger.error(
@@ -359,7 +291,9 @@ class CheckBatchCost:
             return False
         return claimed > 0
 
-    async def _release_job_claim(self, job: "_ManagedObjectRow") -> None:
+    async def _release_job_claim(
+        self, job: "ManagedObjectRow", original_status: str | None, original_file_object: object
+    ) -> None:
         """Give a claimed row back once billing it failed, so a later poll cycle retries it.
 
         Safe to match on batch_processed=True: while this poller is active the retrieve
@@ -371,7 +305,11 @@ class CheckBatchCost:
         try:
             await _managed_object_table(self.prisma_client).update_many(
                 where={"id": job.id, "batch_processed": True},
-                data={"batch_processed": False},
+                data={
+                    "batch_processed": False,
+                    "status": original_status,
+                    "file_object": json.dumps(original_file_object),
+                },
             )
         except Exception as db_err:
             verbose_proxy_logger.error(
@@ -380,7 +318,7 @@ class CheckBatchCost:
             )
 
     @staticmethod
-    def _has_unified_id_without_model(job: "_ManagedObjectRow") -> bool:
+    def _has_unified_id_without_model(job: "ManagedObjectRow") -> bool:
         """A unified id that decodes but carries no model_id can never be routed."""
         from litellm.proxy.openai_files_endpoints.common_utils import (
             convert_b64_uid_to_unified_uid,
@@ -405,13 +343,13 @@ class CheckBatchCost:
 
         from litellm.exceptions import NotFoundError
 
-        return isinstance(error, (NotFoundError, openai.NotFoundError)) and batch_id in str(error)
+        return isinstance(error, (NotFoundError, openai.NotFoundError)) and _error_names_resource(error, batch_id)
 
     def _batch_deployment_exists(self, model_id: str) -> bool:
         """A 404 only proves the batch is gone when it came from the batch's own
         deployment. Once that deployment leaves the router, default fallbacks can
         silently send the retrieve to a provider that never saw the batch, so its
-        404 must not retire the row; the staleness sweep bounds it instead."""
+        404 must not retire a potentially recoverable row."""
         return self.llm_router.get_deployment(model_id=model_id) is not None
 
     @staticmethod
@@ -426,13 +364,13 @@ class CheckBatchCost:
 
         if not output_file_id:
             return False
-        return isinstance(error, (NotFoundError, openai.NotFoundError)) and output_file_id in str(error)
+        return isinstance(error, (NotFoundError, openai.NotFoundError)) and _error_names_resource(error, output_file_id)
 
     async def _finalize_unbilled_terminal_job(
-        self, job: "_ManagedObjectRow", response: "LiteLLMBatch"
-    ) -> None:
+        self, job: "ManagedObjectRow", response: "LiteLLMBatch"
+    ) -> bool:
         """Persist a terminal batch that has nothing billable, converting any raw
-        provider file ids to managed ids, and take it out of the poll page."""
+        provider file ids to managed ids, and take it out of the poll page. Returns whether it was persisted."""
         try:
             from litellm.proxy.openai_files_endpoints.common_utils import (
                 _is_base64_encoded_unified_file_id,
@@ -448,22 +386,24 @@ class CheckBatchCost:
                 db_batch_object=job,
                 unified_batch_id=_is_base64_encoded_unified_file_id(job.unified_object_id),
             )
-            update_data: Final[dict] = {
+            update_data: Final[dict[str, object]] = {
                 "status": response.status,
                 "file_object": response.model_dump_json(),
                 **({"batch_processed": True} if self._has_batch_processed_column else {}),
             }
-            await _managed_object_table(self.prisma_client).update(
-                where={"id": job.id},
+            finalized: Final = await _managed_object_table(self.prisma_client).update_many(
+                where=self._unprocessed_snapshot(job),
                 data=update_data,
             )
-            verbose_proxy_logger.info(
-                f"CheckBatchCost: marked job {job.id} as {response.status} in DB"
-            )
+            if finalized == 0:
+                return False
+            verbose_proxy_logger.info(f"CheckBatchCost: marked job {job.id} as {response.status} in DB")
+            return True
         except Exception as db_err:
             verbose_proxy_logger.error(
                 f"CheckBatchCost: failed to mark job {job.id} as {response.status} in DB: {db_err}"
             )
+            return False
 
     @staticmethod
     def _record_error(
@@ -474,7 +414,7 @@ class CheckBatchCost:
 
     def _resolve_job_routing(
         self,
-        job: "_ManagedObjectRow",
+        job: "ManagedObjectRow",
         prom_logger: Optional["PrometheusLogger"],
     ) -> Optional[Tuple[str, str]]:
         """
@@ -551,7 +491,7 @@ class CheckBatchCost:
 
     def _resolve_unmanaged_provider_routing(
         self,
-        job: "_ManagedObjectRow",
+        job: "ManagedObjectRow",
         prom_logger: Optional["PrometheusLogger"],
         llm_provider: str,
         bare_model_name: str,
@@ -647,7 +587,7 @@ class CheckBatchCost:
     @classmethod
     def _get_managed_file_model_name(
         cls,
-        job: "_ManagedObjectRow",
+        job: "ManagedObjectRow",
         deployment_info: "Deployment",
     ) -> Optional[str]:
         """
@@ -667,27 +607,26 @@ class CheckBatchCost:
         )
 
     @staticmethod
-    def _get_input_file_id(job: "_ManagedObjectRow") -> Optional[str]:
-        import json
-
+    def _get_input_file_id(job: "ManagedObjectRow") -> Optional[str]:
         from litellm.types.utils import LiteLLMBatch
 
-        file_object = job.file_object
-        if isinstance(file_object, str):
-            try:
-                file_object = json.loads(file_object)
-            except (json.JSONDecodeError, ValueError):
-                return None
-        if not isinstance(file_object, dict):
+        file_object: Final = job.file_object
+        try:
+            parsed_file_object: Final[object] = (
+                json.loads(file_object) if isinstance(file_object, str) else file_object
+            )
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(parsed_file_object, dict):
             return None
         try:
-            return LiteLLMBatch.model_validate(file_object).input_file_id
+            return LiteLLMBatch.model_validate(parsed_file_object).input_file_id
         except Exception:
             return None
 
     async def _track_completed_batch_cost(
         self,
-        job: "_ManagedObjectRow",
+        job: "ManagedObjectRow",
         response: "LiteLLMBatch",
         model_id: str,
         batch_id: str,
@@ -700,16 +639,22 @@ class CheckBatchCost:
         another pod claimed it. Raises on results-fetch or cost-computation
         failures so the caller can leave the job unprocessed and retry it on a
         later poll.
+
         """
         from litellm.batches.batch_utils import (
-            count_error_file_failed_requests,
-            _get_file_content_as_dictionary,
             calculate_batch_cost_and_usage,
+            count_error_file_failed_requests,
+            get_file_content_as_dictionary,
         )
         from litellm.files.main import afile_content
+        from litellm.files.types import FileContentCallOptions
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
         from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-        from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info, mask_api_base_credentials
+        from litellm.litellm_core_utils.litellm_logging import (
+            deployment_pricing_model_info,
+            mask_api_base_credentials,
+            resolve_vertex_location_for_cost,
+        )
         from litellm.proxy.openai_files_endpoints.common_utils import (
             _is_base64_encoded_unified_file_id,
         )
@@ -744,30 +689,22 @@ class CheckBatchCost:
             except (IndexError, AttributeError):
                 pass
 
-        credentials = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
+        credentials: Final = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
         _file_content = await afile_content(
-            file_id=raw_output_file_id,
+            file_id=cast(str, raw_output_file_id),
             _litellm_internal_model_credentials=MappingProxyType(dict(credentials)),
-            **credentials,
+            **cast(FileContentCallOptions, credentials),
         )
 
-        # Access content - handle both direct attribute and method call
-        if hasattr(_file_content, 'content'):
-            content_bytes = _file_content.content  # type: ignore[union-attr]
-        elif hasattr(_file_content, 'read'):
-            content_bytes = await _file_content.read()  # type: ignore[misc]
-        else:
-            content_bytes = _file_content  # type: ignore[assignment]
+        content_bytes: Final = await _file_content_bytes(_file_content)
 
-        file_content_as_dict = _get_file_content_as_dictionary(
-            content_bytes  # type: ignore[arg-type]
-        )
+        file_content_as_dict = get_file_content_as_dictionary(content_bytes)
 
         # Record output file size
         if prom_logger and content_bytes:
             try:
                 prom_logger.record_managed_file_size(
-                    size_bytes=len(content_bytes),  # type: ignore
+                    size_bytes=len(content_bytes),
                     purpose="batch",
                     file_type="output",
                     model=model_id,
@@ -790,34 +727,35 @@ class CheckBatchCost:
             custom_llm_provider=custom_llm_provider,
         )
 
-        # CheckBatchCost bypasses async_post_call_success_hook, so convert raw
-        # output/error file IDs to managed base64 IDs before the DB write here.
-        managed_files_hook = self.proxy_logging_obj.get_proxy_hook("managed_files")
-        if managed_files_hook is not None:
+        from litellm.proxy.openai_files_endpoints.common_utils import ManagedBatchOutputFileWriter
+
+        managed_files_hook: Final = self.proxy_logging_obj.get_proxy_hook("managed_files")
+        if isinstance(managed_files_hook, ManagedBatchOutputFileWriter):
+            managed_file_writer: Final = managed_files_hook
             from litellm.proxy._types import UserAPIKeyAuth
 
-            managed_file_model_name = self._get_managed_file_model_name(
-                job=job, deployment_info=deployment_info
-            )
+            managed_file_model_name = self._get_managed_file_model_name(job=job, deployment_info=deployment_info)
             _minimal_auth = UserAPIKeyAuth(
                 user_id=job.created_by or "default-user-id",
                 team_id=getattr(job, "team_id", None),
             )
             for _file_attr in ["output_file_id", "error_file_id"]:
-                _raw_file_id = getattr(response, _file_attr, None)
+                _raw_file_id = cast(str | None, getattr(response, _file_attr, None))
                 if _raw_file_id and not _is_base64_encoded_unified_file_id(_raw_file_id):
                     try:
-                        _unified_file_id = managed_files_hook.get_unified_output_file_id(
+                        _unified_file_id = managed_file_writer.get_unified_output_file_id(
                             output_file_id=_raw_file_id,
                             model_id=model_id,
                             model_name=managed_file_model_name,
                         )
-                        await managed_files_hook.store_unified_file_id(
-                            file_id=_unified_file_id,
-                            file_object=None,
+                        await managed_file_writer.store_batch_output_file(
+                            unified_file_id=_unified_file_id,
+                            provider_file_id=_raw_file_id,
+                            model_id=model_id,
+                            model_name=managed_file_model_name,
+                            owner=_minimal_auth,
                             litellm_parent_otel_span=None,
-                            model_mappings={model_id: _raw_file_id},
-                            user_api_key_dict=_minimal_auth,
+                            size_bytes=len(content_bytes) if _file_attr == "output_file_id" else None,
                         )
                         setattr(response, _file_attr, _unified_file_id)
                         verbose_proxy_logger.info(
@@ -826,8 +764,7 @@ class CheckBatchCost:
                         )
                     except Exception as _e:
                         verbose_proxy_logger.warning(
-                            f"CheckBatchCost: failed to create managed file ID for "
-                            f"{_file_attr}={_raw_file_id!r}: {_e}"
+                            f"CheckBatchCost: failed to create managed file ID for {_file_attr}={_raw_file_id!r}: {_e}"
                         )
 
         # Pass the deployment's router-registered pricing (litellm_params custom
@@ -846,6 +783,12 @@ class CheckBatchCost:
             custom_llm_provider=batch_file_provider,
             model_name=model_name,
             model_info=deployment_model_info,
+            vertex_location=resolve_vertex_location_for_cost(
+                custom_llm_provider=llm_provider,
+                litellm_params=deployment_info.litellm_params.model_dump(exclude_none=True),
+                optional_params=None,
+                model=model_name,
+            ),
         )
         error_file_failed_requests: Final = await count_error_file_failed_requests(
             response,
@@ -863,8 +806,9 @@ class CheckBatchCost:
                 failed_requests=output_file_result.failed_requests + error_file_failed_requests,
             )
         )
+        logging_model: Final = batch_result.models[0] if batch_result.models else litellm_model_name or model_id
         logging_obj = LiteLLMLogging(
-            model=batch_result.models[0],
+            model=logging_model,
             messages=[{"role": "user", "content": "<retrieve_batch>"}],
             stream=False,
             call_type="aretrieve_batch",
@@ -884,7 +828,7 @@ class CheckBatchCost:
                 },
                 **({"api_base": mask_api_base_credentials(deployment_api_base)} if deployment_api_base else {}),
                 "metadata": {
-                    **(await self._build_creator_attribution_metadata(job, batch_id)),
+                    **(await self._creator_attribution.batch_metadata(job, batch_id)),
                     # spend logs read the deployment identity off these metadata keys, so
                     # without them the batch cost row carries no model_id or model_group
                     "model_info": {"id": model_id},
@@ -895,27 +839,35 @@ class CheckBatchCost:
             custom_llm_provider=str(llm_provider) if llm_provider else None,
         )
 
-        if not await self._claim_job_for_costing(job):
+        original_status: Final = job.status
+        original_file_object: Final = job.file_object
+        if not await self._claim_job_for_costing(job, response.model_copy(update={"usage": batch_result.usage})):
             verbose_proxy_logger.info(
                 f"CheckBatchCost: batch {batch_id} (job {job.id}) was claimed by another pod "
                 "in this window, so its cost is already being tracked there"
             )
             return None
 
-        try:
-            await logging_obj.async_success_handler(
-                result=response,
-                batch_cost=batch_result.cost,
-                batch_usage=batch_result.usage,
-                batch_models=batch_result.models,
-                batch_successful_requests=batch_result.successful_requests,
-                batch_failed_requests=batch_result.failed_requests,
-                batch_prompt_cost=batch_result.prompt_cost,
-                batch_completion_cost=batch_result.completion_cost,
-            )
-        except Exception:
-            await self._release_job_claim(job)
-            raise
+        from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
+
+        with track_batch_accounting(logging_obj.litellm_call_id) as accounting:
+            try:
+                await logging_obj.async_success_handler(
+                    result=response,
+                    batch_cost=batch_result.cost,
+                    batch_usage=batch_result.usage,
+                    batch_models=batch_result.models,
+                    batch_successful_requests=batch_result.successful_requests,
+                    batch_failed_requests=batch_result.failed_requests,
+                    batch_prompt_cost=batch_result.prompt_cost,
+                    batch_completion_cost=batch_result.completion_cost,
+                )
+            finally:
+                if accounting.retryable_failure:
+                    await self._release_job_claim(job, original_status, original_file_object)
+
+        if accounting.retryable_failure:
+            return None
 
         # Record batch duration (completed_at - created_at)
         if prom_logger and response.completed_at and response.created_at:
@@ -929,7 +881,202 @@ class CheckBatchCost:
 
         return model_name, str(llm_provider) if llm_provider else None
 
-    async def check_batch_cost(self):
+    async def _retire_unbilled_terminal_job(
+        self, job: "ManagedObjectRow", response: "LiteLLMBatch", model_id: str, batch_id: str
+    ) -> None:
+        """Persist a terminal batch that has nothing billable, then store its lines, reading its input file by the id
+        the provider reported rather than the managed id that was persisted."""
+        provider_input_file_id: Final = response.input_file_id
+        if await self._finalize_unbilled_terminal_job(job, response):
+            response.input_file_id = provider_input_file_id
+            self._store_batch_line_items_in_background(job, response, model_id, batch_id, billed=False)
+
+    def _store_batch_line_items_in_background(
+        self, job: "ManagedObjectRow", response: "LiteLLMBatch", model_id: str, batch_id: str, *, billed: bool
+    ) -> None:
+        """Store a retired batch's lines off the poll loop, one batch at a time and only between polls, so neither
+        pricing the lines nor a slow or hung bucket holds up billing or retiring the other batches. While a poll
+        cycle's worth of batches is still waiting, the lines of the next one are dropped with an error."""
+        if not litellm.batch_line_item_callbacks:
+            return
+        if len(self._line_item_stores) >= MAX_OBJECTS_PER_POLL_CYCLE:
+            verbose_proxy_logger.error(
+                f"CheckBatchCost: {len(self._line_item_stores)} batches are still waiting to store their line items, "
+                f"so the line items of batch {batch_id} (job {job.id}) were not stored"
+            )
+            return
+        store: Final = asyncio.create_task(
+            self._store_batch_line_items_in_turn(job, response, model_id, batch_id, billed=billed)
+        )
+        self._line_item_stores.add(store)
+        store.add_done_callback(self._line_item_stores.discard)
+
+    async def _store_batch_line_items_in_turn(
+        self, job: "ManagedObjectRow", response: "LiteLLMBatch", model_id: str, batch_id: str, *, billed: bool
+    ) -> None:
+        async with self._line_item_store_turn:
+            await self._poll_idle.wait()
+            await self._store_batch_line_items(job, response, model_id, batch_id, billed=billed)
+
+    async def _store_batch_line_items(
+        self, job: "ManagedObjectRow", response: "LiteLLMBatch", model_id: str, batch_id: str, *, billed: bool
+    ) -> None:
+        """Send every line of a finished batch to batch_line_item_callbacks, one part at a time. A billed batch's
+        output file is read again here, so nothing waiting for its turn holds a batch's files. Failures, including an
+        output file that can no longer be read, are logged and never raised, so the batch stays billed and retired
+        whether or not its lines were stored."""
+        if not litellm.batch_line_item_callbacks:
+            return
+        from litellm.batches.batch_line_items import (
+            BatchFileProvider,
+            BatchLineItemSource,
+            batch_line_item_parts,
+            dispatch_batch_line_items,
+            line_item_metadata,
+        )
+        from litellm.batches.batch_utils import fetch_batch_managed_file_content
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+        from litellm.litellm_core_utils.litellm_logging import (
+            deployment_pricing_model_info,
+            resolve_vertex_location_for_cost,
+        )
+
+        try:
+            deployment_info: Final = self.llm_router.get_deployment(model_id=model_id)
+            if deployment_info is None:
+                verbose_proxy_logger.error(
+                    f"CheckBatchCost: deployment {model_id} is no longer in the router, so the line items of batch "
+                    f"{batch_id} (job {job.id}) were not stored"
+                )
+                return
+            litellm_model_name: Final = deployment_info.litellm_params.model
+            model_name, llm_provider, _, _ = get_llm_provider(
+                model=litellm_model_name,
+                custom_llm_provider=deployment_info.litellm_params.custom_llm_provider,
+            )
+            cost_provider: Final = cast(BatchFileProvider, llm_provider)
+            credentials: Final = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
+            file_access: Final = {
+                **credentials,
+                "_litellm_internal_model_credentials": MappingProxyType(dict(credentials)),
+            }
+            output_content: Final = (
+                await fetch_batch_managed_file_content(
+                    response.output_file_id, custom_llm_provider=cost_provider, litellm_params=file_access
+                )
+                if billed and response.output_file_id
+                else b""
+            )
+            error_content: Final = await self._batch_file_content(response.error_file_id, cost_provider, file_access)
+            if not output_content and not error_content:
+                return
+            redact_bodies: Final = await self._creator_turned_off_message_logging(job)
+            source: Final = BatchLineItemSource(
+                batch_id=job.unified_object_id,
+                finished_at=response.completed_at
+                or response.failed_at
+                or response.expired_at
+                or response.cancelled_at
+                or response.created_at,
+                model=model_name,
+                custom_llm_provider=llm_provider,
+                cost_provider=cost_provider,
+                model_info=deployment_pricing_model_info(model_id=model_id, deployment_model=litellm_model_name),
+                metadata=line_item_metadata(await self._creator_attribution.batch_metadata(job, batch_id)),
+                vertex_location=resolve_vertex_location_for_cost(
+                    custom_llm_provider=llm_provider,
+                    litellm_params=deployment_info.litellm_params.model_dump(exclude_none=True),
+                    optional_params=None,
+                    model=model_name,
+                ),
+            )
+            input_content: Final = (
+                b""
+                if redact_bodies
+                else await self._batch_file_content(response.input_file_id, cost_provider, file_access)
+            )
+            parts: Final = batch_line_item_parts(
+                source, input_content, (output_content, error_content), BATCH_LINE_ITEMS_MAX_PART_BYTES
+            )
+            handed = 0
+            # pricing a part's lines is CPU-bound, so each part is built off the event loop
+            while (payload := await asyncio.to_thread(next, parts, None)) is not None:
+                await dispatch_batch_line_items(payload, redact_bodies=redact_bodies)
+                handed += len(payload["lines"])
+            if handed:
+                verbose_proxy_logger.info(
+                    f"CheckBatchCost: handed the {handed} line items of batch {batch_id} to batch_line_item_callbacks"
+                )
+        except Exception as error:  # noqa: BLE001  # storing the lines is best effort, the batch is already billed
+            verbose_proxy_logger.exception(
+                f"CheckBatchCost: the line items of batch {batch_id} (job {job.id}) were not stored: {error}"
+            )
+
+    @staticmethod
+    async def _batch_file_content(
+        file_id: str | None, custom_llm_provider: "BatchFileProvider", file_access: Mapping[str, object]
+    ) -> bytes:
+        """A batch file's raw JSONL, or nothing when the batch has no such file or the provider will not serve it."""
+        from litellm.batches.batch_utils import fetch_batch_managed_file_content
+
+        if not file_id:
+            return b""
+        try:
+            return await fetch_batch_managed_file_content(
+                file_id, custom_llm_provider=custom_llm_provider, litellm_params=file_access
+            )
+        except Exception as error:  # noqa: BLE001  # a missing input or error file leaves those lines out, not the rest
+            verbose_proxy_logger.warning(f"CheckBatchCost: could not read batch file {file_id}: {error}")
+            return b""
+
+    async def _creator_turned_off_message_logging(self, job: "ManagedObjectRow") -> bool:
+        """Whether the creating key's or team's logging settings turn off message logging, falling back to the
+        proxy-wide setting. A batch whose saved credential is not a virtual key's hash, such as one created under JWT
+        or OAuth2 auth or with the master key, has only its team's and the proxy's settings. A key or team that can no
+        longer be read counts as turned off."""
+        from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.litellm_pre_call_utils import get_dynamic_logging_metadata
+        from litellm.proxy.proxy_server import proxy_config
+        from litellm.secret_managers.main import str_to_bool
+
+        api_key: Final = job.api_key if hasattr(job, "api_key") else None
+        team_id: Final = job.team_id if hasattr(job, "team_id") else None
+        has_key_row: Final = api_key is not None and is_valid_sha256_hash(api_key)
+        try:
+            key_row: Final = (
+                await _token_table(self.prisma_client).find_unique(where={"token": api_key}) if has_key_row else None
+            )
+            team_row: Final = (
+                await _team_table(self.prisma_client).find_unique(where={"team_id": team_id}) if team_id else None
+            )
+        except Exception as error:
+            verbose_proxy_logger.error(
+                f"CheckBatchCost: could not read the logging settings of batch job {job.id}'s creator, "
+                f"so its line items are stored without request and response: {error}"
+            )
+            return True
+        if (has_key_row and key_row is None) or (team_id and team_row is None):
+            return True
+        settings: Final = get_dynamic_logging_metadata(
+            UserAPIKeyAuth(
+                metadata=dict(row_metadata(key_row)), team_metadata=dict(row_metadata(team_row)), team_id=team_id
+            ),
+            proxy_config,
+        )
+        callback_vars: Final = (settings.callback_vars if settings is not None else None) or {}
+        creator_setting: Final = str_to_bool(callback_vars.get("turn_off_message_logging"))
+        return creator_setting if creator_setting is not None else litellm.turn_off_message_logging is True
+
+    async def check_batch_cost(self) -> None:
+        """Run one poll cycle. Batch line items wait until it has billed and retired every batch it found."""
+        self._poll_idle.clear()
+        try:
+            await self._poll_batches()
+        finally:
+            self._poll_idle.set()
+
+    async def _poll_batches(self):
         """
         Check if the batch JOB has been tracked.
         - get all status="validating" and file_purpose="batch" jobs
@@ -939,6 +1086,7 @@ class CheckBatchCost:
         """
         try:
             from litellm.integrations.prometheus import PrometheusLogger
+
             prom_logger = PrometheusLogger.get_instance()
         except Exception as e:
             verbose_proxy_logger.error(f"CheckBatchCost: could not get Prometheus logger: {e}")
@@ -963,7 +1111,7 @@ class CheckBatchCost:
                 # endpoint may transition a batch to "complete" before
                 # CheckBatchCost runs.  The batch_processed=False filter
                 # already prevents reprocessing finished batches.
-                jobs = await _managed_object_table(self.prisma_client).find_many(
+                jobs = await self._find_jobs(
                     where={
                         "file_purpose": "batch",
                         "batch_processed": False,
@@ -976,8 +1124,6 @@ class CheckBatchCost:
                             ]
                         },
                     },
-                    take=MAX_OBJECTS_PER_POLL_CYCLE,
-                    order={"created_at": "asc"},
                 )
                 self.batch_processed_support_confirmed = True
             except Exception as query_err:
@@ -1023,10 +1169,7 @@ class CheckBatchCost:
                 continue
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
-            if (
-                response.status in PROVIDER_TERMINAL_BATCH_STATUSES
-                and response.output_file_id is not None
-            ):
+            if response.status in PROVIDER_TERMINAL_BATCH_STATUSES and response.output_file_id is not None:
                 try:
                     tracked = await self._track_completed_batch_cost(
                         job=job,
@@ -1043,11 +1186,11 @@ class CheckBatchCost:
                             f"CheckBatchCost: output file {response.output_file_id} of batch {batch_id} "
                             f"does not exist at the provider; retiring job {job.id} unbilled"
                         )
-                        await self._finalize_unbilled_terminal_job(job, response)
+                        await self._retire_unbilled_terminal_job(job, response, model_id, batch_id)
                         continue
                     verbose_proxy_logger.error(
                         f"CheckBatchCost: failed to track cost for batch {batch_id} "
-                        f"(job {job.id}); leaving it unprocessed so the next poll retries: {tracking_err}"
+                        f"(job {job.id}): {tracking_err}"
                     )
                     self._record_error(prom_logger, "cost_tracking_error")
                     continue
@@ -1057,22 +1200,21 @@ class CheckBatchCost:
                 # Track this job for the final metrics summary
                 processed_models.append(tracked)
 
-                # mark the job as complete
-                try:
-                    update_data: dict = {
-                        "status": response.status if response.status != "completed" else "complete",
-                        "file_object": response.model_dump_json(),
-                    }
-                    if self._has_batch_processed_column:
-                        update_data["batch_processed"] = True
-                    await _managed_object_table(self.prisma_client).update(
-                        where={"id": job.id},
-                        data=update_data,
-                    )
-                except Exception as db_err:
-                    verbose_proxy_logger.error(
-                        f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
-                    )
+                if not self._has_batch_processed_column:
+                    try:
+                        await _managed_object_table(self.prisma_client).update(
+                            where={"id": job.id},
+                            data={
+                                "status": response.status if response.status != "completed" else "complete",
+                                "file_object": response.model_dump_json(),
+                            },
+                        )
+                    except Exception as db_err:
+                        verbose_proxy_logger.error(
+                            f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
+                        )
+                        continue
+                self._store_batch_line_items_in_background(job, response, model_id, batch_id, billed=True)
 
             elif response.status in PROVIDER_TERMINAL_BATCH_STATUSES:
                 from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -1085,7 +1227,7 @@ class CheckBatchCost:
                         f"has not appeared yet; leaving job {job.id} for the next poll cycle"
                     )
                     continue
-                await self._finalize_unbilled_terminal_job(job, response)
+                await self._retire_unbilled_terminal_job(job, response, model_id, batch_id)
 
         # Record polling run metrics (always, even if nothing was processed)
         if prom_logger:

@@ -1,7 +1,8 @@
 use std::{future::Future, pin::Pin, time::Duration};
 
 use litellm_cache::{
-    BaseCache, BatchCache, CacheConnectionResult, Error, ExactCacheContext, FlushCache,
+    BaseCache, BatchCache, CacheConnectionResult, ConnectionCache, Error, ExactCacheContext,
+    FlushCache,
 };
 use serde_json::Value;
 
@@ -61,8 +62,23 @@ pub trait ExactResponseCache: Send + Sync {
     ) -> BoxFuture<'a, Result<(), Error>>;
 
     fn async_flush<'a>(&'a self) -> BoxFuture<'a, Result<(), Error>>;
+}
 
+/// Object-safe `test_connection` for the exact backends whose Python class defines it. Hosts hold
+/// one next to their `ExactResponseCache` when the backend has it, and report the operation as
+/// unsupported otherwise, as Python's `BaseCache.test_connection` does.
+pub trait ConnectionProbe: Send + Sync {
     fn test_connection<'a>(&'a self) -> BoxFuture<'a, Result<CacheConnectionResult, Error>>;
+}
+
+impl<B> ConnectionProbe for ResponseCache<B>
+where
+    B: ConnectionCache<Value = CacheEntry>,
+    B::Context: Default + PartialEq,
+{
+    fn test_connection<'a>(&'a self) -> BoxFuture<'a, Result<CacheConnectionResult, Error>> {
+        Box::pin(ResponseCache::test_connection(self))
+    }
 }
 
 impl<B> ExactResponseCache for ResponseCache<B>
@@ -140,9 +156,5 @@ where
 
     fn async_flush<'a>(&'a self) -> BoxFuture<'a, Result<(), Error>> {
         Box::pin(ResponseCache::async_flush(self))
-    }
-
-    fn test_connection<'a>(&'a self) -> BoxFuture<'a, Result<CacheConnectionResult, Error>> {
-        Box::pin(ResponseCache::test_connection(self))
     }
 }

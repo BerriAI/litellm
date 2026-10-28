@@ -1,6 +1,12 @@
 # tests/unit
 
-In-process. No network, clock or subprocess
+In-process. No network or subprocess. `interactions/test_openapi_compliance.py` reads the spec snapshot beside it,
+and only the `interactions-spec-canary` workflow passes `--interactions-spec-url` (registered in
+`interactions/conftest.py`, so name that file or directory on the command line) with `ai.google.dev` allowed, to run
+the same tests against Google's live spec
+
+Unit tests must not depend on the current time or execution speed. Use fixed timestamps for fixtures
+and controlled clocks for time-dependent behavior. Incidental clock reads inside production code are allowed
 
 ## What good looks like
 
@@ -23,14 +29,14 @@ with patch.object(streamer, "_group_by_date") as mock_group, patch.object(stream
     assert mock_send.call_count == 2
 ```
 
-Green if `send_batched` drops every row. pydantic doubles in 12 of 203 files, fastapi 11 of 594;
+Green if `send_batched` drops every row. pydantic doubles in 12 of 203 files, fastapi 11 of 594.
 `tests/test_litellm` 59 percent. Exception: the count is the behaviour
 (`test_dual_cache_async_batch_get_cache_coalesces_concurrent_redis_reads`, fifty readers, `call_count == 1`)
 
 ## Where it goes
 
 `tests/unit/<path>` mirrors `litellm/<path>`, so a changed file selects its tests by path, not a mapping
-file. Empty today; new unit tests go here. The examples above live in `tests/test_litellm`
+file. New unit tests go here
 
 ## Writing it so a human can read it
 

@@ -7,6 +7,7 @@ import logging
 from abc import ABC
 from typing import Final
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation, log_redis_failure
@@ -23,6 +24,8 @@ class BaseRoutingStrategy(ABC):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: list[RedisPipelineIncrementOperation] = []
         self._sync_task: asyncio.Task[None] | None = None
+        self._retired = False
+        self._flush_after_retire: asyncio.Task[None] | None = None
         if should_batch_redis_writes:
             self.setup_sync_task(default_sync_interval)
 
@@ -40,10 +43,36 @@ class BaseRoutingStrategy(ABC):
             self.periodic_sync_in_memory_spend_with_redis(default_sync_interval=default_sync_interval)
         )
 
+    def cancel_sync_task(self) -> None:
+        if self._sync_task is not None:
+            self._sync_task.cancel()
+
+    def retire(self) -> None:
+        self.cancel_sync_task()
+        self._retired = True
+        self._schedule_flush_after_retire()
+
+    def _schedule_flush_after_retire(self) -> None:
+        if self._flush_after_retire is not None and not self._flush_after_retire.done():
+            return
+        if not self.redis_increment_operation_queue or self.dual_cache.redis_cache is None:
+            return
+        try:
+            loop: Final = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._flush_after_retire = loop.create_task(self._drain_increments_after_retire())
+
+    async def _drain_increments_after_retire(self) -> None:
+        if not self.redis_increment_operation_queue:
+            return
+        await self._push_in_memory_increments_to_redis()
+        await self._drain_increments_after_retire()
+
     async def cleanup(self):
         """Cleanup method to be called when shutting down"""
         if self._sync_task is not None:
-            self._sync_task.cancel()
+            self.cancel_sync_task()
             try:
                 await self._sync_task
             except asyncio.CancelledError:
@@ -83,8 +112,11 @@ class BaseRoutingStrategy(ABC):
 
         self.redis_increment_operation_queue.append(increment_op)
         self.add_to_in_memory_keys_to_update(key=key)
+        if self._retired:
+            self._schedule_flush_after_retire()
         return result
 
+    @with_service_target("router_usage")
     async def periodic_sync_in_memory_spend_with_redis(self, default_sync_interval: float | None):
         """
         Handler that triggers sync_in_memory_spend_with_redis every DEFAULT_REDIS_SYNC_INTERVAL seconds
@@ -104,6 +136,7 @@ class BaseRoutingStrategy(ABC):
                     default_sync_interval
                 )  # Still wait DEFAULT_REDIS_SYNC_INTERVAL seconds on error before retrying
 
+    @with_service_target("router_usage")
     async def _push_in_memory_increments_to_redis(self):
         """
         How this works:

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from litellm.llms.stability.image_generation import StabilityImageGenerationConfig
 from litellm.types.llms.stability import (
@@ -304,3 +305,35 @@ class TestStabilityGenerationModels:
             STABILITY_GENERATION_MODELS["stable-image-core"]
             == "/v2beta/stable-image/generate/core"
         )
+
+
+def _transform(payload: object) -> ImageResponse:
+    return StabilityImageGenerationConfig().transform_image_generation_response(
+        model="sd3",
+        raw_response=httpx.Response(200, json=payload),
+        model_response=ImageResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+def test_transform_image_generation_response_returns_the_base64_image():
+    response = _transform({"image": "QUJD", "finish_reason": "SUCCESS", "seed": 7})
+
+    assert [(image.b64_json, image.url) for image in response.data] == [("QUJD", None)]
+
+
+@pytest.mark.parametrize("payload", [{}, {"image": ""}, {"image": None, "finish_reason": None}])
+def test_transform_image_generation_response_without_an_image_has_no_data(payload: dict[str, object]):
+    assert _transform(payload).data == []
+
+
+@pytest.mark.parametrize("payload", ["base64encodedimage==", ["base64encodedimage=="]])
+def test_transform_image_generation_response_rejects_non_object_bodies(payload: object):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform(payload)
+
+    assert "base64encodedimage" not in str(exc_info.value)

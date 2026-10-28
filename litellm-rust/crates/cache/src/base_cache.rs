@@ -122,36 +122,4 @@ pub trait BaseCache: Send + Sync {
     ) -> impl Future<Output = Result<(), Error>> + Send {
         self.async_set_cache(key, value, context)
     }
-
-    fn disconnect(&self) -> impl Future<Output = Result<(), Error>> + Send;
-
-    fn test_connection(&self) -> impl Future<Output = Result<CacheConnectionResult, Error>> + Send;
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use serde_json::json;
-
-    use super::{CacheContext, SemanticCacheContext};
-
-    #[test]
-    fn semantic_context_with_ttl_only_replaces_ttl() {
-        let context = SemanticCacheContext {
-            input: Some(json!({"input": "hello"})),
-            messages: Some(json!([{"role": "user", "content": "hello"}])),
-            metadata: Some(json!({"tenant": "team"})),
-            scope: Some("scope".into()),
-            ttl: Some(Duration::from_secs(10)),
-        };
-
-        let updated = context.with_ttl(Some(Duration::from_secs(20)));
-
-        assert_eq!(updated.ttl, Some(Duration::from_secs(20)));
-        assert_eq!(updated.input, context.input);
-        assert_eq!(updated.messages, context.messages);
-        assert_eq!(updated.metadata, context.metadata);
-        assert_eq!(updated.scope, context.scope);
-    }
 }

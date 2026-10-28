@@ -1,13 +1,19 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { renderWithProviders } from "../../../tests/test-utils";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import { keyDeleteCall, keyUpdateCall } from "../networking";
+import { keyDeleteCall, keyUpdateCall, teamInfoCall } from "../networking";
 import { QueryClient } from "@tanstack/react-query";
-import KeyInfoView from "./key_info_view";
+import KeyInfoView, { needsLifetimeSpendBackfill } from "./key_info_view";
+
+vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
+  useModelAccessGroupNames: vi.fn(() => new Set<string>()),
+}));
+
+import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 
 const editViewMocks = vi.hoisted(() => ({
   onSubmit: undefined as ((v: Record<string, any>) => Promise<void>) | undefined,
@@ -86,6 +92,7 @@ vi.mock("../networking", () => ({
   serverRootPath: "",
   keyDeleteCall: vi.fn().mockResolvedValue({}),
   keyUpdateCall: vi.fn().mockResolvedValue({}),
+  teamInfoCall: vi.fn(),
   getPolicyInfoWithGuardrails: vi.fn().mockResolvedValue({
     resolved_guardrails: ["guardrail-1", "guardrail-2"],
   }),
@@ -108,6 +115,7 @@ vi.mock("@/utils/dataUtils", () => ({
 
 describe("KeyInfoView", () => {
   beforeEach(() => {
+    vi.mocked(teamInfoCall).mockReset();
     vi.mocked(useTeams).mockReturnValue({
       teams: [],
       setTeams: vi.fn(),
@@ -122,6 +130,7 @@ describe("KeyInfoView", () => {
     total_spend: 0,
     max_budget: 0,
     expires: "null",
+    key_type: null,
     models: [],
     aliases: {},
     config: {},
@@ -148,6 +157,7 @@ describe("KeyInfoView", () => {
     litellm_budget_table: {},
     organization_id: null,
     created_at: "2025-10-29T01:26:41.613000Z",
+    last_active: null,
     updated_at: "2025-10-29T01:47:33.980000Z",
     team_spend: 100,
     team_alias: "",
@@ -190,12 +200,28 @@ describe("KeyInfoView", () => {
     accessToken: "test-token",
     userId: "test-user",
     userRole: "admin",
+    userRoleLabel: "Admin",
     premiumUser: true,
     token: "test-token",
     userEmail: null,
     disabledPersonalKeyCreation: null,
+    isLoading: false,
+    isAuthorized: true,
+    isViewOnly: false,
+    loginMethod: null,
+    passwordResetRequired: false,
     showSSOBanner: false,
   };
+
+  const authorizedForTeamBudget = {
+    ...baseUseAuthorizedMock,
+    isLoading: false,
+    isAuthorized: true,
+    userRoleLabel: "Admin",
+    isViewOnly: false,
+    loginMethod: null,
+    passwordResetRequired: false,
+  } satisfies ReturnType<typeof useAuthorized>;
 
   const openMoreKeyActions = async () => {
     await userEvent.click(await screen.findByRole("button", { name: /more key actions/i }));
@@ -288,6 +314,118 @@ describe("KeyInfoView", () => {
 
     expect(await screen.findByText("$0.2500")).toBeInTheDocument();
     expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime spend: $340.5000");
+  });
+
+  it("shows a team-member budget for a key without its own budget", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(authorizedForTeamBudget);
+    vi.mocked(teamInfoCall).mockResolvedValue({
+      team_info: {
+        team_id: "member-budget-info-team",
+        team_alias: "Test Team",
+        team_member_budget_table: { max_budget: 50, budget_duration: "30d" },
+      },
+      team_memberships: [{ user_id: "owner-user-id", spend: 45, litellm_budget_table: null }],
+    } as never);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={
+          {
+            ...MOCK_KEY_DATA,
+            max_budget: null,
+            team_id: "member-budget-info-team",
+            user_id: "owner-user-id",
+            user: { user_id: "owner-user-id", user_email: "owner@example.com", user_alias: null },
+          } as unknown as KeyResponse
+        }
+        onClose={() => {}}
+        keyId="test-key-id"
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByText("Team member spend $45.0000 of $50.00 (team member budget)")).toBeInTheDocument();
+    expect(screen.queryByText("of Unlimited")).not.toBeInTheDocument();
+    expect(teamInfoCall).toHaveBeenCalledWith("test-token", "member-budget-info-team", { keyLimit: 1 });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(await screen.findByText("$50.00 (team member budget)")).toBeInTheDocument();
+  });
+
+  it("keeps an own key budget in the Overview when a team-member budget exists", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(authorizedForTeamBudget);
+    vi.mocked(teamInfoCall).mockResolvedValue({
+      team_info: {
+        team_id: "own-budget-info-team",
+        team_alias: "Test Team",
+        team_member_budget_table: { max_budget: 50, budget_duration: "30d" },
+      },
+      team_memberships: [],
+    } as never);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, max_budget: 20, team_id: "own-budget-info-team", user_id: "owner-user-id" }}
+        onClose={() => {}}
+        keyId="test-key-id"
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByText("of $20.00")).toBeInTheDocument();
+    expect(teamInfoCall).not.toHaveBeenCalled();
+  });
+
+  it("shows the backfill hint when lifetime spend trails the period spend", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, spend: 10, total_spend: 4 }}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByTestId("key-lifetime-spend-backfill-hint")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /lifetime spend is below/i })).toBeInTheDocument();
+    expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime spend: $4.0000");
+  });
+
+  it("hides the backfill hint when lifetime spend covers the period spend", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, spend: 0.25, total_spend: 340.5 }}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByTestId("key-lifetime-spend")).toBeInTheDocument();
+    expect(screen.queryByTestId("key-lifetime-spend-backfill-hint")).not.toBeInTheDocument();
+  });
+
+  describe("needsLifetimeSpendBackfill", () => {
+    it("returns true when total spend is below the period spend", () => {
+      expect(needsLifetimeSpendBackfill(10, 4)).toBe(true);
+    });
+
+    it("returns false when total spend equals or exceeds the period spend", () => {
+      expect(needsLifetimeSpendBackfill(10, 10)).toBe(false);
+      expect(needsLifetimeSpendBackfill(10, 12)).toBe(false);
+    });
+
+    it("treats a missing total spend as zero", () => {
+      expect(needsLifetimeSpendBackfill(10, null)).toBe(true);
+      expect(needsLifetimeSpendBackfill(10, undefined)).toBe(true);
+      expect(needsLifetimeSpendBackfill(0, null)).toBe(false);
+    });
   });
 
   it("should render the key's saved router fallbacks", async () => {
@@ -587,6 +725,7 @@ describe("KeyInfoView", () => {
     beforeEach(() => {
       vi.mocked(useTeams).mockReturnValue({ teams: [mockTeam], setTeams: vi.fn() });
       vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+      vi.mocked(useModelAccessGroupNames).mockReturnValue(new Set());
     });
 
     it("links the key's team by alias, resolved from the teams list, to the team page", async () => {
@@ -649,6 +788,37 @@ describe("KeyInfoView", () => {
         "href",
         expect.stringContaining("/models-and-endpoints?model_group=anthropic%2F*"),
       );
+    });
+
+    it("links access-group model chips to the access-group filter", async () => {
+      vi.mocked(useModelAccessGroupNames).mockReturnValue(new Set(["repro-access-group"]));
+      const keyData = { ...MOCK_KEY_DATA, models: ["repro-access-group"] };
+      renderWithProviders(
+        <KeyInfoView keyData={keyData} onClose={() => {}} keyId="test-key-id" onKeyDataUpdate={() => {}} teams={[]} />,
+      );
+
+      expect(await screen.findByRole("link", { name: "repro-access-group" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?access_group=repro-access-group$/),
+      );
+
+      await userEvent.setup({ delay: null }).click(screen.getByRole("tab", { name: "Settings" }));
+      const settings = await screen.findByRole("tabpanel", { name: "Settings" });
+      expect(within(settings).getByRole("link", { name: "repro-access-group" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?access_group=repro-access-group$/),
+      );
+    });
+
+    it("keeps access-group model chips unlinked while access-group names are loading", async () => {
+      vi.mocked(useModelAccessGroupNames).mockReturnValue(undefined);
+      const keyData = { ...MOCK_KEY_DATA, models: ["repro-access-group"] };
+      renderWithProviders(
+        <KeyInfoView keyData={keyData} onClose={() => {}} keyId="test-key-id" onKeyDataUpdate={() => {}} teams={[]} />,
+      );
+
+      expect(await screen.findAllByText("repro-access-group")).not.toHaveLength(0);
+      expect(screen.queryByRole("link", { name: "repro-access-group" })).not.toBeInTheDocument();
     });
 
     it("keeps the all-proxy-models grant chip non-clickable", async () => {

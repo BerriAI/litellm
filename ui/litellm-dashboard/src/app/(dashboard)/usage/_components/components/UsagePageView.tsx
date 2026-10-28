@@ -6,48 +6,56 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { ChevronDown, ChevronRight, Download, Info, Sparkles, X } from "lucide-react";
+import { Download, Link2, Search, X } from "lucide-react";
+import { useQueryStates } from "nuqs";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { BarChart } from "@/components/shared/charts";
+import { StackedUsageChart } from "@/components/shared/charts";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
-import PaginationStatusAlerts from "@/components/shared/PaginationStatusAlerts";
+import { ErrorState } from "@/components/shared/ErrorState";
 import { Button } from "@/components/ui/button";
-import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { toast } from "@/lib/toast";
 import { hasCapability } from "@/utils/capabilities";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { all_admin_roles, internalUserRoles } from "@/utils/roles";
+import { copyToClipboard } from "@/utils/dataUtils";
+import { hasProxyWideSpendView, internalUserRoles } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
-import { getApiKeyTruncation, getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
+import type { EntityType } from "@/components/EntityUsageExport/types";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
+import TopUsersView from "@/components/UsagePage/components/TopUsersView";
+import UserActivityPanel from "@/components/UsagePage/components/UserActivityPanel";
+import { filterModelActivity } from "@/components/UsagePage/modelActivityFilter";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
   gatewayDailyActivityCall,
   Organization,
+  requestErrorActivityCall,
   tagListCall,
-  userDailyActivityAggregatedCall,
-  userDailyActivityCall,
+  userDailyActivityUserPageCall,
 } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
-import { ChartLoader } from "@/components/shared/chart_loader";
 import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
-import ViewUserSpend from "@/components/view_user_spend";
-import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
-import { DailyData, MetricWithMetadata } from "@/components/UsagePage/types";
-import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
+import { useAggregatedDailyActivity } from "../hooks/useAggregatedDailyActivity";
+import { ENTITY_API } from "./EntityUsage/entityFetchFns";
+import {
+  EMPTY_DAILY_ACTIVITY_METADATA,
+  toDailyData,
+  type DailyActivityRequest,
+} from "@/components/UsagePage/dailyActivityApi";
+import { keyDetailFromResponse, overallUsageMetrics } from "@/components/UsagePage/keyActivityData";
 import {
   fetchedRangeKey,
   selectForRange,
@@ -57,47 +65,77 @@ import {
   type FetchedGatewayActivity,
   type GatewayActivity,
 } from "./gatewayActivity";
+import ErrorsTab from "./errors/ErrorsTab";
+import type { RequestErrorActivity } from "./errors/errorsData";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
-import SpendByProvider from "./EntityUsage/SpendByProvider";
-import { TOP_MODEL_LIMITS } from "./EntityUsage/TopModelView";
 import TopKeyView, { type TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { getGlobalTopKeys } from "./EntityUsage/entityUsageAggregations";
-import UsageAIChatPanel from "./UsageAIChatPanel";
-import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
+import { AriaUsageComposer, AriaUsageTrigger } from "@/components/liteadmin/LiteAdmin";
+import { allowedUsageOptions, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
+import UserRecordLink from "./UserRecordLink";
+import {
+  CLIENT_USAGE_VIEWS,
+  cleanUsageUrl,
+  clientDateRangeFromParams,
+  clientDateRangePatch,
+  clientPanelPatch,
+  dateRangeFromParams,
+  defaultUsageDateRange,
+  dateRangePatch,
+  entitySelectionPatch,
+  selectedEntitiesFromParams,
+  DEFAULT_USAGE_VIEW,
+  usageTabFromParams,
+  usageTabPatch,
+  usageUrlParsers,
+  usageViewFromParams,
+  usageViewPatch,
+} from "../usageUrlState";
+import { overviewTotals, rollUpBreakdown } from "./overview/overviewData";
+import TopAgents from "./overview/TopAgents";
+import { parseUsageClient, topAgents, type AgentRow } from "./overview/agentCatalog";
+import ClientUsagePanel from "./ClientUsagePanel";
+import { resolveClientUsageScope } from "../hooks/clientUsageScope";
+import { useUsagePanelContext } from "../hooks/useUsagePanelContext";
+import ClientUsageSelect from "./ClientUsageSelect";
+import SpendByProvider from "./EntityUsage/SpendByProvider";
+import { useTagSummary } from "@/app/(dashboard)/hooks/tags/useTagSummary";
+import { Panel } from "./overview/Primitives";
+import UsageOverview from "./overview/UsageOverview";
 
 interface UsagePageProps {
   teams: Team[];
   organizations: Organization[];
+  teamsLoading?: boolean;
+  defaultTimeRange?: string;
 }
 
-const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
-  const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
-  // Aggregated endpoint: try first, fall back to paginated if unavailable
-  const [aggregatedData, setAggregatedData] = useState<FetchedForRange<{
-    results: DailyData[];
-    metadata: any;
-  }> | null>(null);
-  // Stamped like the data itself: the flag decides whether the paginated
-  // fallback is read, and a flag left over from the previous range would let
-  // that fallback's own leftover rows through.
-  const [aggregatedFailure, setAggregatedFailure] = useState<FetchedForRange<true> | null>(null);
-  const [aggregatedLoading, setAggregatedLoading] = useState(false);
+const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoading = false, defaultTimeRange }) => {
+  const { accessToken, userRole, userId: userID, premiumUser, isLoading: authorizationLoading } = useAuthorized();
   const [gatewayActivityData, setGatewayActivityData] = useState<FetchedGatewayActivity | null>(null);
 
-  // Separate loading states for better UX
-  const [isDateChanging, setIsDateChanging] = useState(false);
+  const defaultRange = useMemo(() => defaultUsageDateRange(defaultTimeRange), [defaultTimeRange]);
 
-  // Create initial dates outside of state to prevent recreation
-  const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), []);
-  const initialToDate = useMemo(() => new Date(), []);
+  const [urlParams, setUrlParams] = useQueryStates(usageUrlParsers);
+  const { range, from, to } = urlParams;
+  const dateValue = useMemo<DateRangePickerValue>(
+    () => dateRangeFromParams({ range, from, to }) ?? defaultRange.value,
+    [range, from, to, defaultRange],
+  );
 
-  // Single date state that directly triggers data fetching
-  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: initialFromDate,
-    to: initialToDate,
-  });
+  const presetShortLabel = range ?? (from === null && to === null ? defaultRange.preset : null);
+
+  const { client_range, client_from, client_to } = urlParams;
+  const clientDateValue = useMemo<DateRangePickerValue>(
+    () => clientDateRangeFromParams({ client_range, client_from, client_to }) ?? dateValue,
+    [client_range, client_from, client_to, dateValue],
+  );
+  const clientStartTime = clientDateValue.from ?? null;
+  const clientEndTime = clientDateValue.to ?? null;
+  const clientInheritsRange =
+    clientStartTime?.getTime() === dateValue.from?.getTime() && clientEndTime?.getTime() === dateValue.to?.getTime();
 
   const [fetchedTags, setFetchedTags] = useState<FetchedForRange<EntityList[]> | null>(null);
   // No [] default: an unresolved query must stay undefined so the customer
@@ -105,44 +143,72 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { data: customers } = useCustomers();
   const { data: agentsResponse } = useAgents();
   const { data: currentUser } = useCurrentUser();
-  const isAdmin = all_admin_roles.includes(userRole || "");
+  const isAdmin = hasProxyWideSpendView(userRole);
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
   const isOrgAdmin = useIsOrgAdmin();
-  const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage", isOrgAdmin);
   const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
+  const allowedViews = useMemo(
+    () => allowedUsageOptions(userRole, canViewTagUsage, isOrgAdmin),
+    [userRole, canViewTagUsage, isOrgAdmin],
+  );
 
-  // For admins: null means global view (all users), a string means filter by that user
-  // For non-admins: always set to their own user ID
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(isAdmin ? null : userID || null);
   const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
+  const [modelQuery, setModelQuery] = useState("");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
-  const [isAiChatOpen, setIsAiChatOpen] = useState(false);
-  const [selectedUsageView, setUsageView] = useState<UsageOption>("global");
-  // Org-admin membership is read from the server, so unlike the other usage
-  // views this one can be revoked while the page is open. Derive the view in
-  // render rather than storing it, so the fallback lands on the same paint and
-  // the selector never holds a value it no longer offers.
-  const usageView: UsageOption =
-    selectedUsageView === "organization" && !canViewOrganizationUsage ? "global" : selectedUsageView;
+  const selectedUsageView = usageViewFromParams(urlParams);
+  const selectedTab = usageTabFromParams(urlParams, isAdmin);
+  const usageView = allowedViews.includes(selectedUsageView) ? selectedUsageView : DEFAULT_USAGE_VIEW;
+
+  const selectedClient = CLIENT_USAGE_VIEWS.includes(usageView) ? urlParams.client : null;
+
+  const { pageRef, remember: rememberUsageContext } = useUsagePanelContext(selectedClient !== null);
 
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
-  const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
-  const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);
-  // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
-  useEffect(() => {
-    if (!isAdmin && userID) {
-      setSelectedUserId(userID);
-    }
-  }, [isAdmin, userID]);
-
   // For non-admins or "my-usage" view, always pass their own user_id
-  const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : selectedUserId;
+  const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : urlParams.user;
+
+  const clientScopeInput = {
+    userId: userID,
+    userRole,
+    teams,
+    requestedTeamId: urlParams.client_team,
+    requestedUserId: urlParams.client_user ?? (urlParams.client_team ? null : effectiveUserId),
+    ownUsage: usageView === "my-usage",
+  };
+  const clientScope = resolveClientUsageScope(clientScopeInput);
+  const clientTeamId = usageView === "my-usage" ? null : urlParams.client_team || null;
+  const clientUserId = clientScope.scope?.userId ?? (clientTeamId ? urlParams.client_user || null : null);
+  const canViewTeamClients = clientScope.administeredTeams.length > 0;
+  const openClientPanel = (client: typeof selectedClient) => {
+    rememberUsageContext();
+    const initialTeam = usageView === "team" ? urlParams.team[0] ?? clientScope.administeredTeams[0]?.value : null;
+    void setUrlParams(
+      { ...clientPanelPatch(client), client_team: client ? initialTeam ?? null : null },
+      { scroll: false },
+    );
+  };
+
+  const { isLoading: organizationsLoading } = useOrganizations();
+  const authorizationSettled = !authorizationLoading && userRole !== null;
+  const accessSettled = authorizationSettled && !organizationsLoading && !teamsLoading;
+  useEffect(() => {
+    if (!accessSettled) return;
+    const cleanup = cleanUsageUrl(urlParams, { allowedViews, isAdmin, canViewTeamClients });
+    if (!cleanup) return;
+    if (cleanup.deniedAccess)
+      toast.warning("You don't have access to that usage view", { id: "usage-url-access-denied" });
+    void setUrlParams(cleanup.patch);
+  }, [accessSettled, urlParams, allowedViews, isAdmin, canViewTeamClients, setUrlParams]);
+
+  const entitySelection = (entityType: EntityType) => ({
+    selectedEntities: selectedEntitiesFromParams(urlParams, entityType),
+    onSelectedEntitiesChange: (ids: readonly string[]) => void setUrlParams(entitySelectionPatch(entityType, ids)),
+  });
 
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
-
   // Stamped and selected during render like the request tiles below: the tag
   // filter reads "no tags" from an empty list, so a list left over from the
   // previous range would state that about a range nobody has measured yet.
@@ -181,30 +247,62 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // can paint them. One source is not enough, since the tiles read the gateway
   // counts, fall through to the aggregate, and fall through again to the
   // paginated pages, so a stamp on any one of them is escaped by the next.
-  const currentAggregatedRangeKey = fetchedRangeKey(startTime, endTime, effectiveUserId);
   const currentGatewayRangeKey = fetchedRangeKey(startTime, endTime);
 
-  // Try aggregated endpoint first, fall back to paginated on failure
-  const aggregatedFetchIdRef = useRef(0);
-  useEffect(() => {
-    if (!accessToken || !startTime || !endTime) return;
-    const fetchId = ++aggregatedFetchIdRef.current;
-    const rangeKey = currentAggregatedRangeKey;
-    setAggregatedLoading(true);
-
-    userDailyActivityAggregatedCall(accessToken, startTime, endTime, effectiveUserId)
-      .then((data) => {
-        if (aggregatedFetchIdRef.current !== fetchId) return;
-        setAggregatedData({ rangeKey, value: data });
-        setAggregatedLoading(false);
-        setIsDateChanging(false);
-      })
-      .catch(() => {
-        if (aggregatedFetchIdRef.current !== fetchId) return;
-        setAggregatedFailure({ rangeKey, value: true });
-        setAggregatedLoading(false);
+  const dailyActivityRequest = useMemo<DailyActivityRequest | null>(
+    () =>
+      accessToken && startTime && endTime
+        ? {
+            accessToken,
+            startTime,
+            endTime,
+            entityIds: effectiveUserId ? [effectiveUserId] : null,
+          }
+        : null,
+    [accessToken, startTime, endTime, effectiveUserId],
+  );
+  const {
+    data: aggregatedRaw,
+    loading: aggregatedLoading,
+    failed: aggregatedFailed,
+    errorMessage: aggregatedError,
+    reload: reloadAggregated,
+  } = useAggregatedDailyActivity({
+    fetch: () => ENTITY_API.user.aggregated(dailyActivityRequest as DailyActivityRequest),
+    enabled: dailyActivityRequest !== null,
+    deps: [accessToken, startTime, endTime, effectiveUserId],
+  });
+  // Tag data is deployment-wide with no per-user dimension, so Top agents only appears where the
+  // rest of the page is deployment-wide too: an admin's global view with no user selected.
+  const showTopAgents = isAdmin && usageView === "global" && effectiveUserId === null;
+  const globalClientScope = clientUserId === null && clientTeamId === null && !clientScope.error;
+  const globalClientSelected = isAdmin && selectedClient !== null && globalClientScope;
+  const needsAgentSummary = showTopAgents || globalClientSelected;
+  const tagDailyRequest = useMemo<DailyActivityRequest | null>(
+    () => (accessToken && startTime && endTime ? { accessToken, startTime, endTime, entityIds: null } : null),
+    [accessToken, startTime, endTime],
+  );
+  const { data: tagDailyRaw, loading: tagDailyLoading } = useAggregatedDailyActivity({
+    fetch: () => ENTITY_API.tag.aggregated(tagDailyRequest as DailyActivityRequest),
+    enabled: tagDailyRequest !== null && needsAgentSummary,
+    deps: [accessToken, startTime, endTime, needsAgentSummary],
+  });
+  const tagDaily = useMemo(() => toDailyData(tagDailyRaw), [tagDailyRaw]);
+  const openAgentActivity = useCallback(
+    (agent: AgentRow) => {
+      const client = parseUsageClient(agent.id);
+      if (client) {
+        rememberUsageContext();
+        void setUrlParams(clientPanelPatch(client), { scroll: false });
+        return;
+      }
+      void setUrlParams({
+        ...usageViewPatch("user-agent-activity"),
+        ...entitySelectionPatch("tag", agent.tags),
       });
-  }, [accessToken, startTime, endTime, effectiveUserId, currentAggregatedRangeKey]);
+    },
+    [setUrlParams, rememberUsageContext],
+  );
 
   // Gateway request counts (SGR). Admin-only: the source table is
   // deployment-wide, so a non-admin must not see it.
@@ -227,199 +325,74 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       });
   }, [isAdmin, gatewayRequest, currentGatewayRangeKey]);
 
-  const gatewayActivity = selectGatewayActivity(isAdmin, gatewayActivityData, currentGatewayRangeKey);
-  const activeAggregated = selectForRange(aggregatedData, currentAggregatedRangeKey);
-  // A failure belongs to the range it happened on. Reading it through the same
-  // rule keeps the paginated hook disabled while a new range is in flight, and
-  // disabled is what empties it, so its previous rows never reach a tile.
-  const aggregatedFailed = selectForRange(aggregatedFailure, currentAggregatedRangeKey) === true;
+  const gatewayActivity = selectGatewayActivity(
+    isAdmin && effectiveUserId === null,
+    gatewayActivityData,
+    currentGatewayRangeKey,
+  );
 
-  // Paginated fallback — only enabled when aggregated endpoint fails
-  const paginatedResult = usePaginatedDailyActivity({
-    fetchFn: userDailyActivityCall,
-    args: [accessToken, startTime, endTime, effectiveUserId],
-    enabled: aggregatedFailed && !!accessToken && !!startTime && !!endTime,
-  });
-
-  // Derive userSpendData from whichever source is active
-  const userSpendData = useMemo(() => {
-    if (activeAggregated) return activeAggregated;
-    if (aggregatedFailed) return paginatedResult.data;
-    return { results: [] as DailyData[], metadata: {} as any };
-  }, [activeAggregated, aggregatedFailed, paginatedResult.data]);
-
-  const loading = aggregatedLoading || paginatedResult.loading;
-
-  // Read through the same range stamp as the tiles, so the export is blocked from the first
-  // render of a new range rather than from whenever the fetch effect gets around to running.
-  const spendFetchState = {
-    coversRange: activeAggregated !== null || paginatedResult.coversRange,
-    cancelled: paginatedResult.cancelled,
-    failed: paginatedResult.failed,
-    apiKeyTruncation: getApiKeyTruncation(
-      userSpendData.metadata?.api_key_limit,
-      userSpendData.metadata?.total_api_keys,
-    ),
-  };
-  const exportBlockedReason = getExportBlockedReason(spendFetchState);
-
-  // Clear isDateChanging when paginated data starts arriving
+  const [requestErrorData, setRequestErrorData] = useState<FetchedForRange<RequestErrorActivity | null> | null>(null);
+  const requestErrorFetchIdRef = useRef(0);
   useEffect(() => {
-    if (aggregatedFailed && !paginatedResult.loading && paginatedResult.data.results.length > 0) {
-      setIsDateChanging(false);
-    }
-  }, [aggregatedFailed, paginatedResult.loading, paginatedResult.data.results.length]);
-
-  // Super responsive date change handler
-  const handleDateChange = useCallback((newValue: DateRangePickerValue) => {
-    // Instant visual feedback
-    setIsDateChanging(true);
-
-    // Update date immediately for UI responsiveness
-    setDateValue(newValue);
-  }, []);
-
-  // Derived states from userSpendData
-  const totalSpend = userSpendData.metadata?.total_spend || 0;
-
-  // Calculate top models from the breakdown data
-  const topModels = useMemo(() => {
-    const modelSpend: { [key: string]: MetricWithMetadata } = {};
-    userSpendData.results.forEach((day) => {
-      Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
-        if (!modelSpend[model]) {
-          modelSpend[model] = {
-            metrics: {
-              spend: 0,
-              prompt_tokens: 0,
-              completion_tokens: 0,
-              total_tokens: 0,
-              api_requests: 0,
-              successful_requests: 0,
-              failed_requests: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-            metadata: {},
-            api_key_breakdown: {},
-          };
-        }
-        modelSpend[model].metrics.spend += metrics.metrics.spend;
-        modelSpend[model].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        modelSpend[model].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        modelSpend[model].metrics.total_tokens += metrics.metrics.total_tokens;
-        modelSpend[model].metrics.api_requests += metrics.metrics.api_requests;
-        modelSpend[model].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        modelSpend[model].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        modelSpend[model].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        modelSpend[model].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
+    if (!isAdmin || !gatewayRequest) return;
+    const fetchId = ++requestErrorFetchIdRef.current;
+    requestErrorActivityCall(gatewayRequest.accessToken, gatewayRequest.startTime, gatewayRequest.endTime)
+      .then((data) => {
+        if (requestErrorFetchIdRef.current !== fetchId) return;
+        setRequestErrorData({ rangeKey: currentGatewayRangeKey, value: data as RequestErrorActivity });
+      })
+      .catch(() => {
+        if (requestErrorFetchIdRef.current !== fetchId) return;
+        setRequestErrorData({ rangeKey: currentGatewayRangeKey, value: null });
       });
-    });
+  }, [isAdmin, gatewayRequest, currentGatewayRangeKey]);
+  const requestErrorsForRange = isAdmin ? requestErrorData : null;
+  const requestErrorsFailed =
+    requestErrorsForRange?.rangeKey === currentGatewayRangeKey && requestErrorsForRange.value === null;
+  const requestErrorActivity =
+    requestErrorsForRange?.rangeKey === currentGatewayRangeKey ? requestErrorsForRange.value : null;
 
-    return Object.entries(modelSpend)
-      .map(([model, metrics]) => ({
-        key: model,
-        spend: metrics.metrics.spend,
-        requests: metrics.metrics.api_requests,
-        successful_requests: metrics.metrics.successful_requests,
-        failed_requests: metrics.metrics.failed_requests,
-        tokens: metrics.metrics.total_tokens,
-      }))
-      .sort((a, b) => b.spend - a.spend)
-      .slice(0, topModelsLimit);
-  }, [userSpendData.results, topModelsLimit]);
+  const userSpendData = useMemo(
+    () => ({
+      results: toDailyData(aggregatedRaw),
+      metadata: aggregatedRaw.metadata ?? EMPTY_DAILY_ACTIVITY_METADATA,
+    }),
+    [aggregatedRaw],
+  );
 
-  const topModelGroups = useMemo(() => {
-    const modelGroupSpend: { [key: string]: MetricWithMetadata } = {};
-    userSpendData.results.forEach((day) => {
-      Object.entries(day.breakdown.model_groups || {}).forEach(([modelGroup, metrics]) => {
-        if (!modelGroupSpend[modelGroup]) {
-          modelGroupSpend[modelGroup] = {
-            metrics: {
-              spend: 0,
-              prompt_tokens: 0,
-              completion_tokens: 0,
-              total_tokens: 0,
-              api_requests: 0,
-              successful_requests: 0,
-              failed_requests: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-            metadata: {},
-            api_key_breakdown: {},
-          };
-        }
-        modelGroupSpend[modelGroup].metrics.spend += metrics.metrics.spend;
-        modelGroupSpend[modelGroup].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        modelGroupSpend[modelGroup].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        modelGroupSpend[modelGroup].metrics.total_tokens += metrics.metrics.total_tokens;
-        modelGroupSpend[modelGroup].metrics.api_requests += metrics.metrics.api_requests;
-        modelGroupSpend[modelGroup].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        modelGroupSpend[modelGroup].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        modelGroupSpend[modelGroup].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        modelGroupSpend[modelGroup].metrics.cache_creation_input_tokens +=
-          metrics.metrics.cache_creation_input_tokens || 0;
-      });
-    });
+  const loading = aggregatedLoading;
+  const requestCountsPending = loading && gatewayActivity === null;
 
-    return Object.entries(modelGroupSpend)
-      .map(([modelGroup, metrics]) => ({
-        key: modelGroup,
-        spend: metrics.metrics.spend,
-        requests: metrics.metrics.api_requests,
-        successful_requests: metrics.metrics.successful_requests,
-        failed_requests: metrics.metrics.failed_requests,
-        tokens: metrics.metrics.total_tokens,
-      }))
-      .sort((a, b) => b.spend - a.spend)
-      .slice(0, topModelsLimit);
-  }, [userSpendData.results, topModelsLimit]);
+  const summaryMetrics = useMemo(
+    () => overallUsageMetrics(userSpendData.results, userSpendData.metadata),
+    [userSpendData],
+  );
 
-  // Calculate provider spend from the breakdown data
-  const providerSpend = useMemo(() => {
-    const providerSpendMap: { [key: string]: MetricWithMetadata } = {};
-    userSpendData.results.forEach((day) => {
-      Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
-        if (!providerSpendMap[provider]) {
-          providerSpendMap[provider] = {
-            metrics: {
-              spend: 0,
-              prompt_tokens: 0,
-              completion_tokens: 0,
-              total_tokens: 0,
-              api_requests: 0,
-              successful_requests: 0,
-              failed_requests: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-            metadata: {},
-            api_key_breakdown: {},
-          };
-        }
-        providerSpendMap[provider].metrics.spend += metrics.metrics.spend;
-        providerSpendMap[provider].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        providerSpendMap[provider].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        providerSpendMap[provider].metrics.total_tokens += metrics.metrics.total_tokens;
-        providerSpendMap[provider].metrics.api_requests += metrics.metrics.api_requests;
-        providerSpendMap[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        providerSpendMap[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        providerSpendMap[provider].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        providerSpendMap[provider].metrics.cache_creation_input_tokens +=
-          metrics.metrics.cache_creation_input_tokens || 0;
-      });
-    });
+  const handleDateChange = useCallback(
+    (newValue: DateRangePickerValue, presetShortLabel: string | null) =>
+      void setUrlParams(dateRangePatch(newValue, presetShortLabel)),
+    [setUrlParams],
+  );
 
-    return Object.entries(providerSpendMap).map(([provider, metrics]) => ({
-      provider,
-      spend: metrics.metrics.spend,
-      requests: metrics.metrics.api_requests,
-      successful_requests: metrics.metrics.successful_requests,
-      failed_requests: metrics.metrics.failed_requests,
-      tokens: metrics.metrics.total_tokens,
-    }));
-  }, [userSpendData.results]);
+  const totals = useMemo(
+    () => overviewTotals(userSpendData.metadata, gatewayActivity),
+    [userSpendData.metadata, gatewayActivity],
+  );
+  const providerSpend = useMemo(
+    () => rollUpBreakdown(userSpendData.results, "providers").map(({ key, ...row }) => ({ provider: key, ...row })),
+    [userSpendData.results],
+  );
+  const {
+    data: tagSummary,
+    isLoading: tagSummaryLoading,
+    isError: tagSummaryFailed,
+    refetch: reloadTagSummary,
+  } = useTagSummary(startTime, endTime, needsAgentSummary);
+
+  const clientAgent = useMemo(
+    () => topAgents(tagSummary ?? []).find((agent) => agent.id === selectedClient) ?? null,
+    [tagSummary, selectedClient],
+  );
 
   // Calculate top API keys from the breakdown data
   const topKeys = useMemo<TopKeyItem[]>(
@@ -436,48 +409,110 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     () => processActivityData(userSpendData, modelViewType === "groups" ? "model_groups" : "models", teams),
     [userSpendData, modelViewType, teams],
   );
-  const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
+  const filteredModelMetrics = useMemo(() => filterModelActivity(modelMetrics, modelQuery), [modelMetrics, modelQuery]);
+  const trimmedModelQuery = modelQuery.trim();
   const mcpServerMetrics = useMemo(
     () => processActivityData(userSpendData, "mcp_servers", teams),
     [userSpendData, teams],
   );
 
+  const fetchTopApiKeys = useCallback(
+    (model: string) =>
+      ENTITY_API.user.modelTopKeys(dailyActivityRequest as DailyActivityRequest, model, modelViewType === "groups"),
+    [dailyActivityRequest, modelViewType],
+  );
+  const searchKeys = useCallback(
+    (query: string) =>
+      dailyActivityRequest === null
+        ? Promise.resolve({ api_keys: [] })
+        : ENTITY_API.user.searchKeys(dailyActivityRequest, query),
+    [dailyActivityRequest],
+  );
+  const fetchKeyPage = useCallback(
+    (offset: number, limit: number) => {
+      if (dailyActivityRequest === null) {
+        const emptyPage = { api_keys: [], total_api_keys: 0, offset, limit };
+        return Promise.resolve(emptyPage);
+      }
+      return ENTITY_API.user.keyPage(dailyActivityRequest, offset, limit);
+    },
+    [dailyActivityRequest],
+  );
+  const fetchUserPage = useCallback(
+    (offset: number, limit: number) => {
+      if (dailyActivityRequest === null) {
+        const emptyPage = { users: [], total_users: 0, offset, limit };
+        return Promise.resolve(emptyPage);
+      }
+      return userDailyActivityUserPageCall(dailyActivityRequest, offset, limit);
+    },
+    [dailyActivityRequest],
+  );
+  const fetchKeyDetail = useCallback(
+    (apiKey: string) =>
+      dailyActivityRequest === null
+        ? Promise.resolve(undefined)
+        : ENTITY_API.user
+            .aggregated({ ...dailyActivityRequest, apiKey, apiKeyLimit: 1 })
+            .then((response) => keyDetailFromResponse(response, apiKey, teams)),
+    [dailyActivityRequest, teams],
+  );
+
   return (
-    <div style={{ width: "100%" }} className="p-8 relative">
-      {/* Global Date Picker and Tabs - Single Row */}
-      <div className="flex items-end justify-between gap-6 mb-6">
-        <div className="flex-1">
-          <div className="flex items-end justify-between gap-6 mb-4 w-full">
-            <UsageViewSelect
-              value={usageView}
-              onChange={(value) => setUsageView(value)}
-              userRole={userRole}
-              canViewTagUsage={canViewTagUsage}
-              isOrgAdmin={isOrgAdmin}
+    <div ref={pageRef} className="relative w-full px-4 pt-3 pb-8 sm:px-6">
+      <header className="mb-3 flex w-full flex-wrap items-center justify-between gap-3 border-b pb-3">
+        <UsageViewSelect
+          value={usageView}
+          onChange={(value) => void setUrlParams(usageViewPatch(value))}
+          userRole={userRole}
+          canViewTagUsage={canViewTagUsage}
+          isOrgAdmin={isOrgAdmin}
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          {isAdmin && usageView === "global" && (
+            <div className="flex items-center gap-2">
+              <div className="w-64">
+                <UserDropdown value={urlParams.user} onChange={(user) => void setUrlParams({ user })} />
+              </div>
+              {urlParams.user && <UserRecordLink userId={urlParams.user} />}
+            </div>
+          )}
+          {CLIENT_USAGE_VIEWS.includes(usageView) && (
+            <div className="w-44">
+              <ClientUsageSelect value={selectedClient} onChange={openClientPanel} />
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <AdvancedDatePicker
+              value={dateValue}
+              onValueChange={handleDateChange}
+              presetShortLabel={presetShortLabel}
             />
-            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+            <Button variant="outline" onClick={() => void copyToClipboard(window.location.href, "Link copied")}>
+              <Link2 />
+              Copy Share Link
+            </Button>
           </div>
-          <PaginationStatusAlerts
-            isFetchingMore={paginatedResult.isFetchingMore}
-            cancelled={paginatedResult.cancelled}
-            failed={paginatedResult.failed}
-            progress={paginatedResult.progress}
-            cancel={paginatedResult.cancel}
-          />
+        </div>
+      </header>
+      <AriaUsageComposer />
+      {aggregatedFailed && (
+        <ErrorState title="Failed to load spend data" message={aggregatedError} onRetry={reloadAggregated} />
+      )}
+      <div>
+        <div>
           {/* Your Usage / Global Usage Panel */}
           {(usageView === "global" || usageView === "my-usage") && (
             <>
-              {isAdmin && usageView === "global" && (
-                <div className="mb-4">
-                  <p className="mb-2 text-sm text-foreground">Filter by user</p>
-                  <UserDropdown value={selectedUserId} onChange={setSelectedUserId} />
-                </div>
-              )}
-              <Tabs defaultValue="cost">
-                <div className="flex justify-between items-center">
-                  <TabsList className="mt-1">
+              <Tabs
+                value={selectedTab}
+                onValueChange={(tab: string) => void setUrlParams(usageTabPatch(tab))}
+                className="gap-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <TabsList variant="line">
                     <TabsTrigger value="cost" className="flex-none px-3">
-                      Cost
+                      Overview
                     </TabsTrigger>
                     <TabsTrigger value="models" className="flex-none px-3">
                       Model Activity
@@ -485,387 +520,137 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     <TabsTrigger value="keys" className="flex-none px-3">
                       Key Activity
                     </TabsTrigger>
+                    <TabsTrigger value="users" className="flex-none px-3">
+                      User Activity
+                    </TabsTrigger>
                     <TabsTrigger value="mcp" className="flex-none px-3">
                       MCP Server Activity
                     </TabsTrigger>
                     <TabsTrigger value="endpoints" className="flex-none px-3">
                       Endpoint Activity
                     </TabsTrigger>
+                    {isAdmin && (
+                      <TabsTrigger value="errors" className="flex-none px-3">
+                        Errors
+                      </TabsTrigger>
+                    )}
                   </TabsList>
                   <div className="flex items-center gap-2">
-                    <Button variant="outline" onClick={() => setIsAiChatOpen(true)}>
-                      <Sparkles />
-                      Ask AI
+                    <AriaUsageTrigger />
+                    <Button variant="outline" size="sm" onClick={() => setIsGlobalExportModalOpen(true)}>
+                      <Download />
+                      Export Data
                     </Button>
-                    <span title={exportBlockedReason}>
-                      <Button
-                        variant="outline"
-                        disabled={exportBlockedReason !== undefined}
-                        onClick={() => setIsGlobalExportModalOpen(true)}
-                      >
-                        <Download />
-                        Export Data
-                      </Button>
-                    </span>
                   </div>
                 </div>
-                {/* Cost Panel */}
                 <TabsContent value="cost" keepMounted>
-                  <div className="grid grid-cols-2 gap-2 w-full">
-                    {/* Total Spend Card */}
-                    <div className="col-span-2">
-                      <div className="flex items-center gap-4 mt-2 mb-2">
-                        <p className="text-lg text-muted-foreground">
-                          Project Spend{" "}
-                          {dateValue.from && dateValue.to && (
-                            <>
-                              {dateValue.from.toLocaleDateString("en-US", {
-                                month: "short",
-                                day: "numeric",
-                                year:
-                                  dateValue.from.getFullYear() !== dateValue.to.getFullYear() ? "numeric" : undefined,
-                              })}
-                              {" - "}
-                              {dateValue.to.toLocaleDateString("en-US", {
-                                month: "short",
-                                day: "numeric",
-                                year: "numeric",
-                              })}
-                            </>
-                          )}
-                        </p>
-                      </div>
-
-                      <ViewUserSpend
-                        userSpend={totalSpend}
-                        selectedTeam={null}
-                        userMaxBudget={currentUser?.max_budget || null}
+                  <UsageOverview
+                    results={sortedDailyResults}
+                    totals={totals}
+                    loading={loading}
+                    requestCountsPending={requestCountsPending}
+                    budget={currentUser?.max_budget ?? null}
+                    topKeys={
+                      <TopKeyView
+                        topKeys={topKeys}
+                        teams={null}
+                        topKeysLimit={topKeysLimit}
+                        setTopKeysLimit={setTopKeysLimit}
                       />
-                    </div>
-
-                    <div className="col-span-2">
-                      <ShadcnCard>
-                        <CardContent>
-                          <h3 className="text-lg font-medium text-foreground">Usage Metrics</h3>
-                          <div className="grid grid-cols-5 gap-4 mt-4">
-                            <ShadcnCard>
-                              <CardContent>
-                                <h3 className="text-lg font-medium text-foreground">Total Requests</h3>
-                                <p className="text-2xl font-bold mt-2">
-                                  {(gatewayActivity
-                                    ? gatewayActivity.total_successful_requests + gatewayActivity.total_failed_requests
-                                    : userSpendData.metadata?.total_api_requests
-                                  )?.toLocaleString() || 0}
-                                </p>
-                              </CardContent>
-                            </ShadcnCard>
-                            <ShadcnCard>
-                              <CardContent>
-                                <div className="flex items-center gap-2">
-                                  <h3 className="text-lg font-medium text-foreground">Successful Requests</h3>
-                                  {gatewayActivity && (
-                                    <Tooltip>
-                                      <TooltipTrigger
-                                        render={<Info className="size-4 text-muted-foreground hover:text-foreground" />}
-                                      />
-                                      <TooltipContent>
-                                        Counted by the gateway when it answers a request, independent of spend logging.
-                                        Deployment-wide, so it will not match the per-key or per-model breakdowns below.
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  )}
-                                </div>
-                                {/*
-                                  TODO: drop the userSpendData fallback once every deployment
-                                  is writing LiteLLM_DailyGatewayRequests. It covers two cases
-                                  today: a non-admin (who may not read deployment-wide counts)
-                                  and an admin on a proxy whose table is still backfilling.
-                                */}
-                                <p className="text-2xl font-bold mt-2 text-success">
-                                  {(
-                                    gatewayActivity?.total_successful_requests ??
-                                    userSpendData.metadata?.total_successful_requests
-                                  )?.toLocaleString() || 0}
-                                </p>
-                              </CardContent>
-                            </ShadcnCard>
-                            <ShadcnCard>
-                              <CardContent>
-                                <div className="flex items-center gap-2">
-                                  <h3 className="text-lg font-medium text-foreground">Failed Requests</h3>
-                                  <Tooltip>
-                                    <TooltipTrigger
-                                      render={<Info className="size-4 text-muted-foreground hover:text-foreground" />}
-                                    />
-                                    <TooltipContent>
-                                      {gatewayActivity
-                                        ? "Counted by the gateway when it answers a request, independent of spend logging. Deployment-wide, so it will not match the per-key or per-model breakdowns below."
-                                        : "Includes requests that failed to route to a provider, tool usage failures, and other request errors where the provider cannot be determined."}
-                                    </TooltipContent>
-                                  </Tooltip>
-                                </div>
-                                {/* Same source as Successful Requests: the two must agree, or the
-                                    tile disagrees with the endpoint breakdown chart below it. */}
-                                <p className="text-2xl font-bold mt-2 text-destructive">
-                                  {(
-                                    gatewayActivity?.total_failed_requests ??
-                                    userSpendData.metadata?.total_failed_requests
-                                  )?.toLocaleString() || 0}
-                                </p>
-                              </CardContent>
-                            </ShadcnCard>
-                            <ShadcnCard>
-                              <CardContent>
-                                <h3 className="text-lg font-medium text-foreground">Average Cost per Request</h3>
-                                <p className="text-2xl font-bold mt-2">
-                                  $
-                                  {formatNumberWithCommas(
-                                    (totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1),
-                                    4,
-                                  )}
-                                </p>
-                              </CardContent>
-                            </ShadcnCard>
-                            <ShadcnCard
-                              className="cursor-pointer hover:bg-accent transition-colors"
-                              onClick={() => setShowTokenBreakdown(!showTokenBreakdown)}
-                            >
-                              <CardContent>
-                                <div className="flex items-center gap-2">
-                                  <h3 className="text-lg font-medium text-foreground">Total Tokens</h3>
-                                  {showTokenBreakdown ? (
-                                    <ChevronDown className="size-3 text-muted-foreground" />
-                                  ) : (
-                                    <ChevronRight className="size-3 text-muted-foreground" />
-                                  )}
-                                </div>
-                                <p className="text-2xl font-bold mt-2">
-                                  {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
-                                </p>
-                              </CardContent>
-                            </ShadcnCard>
-                          </div>
-                          {showTokenBreakdown && (
-                            <div className="grid grid-cols-4 gap-4 mt-4">
-                              <ShadcnCard>
-                                <CardContent>
-                                  <h3 className="text-lg font-medium text-foreground">Input Tokens</h3>
-                                  <p className="text-2xl font-bold mt-2 text-info">
-                                    {(userSpendData.metadata?.total_prompt_tokens || 0).toLocaleString()}
-                                  </p>
-                                </CardContent>
-                              </ShadcnCard>
-                              <ShadcnCard>
-                                <CardContent>
-                                  <h3 className="text-lg font-medium text-foreground">Output Tokens</h3>
-                                  <p className="text-2xl font-bold mt-2 text-info">
-                                    {userSpendData.metadata?.total_completion_tokens?.toLocaleString() || 0}
-                                  </p>
-                                </CardContent>
-                              </ShadcnCard>
-                              <ShadcnCard>
-                                <CardContent>
-                                  <h3 className="text-lg font-medium text-foreground">Cache Read Tokens</h3>
-                                  <p className="text-2xl font-bold mt-2 text-success">
-                                    {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
-                                  </p>
-                                </CardContent>
-                              </ShadcnCard>
-                              <ShadcnCard>
-                                <CardContent>
-                                  <h3 className="text-lg font-medium text-foreground">Cache Write Tokens</h3>
-                                  <p className="text-2xl font-bold mt-2 text-purple-600">
-                                    {userSpendData.metadata?.total_cache_creation_input_tokens?.toLocaleString() || 0}
-                                  </p>
-                                </CardContent>
-                              </ShadcnCard>
-                            </div>
-                          )}
-                        </CardContent>
-                      </ShadcnCard>
-                    </div>
-
-                    {/* Daily Spend Chart */}
-                    <div className="col-span-2">
-                      <ShadcnCard>
-                        <CardHeader>
-                          <CardTitle className="text-base font-semibold">Daily Spend</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                          {loading ? (
-                            <ChartLoader isDateChanging={isDateChanging} />
-                          ) : (
-                            <BarChart
-                              data={sortedDailyResults}
-                              index="date"
-                              categories={["metrics.spend"]}
-                              colors={["cyan"]}
-                              valueFormatter={valueFormatterSpend}
-                              yAxisWidth={100}
-                              showLegend={false}
-                              customTooltip={({ payload, active }) => {
-                                if (!active || !payload?.[0]) return null;
-                                const data = payload[0].payload;
-                                return (
-                                  <div className="bg-card p-4 shadow-lg rounded-lg border">
-                                    <p className="font-bold">{data.date}</p>
-                                    <p className="text-info">Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
-                                    <p className="text-muted-foreground">Requests: {data.metrics.api_requests}</p>
-                                    <p className="text-muted-foreground">
-                                      Successful: {data.metrics.successful_requests}
-                                    </p>
-                                    <p className="text-muted-foreground">Failed: {data.metrics.failed_requests}</p>
-                                    <p className="text-muted-foreground">Tokens: {data.metrics.total_tokens}</p>
-                                  </div>
-                                );
-                              }}
-                            />
-                          )}
-                        </CardContent>
-                      </ShadcnCard>
-                    </div>
-                    {/* Gateway Requests by Endpoint (SGR) */}
-                    {gatewayActivity && gatewayActivity.by_route.length > 0 && (
-                      <div className="col-span-2">
-                        <ShadcnCard data-testid="gateway-requests-by-endpoint">
-                          <CardHeader>
-                            <CardTitle className="text-base font-semibold">
-                              Gateway Requests by Endpoint
-                              <Tooltip>
-                                <TooltipTrigger
-                                  render={
-                                    <Info className="ml-2 inline size-4 text-muted-foreground hover:text-foreground" />
-                                  }
-                                />
-                                <TooltipContent>
-                                  Counted by the gateway middleware as each request is answered. Covers LLM, MCP and A2A
-                                  endpoints across the whole deployment.
-                                </TooltipContent>
-                              </Tooltip>
-                            </CardTitle>
-                          </CardHeader>
-                          <CardContent>
-                            <BarChart
-                              data={gatewayRequestsByRoute}
-                              index="route"
-                              categories={["successful_requests", "failed_requests"]}
-                              colors={["green", "red"]}
-                              stack={true}
-                              yAxisWidth={100}
-                              valueFormatter={(value: number) => value.toLocaleString()}
-                            />
-                          </CardContent>
-                        </ShadcnCard>
-                      </div>
-                    )}
-                    {/* Top API Keys */}
-                    <div>
-                      <ShadcnCard className="h-full">
-                        <CardContent>
-                          <h3 className="text-lg font-medium text-foreground">Top Virtual Keys</h3>
-                          <TopKeyView
-                            topKeys={topKeys}
-                            teams={null}
-                            topKeysLimit={topKeysLimit}
-                            setTopKeysLimit={setTopKeysLimit}
+                    }
+                    topUsers={<TopUsersView fetchUserPage={fetchUserPage} />}
+                    gatewayByEndpoint={
+                      gatewayActivity && gatewayActivity.by_route.length > 0 ? (
+                        <Panel
+                          testId="gateway-requests-by-endpoint"
+                          title="Gateway Requests by Endpoint"
+                          subtitle="Successful and failed requests per route"
+                          bodyClassName="px-2 pt-4"
+                        >
+                          <StackedUsageChart
+                            data={gatewayRequestsByRoute.map((row) => ({
+                              route: row.route,
+                              Successful: row.successful_requests,
+                              Failed: row.failed_requests,
+                            }))}
+                            series={["Successful", "Failed"]}
+                            colors={["#2b3fd6", "#ef4444"]}
+                            xKey="route"
+                            format={(value) => value.toLocaleString()}
+                            className="h-64"
                           />
-                        </CardContent>
-                      </ShadcnCard>
-                    </div>
-
-                    {/* Top Models */}
-                    <div>
-                      <ShadcnCard className="h-full">
-                        <CardContent>
-                          <h3 className="text-lg font-medium text-foreground">
-                            {modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models"}
-                          </h3>
-                          <div className="flex justify-between items-center mb-4">
-                            <Tabs
-                              value={String(topModelsLimit)}
-                              onValueChange={(value: string) => setTopModelsLimit(Number(value))}
-                            >
-                              <TabsList>
-                                {TOP_MODEL_LIMITS.map((limit) => (
-                                  <TabsTrigger key={limit} value={String(limit)} className="flex-none px-3">
-                                    {limit}
-                                  </TabsTrigger>
-                                ))}
-                              </TabsList>
-                            </Tabs>
-                            <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
-                          </div>
-                          {loading ? (
-                            <ChartLoader isDateChanging={isDateChanging} />
-                          ) : (
-                            <div className="relative max-h-[600px] overflow-y-auto">
-                              {(() => {
-                                const modelData = modelViewType === "groups" ? topModelGroups : topModels;
-                                return (
-                                  <BarChart
-                                    className="mt-4"
-                                    style={{ height: Math.min(modelData.length, topModelsLimit) * 52 }}
-                                    data={modelData}
-                                    index="key"
-                                    categories={["spend"]}
-                                    colors={["cyan"]}
-                                    valueFormatter={valueFormatterSpend}
-                                    layout="vertical"
-                                    yAxisWidth={200}
-                                    showLegend={false}
-                                    customTooltip={({ payload, active }) => {
-                                      if (!active || !payload?.[0]) return null;
-                                      const data = payload[0].payload;
-                                      return (
-                                        <div className="bg-card p-4 shadow-lg rounded-lg border">
-                                          <p className="font-bold">{data.key}</p>
-                                          <p className="text-info">Spend: ${formatNumberWithCommas(data.spend, 2)}</p>
-                                          <p className="text-muted-foreground">
-                                            Total Requests: {data.requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-success">
-                                            Successful: {data.successful_requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-destructive">
-                                            Failed: {data.failed_requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-muted-foreground">
-                                            Tokens: {data.tokens.toLocaleString()}
-                                          </p>
-                                        </div>
-                                      );
-                                    }}
-                                  />
-                                );
-                              })()}
-                            </div>
-                          )}
-                        </CardContent>
-                      </ShadcnCard>
-                    </div>
-
-                    {/* Spend by Provider */}
-                    <div className="col-span-2">
-                      <SpendByProvider
-                        loading={loading}
-                        isDateChanging={isDateChanging}
-                        providerSpend={providerSpend}
-                      />
-                    </div>
-
-                    {/* Usage Metrics */}
-                  </div>
+                        </Panel>
+                      ) : null
+                    }
+                    topAgents={
+                      showTopAgents ? (
+                        <TopAgents
+                          rows={tagSummary}
+                          daily={tagDaily}
+                          loading={tagSummaryLoading || tagDailyLoading}
+                          totalTokens={totals.tokens}
+                          onOpenAgent={openAgentActivity}
+                        />
+                      ) : null
+                    }
+                    providerBreakdown={
+                      <SpendByProvider loading={loading} isDateChanging={false} providerSpend={providerSpend} />
+                    }
+                  />
                 </TabsContent>
 
                 {/* Activity Panel */}
                 <TabsContent value="models" keepMounted>
-                  <div className="flex justify-end mt-2 mb-4">
+                  <div className="mt-2 mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <InputGroup className="max-w-md">
+                      <InputGroupAddon>
+                        <Search className="size-4 text-muted-foreground" />
+                      </InputGroupAddon>
+                      <InputGroupInput
+                        aria-label="Search models"
+                        placeholder="Search by model name"
+                        value={modelQuery}
+                        onChange={(event) => setModelQuery(event.target.value)}
+                      />
+                      {trimmedModelQuery !== "" && (
+                        <InputGroupAddon align="inline-end">
+                          <InputGroupButton
+                            size="icon-xs"
+                            aria-label="Clear model search"
+                            onClick={() => setModelQuery("")}
+                          >
+                            <X />
+                          </InputGroupButton>
+                        </InputGroupAddon>
+                      )}
+                    </InputGroup>
                     <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
                   </div>
-                  <ActivityMetrics modelMetrics={modelMetrics} />
+                  {trimmedModelQuery !== "" &&
+                  Object.keys(modelMetrics).length > 0 &&
+                  Object.keys(filteredModelMetrics).length === 0 ? (
+                    <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">
+                      No models match &quot;{trimmedModelQuery}&quot; in this date range
+                    </p>
+                  ) : (
+                    <ActivityMetrics
+                      modelMetrics={filteredModelMetrics}
+                      fetchTopApiKeys={dailyActivityRequest ? fetchTopApiKeys : undefined}
+                    />
+                  )}
                 </TabsContent>
                 <TabsContent value="keys" keepMounted>
-                  <KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={spendFetchState.apiKeyTruncation} />
+                  <KeyActivityPanel
+                    summary={summaryMetrics}
+                    summaryLoading={loading}
+                    fetchKeyPage={fetchKeyPage}
+                    fetchKeyDetail={fetchKeyDetail}
+                    teams={teams}
+                    searchKeys={searchKeys}
+                  />
+                </TabsContent>
+                <TabsContent value="users" keepMounted>
+                  <UserActivityPanel fetchUserPage={fetchUserPage} />
                 </TabsContent>
                 <TabsContent value="mcp" keepMounted>
                   <ActivityMetrics modelMetrics={mcpServerMetrics} />
@@ -873,15 +658,26 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 <TabsContent value="endpoints" keepMounted>
                   <EndpointUsage userSpendData={userSpendData} />
                 </TabsContent>
+                {isAdmin && (
+                  <TabsContent value="errors">
+                    <ErrorsTab
+                      activity={requestErrorActivity}
+                      loading={requestErrorActivity === null && !requestErrorsFailed}
+                      failed={requestErrorsFailed}
+                      userScoped={effectiveUserId !== null}
+                    />
+                  </TabsContent>
+                )}
               </Tabs>
             </>
           )}
           {/* Organization Usage Panel */}
 
-          {usageView === "organization" && canViewOrganizationUsage && (
+          {usageView === "organization" && (
             <EntityUsage
               accessToken={accessToken}
               entityType="organization"
+              {...entitySelection("organization")}
               userID={userID}
               userRole={userRole}
               isOrgAdmin={isOrgAdmin}
@@ -901,6 +697,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             <EntityUsage
               accessToken={accessToken}
               entityType="team"
+              {...entitySelection("team")}
               userID={userID}
               userRole={userRole}
               entityList={
@@ -919,6 +716,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             <EntityUsage
               accessToken={accessToken}
               entityType="customer"
+              {...entitySelection("customer")}
               userID={userID}
               userRole={userRole}
               entityList={
@@ -957,6 +755,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               <EntityUsage
                 accessToken={accessToken}
                 entityType="tag"
+                {...entitySelection("tag")}
                 userID={userID}
                 userRole={userRole}
                 entityList={allTags}
@@ -969,6 +768,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             <EntityUsage
               accessToken={accessToken}
               entityType="agent"
+              {...entitySelection("agent")}
               userID={userID}
               userRole={userRole}
               entityList={
@@ -983,6 +783,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             <EntityUsage
               accessToken={accessToken}
               entityType="user"
+              {...entitySelection("user")}
               userID={userID}
               userRole={userRole}
               entityList={null}
@@ -992,10 +793,44 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           )}
           {/* User Agent Activity Panel */}
           {usageView === "user-agent-activity" && (
-            <UserAgentActivity accessToken={accessToken} userRole={userRole} dateValue={dateValue} />
+            <UserAgentActivity
+              accessToken={accessToken}
+              userRole={userRole}
+              dateValue={dateValue}
+              selectedTags={selectedEntitiesFromParams(urlParams, "tag")}
+              onSelectedTagsChange={(tags) => void setUrlParams(entitySelectionPatch("tag", tags))}
+            />
           )}
         </div>
       </div>
+
+      {selectedClient && accessSettled && (
+        <ClientUsagePanel
+          client={selectedClient}
+          userId={clientUserId}
+          canChooseUser={clientScope.canChooseGlobalUser && clientTeamId === null}
+          teamId={clientTeamId}
+          scopeError={clientScope.error}
+          teams={usageView === "my-usage" ? [] : clientScope.administeredTeams}
+          members={clientScope.members}
+          defaultScopeLabel={isAdmin ? "All users" : "My usage"}
+          onTeamChange={(teamId) => void setUrlParams({ client_team: teamId, client_user: "" }, { scroll: false })}
+          onUserChange={(userId) => void setUrlParams({ client_user: userId ?? "" }, { scroll: false })}
+          onClose={() => void setUrlParams(clientPanelPatch(null), { scroll: false })}
+          accessToken={accessToken}
+          startTime={clientStartTime}
+          endTime={clientEndTime}
+          dateValue={clientDateValue}
+          presetShortLabel={client_range ?? (clientInheritsRange ? presetShortLabel : null)}
+          onDateChange={(value, preset) => void setUrlParams(clientDateRangePatch(value, preset), { scroll: false })}
+          agent={clientInheritsRange ? clientAgent : null}
+          daily={clientInheritsRange ? tagDaily : []}
+          colorSource={userSpendData.results}
+          loading={!accessSettled || tagSummaryLoading || tagDailyLoading}
+          summaryFailed={clientInheritsRange && tagSummaryFailed}
+          onRetry={() => void reloadTagSummary()}
+        />
+      )}
 
       {/* CloudZero Export Modal */}
       <CloudZeroExportModal
@@ -1008,18 +843,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       <EntityUsageExportModal
         isOpen={isGlobalExportModalOpen}
         onClose={() => setIsGlobalExportModalOpen(false)}
-        entityType="team"
-        spendData={{
-          results: userSpendData.results,
-          metadata: userSpendData.metadata,
-        }}
+        entityType="user"
+        onExport={(exportType, format) =>
+          dailyActivityRequest
+            ? ENTITY_API.user.exportRows(dailyActivityRequest, exportType, format)
+            : Promise.reject(new Error("Missing access token or date range"))
+        }
         dateRange={dateValue}
         selectedFilters={[]}
         customTitle="Export Usage Data"
       />
-
-      {/* AI Chat Panel */}
-      <UsageAIChatPanel open={isAiChatOpen} onClose={() => setIsAiChatOpen(false)} accessToken={accessToken} />
     </div>
   );
 };

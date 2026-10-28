@@ -50,7 +50,7 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
           ? { status: "success" }
           : {
               status: "error",
-              error: `JEV was not reached successfully (routing cause: ${decision.cause ?? "unknown"})`,
+              error: `OSS classifier was not reached successfully (routing cause: ${decision.cause ?? "unknown"})`,
             },
       );
     };
@@ -91,11 +91,11 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
         classifier probe includes its reasoning effort override.
       </p>
       {jevRequest && (
-        <div role="status" aria-label="JEV connection" className="rounded-lg border p-3 text-sm">
-          <strong>JEV Classifier</strong>
+        <div role="status" aria-label="OSS classifier connection" className="rounded-lg border p-3 text-sm">
+          <strong>OSS Classifier</strong>
           <p>
-            {jevResult.status === "pending" && "Testing JEV classification"}
-            {jevResult.status === "success" && "JEV classification succeeded"}
+            {jevResult.status === "pending" && "Testing OSS classification"}
+            {jevResult.status === "success" && "OSS classification succeeded"}
             {jevResult.status === "error" && jevResult.error}
           </p>
         </div>

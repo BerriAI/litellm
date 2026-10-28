@@ -8,7 +8,7 @@ This module handles transforming between:
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from pydantic import BaseModel
 
@@ -251,7 +251,7 @@ class LiteLLMResponsesInteractionsConfig:
 
         # Build interactions response — populate both `outputs` (legacy schema) and
         # `steps` (new schema) so callers work regardless of which schema they expect.
-        interactions_response_dict: Final[dict[str, Any]] = {
+        interactions_response_dict: Final[dict[str, object]] = {
             "id": getattr(responses_response, "id", ""),
             "object": "interaction",
             "status": interactions_status,
@@ -274,4 +274,4 @@ class LiteLLMResponsesInteractionsConfig:
         # Add updated (same as created for now)
         interactions_response_dict["updated"] = created
 
-        return InteractionsAPIResponse(**interactions_response_dict)
+        return InteractionsAPIResponse.model_validate(interactions_response_dict)

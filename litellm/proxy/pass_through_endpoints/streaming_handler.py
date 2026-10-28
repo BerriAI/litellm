@@ -1,5 +1,5 @@
 import traceback
-from collections.abc import Coroutine, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final, Protocol
@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
@@ -64,7 +65,7 @@ class PassThroughStreamingHandler:
     @staticmethod
     def _stamp_first_chunk_if_needed(litellm_logging_obj: LiteLLMLoggingObj) -> None:
         if litellm_logging_obj.completion_start_time is None:
-            litellm_logging_obj._update_completion_start_time(completion_start_time=datetime.now())
+            litellm_logging_obj.update_completion_start_time(completion_start_time=datetime.now())
 
     @staticmethod
     async def schedule_stream_failure_logging(
@@ -87,12 +88,31 @@ class PassThroughStreamingHandler:
         )
         try:
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                async_coroutine=litellm_logging_obj.dispatch_failure_handlers(
-                    exception, traceback.format_exc(), prefer_async_handlers=True
-                )
+                async_coroutine=litellm_logging_obj.dispatch_attempt_failure_handlers(exception, traceback.format_exc())
             )
         except Exception as e:
             verbose_proxy_logger.error("Error scheduling stream failure logging: %s", e)
+
+    @staticmethod
+    async def _schedule_stream_end_logging(
+        litellm_logging_obj: LiteLLMLoggingObj,
+        endpoint_type: EndpointType,
+        request_body: Mapping[str, object],
+        raw_bytes: Sequence[bytes],
+        error_event: tuple[str, str, int] | None,
+        success_logging: Callable[[], Coroutine[None, None, None]],
+    ) -> None:
+        if error_event is None:
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=success_logging())
+            return
+        error_type, message, status_code = error_event
+        await PassThroughStreamingHandler.schedule_stream_failure_logging(
+            litellm_logging_obj=litellm_logging_obj,
+            endpoint_type=endpoint_type,
+            request_body=dict(request_body),
+            raw_bytes=raw_bytes,
+            exception=anthropic_error_frame_exception(error_type, message, status_code, str(litellm_logging_obj.model)),
+        )
 
     @staticmethod
     def _record_partial_usage_for_failure(
@@ -129,10 +149,11 @@ class PassThroughStreamingHandler:
         usage: Final = getattr(partial_response, "usage", None)
         if not isinstance(usage, Usage):
             return
-        response_cost: Final = kwargs.get("response_cost")
+        logger_cost: Final = litellm_logging_obj.response_cost_calculator(result=partial_response)
+        handler_cost: Final = kwargs.get("response_cost")
+        fallback_cost: Final = float(handler_cost) if isinstance(handler_cost, (int, float)) else 0.0
         litellm_logging_obj.record_partial_usage_for_failure(
-            usage=usage,
-            response_cost=float(response_cost) if isinstance(response_cost, (int, float)) else 0.0,
+            usage=usage, response_cost=fallback_cost if logger_cost is None else logger_cost
         )
 
     @staticmethod
@@ -147,7 +168,7 @@ class PassThroughStreamingHandler:
         route_streaming_logging: RouteStreamingLogging | None = None,
     ):
         resolved_route_streaming_logging: Final[RouteStreamingLogging] = (
-            route_streaming_logging or PassThroughStreamingHandler._route_streaming_logging_to_handler
+            route_streaming_logging or PassThroughStreamingHandler.route_streaming_logging_to_handler
         )
         raw_bytes: Final[list[bytes]] = []
         resolved_request_body: Final[dict[str, object]] = request_body or {}
@@ -165,6 +186,7 @@ class PassThroughStreamingHandler:
             )
 
         logging_scheduled = False
+        stream_ended = False  # rebind-ok: flipped once the upstream ran to its end, so the finally can tell a close-at-frame from a completed stream
         model_name: Final = PassThroughStreamingHandler._extract_model_for_cost_injection(
             request_body=request_body,
             url_route=url_route,
@@ -217,15 +239,14 @@ class PassThroughStreamingHandler:
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
-                    complete_frames, pending = split_complete_sse_frames(
-                        pending + chunk
-                    )  # rebind-ok: SSE frame reassembly buffer across transport chunks
+                    complete_frames, pending = split_complete_sse_frames(pending + chunk)
                     if complete_frames:
-                        yield ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                        yield ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
                             complete_frames, resolved_model_name, litellm_logging_obj
                         )
                 if pending:
                     yield pending
+            stream_ended = True  # rebind-ok: the finally reads it to spot a close-at-frame
             # Stream completed cleanly.  When the proxy armed deferred
             # dispatch (post-call guardrails active), park the logging
             # coroutine on logging_obj instead of enqueueing now, so
@@ -269,15 +290,40 @@ class PassThroughStreamingHandler:
             # a success would double-log the same request.
             if not logging_scheduled and raw_bytes and response.status_code < 400:
                 logging_scheduled = True
+                superseded_error_event: Final = (
+                    None
+                    if stream_ended
+                    else PassThroughStreamingHandler._error_frame_closed_at(endpoint_type, raw_bytes)
+                )
                 try:
-                    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=_build_logging_coroutine())
+                    await PassThroughStreamingHandler._schedule_stream_end_logging(
+                        litellm_logging_obj=litellm_logging_obj,
+                        endpoint_type=endpoint_type,
+                        request_body=resolved_request_body,
+                        raw_bytes=tuple(raw_bytes),
+                        error_event=superseded_error_event,
+                        success_logging=_build_logging_coroutine,
+                    )
                 except Exception as e:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
                 else:
                     bind_budget_reservation_to_callbacks(litellm_logging_obj.litellm_params)
 
     @staticmethod
-    async def _route_streaming_logging_to_handler(
+    def _error_frame_closed_at(endpoint_type: EndpointType, raw_bytes: Sequence[bytes]) -> tuple[str, str, int] | None:
+        from litellm.llms.anthropic.messages.native.streaming_iterator import (
+            closing_superseded_attempt,
+            parse_anthropic_error_event,
+        )
+
+        if endpoint_type != EndpointType.ANTHROPIC or not closing_superseded_attempt():
+            return None
+
+        complete_frames, _ = split_complete_sse_frames(b"".join(raw_bytes))
+        return parse_anthropic_error_event(complete_frames)
+
+    @staticmethod
+    async def route_streaming_logging_to_handler(
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
@@ -296,9 +342,9 @@ class PassThroughStreamingHandler:
         - Vertex AI
         - OpenAI
         """
-        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
-            _is_message_stop_chunk,  # pyright: ignore[reportPrivateUsage]  # both native stream paths share terminal-event detection
-            _is_provider_error_chunk,  # pyright: ignore[reportPrivateUsage]  # provider errors must not become cache evidence
+        from litellm.llms.anthropic.messages.native.streaming_iterator import (
+            is_message_stop_chunk,  # pyright: ignore[reportPrivateUsage]  # both native stream paths share terminal-event detection
+            is_provider_error_chunk,  # pyright: ignore[reportPrivateUsage]  # provider errors must not become cache evidence
         )
 
         # Transport reads can split event names and JSON payloads. Recognize terminal
@@ -311,8 +357,8 @@ class PassThroughStreamingHandler:
         ] = (
             endpoint_type == EndpointType.ANTHROPIC
             and not incomplete_tail.strip()
-            and _is_message_stop_chunk(complete_frames)
-            and not _is_provider_error_chunk(complete_frames)
+            and is_message_stop_chunk(complete_frames)
+            and not is_provider_error_chunk(complete_frames)
         )
         try:
             # TinyFish billing is owned by the detached poller; the $0 fallback below is only for streams with no run_id
@@ -375,6 +421,8 @@ class PassThroughStreamingHandler:
         except Exception as e:
             verbose_proxy_logger.error("Error in _route_streaming_logging_to_handler: %s", e)
 
+    _route_streaming_logging_to_handler = route_streaming_logging_to_handler
+
     @staticmethod
     def _build_passthrough_logging_result(
         litellm_logging_obj: LiteLLMLoggingObj,
@@ -399,7 +447,7 @@ class PassThroughStreamingHandler:
         kwargs: dict = {}
         if endpoint_type == EndpointType.ANTHROPIC:
             anthropic_passthrough_logging_handler_result: Final = (
-                AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+                AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
                     litellm_logging_obj=litellm_logging_obj,
                     passthrough_success_handler_obj=passthrough_success_handler_obj,
                     url_route=url_route,
@@ -414,7 +462,7 @@ class PassThroughStreamingHandler:
             kwargs = anthropic_passthrough_logging_handler_result["kwargs"]
         elif endpoint_type == EndpointType.VERTEX_AI:
             vertex_passthrough_logging_handler_result: Final = (
-                VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
+                VertexPassthroughLoggingHandler.handle_logging_vertex_collected_chunks(
                     litellm_logging_obj=litellm_logging_obj,
                     passthrough_success_handler_obj=passthrough_success_handler_obj,
                     url_route=url_route,
@@ -450,7 +498,7 @@ class PassThroughStreamingHandler:
             )
         elif endpoint_type == EndpointType.OPENAI:
             openai_passthrough_logging_handler_result: Final = (
-                OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
+                OpenAIPassthroughLoggingHandler.handle_logging_openai_collected_chunks(
                     litellm_logging_obj=litellm_logging_obj,
                     passthrough_success_handler_obj=passthrough_success_handler_obj,
                     url_route=url_route,

@@ -32,7 +32,10 @@ litellm_settings:
       - host: 127.0.0.1
         port: 6379
     ssl: true
-  callbacks: ["arize_phoenix", "datadog", "smtp_email", "prometheus", "otel"]
+  callbacks: ["arize_phoenix", "datadog", "smtp_email", "prometheus", "otel", "websearch_interception"]
+  websearch_interception_params:
+    enabled_providers: ["bedrock"]
+    search_tool_name: e2e-search
   require_auth_for_metrics_endpoint: false
 
 router_settings:
@@ -40,6 +43,8 @@ router_settings:
   num_retries: 3
   allowed_fails: 5
   cooldown_time: 30
+  model_group_alias:
+    e2e-alias-rl-alias: e2e-alias-rl-target
 
 model_list:
   - model_name: gpt-5.5
@@ -60,10 +65,21 @@ model_list:
     litellm_params:
       model: gemini/gemini-2.5-flash
       api_key: os.environ/GEMINI_API_KEY
+  - model_name: e2e-alias-rl-target
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      default_api_key_rpm_limit: 3
   - model_name: openai-text-embedding-3-small
     litellm_params:
       model: openai/text-embedding-3-small
       api_key: os.environ/OPENAI_API_KEY
+
+search_tools:
+  - search_tool_name: e2e-search
+    litellm_params:
+      search_provider: perplexity
+      api_key: os.environ/PERPLEXITY_API_KEY
 
 files_settings:
   - custom_llm_provider: openai

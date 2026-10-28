@@ -66,7 +66,7 @@ async def _search_skills(
     to_response: Final = LiteLLMSkillsTransformationHandler().db_skill_to_response
     match outcome:
         case SkillSearchHits(hits):
-            skills: Final = [  # mutable-ok: ListSkillsResponse.data requires list[Skill]; never mutated after
+            skills: Final = [
                 to_response(hit.skill).model_copy(update=MappingProxyType({"search_score": hit.score})) for hit in hits
             ]
             return ListSkillsResponse(data=skills, has_more=False, next_page=None)
@@ -170,7 +170,7 @@ async def create_skill(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -300,7 +300,7 @@ async def list_skills(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -397,7 +397,7 @@ async def get_skill(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -496,7 +496,7 @@ async def delete_skill(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

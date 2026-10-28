@@ -7,19 +7,19 @@ stripping, and the anthropic-version / anthropic-beta placement (headers,
 never the body) that are specific to the bedrock-mantle endpoint.
 """
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from pydantic import TypeAdapter
 
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
 from litellm.llms.bedrock.common_utils import build_mantle_messages_url
-from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -45,7 +45,7 @@ def _move_betas_into_header(request: Mapping[str, object], headers: dict[str, st
     if betas:
         headers["anthropic-beta"] = ",".join(betas)  # rebind-ok: the handler signs and sends this same dict
         return
-    headers.pop("anthropic-beta", None)  # rebind-ok: a caller header Mantle rejects in full must not reach it
+    headers.pop("anthropic-beta", None)
 
 
 class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
@@ -56,11 +56,18 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
     model ID in the request body (unlike Bedrock Invoke which puts it in the URL).
     """
 
+    BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = (
+        AmazonAnthropicClaudeMessagesConfig.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS | {"service_tier"}
+    )
+
     @property
     def beta_headers_provider(self) -> str:
         return "bedrock_mantle"
 
     def should_filter_anthropic_beta_headers(self) -> bool:
+        return False
+
+    def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return False
 
     def get_complete_url(
@@ -83,7 +90,7 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -104,13 +111,13 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
             {
                 name: value
                 for name, value in (
-                    ("anthropic-workspace", project_id),
+                    ("anthropic-workspace-id", project_id),
                     ("anthropic-version", None if has_version else DEFAULT_ANTHROPIC_API_VERSION),
                 )
                 if value
             }
         )
-        return {  # mutable-ok: the base class contract returns a dict the handler signs into in place
+        return {
             **merged_headers,
             **mantle_headers,
         }, resolved_api_base
@@ -141,7 +148,7 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         mantle_fields: Final = MappingProxyType(
             {key: value for key, value in (("model", model_id), ("stream", streaming)) if value}
         )
-        return {  # mutable-ok: the base class contract returns the dict the handler serializes as the body
+        return {
             **body,
             **mantle_fields,
         }
@@ -169,9 +176,9 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         self,
         model: str,
         httpx_response: httpx.Response,
-        request_body: dict,
+        request_body: dict[str, object],  # mutable-ok: mirrors the base signature
         litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> AsyncIterator:
+    ) -> AsyncIterator[bytes]:
         return AnthropicMessagesConfig.get_async_streaming_response_iterator(
             self,
             model=model,

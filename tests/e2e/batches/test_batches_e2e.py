@@ -44,23 +44,29 @@ from capabilities import (
     OPENAI_BATCH_BACKEND,
     OPENAI_BATCH_MODEL,
     PROVIDERS,
+    VERTEX_BATCH_BACKEND,
     Capability,
     Provider,
     batch_model_name,
     coverage_cells_for_lifecycle,
     decoded_model_from_id,
+    file_content_meta,
     is_managed_id,
+    lifecycle_meta,
     matches_id_shape,
     openai_batch_params,
     raw_id_matches_provider,
 )
 from e2e_config import MASTER_KEY, PROXY_BASE_URL, unique_marker
+from e2e_metadata import Domain, Mode, Route, Subject, meta
+from e2e_metadata import Provider as MetaProvider
 from e2e_http import (
     FileUploadForm,
     Result,
     StreamingResponse,
     Success,
     UnknownApiError,
+    proxy_error,
     require_successful_call,
     unwrap,
 )
@@ -93,11 +99,11 @@ class _GovCloudBedrockRecord(BaseModel):
     model_input: _GovCloudBedrockInput = Field(alias="modelInput")
 
 
-# Azure / Vertex cancel and the pre-cancel re-retrieve are provider-side flakes
+# Vertex cancel and the pre-cancel re-retrieve are provider-side flakes
 # (connection refused, brief 500s) and the registry only has one basic cell per
 # provider (shared across scenarios). Create + retrieve already prove routing;
-# cancel is still deferred for cleanup, just not asserted for these two.
-_CANCEL_ASSERTED_PROVIDERS = frozenset({"openai", "bedrock"})
+# cancel is still deferred for cleanup, just not asserted for Vertex.
+_CANCEL_ASSERTED_PROVIDERS = frozenset({"openai", "azure", "bedrock"})
 
 
 def _transient_status(status_code: int) -> bool:
@@ -248,7 +254,7 @@ def assert_batch_object(batch: BatchObject) -> None:
         pytest.param(
             cap,
             id=cap.id,
-            marks=pytest.mark.covers(*coverage_cells_for_lifecycle(cap)),
+            marks=(pytest.mark.covers(*coverage_cells_for_lifecycle(cap)), lifecycle_meta(cap)),
         )
         for cap in CAPABILITIES
     ],
@@ -349,6 +355,15 @@ def test_batch_lifecycle(
 
 
 @pytest.mark.covers("llm.batches.openai.key_model_access_denied.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.PROXY_AUTH,
+        route=Route.BATCHES,
+        providers=(MetaProvider.OPENAI,),
+        models=(OPENAI_BATCH_BACKEND,),
+        mode=Mode.BATCH,
+    )
+)
 def test_batch_key_model_access_denied(
     client: BatchClient, resources: ResourceManager, batch_deployments: None
 ) -> None:
@@ -387,6 +402,14 @@ def test_batch_key_model_access_denied(
 @pytest.mark.covers(
     "llm.files.openai.upload.nonstream.works",
     "llm.files.openai.delete.nonstream.works",
+)
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.FILES,
+        providers=(MetaProvider.OPENAI,),
+        models=(OPENAI_BATCH_BACKEND,),
+    )
 )
 def test_file_upload_and_delete_outputs(
     client: BatchClient, resources: ResourceManager, batch_deployments: None
@@ -432,6 +455,15 @@ def unattributed_rows(rows: list[SpendLogRow]) -> list[SpendLogRow]:
         "once the fetch is bounded."
     )
 )
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.BATCHES,
+        providers=(MetaProvider.OPENAI,),
+        models=(OPENAI_BATCH_BACKEND,),
+        mode=Mode.BATCH,
+    )
+)
 def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
     client: BatchClient, resources: ResourceManager, batch_deployments: None
 ) -> None:
@@ -470,7 +502,7 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
 
     file = unwrap(
         client.upload_file(
-            content=render_jsonl("gpt-4o-mini"),
+            content=render_jsonl(OPENAI_BATCH_BACKEND),
             form=FileUploadForm(purpose="batch"),
             model=OPENAI_BATCH_MODEL,
             key=key,
@@ -519,6 +551,14 @@ class TestBatchFileContent:
         "llm.files.openai.content.nonstream.works",
         exercised_on=["files"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.FILES,
+            providers=(MetaProvider.OPENAI,),
+            models=(OPENAI_BATCH_BACKEND,),
+        )
+    )
     def test_file_content_matches_upload(
         self, client: BatchClient, resources: ResourceManager
     ) -> None:
@@ -557,8 +597,9 @@ class TestBatchFileContent:
             pytest.param(
                 p,
                 id=p.name,
-                marks=pytest.mark.covers(
-                    FILE_CONTENT_CELLS[p.name], exercised_on=["files"]
+                marks=(
+                    pytest.mark.covers(FILE_CONTENT_CELLS[p.name], exercised_on=["files"]),
+                    file_content_meta(p),
                 ),
             )
             for p in PROVIDERS
@@ -631,6 +672,14 @@ class TestOpenAIFiles:
             "marker when LIT-4820 is fixed; do not relax the assertion to make it pass."
         )
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.FILES,
+            providers=(MetaProvider.OPENAI,),
+            models=(OPENAI_BATCH_BACKEND,),
+        )
+    )
     def test_uploaded_file_appears_in_list(
         self, client: BatchClient, resources: ResourceManager, batch_deployments: None
     ) -> None:
@@ -661,6 +710,7 @@ class TestOpenAIFiles:
         "llm.files.openai.list_isolation.nonstream.works",
         exercised_on=["files"],
     )
+    @meta(Subject(domain=Domain.LLM_TRANSLATION, route=Route.FILES, providers=(MetaProvider.OPENAI,)))
     def test_list_page_cursors_address_only_the_callers_own_files(
         self, client: BatchClient, resources: ResourceManager
     ) -> None:
@@ -695,6 +745,14 @@ class TestOpenAIFiles:
     @pytest.mark.covers(
         "llm.files.openai.retrieve.nonstream.works",
         exercised_on=["files"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.FILES,
+            providers=(MetaProvider.OPENAI,),
+            models=(OPENAI_BATCH_BACKEND,),
+        )
     )
     def test_retrieve_round_trips_metadata(
         self, client: BatchClient, resources: ResourceManager, batch_deployments: None
@@ -759,6 +817,15 @@ class TestBatchRateLimitErrorMapping:
         "quota_management.ratelimit.batch_rpm.blocks_over_limit",
         exercised_on=["batches"],
     )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.BATCHES,
+            providers=(MetaProvider.OPENAI,),
+            models=(OPENAI_BATCH_BACKEND,),
+            mode=Mode.BATCH,
+        )
+    )
     def test_batch_create_over_rpm_returns_mapped_429(
         self, client: BatchClient, resources: ResourceManager, batch_deployments: None
     ) -> None:
@@ -772,7 +839,7 @@ class TestBatchRateLimitErrorMapping:
 
         file = unwrap(
             client.upload_file(
-                content=_multi_request_jsonl("gpt-4o-mini", BATCH_RL_REQUEST_LINES),
+                content=_multi_request_jsonl(OPENAI_BATCH_BACKEND, BATCH_RL_REQUEST_LINES),
                 form=FileUploadForm(purpose="batch"),
                 model=OPENAI_BATCH_MODEL,
                 key=key,
@@ -825,7 +892,7 @@ class TestBatchEnqueuedTokenLimit:
     ) -> FileObject:
         file = unwrap(
             client.upload_file(
-                content=_multi_request_jsonl("gpt-4o-mini", BATCH_RL_REQUEST_LINES),
+                content=_multi_request_jsonl(OPENAI_BATCH_BACKEND, BATCH_RL_REQUEST_LINES),
                 form=FileUploadForm(purpose="batch"),
                 model=OPENAI_BATCH_MODEL,
                 key=key,
@@ -858,6 +925,15 @@ class TestBatchEnqueuedTokenLimit:
         "quota_management.ratelimit.batch_enqueued_tokens.accepts_over_rpm",
         exercised_on=["batches"],
     )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.BATCHES,
+            providers=(MetaProvider.OPENAI,),
+            models=(OPENAI_BATCH_BACKEND,),
+            mode=Mode.BATCH,
+        )
+    )
     def test_enqueued_allowance_accepts_batch_over_key_rpm(
         self, client: BatchClient, resources: ResourceManager, batch_deployments: None
     ) -> None:
@@ -888,6 +964,15 @@ class TestBatchEnqueuedTokenLimit:
     @pytest.mark.covers(
         "quota_management.ratelimit.batch_enqueued_tokens.refunds_on_cancel",
         exercised_on=["batches"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.BATCHES,
+            providers=(MetaProvider.OPENAI,),
+            models=(OPENAI_BATCH_BACKEND,),
+            mode=Mode.BATCH,
+        )
     )
     def test_exhausted_allowance_blocks_until_cancel_refunds(
         self, client: BatchClient, resources: ResourceManager, batch_deployments: None
@@ -984,6 +1069,15 @@ class TestBedrockBatchAssumeRole:
         "llm.files.bedrock.upload.nonstream.works",
         exercised_on=["batches", "files"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.BATCHES,
+            providers=(MetaProvider.BEDROCK,),
+            models=(ASSUME_ROLE_RAW_MODEL,),
+            mode=Mode.BATCH,
+        )
+    )
     def test_unified_batch_create_with_assume_role(
         self, client: BatchClient, resources: ResourceManager
     ) -> None:
@@ -1050,6 +1144,14 @@ class TestBedrockBatchSplitS3Credentials:
     @pytest.mark.covers(
         "llm.files.bedrock.split_s3_credentials.nonstream.works",
         exercised_on=["files"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.FILES,
+            providers=(MetaProvider.BEDROCK,),
+            models=(ASSUME_ROLE_RAW_MODEL,),
+        )
     )
     def test_file_lifecycle_signs_s3_with_s3_credentials(
         self, client: BatchClient, resources: ResourceManager
@@ -1122,6 +1224,15 @@ class TestBedrockBatchGovCloud:
         "llm.files.bedrock.govcloud_partition.nonstream.works",
         exercised_on=["batches", "files"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.BATCHES,
+            providers=(MetaProvider.BEDROCK,),
+            models=(GOVCLOUD_RAW_MODEL,),
+            mode=Mode.BATCH,
+        )
+    )
     def test_unified_file_upload_and_batch_create_in_govcloud(
         self, client: BatchClient, resources: ResourceManager
     ) -> None:
@@ -1192,6 +1303,14 @@ class TestGeminiFiles:
         "llm.files.gemini.upload.nonstream.works",
         exercised_on=["files"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.FILES,
+            providers=(MetaProvider.GEMINI,),
+            models=(GEMINI_FILES_RAW_MODEL,),
+        )
+    )
     def test_gemini_file_upload(
         self, client: BatchClient, resources: ResourceManager
     ) -> None:
@@ -1226,7 +1345,7 @@ def _vllm_params(api_base: str, api_key: str | None, model_id: str) -> LiteLLMPa
     )
 
 
-HOSTED_VLLM_DEFAULT_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
+HOSTED_VLLM_MODEL: Final = (os.environ.get("HOSTED_VLLM_MODEL") or "Qwen/Qwen2.5-0.5B-Instruct").strip()
 HOSTED_VLLM_BAD_LINE_CUSTOM_ID = "req-bad"
 
 
@@ -1235,9 +1354,8 @@ def _hosted_vllm_deployment(client: BatchClient, resources: ResourceManager) -> 
     if api_base is None:
         pytest.skip("set HOSTED_VLLM_API_BASE (the live vLLM server this deployment targets)")
     api_key = (os.environ.get("HOSTED_VLLM_API_KEY") or "").strip() or None
-    model_id = (os.environ.get("HOSTED_VLLM_MODEL") or HOSTED_VLLM_DEFAULT_MODEL).strip()
     proxy_name = batch_model_name("hosted-vllm-batch")
-    model_row_id = client.create_model(proxy_name, _vllm_params(api_base, api_key, model_id))
+    model_row_id = client.create_model(proxy_name, _vllm_params(api_base, api_key, HOSTED_VLLM_MODEL))
     resources.defer(lambda: client.delete_model(model_row_id))
     return proxy_name
 
@@ -1289,6 +1407,15 @@ class TestHostedVllmBatch:
         "llm.files.hosted_vllm.upload.nonstream.works",
         exercised_on=["batches", "files"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.BATCHES,
+            providers=(MetaProvider.HOSTED_VLLM,),
+            models=(HOSTED_VLLM_MODEL,),
+            mode=Mode.BATCH,
+        )
+    )
     def test_batch_runs_to_completion_with_a_downloadable_output(
         self, client: BatchClient, resources: ResourceManager, upload_route: str
     ) -> None:
@@ -1336,6 +1463,15 @@ class TestHostedVllmBatch:
         )
 
     @pytest.mark.covers("llm.batches.hosted_vllm.basic.nonstream.works", exercised_on=["batches", "files"])
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.BATCHES,
+            providers=(MetaProvider.HOSTED_VLLM,),
+            models=(HOSTED_VLLM_MODEL,),
+            mode=Mode.BATCH,
+        )
+    )
     def test_failing_line_lands_in_the_error_file_not_the_batch_status(
         self, client: BatchClient, resources: ResourceManager
     ) -> None:
@@ -1416,6 +1552,7 @@ class TestBatchFailurePaths:
         "llm.batches.openai.malformed_jsonl.nonstream.works",
         exercised_on=["files"],
     )
+    @meta(Subject(domain=Domain.LLM_TRANSLATION, route=Route.FILES))
     def test_malformed_jsonl_upload_rejected(
         self, client: BatchClient, resources: ResourceManager, batch_deployments: None
     ) -> None:
@@ -1438,13 +1575,22 @@ class TestBatchFailurePaths:
         "llm.batches.openai.cancel_terminal.nonstream.works",
         exercised_on=["batches", "files"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.BATCHES,
+            providers=(MetaProvider.OPENAI,),
+            models=(OPENAI_BATCH_BACKEND,),
+            mode=Mode.BATCH,
+        )
+    )
     def test_endpoint_mismatch_fails_batch_and_cancel_conflicts(
         self, client: BatchClient, resources: ResourceManager, batch_deployments: None
     ) -> None:
         key = resources.key()
         file = unwrap(
             client.upload_file(
-                content=_mismatched_endpoint_jsonl("gpt-4o-mini"),
+                content=_mismatched_endpoint_jsonl(OPENAI_BATCH_BACKEND),
                 form=FileUploadForm(purpose="batch"),
                 model=OPENAI_BATCH_MODEL,
                 key=key,
@@ -1493,6 +1639,15 @@ class TestBatchFailurePaths:
     @pytest.mark.covers(
         "llm.batches.openai.foreign_file_id.nonstream.works",
         exercised_on=["batches", "files"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.BATCHES,
+            providers=(MetaProvider.AZURE,),
+            models=(AZURE_BATCH_RAW_MODEL,),
+            mode=Mode.BATCH,
+        )
     )
     def test_foreign_encoded_file_id_routes_by_file_model(
         self, client: BatchClient, resources: ResourceManager, batch_deployments: None
@@ -1543,6 +1698,15 @@ class TestBatchSecondHop:
         "llm.batches.openai.second_hop.nonstream.works",
         exercised_on=["batches", "files"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.BATCHES,
+            providers=(MetaProvider.LITELLM_PROXY, MetaProvider.OPENAI),
+            models=(OPENAI_BATCH_BACKEND,),
+            mode=Mode.BATCH,
+        )
+    )
     def test_unified_create_and_retrieve_via_chained_gateway(
         self, client: BatchClient, resources: ResourceManager, batch_deployments: None
     ) -> None:
@@ -1560,7 +1724,7 @@ class TestBatchSecondHop:
 
         file = unwrap(
             client.upload_file(
-                content=render_jsonl("gpt-4o-mini"),
+                content=render_jsonl(OPENAI_BATCH_BACKEND),
                 form=FileUploadForm(purpose="batch", target_model_names=hop_name),
                 key=key,
             )
@@ -1679,13 +1843,22 @@ class TestBatchTerminalState:
         "llm.batches.openai.terminal_state.nonstream.cost_logged",
         exercised_on=["batches", "files"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.BATCHES,
+            providers=(MetaProvider.OPENAI,),
+            models=(OPENAI_BATCH_BACKEND,),
+            mode=Mode.BATCH,
+        )
+    )
     def test_completed_batch_downloads_output_and_books_cost(
         self, client: BatchClient, resources: ResourceManager, batch_deployments: None
     ) -> None:
         key = resources.key()
         file = unwrap(
             client.upload_file(
-                content=render_jsonl("gpt-4o-mini"),
+                content=render_jsonl(OPENAI_BATCH_BACKEND),
                 form=FileUploadForm(purpose="batch"),
                 model=OPENAI_BATCH_MODEL,
                 key=key,
@@ -1752,3 +1925,124 @@ class TestBatchTerminalState:
         assert (cost_row.total_tokens or 0) > 0, (
             f"batch cost row has no token usage: {cost_row.total_tokens!r}"
         )
+
+
+NATIVE_VERTEX_BATCH_ROWS: Final = b"".join(
+    json.dumps(
+        {
+            "request": {
+                "contents": [{"role": "user", "parts": [{"text": text}]}],
+                "tools": [{"googleSearch": {"excludeDomains": ["example.com"]}}],
+            }
+        }
+    ).encode()
+    + b"\n"
+    for text in ("What is the tallest building in the world?", "Who won the last FIFA World Cup?")
+)
+VERTEX_BATCH_PROVIDER: Final = next(p for p in PROVIDERS if p.name == "vertex_ai")
+
+
+class TestVertexNativePassthrough:
+    """`passthrough=true` on POST /v1/files uploads native Vertex batch JSONL byte for
+    byte (no OpenAI-to-Vertex translation, so `googleSearch` tools and the grounding
+    metadata they produce survive), and a batch created from that file is accepted.
+
+    Terminal-state assertions (native output rows with groundingMetadata, the spend
+    row) are deliberately not here: retrieving a non-terminal batch books a $0 spend
+    row that blocks the real-cost row, the same reason TestBatchTerminalState polls
+    the list endpoint only. Those are proven by the PR's live curl proof instead.
+    """
+
+    @pytest.mark.covers(
+        "llm.files.vertex.native_passthrough.nonstream.works",
+        "llm.batches.vertex.native_passthrough.nonstream.works",
+        exercised_on=["files", "batches"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.BATCHES,
+            providers=(MetaProvider.VERTEX_AI,),
+            models=(VERTEX_BATCH_BACKEND,),
+            mode=Mode.BATCH,
+        )
+    )
+    def test_native_jsonl_round_trips_untouched_and_starts_a_batch(
+        self, client: BatchClient, resources: ResourceManager, batch_deployments: None
+    ) -> None:
+        key = resources.key()
+        file = unwrap(
+            client.upload_file(
+                content=NATIVE_VERTEX_BATCH_ROWS,
+                form=FileUploadForm(
+                    purpose="batch", target_model_names=VERTEX_BATCH_PROVIDER.model, passthrough=True
+                ),
+                key=key,
+            )
+        )
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
+        assert_file_object(file, provider="vertex_ai")
+        assert is_managed_id(file.id), f"passthrough upload must return a managed file id, got {file.id!r}"
+        assert file.bytes == len(NATIVE_VERTEX_BATCH_ROWS), (
+            f"passthrough upload must report the caller's byte count, got {file.bytes}"
+        )
+
+        downloaded = client.proxy.transport.download(
+            f"/v1/files/{file.id}/content", headers=client.proxy.transport.bearer(key)
+        )
+        assert downloaded.status_code == 200, (
+            f"file content must be 200, got {downloaded.status_code}: {downloaded.body[:300]}"
+        )
+        assert downloaded.body.encode() == NATIVE_VERTEX_BATCH_ROWS, (
+            "passthrough file content must be the uploaded native rows byte for byte"
+        )
+
+        created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
+        require_successful_call(created)
+        batch = BatchObject.model_validate_json(created.body)
+        resources.defer(lambda: cleanup_batch(client, batch.id, key=key, delete_output_files=True))
+        assert is_managed_id(batch.id), f"passthrough batch must be LiteLLM-managed, got {batch.id!r}"
+        assert batch.status in CREATED_BATCH_STATUSES, f"passthrough batch has non-transitional status {batch.status!r}"
+        assert batch.input_file_id == file.id
+
+    @pytest.mark.covers("llm.files.vertex.native_passthrough_validation.nonstream.works", exercised_on=["files"])
+    @pytest.mark.parametrize(
+        "content, form, expected_param",
+        [
+            pytest.param(
+                NATIVE_VERTEX_BATCH_ROWS,
+                FileUploadForm(purpose="batch", passthrough=True),
+                "target_model_names",
+                id="no-target-model",
+            ),
+            pytest.param(
+                NATIVE_VERTEX_BATCH_ROWS,
+                FileUploadForm(purpose="batch", target_model_names=OPENAI_BATCH_MODEL, passthrough=True),
+                "target_model_names",
+                id="non-vertex-target-model",
+            ),
+            pytest.param(
+                render_jsonl(VERTEX_BATCH_PROVIDER.raw_model),
+                FileUploadForm(purpose="batch", target_model_names=VERTEX_BATCH_PROVIDER.model, passthrough=True),
+                "request",
+                id="openai-shaped-rows",
+            ),
+        ],
+    )
+    @meta(Subject(domain=Domain.LLM_TRANSLATION, route=Route.FILES))
+    def test_passthrough_upload_is_rejected_outside_a_native_vertex_batch(
+        self,
+        content: bytes,
+        form: FileUploadForm,
+        expected_param: str,
+        client: BatchClient,
+        resources: ResourceManager,
+        batch_deployments: None,
+    ) -> None:
+        key = resources.key()
+        result = client.upload_file(content=content, form=form, key=key)
+        assert isinstance(result, UnknownApiError), f"expected a 400, got {result!r}"
+        assert result.status_code == 400, f"expected 400, got {result.status_code}: {result.body[:300]}"
+        error = proxy_error(result.body)
+        assert error.param == expected_param, f"unexpected error param in {error!r}"
+        assert "passthrough" in error.message
