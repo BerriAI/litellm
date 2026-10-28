@@ -4680,7 +4680,7 @@ def test_fast_mode_parameter_mapping():
 
 
 @pytest.mark.parametrize("model", ["claude-sonnet-4-6", "claude-opus-4-7"])
-def test_anthropic_drop_params_strips_speed_for_unsupported_models(model):
+def test_anthropic_drop_params_strips_speed_for_unsupported_models(model: str):
     """``drop_params=True`` strips ``speed`` for models without fast mode."""
     config = AnthropicConfig()
     messages = [{"role": "user", "content": "Hello"}]
