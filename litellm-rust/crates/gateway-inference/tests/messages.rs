@@ -6,7 +6,6 @@ use axum::{
 };
 use rstest::rstest;
 use serde_json::json;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -16,7 +15,7 @@ use wiremock::{
 #[rstest]
 #[case::anthropic("anthropic/test-model", "/v1/messages", true)]
 #[case::azure("azure_ai/test-model", "/anthropic/v1/messages", false)]
-#[case::deepseek("deepseek/test-model", "/anthropic/v1/messages", false)]
+#[case::deepseek("deepseek/test-model", "/anthropic/v1/messages", true)]
 #[tokio::test]
 async fn messages_reaches_the_provider_and_preserves_json_or_sse(
     #[case] model: &str,
@@ -90,34 +89,11 @@ async fn invalid_messages_stays_an_anthropic_error() {
     assert_eq!(body["error"]["type"], "invalid_request_error");
 }
 
-/// Answers with the SSE head and one event, then drops the connection short of the
-/// announced body length.
-async fn truncating_upstream() -> String {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut request = vec![0; 4096];
-        let _ = socket.read(&mut request).await;
-        socket
-            .write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{FIRST_EVENT}",
-                    FIRST_EVENT.len() * 2
-                )
-                .as_bytes(),
-            )
-            .await
-            .unwrap();
-    });
-    base
-}
-
 const FIRST_EVENT: &str = "event: message_start\ndata: {}\n\n";
 
 #[tokio::test]
 async fn a_stream_that_fails_after_opening_ends_with_an_sse_error_frame() {
-    let base = truncating_upstream().await;
+    let base = support::truncating_upstream(FIRST_EVENT).await;
     let request = Request::post("/v1/messages")
         .header("content-type", "application/json")
         .body(Body::from(

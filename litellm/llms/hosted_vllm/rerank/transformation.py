@@ -4,16 +4,18 @@ Transformation logic for Hosted VLLM rerank
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 import httpx
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._uuid import uuid
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
     HostedVLLMRerankTruncationParams,
@@ -26,6 +28,8 @@ from litellm.types.rerank import (
     RerankResponseResult,
     RerankTokens,
 )
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class HostedVLLMRerankError(BaseLLMException):
@@ -62,7 +66,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
             if api_base.endswith("/v1/rerank"):
                 api_base = api_base.replace("/v1/rerank", "/rerank")
             elif not api_base.endswith("/rerank"):
-                api_base = f"{api_base}/rerank"
+                api_base = join_api_base(api_base, "rerank")
             return api_base
         raise ValueError("api_base must be provided for Hosted VLLM rerank")
 
@@ -86,7 +90,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
@@ -192,11 +196,11 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         Process response from Hosted VLLM rerank API
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise ValueError(f"Error parsing response: {raw_response.text}, status_code={raw_response.status_code}")
 
-        return self._transform_response(raw_response_json)
+        return self._transform_response(dict(decoded_json_object(raw_response_json)))
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return HostedVLLMRerankError(message=error_message, status_code=status_code, headers=headers)

@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl, getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
 import { withRequiredHeaders } from "@/components/llm_calls/request_headers";
 import { createApiClient } from "@/lib/http/client";
-import { isDecisionMode } from "@/lib/decisionModels";
+import { isDecisionEntry } from "@/lib/decisionModels";
 import {
   systemOneResponseSchema,
   type PlaygroundRequest,
@@ -26,11 +26,17 @@ export type PlaygroundDecisionRequest =
   | { endpoint: "/v1/decisions"; payload: OpenAIDecisionsRequest };
 
 const modelGroupInfoSchema = z.object({
-  data: z.array(z.object({ model_group: z.string(), mode: z.string().nullish() })),
+  data: z.array(
+    z.object({
+      model_group: z.string(),
+      mode: z.string().nullish(),
+      supported_endpoints: z.array(z.string()).nullish(),
+    }),
+  ),
 });
 
-function proxyClient(customBaseUrl?: string) {
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
+function proxyClient(customBaseUrl?: string, getDefaultBaseUrl: () => string = getProxyBaseUrl) {
+  const proxyBaseUrl = customBaseUrl || getDefaultBaseUrl();
   const normalizedBaseUrl = proxyBaseUrl.endsWith("/") ? proxyBaseUrl.slice(0, -1) : proxyBaseUrl;
   return createApiClient({ getBaseUrl: () => normalizedBaseUrl });
 }
@@ -56,7 +62,7 @@ export async function fetchDecisionModels(
   });
   return modelGroupInfoSchema
     .parse(body)
-    .data.filter((group) => isDecisionMode(group.mode))
+    .data.filter(isDecisionEntry)
     .map((group) => group.model_group)
     .sort((a, b) => a.localeCompare(b));
 }
@@ -68,7 +74,7 @@ async function sendDecisionRequest<T>(
   signal?: AbortSignal,
 ): Promise<DecisionResult<T>> {
   const startedAt = performance.now();
-  const body = await proxyClient(customBaseUrl).post<unknown>(request.endpoint, {
+  const body = await proxyClient(customBaseUrl, getGatewayBaseUrl).post<unknown>(request.endpoint, {
     body: request.payload,
     headers: authHeaders(accessToken),
     signal,

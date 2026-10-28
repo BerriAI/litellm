@@ -343,15 +343,18 @@ def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
     client: Final = HTTPHandler()
     client.post = MagicMock(return_value=mock_response)
     router: Final = litellm.Router(
-        model_list=[{"model_name": "invoke-chunked", "litellm_params": {**INVOKE_DEPLOYMENT, **deployment_extras}}]
+        model_list=[{"model_name": "invoke-chunked", "litellm_params": {**INVOKE_DEPLOYMENT, **deployment_extras}}],
+        num_retries=0,
     )
 
-    router.completion(
-        model="invoke-chunked",
-        messages=[{"role": "user", "content": "hi"}],
-        stream=True,
-        client=client,
-    )
+    # the empty body is a stream that ends before its first chunk, which the Router now reports from the call
+    with pytest.raises(litellm.BadGatewayError):
+        router.completion(
+            model="invoke-chunked",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+        )
 
     mock_response.iter_bytes.assert_called_once_with(chunk_size=expected_chunk_size)
     data: Final = client.post.call_args.kwargs["data"]
@@ -399,6 +402,27 @@ def test_router_deployment_with_a_non_numeric_stream_chunk_size_gets_a_400_befor
 
     assert exc_info.value.status_code == 400
     send.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_provider"),
+    [
+        pytest.param("us.anthropic.claude-3-5-sonnet-20240620-v1:0", "anthropic", id="region-prefixed-model-id"),
+        pytest.param(
+            "arn:aws:bedrock:us-east-1:123:inference-profile/us.meta.llama3-2-90b-instruct-v1:0",
+            "meta",
+            id="inference-profile-arn",
+        ),
+        pytest.param("my-anthropic-and-cohere-model", "cohere", id="two-providers-named-earliest-listed-wins"),
+        pytest.param("us.twelvelabs.pegasus-1-2-v1:0", "twelvelabs", id="provider-listed-late"),
+        pytest.param("unknown-model", None, id="no-provider-named"),
+        pytest.param("", None, id="empty-model"),
+    ],
+)
+def test_get_bedrock_invoke_provider_finds_a_provider_named_anywhere_in_the_model(
+    model: str, expected_provider: str | None
+) -> None:
+    assert AmazonInvokeConfig.get_bedrock_invoke_provider(model) == expected_provider
 
 
 @pytest.mark.respx(assert_all_called=False)

@@ -198,6 +198,69 @@ class TestCountTokensUsesWorkloadIdentity:
         assert ANTHROPIC_OAUTH_BETA_HEADER not in betas
 
     @pytest.mark.asyncio
+    async def test_a_global_anthropic_key_counts_like_chat_would_authenticate(
+        self, monkeypatch, httpx_transport_clients
+    ):
+        for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(litellm, "anthropic_key", FAKE_REGULAR_KEY)
+
+        with respx.mock(assert_all_called=True) as router:
+            route = router.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
+                return_value=httpx.Response(200, json={"input_tokens": 13})
+            )
+            result = await AnthropicTokenCounter().count_tokens(
+                model_to_use="claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "hi"}],
+                contents=None,
+                deployment={"litellm_params": {"model": "anthropic/claude-sonnet-4-5"}},
+                request_model="claude-sonnet-4-5",
+            )
+
+        assert result is not None
+        assert result.total_tokens == 13
+        assert route.calls.last.request.headers["x-api-key"] == FAKE_REGULAR_KEY
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("deployment_key", "expected_credentials"),
+        [
+            (None, {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}", "x-api-key": None}),
+            (FAKE_REGULAR_KEY, {"authorization": None, "x-api-key": FAKE_REGULAR_KEY}),
+        ],
+        ids=["keyless-deployment-uses-the-callers-token", "deployment-key-wins-over-the-callers-token"],
+    )
+    async def test_a_callers_subscription_token_counts_only_when_no_key_is_configured(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        httpx_transport_clients: None,
+        deployment_key: str | None,
+        expected_credentials: dict[str, str | None],
+    ) -> None:
+        for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(litellm, "anthropic_key", None)
+        monkeypatch.setattr(litellm, "api_key", None)
+
+        with respx.mock(assert_all_called=True) as router:
+            route = router.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
+                return_value=httpx.Response(200, json={"input_tokens": 17})
+            )
+            result = await AnthropicTokenCounter(client_oauth_token=FAKE_OAUTH_TOKEN).count_tokens(
+                model_to_use="claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "hi"}],
+                contents=None,
+                deployment={"litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": deployment_key}},
+                request_model="claude-sonnet-4-5",
+            )
+
+        assert result is not None
+        assert result.total_tokens == 17
+        sent = route.calls.last.request.headers
+        assert {name: sent.get(name) for name in expected_credentials} == expected_credentials
+        assert (ANTHROPIC_OAUTH_BETA_HEADER in sent["anthropic-beta"].split(",")) is (deployment_key is None)
+
+    @pytest.mark.asyncio
     async def test_a_failed_mint_degrades_like_an_anthropic_error(self, monkeypatch):
         from litellm.llms.anthropic.count_tokens import token_counter as token_counter_module
 

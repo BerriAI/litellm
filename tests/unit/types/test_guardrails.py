@@ -7,12 +7,14 @@ from typing import Any, List, Optional, Tuple
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import completion
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.guardrails import BaseLitellmParams, LitellmParams
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -157,3 +159,36 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_litellm_params_treats_blank_values_as_unset(blank: str) -> None:
+    """
+    Regression: `os.environ/X` with X exported blank resolves to "", which pydantic rejected on
+    bool fields (default_on, mask_request_content, fail_on_error), so the guardrail was dropped at
+    boot. Blank now means unset, so the field keeps the same default as when it is omitted.
+    """
+    with_blank_values = LitellmParams(
+        guardrail="presidio",
+        mode="pre_call",
+        default_on=blank,
+        mask_request_content=blank,
+        api_key=blank,
+    )
+    omitted = LitellmParams(guardrail="presidio", mode="pre_call")
+    assert with_blank_values.model_dump() == omitted.model_dump()
+
+    assert BaseLitellmParams(fail_on_error=blank).model_dump() == BaseLitellmParams().model_dump()
+
+
+@pytest.mark.parametrize(("configured", "loaded"), [("2", 2), (2, 2), ("0", 0), (5, 5), ("", None)])
+def test_num_retries_loads_the_dashboard_string_and_blank_means_unset(configured: object, loaded: int | None) -> None:
+    assert (
+        LitellmParams(guardrail="generic_guardrail_api", mode="pre_call", num_retries=configured).num_retries == loaded
+    )
+
+
+@pytest.mark.parametrize("configured", [-1, 6, "1.5", "twice"])
+def test_num_retries_rejects_values_that_are_not_a_retry_count(configured: object) -> None:
+    with pytest.raises(ValidationError, match="num_retries"):
+        LitellmParams(guardrail="generic_guardrail_api", mode="pre_call", num_retries=configured)

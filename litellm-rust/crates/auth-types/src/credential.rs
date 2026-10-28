@@ -86,9 +86,9 @@ impl CredentialPlan {
             Self::Caller(caller) => {
                 let credential = caller.acquire().await?;
                 if credential.secret().expose().is_empty() {
-                    return Err(Error::EmptyCallerCredential(
-                        "credential caller returned an empty credential",
-                    ));
+                    return Err(Error::EmptyCallerCredential {
+                        caller: "credential caller",
+                    });
                 }
                 Ok(CredentialPlanResolution::Resolved(credential))
             }
@@ -104,8 +104,8 @@ mod tests {
         CredentialLookup, CredentialLookupFuture, CredentialPlan, CredentialPlanResolution,
         CredentialRef, CredentialResolver, CredentialResolverHandle,
     };
-    use crate::Error;
     use crate::SecretValue;
+    use crate::{Error, ErrorDetail};
 
     #[derive(Debug)]
     struct HostResolver;
@@ -150,9 +150,10 @@ mod tests {
     impl CredentialResolver for FailingResolver {
         fn resolve<'a>(&'a self, _reference: &'a CredentialRef) -> CredentialLookupFuture<'a> {
             Box::pin(async {
-                Err(Error::CredentialAcquisition(
-                    "host credential lookup failed".into(),
-                ))
+                Err(Error::CredentialAcquisition(ErrorDetail::failed(
+                    "host credential lookup",
+                    std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+                )))
             })
         }
     }
@@ -168,9 +169,14 @@ mod tests {
             .await
             .expect_err("acquisition errors cannot become fallback");
 
-        assert_eq!(
-            error,
-            Error::CredentialAcquisition("host credential lookup failed".into())
+        assert!(
+            matches!(error, Error::CredentialAcquisition(_)),
+            "{error:?}"
+        );
+        assert!(
+            litellm_error::Report::new(&error)
+                .to_string()
+                .contains("host credential lookup failed")
         );
     }
 }

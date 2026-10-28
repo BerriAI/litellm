@@ -54,6 +54,7 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/llms/azure/common_utils.py",
         "litellm/llms/bedrock/base_aws_llm.py",
         "litellm/llms/custom_httpx/http_handler.py",
+        "litellm/llms/databricks/common_utils.py",
         "litellm/llms/gigachat/authenticator.py",
         "litellm/llms/github_copilot/per_user_auth.py",
         "litellm/llms/litellm_proxy/skills/handler.py",
@@ -61,13 +62,13 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/llms/openai_like/model_info.py",
         "litellm/llms/vertex_ai/vertex_ai_non_gemini.py",
         "litellm/llms/watsonx/common_utils.py",
-        "litellm/proxy/_experimental/mcp_server/byok_credential_cache.py",
-        "litellm/proxy/_experimental/mcp_server/catalog.py",
-        "litellm/proxy/_experimental/mcp_server/discoverable_endpoints.py",
-        "litellm/proxy/_experimental/mcp_server/oauth_identity_binding.py",
-        "litellm/proxy/_experimental/mcp_server/operations.py",
-        "litellm/proxy/_experimental/mcp_server/outbound_credentials/sso_assertion_store.py",
-        "litellm/proxy/_experimental/mcp_server/outbound_credentials/token_endpoint.py",
+        "litellm/proxy/mcp_server/byok_credential_cache.py",
+        "litellm/proxy/mcp_server/catalog.py",
+        "litellm/proxy/mcp_server/discoverable_endpoints.py",
+        "litellm/proxy/mcp_server/oauth_identity_binding.py",
+        "litellm/proxy/mcp_server/operations.py",
+        "litellm/proxy/mcp_server/outbound_credentials/sso_assertion_store.py",
+        "litellm/proxy/mcp_server/outbound_credentials/token_endpoint.py",
         "litellm/proxy/agent_endpoints/databricks_oauth.py",
         "litellm/proxy/common_utils/registry_read_through.py",
         "litellm/proxy/container_endpoints/ownership.py",
@@ -86,10 +87,10 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
 )
 
 _CACHE_CALL: Final = re.compile(
-    r"\.(?:async_)?(?:get_cache|set_cache|batch_get_cache|batch_get_cache_shared|increment_cache|increment"
+    r"\.(?:async_)?(?:get_cache|set_cache|batch_get_cache|batch_get_cache_shared|increment_cache|increment_if_present|increment"
     r"|set_cache_pipeline|set_cache_pipeline_with_ttls|set_cache_sadd|delete_cache|batch_set_cache|increment_pipeline"
     r"|rpush|lpop|scan_iter|get_ttl|mget)\("
-    r"|\b(?:reserve_redis_batch_reads|declare_batch_get|_prepare_batch_get)\("
+    r"|\b(?:reserve_redis_batch_reads|_prepare_batch_get)\("
     r"|\bbatch\.(?:set|delete|script|increment)\("
 )
 _DECLARES_TARGET: Final = re.compile(r"\b(?:with_service_target|service_target|response_cache_phase)\(")

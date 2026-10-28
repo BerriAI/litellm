@@ -6,6 +6,7 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.litellm_core_utils.decisions_pricing import apply_decisions_pricing
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,  # pyright: ignore[reportUnknownVariableType]  # legacy helper has an untyped signature
@@ -51,7 +52,9 @@ def _pricing_for(model_keys: tuple[str, ...]) -> _RegistryPricing:
             continue
         try:
             return _REGISTRY_PRICING_ADAPTER.validate_python(
-                litellm.model_cost[model_key]  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
+                apply_decisions_pricing(
+                    litellm.model_cost[model_key]  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # registry is dynamically typed
+                )
             )
         except ValidationError:
             continue

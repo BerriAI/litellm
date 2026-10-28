@@ -156,15 +156,13 @@ async def arm_pre_call(
     if not isinstance(model_alias, str) or not model_alias:
         return
 
-    from litellm.router_strategy.tag_based_routing import (
-        get_tags_from_request_kwargs,
-    )
+    from litellm.router_strategy.tag_based_routing import get_routing_tags_from_request_kwargs
 
     policy: Final = policy_for_model(
         llm_router=llm_router,
         model_alias=model_alias,
         request_kwargs=data,
-        request_tags=get_tags_from_request_kwargs(data),
+        request_tags=get_routing_tags_from_request_kwargs(data),
     )
     if policy is None:
         return

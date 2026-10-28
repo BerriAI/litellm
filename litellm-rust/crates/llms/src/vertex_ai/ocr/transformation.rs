@@ -174,9 +174,7 @@ impl VertexAiOcrConfig {
                 ])
             })
             .map(|url| url.into_string())
-            .map_err(|_| Error::RequestField {
-                path: "api_base".into(),
-            })
+            .map_err(|error| Error::request_field("api_base", error))
     }
 }
 
@@ -198,6 +196,7 @@ fn validate_location(location: &str) -> Result<(), Error> {
     }
     Err(Error::RequestField {
         path: "vertex_location".into(),
+        cause: None,
     })
 }
 

@@ -76,7 +76,10 @@ def parse_violations(out: str) -> tuple[Violation, ...]:
 
 def _check(root: Path, checker: Path) -> tuple[Violation, ...]:
     resolved: Final = root.resolve()
-    env: Final = {**os.environ, "PYTHONPATH": os.pathsep.join((str(resolved), os.environ.get("PYTHONPATH", "")))}
+    env: Final = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join((str(resolved), str(resolved / "enterprise"), os.environ.get("PYTHONPATH", ""))),
+    }
     return parse_violations(_run([sys.executable, str(checker)], cwd=resolved, env=env))
 
 

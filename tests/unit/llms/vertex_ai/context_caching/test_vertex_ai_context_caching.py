@@ -40,6 +40,7 @@ class TestContextCachingEndpoints:
         """Setup for each test method"""
         self.context_caching = ContextCachingEndpoints()
         self.mock_logging = MagicMock(spec=Logging)
+        self.mock_logging.model_call_details = {}
         self.mock_client = MagicMock(spec=HTTPHandler)
         self.mock_async_client = MagicMock(spec=AsyncHTTPHandler)
 
@@ -1790,6 +1791,7 @@ class TestCheckCachePagination:
         """Setup for each test method"""
         self.context_caching = ContextCachingEndpoints()
         self.mock_logging = MagicMock(spec=Logging)
+        self.mock_logging.model_call_details = {}
         self.mock_client = MagicMock(spec=HTTPHandler)
         self.mock_async_client = MagicMock(spec=AsyncHTTPHandler)
 
@@ -2289,3 +2291,135 @@ class TestContextCachingMultiRegionUrls:
 
         assert url.startswith("https://aiplatform.googleapis.com/")
         assert "/locations/global/cachedContents" in url
+
+
+def _created_cache_body(total_token_count: int) -> dict:
+    return {
+        "name": "cachedContents/created",
+        "model": "models/gemini-3.1-pro",
+        "usageMetadata": {"totalTokenCount": total_token_count},
+    }
+
+
+def _cacheable_messages() -> list:
+    return [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "cacheable prefix " * 1200, "cache_control": {"type": "ephemeral"}}
+            ],
+        },
+        {"role": "user", "content": "question"},
+    ]
+
+
+@patch.object(ContextCachingEndpoints, "check_cache", return_value=None)
+@patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching", return_value=("token", "https://u"))
+def test_check_and_create_cache_records_creation_tokens_for_billing(mock_url, mock_check):
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    client = MagicMock(spec=HTTPHandler)
+    client.post.return_value = MagicMock(json=lambda: _created_cache_body(1280))
+
+    _, _, cache_name = ContextCachingEndpoints().check_and_create_cache(
+        messages=_cacheable_messages(),
+        optional_params={},
+        api_key="k",
+        api_base=None,
+        model="gemini-3.1-pro",
+        client=client,
+        timeout=30.0,
+        logging_obj=logging_obj,
+        custom_llm_provider="gemini",
+        vertex_project=None,
+        vertex_location=None,
+        vertex_auth_header=None,
+    )
+
+    assert cache_name == "cachedContents/created"
+    assert logging_obj.vertex_ai_cache_creation_input_tokens == 1280
+
+
+@patch.object(ContextCachingEndpoints, "check_cache", return_value="cachedContents/existing")
+@patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching", return_value=("token", "https://u"))
+def test_check_and_create_cache_records_no_creation_tokens_when_cache_exists(mock_url, mock_check):
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    logging_obj.vertex_ai_cache_creation_input_tokens = 0
+    client = MagicMock(spec=HTTPHandler)
+
+    _, _, cache_name = ContextCachingEndpoints().check_and_create_cache(
+        messages=_cacheable_messages(),
+        optional_params={},
+        api_key="k",
+        api_base=None,
+        model="gemini-3.1-pro",
+        client=client,
+        timeout=30.0,
+        logging_obj=logging_obj,
+        custom_llm_provider="gemini",
+        vertex_project=None,
+        vertex_location=None,
+        vertex_auth_header=None,
+    )
+
+    assert cache_name == "cachedContents/existing"
+    client.post.assert_not_called()
+    assert logging_obj.vertex_ai_cache_creation_input_tokens == 0
+
+
+@pytest.mark.asyncio
+@patch.object(ContextCachingEndpoints, "async_check_cache", return_value=None)
+@patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching", return_value=("token", "https://u"))
+async def test_async_check_and_create_cache_records_creation_tokens_for_billing(mock_url, mock_check):
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    client = MagicMock(spec=AsyncHTTPHandler)
+    client.post = AsyncMock(return_value=MagicMock(json=lambda: _created_cache_body(2048)))
+
+    _, _, cache_name = await ContextCachingEndpoints().async_check_and_create_cache(
+        messages=_cacheable_messages(),
+        optional_params={},
+        api_key="k",
+        api_base=None,
+        model="gemini-3.1-pro",
+        client=client,
+        timeout=30.0,
+        logging_obj=logging_obj,
+        custom_llm_provider="gemini",
+        vertex_project=None,
+        vertex_location=None,
+        vertex_auth_header=None,
+    )
+
+    assert cache_name == "cachedContents/created"
+    assert logging_obj.vertex_ai_cache_creation_input_tokens == 2048
+
+
+def test_check_and_create_cache_clamps_negative_creation_tokens() -> None:
+    logging_obj = MagicMock(spec=Logging)
+    logging_obj.model_call_details = {}
+    client = MagicMock(spec=HTTPHandler)
+    client.post.return_value = MagicMock(json=lambda: _created_cache_body(-500))
+
+    with (
+        patch.object(ContextCachingEndpoints, "check_cache", return_value=None),
+        patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching", return_value=("token", "https://u")),
+    ):
+        _, _, cache_name = ContextCachingEndpoints().check_and_create_cache(
+            messages=_cacheable_messages(),
+            optional_params={},
+            api_key="k",
+            api_base=None,
+            model="gemini-3.1-pro",
+            client=client,
+            timeout=30.0,
+            logging_obj=logging_obj,
+            custom_llm_provider="gemini",
+            vertex_project=None,
+            vertex_location=None,
+            vertex_auth_header=None,
+        )
+
+    assert cache_name == "cachedContents/created"
+    assert logging_obj.vertex_ai_cache_creation_input_tokens == 0

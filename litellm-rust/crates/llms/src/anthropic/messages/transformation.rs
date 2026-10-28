@@ -74,6 +74,7 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
+        _optional_params: &MessagesOptionalParams,
         _litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
@@ -109,7 +110,10 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
-        update_headers_with_anthropic_beta(headers, request)
+        merge_beta_headers(
+            headers,
+            provider_feature_betas(request, BetaProvider::Anthropic),
+        )
     }
 }
 
@@ -136,10 +140,18 @@ pub(crate) fn transform_messages_request(
         messages: strip_encrypted_reasoning_blocks(messages),
         params: MessagesOptionalParams {
             context_management,
+            extra: without_null_safeguards(request.params.extra),
             ..request.params
         },
         ..request
     })
+}
+
+fn without_null_safeguards(extra: Map<String, Value>) -> Map<String, Value> {
+    extra
+        .into_iter()
+        .filter(|(key, value)| key != "safeguards" || !value.is_null())
+        .collect()
 }
 
 pub(crate) fn update_headers_with_anthropic_beta(
@@ -149,12 +161,34 @@ pub(crate) fn update_headers_with_anthropic_beta(
     merge_beta_headers(headers, feature_betas(request))
 }
 
-/// The betas a request needs on a host other than the first-party API: the Anthropic set
-/// filtered and renamed through the host's `BetaProvider` policy.
+pub(crate) fn update_headers_with_safeguards_beta(
+    headers: Headers,
+    request: &MessagesRequest,
+    provider: BetaProvider,
+) -> Headers {
+    merge_beta_headers(
+        headers,
+        feature_betas(request).union(on_provider(mapped_host_betas(&request.params), provider)),
+    )
+}
+
+/// The betas a request needs on a host with a column in the beta map, filtered and renamed
+/// through that column.
 pub(crate) fn provider_feature_betas(request: &MessagesRequest, provider: BetaProvider) -> BetaSet {
-    feature_betas(request)
-        .iter()
-        .filter_map(|beta| beta.on(provider))
+    on_provider(
+        feature_betas(request).union(mapped_host_betas(&request.params)),
+        provider,
+    )
+}
+
+fn on_provider(betas: BetaSet, provider: BetaProvider) -> BetaSet {
+    betas.iter().filter_map(|beta| beta.on(provider)).collect()
+}
+
+fn mapped_host_betas(params: &MessagesOptionalParams) -> BetaSet {
+    carries_safeguards(params)
+        .then_some(AnthropicBeta::DangerousToolUse20260903)
+        .into_iter()
         .collect()
 }
 
@@ -204,6 +238,13 @@ fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
             .as_ref()
             .and_then(Recognized::known)
             .is_some_and(|config| config.format.is_some())
+}
+
+fn carries_safeguards(params: &MessagesOptionalParams) -> bool {
+    params
+        .extra
+        .get("safeguards")
+        .is_some_and(|value| !value.is_null())
 }
 
 fn messages_carry_output_config(messages: &[Message]) -> bool {
@@ -847,6 +888,7 @@ mod tests {
             headers(forwarded),
             api_key,
             "claude",
+            &MessagesOptionalParams::default(),
             &LitellmParams::default(),
             &env(vars),
         )
@@ -1025,8 +1067,42 @@ mod tests {
         json!({"messages": [{"role": "user", "content": "hi", "output_config": null}]}),
         &["per-turn-control-2026-07-01"]
     )]
+    #[case::safeguards(
+        json!({"safeguards": [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]}),
+        &[]
+    )]
     fn feature_betas_follow_the_request(#[case] fields: Value, #[case] expected: &[&str]) {
         assert_eq!(feature_betas(&request(fields)), betas(expected));
+    }
+
+    #[rstest]
+    #[case::anthropic(BetaProvider::Anthropic, json!([{"type": "dangerous_tool_use"}]), &["dangerous-tool-use-2026-09-03"])]
+    #[case::vertex_ai(BetaProvider::VertexAi, json!([{"type": "dangerous_tool_use"}]), &["dangerous-tool-use-2026-09-03"])]
+    #[case::empty_list(BetaProvider::Anthropic, json!([]), &["dangerous-tool-use-2026-09-03"])]
+    #[case::not_a_list(BetaProvider::Anthropic, json!(1), &["dangerous-tool-use-2026-09-03"])]
+    #[case::null(BetaProvider::Anthropic, Value::Null, &[])]
+    #[case::bedrock_converse_has_a_null_cell(BetaProvider::BedrockConverse, json!([{"type": "dangerous_tool_use"}]), &[])]
+    fn safeguards_add_the_dangerous_tool_use_beta_where_the_beta_map_has_a_cell(
+        #[case] provider: BetaProvider,
+        #[case] safeguards: Value,
+        #[case] expected: &[&str],
+    ) {
+        assert_eq!(
+            provider_feature_betas(&request(json!({"safeguards": safeguards})), provider),
+            betas(expected)
+        );
+    }
+
+    #[rstest]
+    fn hosts_without_a_beta_map_column_get_safeguards_without_a_derived_beta() {
+        let client = headers(&[("anthropic-beta", "claude-code-20250219")]);
+        assert_eq!(
+            update_headers_with_anthropic_beta(
+                client.clone(),
+                &request(json!({"safeguards": [{"type": "dangerous_tool_use"}]}))
+            ),
+            client
+        );
     }
 
     #[rstest]
@@ -1066,6 +1142,11 @@ mod tests {
         &[("anthropic-beta", "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,per-turn-control-2026-07-01,effort-2025-11-24")],
         json!({"messages": [{"role": "user", "content": "hi", "output_config": {"effort": "low"}}]}),
         &[("anthropic-beta", "claude-code-20250219,context-management-2025-06-27,effort-2025-11-24,interleaved-thinking-2025-05-14,per-turn-control-2026-07-01")],
+    )]
+    #[case::safeguards_add_the_dangerous_tool_use_beta_to_the_client_betas(
+        &[("anthropic-beta", "claude-code-20250219,interleaved-thinking-2025-05-14")],
+        json!({"safeguards": [{"type": "dangerous_tool_use"}]}),
+        &[("anthropic-beta", "claude-code-20250219,dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14")],
     )]
     fn request_headers_merge_the_feature_betas(
         #[case] input: &[(&str, &str)],
@@ -1127,6 +1208,7 @@ mod tests {
             Vec::new(),
             None,
             "claude",
+            &MessagesOptionalParams::default(),
             &LitellmParams::default(),
             &record,
         );
