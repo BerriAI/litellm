@@ -123,9 +123,7 @@ def _derived_keys(bridged_fields: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys((*MODE_TO_FLAG.values(), *SUPPORTED_ENDPOINT_TO_FLAG.values(), *bridged_fields)))
 
 
-def _model_evidence(
-    model: JsonValue, bridged_fields: tuple[str, ...]
-) -> Iterator[tuple[str, str]]:
+def _model_evidence(model: JsonValue, bridged_fields: tuple[str, ...]) -> Iterator[tuple[str, str]]:
     provider: Final = _model_provider_slug(model)
     if provider is None or not isinstance(model, dict):
         return
@@ -136,13 +134,9 @@ def _model_evidence(
     yield from ((provider, flag) for flag in bridged_fields)
 
 
-def _provider_evidence(
-    cost_map: Mapping[str, JsonValue], bridged_fields: tuple[str, ...]
-) -> Iterator[tuple[str, str]]:
+def _provider_evidence(cost_map: Mapping[str, JsonValue], bridged_fields: tuple[str, ...]) -> Iterator[tuple[str, str]]:
     return chain.from_iterable(
-        _model_evidence(model, bridged_fields)
-        for model_name, model in cost_map.items()
-        if model_name != "sample_spec"
+        _model_evidence(model, bridged_fields) for model_name, model in cost_map.items() if model_name != "sample_spec"
     )
 
 
@@ -164,14 +158,10 @@ def _generated_provider(
     provider: Final = _json_object(value, f"provider {slug}")
     current_flags_value: Final = provider.get("endpoints")
     current_flags: Final = (
-        _json_object(current_flags_value, f"provider {slug} endpoints")
-        if current_flags_value is not None
-        else {}
+        _json_object(current_flags_value, f"provider {slug} endpoints") if current_flags_value is not None else {}
     )
-    derived_flags: Final = {flag: (slug, flag) in evidence for flag in derived_keys}
-    handwritten_flags: Final = {
-        flag: value for flag, value in current_flags.items() if flag not in derived_key_set
-    }
+    derived_flags: Final = {flag: current_flags.get(flag) is True or (slug, flag) in evidence for flag in derived_keys}
+    handwritten_flags: Final = {flag: value for flag, value in current_flags.items() if flag not in derived_key_set}
     return {
         **provider,
         "endpoints": {**derived_flags, **handwritten_flags},
@@ -182,9 +172,7 @@ def generate_provider_endpoints_support(
     cost_map: Mapping[str, JsonValue],
     current_json: Mapping[str, JsonValue],
 ) -> dict[str, JsonValue]:
-    current_providers: Final = _json_object(
-        current_json.get("providers"), "provider_endpoints_support providers"
-    )
+    current_providers: Final = _json_object(current_json.get("providers"), "provider_endpoints_support providers")
     endpoints: Final = _json_object(current_json.get("endpoints"), "provider_endpoints_support endpoints")
     bridged_fields: Final = _bridged_fields(endpoints)
     derived_keys: Final = _derived_keys(bridged_fields)

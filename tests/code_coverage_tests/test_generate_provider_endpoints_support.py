@@ -99,12 +99,12 @@ def test_chat_models_enable_bridge_flags_but_other_models_do_not() -> None:
     assert _flags(generated, "no_chat")["generateContent"] is False
 
 
-def test_unbacked_derived_flags_reset_and_handwritten_flags_remain() -> None:
+def test_unbacked_false_flags_stay_false_and_handwritten_flags_remain() -> None:
     cost_map: Final = {"example/model": {"litellm_provider": "example", "mode": "image_generation"}}
     current_json: Final = _current_json(
         {
-            "example": _provider({"responses": True, "count_tokens": True, "files": False}),
-            "without_models": _provider({"responses": True}),
+            "example": _provider({"responses": False, "count_tokens": True, "files": False}),
+            "without_models": _provider({"responses": False}),
         }
     )
 
@@ -115,6 +115,26 @@ def test_unbacked_derived_flags_reset_and_handwritten_flags_remain() -> None:
     assert flags["count_tokens"] is True
     assert flags["files"] is False
     assert _flags(generated, "without_models")["chat_completions"] is False
+
+
+def test_true_flags_never_flip_to_false_through_regeneration() -> None:
+    cost_map: Final = {"example/model": {"litellm_provider": "example", "mode": "image_generation"}}
+    current_json: Final = _current_json(
+        {
+            "example": _provider({"responses": True, "embeddings": True}),
+            "without_models": _provider({"chat_completions": True, "a2a": True}),
+        }
+    )
+
+    generated: Final = generate_provider_endpoints_support(cost_map, current_json)
+    regenerated: Final = generate_provider_endpoints_support(cost_map, generated)
+
+    assert _flags(generated, "example")["responses"] is True
+    assert _flags(generated, "example")["embeddings"] is True
+    assert _flags(generated, "example")["image_generations"] is True
+    assert _flags(generated, "without_models")["chat_completions"] is True
+    assert _flags(generated, "without_models")["a2a"] is True
+    assert regenerated == generated
 
 
 def test_provider_aliases_share_their_mapped_slugs() -> None:
