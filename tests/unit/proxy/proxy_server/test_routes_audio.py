@@ -401,7 +401,7 @@ def test_streamed_transcription_returns_the_litellm_call_and_model_headers(
     assert '"text":"hello world"' in response.text
     assert response.headers["x-litellm-call-id"] == "streamed-transcription-call"
     assert response.headers["x-litellm-model-id"] == "transcription-deployment"
-    assert "x-litellm-response-cost" not in response.headers
+    assert [name for name in response.headers if name.startswith("x-litellm-response-cost")] == []
     proxy_server.proxy_logging_obj.update_request_status.assert_called_once_with(
         litellm_call_id="streamed-transcription-call", status="success"
     )
@@ -649,7 +649,11 @@ def _streams_chat_and_transcription(request: httpx.Request) -> httpx.Response:
 
 
 def _litellm_header_names(response: httpx.Response) -> frozenset[str]:
-    return frozenset(name for name in response.headers if name.startswith("x-litellm-"))
+    return frozenset(
+        name
+        for name in response.headers
+        if name.startswith("x-litellm-") and not name.startswith("x-litellm-response-cost")
+    )
 
 
 def test_streamed_transcription_carries_the_headers_a_streamed_chat_completion_carries(
@@ -689,7 +693,7 @@ def test_streamed_transcription_carries_the_headers_a_streamed_chat_completion_c
     assert _litellm_header_names(chat) - _litellm_header_names(transcription) <= {"x-litellm-overhead-duration-ms"}
     assert transcription.headers["x-litellm-model-name"] == "openai/gpt-transcribe"
     assert transcription.headers["llm_provider-x-ratelimit-remaining-requests"] == "99"
-    assert ("x-litellm-response-cost" in transcription.headers) == ("x-litellm-response-cost" in chat.headers)
+    assert [name for name in transcription.headers if name.startswith("x-litellm-response-cost")] == []
 
 
 class _FailsAfterTwoDeltas(httpx.AsyncByteStream):

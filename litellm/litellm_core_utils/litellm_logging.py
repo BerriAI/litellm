@@ -20,6 +20,8 @@ from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
 from httpx import Response, Timeout
+from openai import AsyncStream as OpenAIAsyncStream
+from openai import Stream as OpenAIStream
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
@@ -2036,6 +2038,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if resolved_cache_hit is True:
             return 0.0
+
+        if isinstance(result, (OpenAIStream, OpenAIAsyncStream)):
+            return None
 
         if is_unbilled_non_inference_call(
             self.call_type, StandardLoggingPayloadSetup.merge_litellm_metadata(self.litellm_params), result

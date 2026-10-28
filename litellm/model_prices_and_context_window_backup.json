@@ -78,6 +78,7 @@
         "supports_reasoning": true
     },
     "azure/gpt-realtime-translate-2026-05-06": {
+        "input_cost_per_second": 0.0005666666666666667,
         "litellm_provider": "azure",
         "max_input_tokens": 32000,
         "max_output_tokens": 4096,
@@ -85,7 +86,6 @@
         "provider_specific_entry": {
             "realtime_ga_only": 1
         },
-        "output_cost_per_second": 0.0005666666666666667,
         "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/a-new-chapter-for-realtime-ai-reasoning-translation-and-real-time-transcription/4517124",
         "supported_endpoints": [
             "/v1/realtime/translations",
@@ -104,6 +104,7 @@
         "supports_native_streaming": true
     },
     "azure/gpt-realtime-translate-2026-05-07": {
+        "input_cost_per_second": 0.0005666666666666667,
         "litellm_provider": "azure",
         "max_input_tokens": 32000,
         "max_output_tokens": 4096,
@@ -111,7 +112,6 @@
         "provider_specific_entry": {
             "realtime_ga_only": 1
         },
-        "output_cost_per_second": 0.0005666666666666667,
         "source": "https://ai.azure.com/catalog/models/gpt-realtime-translate",
         "supported_endpoints": [
             "/v1/realtime/translations",
@@ -61374,11 +61374,11 @@
         "supports_function_calling": true
     },
     "gpt-realtime-translate": {
+        "input_cost_per_second": 0.000566666666667,
         "litellm_provider": "openai",
         "max_input_tokens": 16000,
         "max_output_tokens": 2000,
         "mode": "realtime",
-        "output_cost_per_second": 0.0005666666666666667,
         "source": "https://developers.openai.com/api/docs/pricing",
         "supported_endpoints": [
             "/v1/realtime/translations",
@@ -68971,6 +68971,7 @@
     },
     "azure/gpt-realtime-translate": {
         "deprecation_date": "2027-11-09",
+        "input_cost_per_second": 0.000566666666667,
         "litellm_provider": "azure",
         "max_input_tokens": 32000,
         "max_output_tokens": 4096,
@@ -68988,7 +68989,6 @@
         "provider_specific_entry": {
             "realtime_ga_only": 1
         },
-        "output_cost_per_second": 0.000566666666667,
         "supported_endpoints": [
             "/v1/realtime/translations",
             "/v1/realtime/translations/client_secrets",

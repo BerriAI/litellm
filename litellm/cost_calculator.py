@@ -3261,10 +3261,10 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
     def create_logging_realtime_object(
         usage: Usage, results: OpenAIRealtimeStreamList
     ) -> LiteLLMRealtimeStreamLoggingObject:
-        _, translated_output_seconds = _translation_session_seconds(results)
+        translated_input_seconds, _ = _translation_session_seconds(results)
         return LiteLLMRealtimeStreamLoggingObject(
-            usage=usage.model_copy(update={"seconds": translated_output_seconds})
-            if translated_output_seconds > 0
+            usage=usage.model_copy(update={"seconds": translated_input_seconds})
+            if translated_input_seconds > 0
             else usage,
             results=results,
         )

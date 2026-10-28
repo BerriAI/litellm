@@ -2103,8 +2103,7 @@ async def test_realtime_function_call_output_guardrail_allows_clean_output(monke
 @pytest.mark.asyncio
 async def test_realtime_text_input_guardrail_uses_pre_call_mode(monkeypatch: pytest.MonkeyPatch):
     """
-    Test that _has_realtime_guardrails returns True for a guardrail configured with
-    pre_call mode (not just realtime_input_transcription).
+    A pre_call guardrail gates typed user messages and tool output, never audio VAD.
     """
     import litellm
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -2126,10 +2125,6 @@ async def test_realtime_text_input_guardrail_uses_pre_call_mode(monkeypatch: pyt
     logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
 
-    assert streaming._has_realtime_guardrails() is True, (
-        "pre_call guardrail should be recognized as a realtime guardrail"
-    )
-    # pre_call-only guardrails gate typed user messages / tool output, not audio VAD.
     assert streaming._has_audio_transcription_guardrails() is False, (
         "pre_call-only guardrail must not disable server_vad auto-response"
     )
@@ -2280,7 +2275,6 @@ async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad(monke
         },
     )
 
-    assert streaming._has_realtime_guardrails() is True
     assert streaming._has_audio_transcription_guardrails() is False
 
 

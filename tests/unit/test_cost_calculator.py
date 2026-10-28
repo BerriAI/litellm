@@ -10174,7 +10174,7 @@ def test_realtime_translation_duration_cost(_local_model_cost_map):
 
     model: Final = "gpt-realtime-translate"
     events: Final[OpenAIRealtimeStreamList] = [
-        {"type": "session.closed", "usage": {"type": "duration", "output_seconds": 2.0}}
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 2.0, "output_seconds": 1.5}}
     ]
     actual: Final = handle_realtime_translation_cost_calculation(
         results=events,
@@ -10182,7 +10182,7 @@ def test_realtime_translation_duration_cost(_local_model_cost_map):
         litellm_model_name=model,
     )
 
-    assert actual == pytest.approx(2 * litellm.model_cost[model]["output_cost_per_second"])
+    assert actual == pytest.approx(2 * litellm.model_cost[model]["input_cost_per_second"])
 
 
 def test_realtime_translation_bills_session_audio_once_on_openai_and_azure(_local_model_cost_map) -> None:
@@ -10198,7 +10198,7 @@ def test_realtime_translation_bills_session_audio_once_on_openai_and_azure(_loca
         results=one_minute_session, custom_llm_provider="azure", litellm_model_name="gpt-realtime-translate"
     )
 
-    assert openai_cost == pytest.approx(60 * litellm.model_cost["gpt-realtime-translate"]["output_cost_per_second"])
+    assert openai_cost == pytest.approx(60 * litellm.model_cost["gpt-realtime-translate"]["input_cost_per_second"])
     assert openai_cost == pytest.approx(azure_cost)
 
 
@@ -10262,17 +10262,17 @@ def _translation_session_cost(deployment_id: str) -> float:
 
 
 @pytest.mark.parametrize(
-    "deployment_id,deployment_rates,bills_public_output_rate",
+    "deployment_id,deployment_rates,bills_public_input_rate",
     [
-        ("translate-input-priced", {"input_cost_per_second": 0.001}, True),
-        ("translate-free-output", {"input_cost_per_second": 0.001, "output_cost_per_second": 0.0}, False),
+        ("translate-output-priced", {"output_cost_per_second": 0.001}, True),
+        ("translate-free-input", {"input_cost_per_second": 0.0, "output_cost_per_second": 0.001}, False),
     ],
 )
 def test_realtime_translation_deployment_per_second_rates_fall_back_to_public_rates_per_key(
     _local_model_cost_map: None,
     deployment_id: str,
     deployment_rates: Mapping[str, float],
-    bills_public_output_rate: bool,
+    bills_public_input_rate: bool,
 ) -> None:
     litellm.Router(
         model_list=[
@@ -10287,11 +10287,11 @@ def test_realtime_translation_deployment_per_second_rates_fall_back_to_public_ra
             }
         ]
     )
-    public_output_rate: Final = litellm.model_cost["gpt-realtime-translate"]["output_cost_per_second"]
+    public_input_rate: Final = litellm.model_cost["gpt-realtime-translate"]["input_cost_per_second"]
 
-    assert public_output_rate > 0
+    assert public_input_rate > 0
     assert _translation_session_cost(deployment_id) == pytest.approx(
-        60 * 0.001 + (60 * public_output_rate if bills_public_output_rate else 0.0)
+        60 * 0.001 + (60 * public_input_rate if bills_public_input_rate else 0.0)
     )
 
 
@@ -10319,7 +10319,7 @@ def test_realtime_translation_deployment_without_per_second_rates_bills_public_r
     assert _translation_session_cost("translate-token-priced") == pytest.approx(public_cost)
 
 
-def test_realtime_translation_spend_usage_carries_the_billed_output_seconds(_local_model_cost_map) -> None:
+def test_realtime_translation_spend_usage_carries_the_billed_input_seconds(_local_model_cost_map) -> None:
     logging_obj: Final = Logging(
         model="gpt-realtime-translate",
         messages=[],
@@ -10339,9 +10339,9 @@ def test_realtime_translation_spend_usage_carries_the_billed_output_seconds(_loc
     logging_obj.success_handler(result=events, start_time=datetime.datetime.now(), end_time=datetime.datetime.now())
 
     payload: Final = logging_obj.model_call_details["standard_logging_object"]
-    assert payload["metadata"]["usage_object"]["seconds"] == pytest.approx(42.5)
+    assert payload["metadata"]["usage_object"]["seconds"] == pytest.approx(30.0)
     assert payload["response_cost"] == pytest.approx(
-        42.5 * litellm.model_cost["gpt-realtime-translate"]["output_cost_per_second"]
+        30.0 * litellm.model_cost["gpt-realtime-translate"]["input_cost_per_second"]
     )
 
 

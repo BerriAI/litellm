@@ -1290,9 +1290,6 @@ class RealTimeStreaming:
     ) -> bool:
         return _guardrails_run_for_event_hooks(self.request_data, event_hooks)
 
-    def _has_realtime_guardrails(self) -> bool:
-        return realtime_guardrails_apply(self.request_data)
-
     def _has_audio_transcription_guardrails(self) -> bool:
         """Return True when a guardrail is configured for the audio/VAD transcript path.
 
