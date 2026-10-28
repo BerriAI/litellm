@@ -241,20 +241,14 @@ print("compatible")
 
 
 @pytest.mark.parametrize("rust", (None, "0", "1"))
-def test_tokenization_without_native_extension_stays_offline(tmp_path: Path, rust: str | None) -> None:
+def test_tokenization_stays_offline(tmp_path: Path, rust: str | None) -> None:
     script: Final = """
-import importlib.abc
 import sys
 sys.path.insert(0, sys.argv[1])
 def reject_network(event, args):
     if event == "socket.connect":
         raise AssertionError("tokenizer attempted a network connection")
 sys.addaudithook(reject_network)
-class Block(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname == "litellm.rust_bridge._native":
-            raise ImportError("native extension is unavailable")
-sys.meta_path.insert(0, Block())
 import litellm
 from litellm.rust_bridge.tokenizer import get_encoding
 import tiktoken
