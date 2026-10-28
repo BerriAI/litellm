@@ -39,8 +39,8 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.plumbing.context import set_request_root_span
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.llms.anthropic.pass_through.messages.streaming_iterator import closing_superseded_attempt
-from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
+from litellm.llms.anthropic.messages.native.streaming_iterator import closing_superseded_attempt
+from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
     SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -7039,8 +7039,7 @@ async def test_aresponses_fallback_attempt_does_not_replay_held_lifecycle_events
 
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_partial_content_injects_continuation():
-    """Mid-stream error: input is rewritten to include user prompt +
-    developer instruction + prior assistant message with partial output."""
+    """Mid-stream error: preserve partial assistant output and request continuation in a user turn."""
     from litellm.exceptions import MidStreamFallbackError
 
     router = _make_router_with_fallback()
@@ -7076,11 +7075,11 @@ async def test_aresponses_streaming_iterator_partial_content_injects_continuatio
     assert isinstance(new_input, list)
     assert new_input[0]["role"] == "user"
     assert new_input[0]["content"][0]["text"] == "What's the capital of France?"
-    assert new_input[1]["role"] == "developer"
-    assert "do not repeat" in new_input[1]["content"][0]["text"].lower()
-    assert new_input[2]["role"] == "assistant"
-    assert new_input[2]["content"][0]["type"] == "output_text"
-    assert new_input[2]["content"][0]["text"] == "The capital of France is"
+    assert new_input[1]["role"] == "assistant"
+    assert new_input[1]["content"][0]["type"] == "output_text"
+    assert new_input[1]["content"][0]["text"] == "The capital of France is"
+    assert new_input[2]["role"] == "user"
+    assert "do not repeat" in new_input[2]["content"][0]["text"].lower()
 
 
 @pytest.mark.asyncio
@@ -12212,7 +12211,12 @@ class TestBackgroundResponseCostPollCooldown:
                     "model_name": "gpt-4.1",
                     "litellm_params": {"model": "openai/gpt-4.1"},
                     "model_info": {"id": "dep-1"},
-                }
+                },
+                {
+                    "model_name": "gpt-4.1",
+                    "litellm_params": {"model": "openai/gpt-4.1"},
+                    "model_info": {"id": "dep-2"},
+                },
             ],
             allowed_fails=0,
         )
@@ -12340,7 +12344,12 @@ class TestCallerTimeoutCooldown:
                     "model_name": "slow-model",
                     "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
                     "model_info": {"id": "dep-1"},
-                }
+                },
+                {
+                    "model_name": "slow-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                    "model_info": {"id": "dep-2"},
+                },
             ],
             allowed_fails=0,
             cooldown_time=120,
@@ -21229,9 +21238,9 @@ def test_router_retry_skip_stamp_feeds_deployment_ids_to_skip_on_retry(
     ],
 )
 def test_router_as_retry_skipped_deployment_ids_keeps_only_a_tuple_of_strings(value, expected):
-    from litellm.router import _as_retry_skipped_deployment_ids
+    from litellm.router_utils.common_utils import as_retry_skipped_deployment_ids
 
-    assert _as_retry_skipped_deployment_ids(value) == expected
+    assert as_retry_skipped_deployment_ids(value) == expected
 
 
 @pytest.mark.parametrize(

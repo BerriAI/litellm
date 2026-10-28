@@ -162,7 +162,7 @@ def _has_non_chat_user_block(message: Mapping[str, object]) -> bool:
 
 
 def _gets_placeholder_name(tool: Mapping[str, object]) -> bool:
-    from litellm.llms.anthropic.pass_through.adapters.transformation import is_provider_native_tool_dict
+    from litellm.llms.anthropic.messages.adapters.transformation import is_provider_native_tool_dict
 
     name: Final = tool.get("name")
     return not (_is_chat_tool(tool) or is_provider_native_tool_dict(tool) or (isinstance(name, str) and name.strip()))

@@ -212,6 +212,7 @@ from litellm.router_utils.clientside_credential_handler import (
 )
 from litellm.router_utils.common_utils import (
     MID_STREAM_CONTINUATION_KWARG,
+    as_retry_skipped_deployment_ids,
     deployments_the_caller_may_use,
     filter_team_based_models,
     filter_web_search_deployments,
@@ -238,11 +239,12 @@ from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments_with_debug_info,
     get_cooldown_deployment_info,
     get_cooldown_deployments,
-    is_advisor_orchestration_failure,
     is_background_response_poll_not_found,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
+    is_failure_outside_selected_deployment,
     is_video_lookup_not_found,
+    mark_deployment_selection_failure,
     set_cooldown_deployments,
 )
 from litellm.router_utils.deployment_pricing import deployment_pricing_models
@@ -303,14 +305,20 @@ from litellm.router_utils.kubernetes_pod_discovery import (
 )
 from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_MARKER,
+    RESPONSES_CONTINUATION_KWARG,
     ContinuationOutput,
     ContinuationPrefillDeploymentCheck,
     ContinuedPartial,
+    ResponsesContinuation,
+    ResponsesContinuationSeam,
     constrains_continuation,
+    constrains_responses_continuation,
     continuation_deployments,
     continuation_output_ceilings,
     continued_text,
     deployment_can_continue,
+    responses_continuation_input,
+    responses_continuation_input_for,
 )
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
@@ -455,6 +463,7 @@ from litellm.utils import (
     provider_rejectable_params,
     resolve_api_key_secret_reference,
     set_live_deployment_replay,
+    token_counter,
 )
 
 from .router_utils.pattern_match_deployments import PatternMatchRouter
@@ -486,7 +495,6 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import (
         ResponseAPIUsage,
         ResponseIncompleteEvent,
-        ResponseInputParam,
         ResponsesAPIResponse,
     )
 
@@ -684,10 +692,6 @@ def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, obj
     return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
 
 
-def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
-    return tuple(item for item in value if isinstance(item, str)) if isinstance(value, tuple) else ()
-
-
 def _silent_experiment_targets(silent_model: object) -> tuple[str, ...]:
     if silent_model is None:
         return ()
@@ -737,7 +741,7 @@ def _anthropic_stream_forwards_ping_live(chunk: object, has_generated_content: b
     """A `ping` keepalive reaches the client live whenever the stream has not committed: it carries no
     lifecycle, so it cannot create overlapping lifecycles on the wire, and it keeps the connection alive
     while lifecycle frames sit buffered for a possible fallback during a long thinking pass."""
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
+    from litellm.llms.anthropic.messages.native.streaming_iterator import is_anthropic_ping_chunk
 
     return not has_generated_content and is_anthropic_ping_chunk(chunk)
 
@@ -753,7 +757,7 @@ def _without_line_breaks(value: object) -> str:
 def _anthropic_stream_error_is_gateway_verdict(chunk: object) -> bool:
     """AgenticAnthropicStreamingIterator's own retrieval-failure frame is the gateway's verdict, not a provider
     failure: another deployment would rerun the same failed hook, so it reaches the client instead of falling back."""
-    from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
         is_server_fulfilled_tool_leak_error,
     )
 
@@ -917,7 +921,7 @@ def _stream_commits_now(chunk: object, has_generated_content: bool, buffered_chu
     pre-content buffer cap was hit) rather than keep buffering lifecycle
     frames toward a possible fallback.
     """
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.streaming_iterator import (
         is_anthropic_content_delta_chunk,
     )
 
@@ -1120,6 +1124,27 @@ def as_output_cap(value: object) -> int | None:
     except (ValueError, OverflowError):
         return None
     return cap if cap >= 0 else None
+
+
+def stamped_client_ceiling(request_kwargs: Mapping[str, object]) -> Mapping[str, int] | None:
+    """None means unstamped; an empty mapping means the original caller supplied no limit."""
+    stamped: Final = next(
+        (
+            bucket.get(CLIENT_OUTPUT_CEILING_METADATA_KEY)
+            for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata"))
+            if isinstance(bucket, dict) and CLIENT_OUTPUT_CEILING_METADATA_KEY in bucket
+        ),
+        None,
+    )
+    if not isinstance(stamped, dict):
+        return None
+    return MappingProxyType(
+        {
+            carrier: cap
+            for carrier, value in stamped.items()
+            if carrier in OUTPUT_TOKEN_CEILING_PARAMS and (cap := as_output_cap(value)) is not None
+        }
+    )
 
 
 def _exact_base_model_max_input_tokens(base_model: str) -> int | None:
@@ -1498,6 +1523,7 @@ class Router:
             self.allowed_fails = allowed_fails
         else:
             self.allowed_fails = litellm.allowed_fails
+        self.explicit_allowed_fails = allowed_fails
         self.cooldown_time = cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
         self.cooldown_cache = CooldownCache(cache=self.cache, default_cooldown_time=self.cooldown_time)
         self.disable_cooldowns = disable_cooldowns
@@ -3845,7 +3871,8 @@ class Router:
     ) -> Mapping[str, object]:
         """The request as the deployment received it, merged in the order _update_kwargs_with_deployment applies."""
         deployment_params: Final = deployment.litellm_params.model_dump(exclude_none=True) if deployment else {}
-        defaults: Final = {key: value for key, value in self.default_litellm_params.items() if value is not None}
+        default_params: Final = _REQUEST_KWARGS_ADAPTER.validate_python(self.default_litellm_params)
+        defaults: Final = {key: value for key, value in default_params.items() if value is not None}
         deployment_tool_choice: Final = (
             {"tool_choice": deployment_params["tool_choice"]}
             if deployment_params.get("tool_choice") is not None
@@ -3924,67 +3951,6 @@ class Router:
         extended: Final = _extend_trailing_text_block(blocks, new_text)
         return [*messages[:-1], {**last, "content": extended, "prefix": True}]
 
-    @staticmethod
-    def _build_responses_continuation_input(
-        input_val: Union[str, "ResponseInputParam"] | None,
-        generated_content: str,
-    ) -> "ResponseInputParam":
-        """
-        Convert Responses-API input + partial assistant output into a
-        continuation input that asks the fallback model to pick up where the
-        prior assistant message stopped.
-
-        Best effort across providers. The chat-completions path uses
-        Anthropic's `prefix: True` prefill trick on the assistant message;
-        the Responses-API input schema has no direct equivalent, so we
-        append an instruction (developer role) plus a prior assistant
-        message containing the partial output. Providers without prefill
-        semantics (OpenAI, Vertex) treat this as conversational context
-        and may regenerate — same trade-off as the chat-completions path
-        for non-Anthropic fallbacks.
-        """
-        # base/continuation are List[Any] because ResponseInputParam items
-        # are a wide Union of TypedDicts (EasyInputMessageParam, Message,
-        # ResponseOutputMessageParam, ...) — annotating as List[Dict[str, Any]]
-        # rejects the list() spread of input_val. We cast the combined list to
-        # ResponseInputParam at the return.
-        base: list[object]
-        if isinstance(input_val, str):
-            base = [
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": input_val}],
-                }
-            ]
-        elif isinstance(input_val, list):
-            base = list(input_val)
-        else:
-            base = []
-        continuation: Final[list[object]] = [
-            {
-                "type": "message",
-                "role": "developer",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": (
-                            "The previous assistant response was interrupted "
-                            "mid-stream. Continue exactly where it stopped — "
-                            "do not repeat any of its content. Your response "
-                            "must read as a seamless continuation."
-                        ),
-                    }
-                ],
-            },
-            {
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": generated_content}],
-            },
-        ]
-        return cast("ResponseInputParam", base + continuation)
-
     async def _aresponses_streaming_iterator(
         self,
         response: "BaseResponsesAPIStreamingIterator",
@@ -4006,9 +3972,12 @@ class Router:
 
         Full parity with the chat-completions path:
           - Pre-first-chunk: retry with the original input unchanged.
-          - Partial content: inject a developer instruction + prior
-            assistant message carrying the generated text so the fallback
-            model continues rather than restarts.
+          - Partial content: continue from the generated text, as an
+            assistant prefill on a fallback that takes one and as assistant
+            history plus a user request to continue on any other. A request
+            whose output is constrained (a JSON schema, a forced tool), or a
+            stream that began a tool call, is not continued, and the primary's
+            error surfaces instead.
           - Usage combining: merge partial-stream usage onto the fallback's
             response.completed event so accounting reflects both attempts.
           - Stream cleanup: shielded aclose() on both source and fallback
@@ -4197,6 +4166,42 @@ class Router:
         wrapper: Final = FallbackResponsesStreamWrapper(stream_with_fallbacks())
         return wrapper
 
+    def _responses_continuation(
+        self,
+        e: "MidStreamFallbackError",
+        source_iterator: "BaseResponsesAPIStreamingIterator",
+        request_kwargs: Mapping[str, object],
+    ) -> ResponsesContinuation | None:
+        """What a fallback continues from once a Responses stream broke after text, raising the primary's error
+        when the request constrains its output or the stream began a tool call, since a continued JSON document or
+        tool call would not parse, and when a content filter cut it, so no other model finishes filtered text."""
+        if not e.generated_content or e.is_pre_first_chunk:
+            return None
+        if source_iterator.started_tool_call or isinstance(e.original_exception, litellm.ContentPolicyViolationError):
+            Router._raise_original_mid_stream_error(e)
+        cut_deployment_id: Final = (get_hidden_params(source_iterator) or {}).get("model_id")
+        cut_deployment: Final = (
+            self.get_deployment(model_id=cut_deployment_id) if isinstance(cut_deployment_id, str) else None
+        )
+        if constrains_responses_continuation(self._params_sent_to_deployment(request_kwargs, cut_deployment)):
+            Router._raise_original_mid_stream_error(e)
+        earlier: Final = request_kwargs.get(RESPONSES_CONTINUATION_KWARG)
+        if isinstance(earlier, ResponsesContinuation):
+            return earlier.extended(e.generated_content)
+        return ResponsesContinuation(request_kwargs.get("input"), e.generated_content)
+
+    @staticmethod
+    def _responses_continuation_ceilings(
+        e: "MidStreamFallbackError", request_kwargs: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        """The caller's output ceilings less what the cut stream already emitted, raising the primary's error once
+        nothing is left."""
+        emitted_tokens: Final = token_counter(model=e.model or "", text=e.generated_content)
+        reduced: Final = continuation_output_ceilings(request_kwargs, emitted_tokens)
+        if reduced is None:
+            Router._raise_original_mid_stream_error(e)
+        return reduced
+
     async def _aresponses_fallback_attempt(
         self,
         e: "MidStreamFallbackError",
@@ -4215,6 +4220,11 @@ class Router:
         """
         from litellm.exceptions import MidStreamFallbackError
 
+        continuation: Final = self._responses_continuation(e, source_iterator, initial_kwargs)
+        reduced_ceilings: Final[Mapping[str, object]] = (
+            Router._responses_continuation_ceilings(e, initial_kwargs) if continuation is not None else {}
+        )
+        seam: Final = ResponsesContinuationSeam(continuation.emitted_text if continuation is not None else "")
         partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
         fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted
         fallback_yielded = False  # rebind-ok: flipped on the first fallback item so a fallback that dies before its first event still replays the primary's held announcement
@@ -4232,11 +4242,10 @@ class Router:
             initial_kwargs["original_function"] = (  # rebind-ok: the fallback chain re-enters on the same kwargs
                 self._ageneric_api_call_with_fallbacks_responses_attempt
             )
-            if e.generated_content and not e.is_pre_first_chunk:
-                initial_kwargs["input"] = Router._build_responses_continuation_input(  # rebind-ok: fallback hop input
-                    initial_kwargs.get("input"),
-                    e.generated_content,
-                )
+            if continuation is not None:
+                initial_kwargs.update(reduced_ceilings)
+                initial_kwargs[RESPONSES_CONTINUATION_KWARG] = continuation  # rebind-ok: shaped per fallback deployment
+                initial_kwargs["input"] = responses_continuation_input(continuation)  # rebind-ok: fallback hop input
             # The Responses-API path stores observability metadata
             # under "litellm_metadata" (not the default "metadata") —
             # see _ageneric_api_call_with_fallbacks. Mirroring that
@@ -4265,7 +4274,7 @@ class Router:
             )
             prepared_fallback_hidden_params: Final = adopt_headers(fallback_response)
             if hasattr(fallback_response, "__aiter__"):
-                async for fallback_item in fallback_response:
+                async for fallback_item in seam.splice(fallback_response):
                     Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                     if partial_usage is not None:
                         Router._combine_responses_fallback_usage(fallback_item, partial_usage)
@@ -4788,11 +4797,12 @@ class Router:
         splits_stream_timeout: bool = False,
     ) -> None:
         """
-        4 jobs:
+        5 jobs:
         - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
         - Adds default litellm params to kwargs, if set.
         - Merges tools from deployment with request (proxy-configured tools + request tools).
         - On a fallback hop, drops the encrypted reasoning this deployment cannot decrypt, keeping its summary.
+        - On a Responses continuation, sends the partial response as prefill where this deployment takes one.
         """
         for key in self._forwarded_alias_marker_keys_the_deployment_sets(
             deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
@@ -4995,6 +5005,11 @@ class Router:
                 hop_kwargs.get("messages"),
                 (_FALLBACK_HOP_ADAPTER.validate_python(deployment),),
                 unmarked_origin=deployment_that_just_failed,
+            )
+        if RESPONSES_CONTINUATION_KWARG in hop_kwargs:
+            del kwargs[RESPONSES_CONTINUATION_KWARG]  # rebind-ok: this method prepares the call's kwargs in place
+            kwargs["input"] = responses_continuation_input_for(  # rebind-ok: the deployment's continuation input
+                hop_kwargs, _FALLBACK_HOP_ADAPTER.validate_python(deployment)
             )
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
@@ -6307,7 +6322,7 @@ class Router:
                 response=response,
                 kwargs=kwargs,
             ):
-                from litellm.llms.anthropic.pass_through.messages.utils import (
+                from litellm.llms.anthropic.messages.native.utils import (
                     safeguard_refusal_error,
                 )
 
@@ -6424,16 +6439,16 @@ class Router:
         including pings and provider error frames, is forwarded live and
         verbatim instead.
         """
-        from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
+        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
             FakeAnthropicMessagesStreamIterator,
         )
-        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.messages.native.streaming_iterator import (
             aclose_if_supported,
             aclose_superseded_attempt,
             parse_anthropic_error_event,
             parse_anthropic_refusal_stop_details,
         )
-        from litellm.llms.anthropic.pass_through.messages.utils import (
+        from litellm.llms.anthropic.messages.native.utils import (
             safeguard_refusal_error,
         )
 
@@ -6797,7 +6812,7 @@ class Router:
         A retry stamps the retry headers async_function_with_retries would have for a pre-stream retry;
         a later hop the recovered stream makes replaces them with its own, the way a fallback's do.
         """
-        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.messages.native.streaming_iterator import (
             aclose_if_supported,
             anthropic_messages_response_as_sse_events,
         )
@@ -8919,7 +8934,7 @@ class Router:
             return ()
         if litellm.should_retry(status_code):
             return ()
-        already_skipped_ids: Final = _as_retry_skipped_deployment_ids(already_skipped)
+        already_skipped_ids: Final = as_retry_skipped_deployment_ids(already_skipped)
         skipped: Final = tuple(sorted(frozenset((*already_skipped_ids, failed_deployment_id))))
         verbose_router_logger.debug(
             "Retry skips deployments that already answered %s to this request: %s", status_code, skipped
@@ -9558,10 +9573,10 @@ class Router:
         try:
             exception: Final = kwargs.get("exception", None)
 
-            if is_advisor_orchestration_failure(exception):
+            if is_failure_outside_selected_deployment(exception):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
-                    "Failure originated from advisor orchestration, not the selected deployment."
+                    "Failure came from advisor orchestration or deployment selection, not the selected deployment."
                 )
                 return False
 
@@ -9931,7 +9946,7 @@ class Router:
         when a content-policy fallback is configured; a plain refusal without stop_details, or
         any response with nothing configured, is returned to the client unchanged.
         """
-        from litellm.llms.anthropic.pass_through.messages.utils import (
+        from litellm.llms.anthropic.messages.native.utils import (
             get_safeguard_refusal_stop_details,
         )
 
@@ -14148,7 +14163,7 @@ class Router:
         `tools` (Chat Completions, Responses and Anthropic Messages shapes) and the
         Anthropic Messages top-level `system` block.
         """
-        from litellm.llms.anthropic.pass_through.messages.utils import (
+        from litellm.llms.anthropic.messages.native.utils import (
             anthropic_system_to_openai_message,
         )
 
@@ -15163,7 +15178,7 @@ class Router:
         ## RETRY SKIP ## -> drop deployments that already refused this request with a
         ## non-retryable status, unless that leaves nothing, so the caller still gets
         ## the provider's own error instead of a no-deployments error.
-        _retry_skipped_deployment_ids: Final = _as_retry_skipped_deployment_ids(
+        _retry_skipped_deployment_ids: Final = as_retry_skipped_deployment_ids(
             request_kwargs.pop("_retry_skipped_deployment_ids", None) if request_kwargs else None
         )
         healthy_deployments = (
@@ -15235,9 +15250,7 @@ class Router:
         request_kwargs: dict,
         responses_call: bool,
     ) -> bool:
-        """Apply a routing strategy's per-tier litellm_params on top of the request and report
-        whether they pinned an output ceiling, so the caller can hand the request its own ceiling
-        back on a routing pass that pins none."""
+        """Apply per-tier litellm_params and report whether they pinned an output ceiling."""
         if not tier_litellm_params:
             return False
         reject_api_key_secret_reference(tier_litellm_params)
@@ -15250,33 +15263,25 @@ class Router:
         return not OUTPUT_TOKEN_CEILING_PARAMS.isdisjoint(surface_tier_params)
 
     @staticmethod
-    def _restore_client_ceiling_no_tier_pins(request_kwargs: MutableMapping[str, object]) -> None:
-        """A model-group fallback re-enters routing with the kwargs an earlier auto-router pass
-        already rewrote, so a ceiling sized for that pass's tier would ride onto a group no tier
-        chose. When this pass pins none, hand the request back exactly the carriers the caller
-        sent, which the first pinning pass stamped. The stamp lives in a metadata bucket a
-        caller can also write, so the proxy strips the key at ingestion and this read takes
-        nothing but the three ceiling carriers as integers: no other key ever reaches kwargs."""
-        stamped: Final = next(
-            (
-                bucket.get(CLIENT_OUTPUT_CEILING_METADATA_KEY)
-                for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata"))
-                if isinstance(bucket, dict) and CLIENT_OUTPUT_CEILING_METADATA_KEY in bucket
-            ),
-            None,
-        )
-        if not isinstance(stamped, dict):
+    def _restore_client_output_ceiling(request_kwargs: MutableMapping[str, object]) -> None:
+        """Restore caller intent before routing, so neither a previous tier pin nor alias defaults
+        become the next attempt's budget. The proxy strips caller-written stamps at ingestion."""
+        callers_ceiling: Final = stamped_client_ceiling(request_kwargs)
+        if callers_ceiling is None:
             return
-        callers_ceiling: Final = MappingProxyType(
-            {
-                carrier: cap
-                for carrier, value in stamped.items()
-                if carrier in OUTPUT_TOKEN_CEILING_PARAMS and (cap := as_output_cap(value)) is not None
-            }
-        )
         for carrier in OUTPUT_TOKEN_CEILING_PARAMS:
             request_kwargs.pop(carrier, None)
         request_kwargs.update(callers_ceiling)
+
+    @staticmethod
+    def _stamp_client_output_ceiling(
+        request_kwargs: dict[str, object],  # mutable-ok: preserve request-owned metadata across routing attempts
+    ) -> None:
+        _, metadata_bucket = get_or_create_metadata_bucket(request_kwargs)
+        metadata_bucket.setdefault(
+            CLIENT_OUTPUT_CEILING_METADATA_KEY,
+            {carrier: request_kwargs[carrier] for carrier in OUTPUT_TOKEN_CEILING_PARAMS if carrier in request_kwargs},
+        )
 
     @staticmethod
     def _drop_client_carriers_a_tier_pin_supersedes(
@@ -15294,15 +15299,7 @@ class Router:
         one setting under three names, and a provider handed two of them either
         rejects the request or picks one by iteration order."""
         if not OUTPUT_TOKEN_CEILING_PARAMS.isdisjoint(tier_litellm_params):
-            _, metadata_bucket = get_or_create_metadata_bucket(request_kwargs)
-            metadata_bucket.setdefault(
-                CLIENT_OUTPUT_CEILING_METADATA_KEY,
-                {
-                    carrier: request_kwargs[carrier]
-                    for carrier in OUTPUT_TOKEN_CEILING_PARAMS
-                    if carrier in request_kwargs
-                },
-            )
+            Router._stamp_client_output_ceiling(request_kwargs)
             for carrier in OUTPUT_TOKEN_CEILING_PARAMS:
                 request_kwargs.pop(carrier, None)
         if "reasoning_effort" not in tier_litellm_params:
@@ -15374,14 +15371,12 @@ class Router:
                 model = pre_routing_hook_response.model
                 messages = pre_routing_hook_response.messages
                 record_pre_routing_selection(request_kwargs, model)
-            tier_pins_ceiling: Final = self._pin_tier_params_onto_request(
+            self._pin_tier_params_onto_request(
                 model=model,
                 tier_litellm_params=pre_routing_hook_response.litellm_params if pre_routing_hook_response else None,
                 request_kwargs=request_kwargs,
                 responses_call=responses_call,
             )
-            if not tier_pins_ceiling:
-                self._restore_client_ceiling_no_tier_pins(request_kwargs)
             #########################################################
 
             # Resolve the strategy and logger AFTER the pre-routing hook, since
@@ -15472,6 +15467,7 @@ class Router:
             phase_event(_DEPLOYMENT_SELECTED_EVENT, pick_attributes)
             return deployment
         except Exception as e:
+            mark_deployment_selection_failure(e)
             traceback_exception: Final = traceback.format_exc()
             # if router rejects call -> log to langfuse/otel/etc.
             if request_kwargs is not None:
@@ -15539,14 +15535,12 @@ class Router:
                 model = pre_routing_hook_response.model
                 messages = pre_routing_hook_response.messages
                 record_pre_routing_selection(request_kwargs, model)
-            tier_pins_ceiling: Final = self._pin_tier_params_onto_request(
+            self._pin_tier_params_onto_request(
                 model=model,
                 tier_litellm_params=pre_routing_hook_response.litellm_params if pre_routing_hook_response else None,
                 request_kwargs=request_kwargs,
                 responses_call=responses_call,
             )
-            if not tier_pins_ceiling:
-                self._restore_client_ceiling_no_tier_pins(request_kwargs)
 
             # 2. Get healthy deployments
             healthy_deployments: Final = await self.async_get_healthy_deployments(
@@ -15642,6 +15636,7 @@ class Router:
 
             return deployment
         except Exception as e:
+            mark_deployment_selection_failure(e)
             traceback_exception: Final = traceback.format_exc()
             if request_kwargs is not None:
                 logging_obj: Final = request_kwargs.get("litellm_logging_obj", None)
@@ -15896,6 +15891,7 @@ class Router:
         spend metadata is stamped before routing and the response carries the tier group the
         strategy picked.
         """
+        self._restore_client_output_ceiling(request_kwargs)
         self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
         requested_registered_model_name: Final = self.get_model_from_alias(model=model) or model
         registered_model_name: Final = await self._resolve_claude_code_session_router(
@@ -16062,7 +16058,8 @@ class Router:
         # them) until `_update_kwargs_with_deployment` drops any the selected
         # deployment sets itself (its own `aws_region_name` beats the marker's).
         # Per-tier `litellm_params` on the hook response are deliberate overrides
-        # the caller applies on top, so those keys are never forwarded here.
+        # the caller applies on top, so those keys and equivalent output-limit
+        # names are never tracked as alias defaults here.
         marker_params: Final = (
             self._forwardable_alias_marker_params(
                 model=registered_model_name, strategy_tags=selected_strategy.tags, request_kwargs=request_kwargs
@@ -16073,9 +16070,16 @@ class Router:
         tier_param_keys: Final = (
             tuple(pre_routing_hook_response.litellm_params or ()) if pre_routing_hook_response is not None else ()
         )
-        newly_forwarded: Final = tuple(
-            (key, value) for key, value in marker_params if key not in request_kwargs and key not in tier_param_keys
+        overridden_marker_keys: Final = frozenset(tier_param_keys) | (
+            OUTPUT_TOKEN_CEILING_PARAMS if not OUTPUT_TOKEN_CEILING_PARAMS.isdisjoint(tier_param_keys) else frozenset()
         )
+        newly_forwarded: Final = tuple(
+            (key, value)
+            for key, value in marker_params
+            if key not in request_kwargs and key not in overridden_marker_keys
+        )
+        if pre_routing_hook_response is not None:
+            self._stamp_client_output_ceiling(request_kwargs)
         request_kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, None)
         request_kwargs.update(newly_forwarded)
         if newly_forwarded:
@@ -16406,7 +16410,7 @@ class Router:
         )
 
         ## RETRY SKIP ## -> see async counterpart in async_get_healthy_deployments.
-        _retry_skipped_deployment_ids: Final = _as_retry_skipped_deployment_ids(
+        _retry_skipped_deployment_ids: Final = as_retry_skipped_deployment_ids(
             request_kwargs.pop("_retry_skipped_deployment_ids", None) if request_kwargs else None
         )
         healthy_deployments = (
