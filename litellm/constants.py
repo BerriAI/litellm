@@ -1056,6 +1056,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
     "https://api.sailresearch.com/v1",
+    "https://api.tokenify.dev/v1",
     "https://api.cognition.ai/v1",
     "https://inference.coralbricks.ai/v1",
     "https://api.cortecs.ai/v1",
@@ -1144,6 +1145,7 @@ openai_compatible_providers: Final[list[str]] = [
     "prism",
     "sail",
     "reka",
+    "tokenify",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
