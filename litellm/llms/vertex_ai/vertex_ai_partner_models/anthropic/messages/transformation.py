@@ -6,6 +6,12 @@ from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
     messages_carry_output_config,
 )
+from litellm.llms.vertex_ai.request_labels import (
+    VERTEX_LABELS_HEADER,
+    is_vertex_labels_header,
+    vertex_partner_labels_header,
+    vertex_request_label_fields,
+)
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
@@ -16,6 +22,18 @@ from litellm.types.router import GenericLiteLLMParams
 
 from ....vertex_llm_base import VertexBase
 from ..output_params_utils import sanitize_vertex_anthropic_output_params
+
+
+def _labels_header_replacement(
+    request_headers: Mapping[str, str], litellm_params: Mapping[str, object]
+) -> tuple[tuple[str, ...], str | None]:
+    allowed_fields: Final = vertex_request_label_fields()
+    if not allowed_fields:
+        return (), None
+    return (
+        tuple(filter(is_vertex_labels_header, request_headers)),
+        vertex_partner_labels_header(allowed_fields, None, request_headers, litellm_params),
+    )
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
@@ -67,6 +85,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             project_id,
             vertex_ai_project,
             vertex_ai_location,
+            litellm_params,
         )
 
     async def avalidate_anthropic_messages_environment(
@@ -95,6 +114,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             project_id,
             vertex_ai_project,
             vertex_ai_location,
+            litellm_params,
         )
 
     def _finalize_vertex_messages_environment(
@@ -108,6 +128,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         project_id: str,
         vertex_ai_project: str | None,
         vertex_ai_location: str | None,
+        litellm_params: Mapping[str, object],
     ) -> tuple[dict[str, str], str | None]:  # mutable-ok: the caller consumes request headers
         # Router shallow-copies litellm_params, so headers may be shared between requests.
         request_headers: Final = dict(headers)
@@ -177,6 +198,11 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         if beta_values:
             request_headers["anthropic-beta"] = ",".join(beta_values)
 
+        replaced_headers, labels_header = _labels_header_replacement(request_headers, litellm_params)
+        for name in replaced_headers:
+            del request_headers[name]
+        if labels_header is not None:
+            request_headers[VERTEX_LABELS_HEADER] = labels_header
         return request_headers, api_base
 
     def get_complete_url(

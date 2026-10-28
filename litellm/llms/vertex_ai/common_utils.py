@@ -24,6 +24,11 @@ from litellm.llms.gemini.common_utils import (
     GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO,
     map_openai_size_to_gemini_image_config,
 )
+from litellm.llms.vertex_ai.request_labels import (
+    VERTEX_REQUEST_LABELS_MAX,
+    resolve_vertex_request_labels,
+    vertex_request_label_fields,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import (
     VERTEX_AI_PROVIDER_METADATA_FIELDS,
@@ -196,6 +201,9 @@ def redact_vertex_ai_metadata_from_litellm_params(model_call_details: dict) -> N
             hidden_params.pop(field, None)
 
 
+_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
 def vertex_request_labels_from_litellm_params(
     litellm_params: dict | None,
 ) -> dict[str, str] | None:
@@ -231,7 +239,8 @@ def pop_vertex_request_labels(
     """
     Resolve labels from optional ``labels`` (Gemini-style) and/or
     ``litellm_params["metadata"]`` / ``litellm_params["litellm_metadata"]``
-    (``requester_metadata``). Pops ``labels`` from optional_params when present.
+    (``requester_metadata``), plus the proxy identity ``litellm.vertex_request_label_fields`` allows.
+    Pops ``labels`` from optional_params when present.
     """
     labels: dict[str, str] | None = None
     if optional_params is not None and "labels" in optional_params:
@@ -240,7 +249,13 @@ def pop_vertex_request_labels(
             labels = {k: v for k, v in raw.items() if isinstance(v, str)}
     if not labels:
         labels = vertex_request_labels_from_litellm_params(litellm_params)
-    return labels if labels else None
+    allowed_fields: Final = vertex_request_label_fields()
+    if not allowed_fields:
+        return labels if labels else None
+    resolved: Final = resolve_vertex_request_labels(
+        allowed_fields, labels, _LITELLM_PARAMS.validate_python(litellm_params or {}), VERTEX_REQUEST_LABELS_MAX
+    )
+    return dict(resolved) if resolved else None
 
 
 class VertexAIModelRoute(str, Enum):
