@@ -1829,14 +1829,27 @@ async def test_uncountable_model_without_framing_raises():
     assert raised.value.code == "404"
 
 
+@pytest.mark.parametrize(
+    ("count_model", "counted_as"),
+    [
+        (None, "us.anthropic.claude-sonnet-5-5"),
+        (
+            TokenCountModel(model="anthropic.claude-sonnet-5-5", region=None, litellm_provider="bedrock"),
+            "bedrock/anthropic.claude-sonnet-5-5",
+        ),
+    ],
+    ids=["no_token_count_model", "token_count_model_in_the_deployment_region"],
+)
 @pytest.mark.asyncio
-async def test_uncountable_model_with_framing_falls_through_to_the_local_estimate():
-    counter: Final = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=400)})
+async def test_uncountable_model_with_framing_falls_through_to_the_local_estimate(
+    count_model: TokenCountModel | None, counted_as: str
+):
+    counter: Final = _ScriptedCounter({counted_as: _provider_reply("sonnet", status_code=400)})
 
-    result: Final = await _ladder(counter, TokenCountSettings(framing=0, count_model=None))
+    result: Final = await _ladder(counter, TokenCountSettings(framing=0, count_model=count_model))
 
     assert isinstance(result, ProviderCountFailure)
-    assert len(counter.calls) == 1
+    assert [call[0] for call in counter.calls] == [counted_as]
 
 
 @pytest.mark.parametrize("status_code", [400, 404])

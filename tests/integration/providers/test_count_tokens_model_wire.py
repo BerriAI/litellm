@@ -25,6 +25,8 @@ _SONNET_BASE: Final = "anthropic.claude-sonnet-5-5"
 _OPUS: Final = "us.anthropic.claude-opus-5-5"
 _OPUS_BASE: Final = "anthropic.claude-opus-5-5"
 _NOVA: Final = "amazon.nova-lite-v1:0"
+_RUNTIME_ROUTED: Final = "us.anthropic.claude-sonnet-4-6"
+_CONFIGURED_COUNT_REGION: Final = "us-east-2"
 _KIMI: Final = "us.moonshotai.kimi-k3"
 _KIMI_BASE: Final = "moonshotai.kimi-k3"
 _PROFILE_ID: Final = "lit9563count"
@@ -380,6 +382,64 @@ def test_framing_on_one_deployment_leaves_a_sibling_of_the_same_model_raising_th
             _count(gateway, sibling, 400)
         assert _runtime_models(runtime) == (_NOVA, _NOVA)
         assert _mantle_models(mantle) == ()
+
+
+def test_framing_is_added_to_the_local_estimate_when_a_shipped_runtime_count_model_cannot_count(
+    counting_proxy: OwnedProxy, runtime_port: int, mantle_port: int
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    count_model: Final = _shipped_token_count_model_field(_RUNTIME_ROUTED, "model")
+    assert _shipped_token_count_model(_RUNTIME_ROUTED).get("region") is None
+    with (
+        wire_server(_runtime, port=runtime_port) as runtime,
+        wire_server(_mantle, port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        framed: Final = _count(
+            gateway,
+            _deployment(scenario, runtime_port, _RUNTIME_ROUTED, {"token_count_framing": _FRAMING}),
+            400,
+            count_model_status=404,
+        )
+        unframed: Final = _count(
+            gateway,
+            _deployment(scenario, runtime_port, _RUNTIME_ROUTED, {"token_count_framing": 0}),
+            400,
+            count_model_status=404,
+        )
+        assert (framed.model_extra, unframed.model_extra) == (_LOCAL_SOURCE, _LOCAL_SOURCE), (framed, unframed)
+        assert framed.input_tokens - unframed.input_tokens == _FRAMING, (framed, unframed)
+        assert _runtime_models(runtime) == (count_model, count_model)
+        assert _mantle_models(mantle) == (count_model, count_model)
+
+
+def test_configured_token_count_model_provider_counts_on_mantle_without_trying_the_runtime(
+    counting_proxy: OwnedProxy, runtime_port: int, mantle_port: int
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    count_model: Final = _shipped_token_count_model_field(_RUNTIME_ROUTED, "model")
+    assert _shipped_token_count_model_field(_RUNTIME_ROUTED, "litellm_provider") == "bedrock"
+    configured: Final[dict[str, JsonValue]] = {
+        "model": count_model,
+        "litellm_provider": "bedrock_mantle",
+        "region": _CONFIGURED_COUNT_REGION,
+    }
+    with (
+        wire_server(_runtime, port=runtime_port) as runtime,
+        wire_server(_mantle, port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        counted: Final = _count(
+            gateway, _deployment(scenario, runtime_port, _RUNTIME_ROUTED, {"token_count_model": configured}), 400
+        )
+        assert (counted.input_tokens, counted.model_extra) == (
+            _COUNT_MODEL_COUNT,
+            {"litellm_count_source": "token_count_model", "litellm_count_model": count_model},
+        ), counted
+        assert _runtime_counts(runtime) == ()
+        assert _mantle_count_requests(mantle) == (
+            ((_ACCESS_KEY, _CONFIGURED_COUNT_REGION), {**_mantle_body(_prompt(400)), "model": count_model}),
+        )
 
 
 def test_empty_configured_token_count_model_counts_the_model_itself_in_the_deployment_region(
