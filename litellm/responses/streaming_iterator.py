@@ -39,7 +39,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import finite_cost, process_response_headers
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
 from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
@@ -1750,7 +1750,7 @@ def stamp_responses_usage_cost(
     if usage_obj is None:
         return
     response_obj.usage = usage_obj  # rebind-ok: the stamped cost has to ride on the response the client receives
-    if isinstance(getattr(usage_obj, "cost", None), (int, float)):
+    if finite_cost(getattr(usage_obj, "cost", None)) is not None:
         return
     try:
         cost: Final[float | None] = logging_obj.response_cost_calculator(result=response_obj)

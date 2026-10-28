@@ -8,7 +8,7 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from functools import reduce
+from functools import partial, reduce
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
@@ -107,6 +107,13 @@ _SPEND_TRANSACTION_FIELDS: Final[tuple[_SpendTransactionField, ...]] = (
 
 _ValueT = TypeVar("_ValueT")
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _zero_for_non_finite_constant(_constant: str) -> float:
+    return 0.0
+
+
+_load_buffered_transaction: Final = partial(json.loads, parse_constant=_zero_for_non_finite_constant)
 
 
 def _spend_log_json_default(value: object) -> str:
@@ -825,13 +832,13 @@ class RedisUpdateBuffer:
             if slot_result is None:
                 daily_results.append(None)
             else:
-                list_of_daily = [json.loads(t) for t in slot_result]
+                list_of_daily = [_load_buffered_transaction(t) for t in slot_result]
                 aggregated = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(list_of_daily)
                 daily_results.append(aggregated)
 
         window_spend: Final = (
             WindowSpendUpdateQueue.get_aggregated_window_spend_transactions(
-                tuple(json.loads(transaction) for transaction in raw_results[6])
+                tuple(_load_buffered_transaction(transaction) for transaction in raw_results[6])
             )
             if raw_results[6] is not None
             else None
@@ -880,7 +887,7 @@ class RedisUpdateBuffer:
         )
         if list_of_transactions is None:
             return None
-        return [json.loads(transaction) for transaction in list_of_transactions]
+        return [_load_buffered_transaction(transaction) for transaction in list_of_transactions]
 
     async def get_all_daily_spend_update_transactions_from_redis_buffer(
         self,
@@ -1010,9 +1017,9 @@ class RedisUpdateBuffer:
         Parses the list of transactions from Redis
         """
         if isinstance(list_of_transactions, list):
-            return [json.loads(transaction) for transaction in list_of_transactions]
+            return [_load_buffered_transaction(transaction) for transaction in list_of_transactions]
         else:
-            return [json.loads(list_of_transactions)]
+            return [_load_buffered_transaction(list_of_transactions)]
 
     @staticmethod
     def _combine_list_of_transactions(

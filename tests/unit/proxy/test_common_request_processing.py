@@ -12045,6 +12045,30 @@ class TestResponseCostFromLoggingObjForCacheHits:
         )
         assert {name: headers.get(name) for name in cost_headers} == dict.fromkeys(cost_headers, expected_header)
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("response_cost", "expected_header"),
+        ((float("nan"), None), (float("inf"), None), (0.0042, "0.0042")),
+        ids=("nan", "inf", "finite"),
+    )
+    async def test_a_non_finite_response_cost_sends_no_cost_header(
+        self, response_cost: float, expected_header: str | None
+    ):
+        response: Final = litellm.ModelResponse()
+        response._hidden_params = {"response_cost": response_cost}
+
+        headers: Final = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=response,
+            request_data={"model": "gpt-5.4-mini"},
+            request=Request({"type": "http", "method": "POST", "headers": []}),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            logging_obj=self._logging_obj(),
+            version=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+
+        assert headers.get("x-litellm-response-cost") == expected_header
+
     def test_a_fresh_zero_cost_v1_messages_call_still_sends_no_cost_header(self):
         logging_obj: Final = self._logging_obj()
         logging_obj.model_call_details["response_cost"] = 0.0

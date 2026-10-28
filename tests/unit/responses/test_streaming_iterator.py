@@ -864,6 +864,20 @@ def test_stamp_responses_usage_cost_keeps_provider_reported_cost():
     logging_obj.response_cost_calculator.assert_not_called()
 
 
+@pytest.mark.parametrize("reported_cost", [float("nan"), float("inf")])
+def test_stamp_responses_usage_cost_replaces_a_non_finite_provider_cost(reported_cost: float):
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
+
+    response: Final = _responses_api_response_with_usage()
+    setattr(response.usage, "cost", reported_cost)
+    logging_obj: Final = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.response_cost_calculator.return_value = 0.000704
+
+    stamp_responses_usage_cost(response, logging_obj)
+
+    assert getattr(response.usage, "cost", None) == pytest.approx(0.000704)
+
+
 def _unvalidated_response_with_dict_usage(usage: dict) -> ResponsesAPIResponse:
     return ResponsesAPIResponse.model_construct(
         id="resp_lit7391",

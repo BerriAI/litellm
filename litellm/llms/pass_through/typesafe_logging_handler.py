@@ -6,6 +6,7 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import finite_cost
 from litellm.litellm_core_utils.decisions_pricing import apply_decisions_pricing
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
@@ -91,9 +92,10 @@ class TypeSafePassthroughLoggingHandler:
             f"{custom_llm_provider}/{model}" for model in (response_model, request_model) if model is not None
         )
         pricing: Final = _pricing_for(candidate_model_keys)
+        reported_cost: Final = finite_cost(usage.cost) if custom_llm_provider == "openrouter" else None
         response_cost: Final = (
-            usage.cost
-            if custom_llm_provider == "openrouter" and usage.cost is not None
+            reported_cost
+            if reported_cost is not None
             else input_tokens * pricing.input_cost_per_token + output_tokens * pricing.output_cost_per_token
         )
         usage_object: Final = Usage(

@@ -59,6 +59,7 @@ from litellm.litellm_core_utils.bug_report import (
     strip_bug_report_notice,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    finite_cost,
     get_or_create_metadata_bucket,
     independent_snapshot,
     is_expected_client_error,
@@ -1774,7 +1775,9 @@ def _response_cost_header_value(hidden_params: Mapping[str, object]) -> float | 
     if hidden_params.get("cache_hit") is True:
         return 0.0
     response_cost: Final = hidden_params.get("response_cost")
-    return response_cost if isinstance(response_cost, (int, float, str)) and response_cost else ""
+    if isinstance(response_cost, str):
+        return response_cost
+    return finite_cost(response_cost) or ""
 
 
 def cost_headers(

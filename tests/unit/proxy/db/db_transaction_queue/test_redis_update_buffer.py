@@ -379,6 +379,88 @@ async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_fail
     assert restored_spend["org_member_list_transactions"] == {member_key: 1.5}
 
 
+PARKED_DAILY_KEY: Final = "user-1_2025-01-15_api-key-123_gpt-4o_openai_/chat/completions"
+
+
+def _parked_daily_batch(spend: float) -> str:
+    return json.dumps(
+        {
+            PARKED_DAILY_KEY: {
+                "spend": spend,
+                "prompt_tokens": 12,
+                "completion_tokens": 7,
+                "api_requests": 1,
+                "successful_requests": 1,
+                "failed_requests": 0,
+            }
+        },
+        allow_nan=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_nan_spend_parked_by_an_older_version_drains_from_the_pipeline_as_zero(
+    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock
+):
+    entity_batch: Final = json.dumps({"key_list_transactions": {"hashed-key": float("nan")}}, allow_nan=True)
+    window_batches: Final = tuple(
+        json.dumps(
+            [
+                {
+                    "entity_type": "key",
+                    "entity_id": "hashed-key",
+                    "window_duration": "30d",
+                    "window_start": "2026-08-01T00:00:00.000000",
+                    "spend": spend,
+                    "started_at": None,
+                }
+            ],
+            allow_nan=True,
+        )
+        for spend in (float("nan"), 3.0)
+    )
+    mock_redis_cache.async_lpop_pipeline = AsyncMock(
+        return_value=[
+            [entity_batch],
+            [_parked_daily_batch(float("nan")), _parked_daily_batch(0.0042)],
+            None,
+            None,
+            None,
+            None,
+            list(window_batches),
+        ]
+    )
+
+    (
+        db_spend,
+        daily_user,
+        *_rest,
+        window_spend,
+    ) = await redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
+
+    assert db_spend is not None
+    assert db_spend["key_list_transactions"] == {"hashed-key": 0}
+    assert daily_user is not None
+    assert daily_user[PARKED_DAILY_KEY]["spend"] == 0.0042
+    assert daily_user[PARKED_DAILY_KEY]["api_requests"] == 2
+    assert window_spend is not None
+    assert [transaction["spend"] for transaction in window_spend] == [3.0]
+
+
+@pytest.mark.asyncio
+async def test_a_nan_spend_parked_by_an_older_version_drains_from_a_daily_key_as_zero(
+    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock
+):
+    mock_redis_cache.async_lpop = AsyncMock(
+        return_value=[_parked_daily_batch(float("inf")), _parked_daily_batch(0.0042)]
+    )
+
+    daily_tag: Final = await redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+
+    assert daily_tag is not None
+    assert daily_tag[PARKED_DAILY_KEY]["spend"] == 0.0042
+
+
 @pytest.mark.asyncio
 async def test_get_all_transactions_from_redis_buffer_pipeline_no_redis():
     """When redis_cache is None, should return all Nones"""

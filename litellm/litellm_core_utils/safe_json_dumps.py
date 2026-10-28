@@ -72,7 +72,8 @@ def safe_json_structure(
             seen.remove(id(obj))
             return result
         elif isinstance(obj, set):
-            result = sorted([_serialize(item, seen, depth + 1, key) for item in obj])
+            members: Final = [_serialize(item, seen, depth + 1, key) for item in obj]
+            result = sorted(member for member in members if member is not None) + [None] * members.count(None)
             seen.remove(id(obj))
             return result
         elif isinstance(obj, BaseModel):

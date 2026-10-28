@@ -179,6 +179,10 @@ def test_non_finite_floats_are_written_as_json_null(value: float) -> None:
     }
 
 
+def test_a_set_holding_a_non_finite_float_sorts_its_finite_members_and_puts_null_last() -> None:
+    assert json.loads(safe_dumps({"costs": {2.0, float("inf"), 1.0}})) == {"costs": [1.0, 2.0, None]}
+
+
 def test_clean_strings_are_not_run_through_replace():
     """Regression for LIT-3910.
 

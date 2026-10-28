@@ -128,8 +128,8 @@ def test_a_non_finite_cost_never_blocks_the_next_requests_spend_rows(
             team: Final = scenario.team()
             key: Final = scenario.key(user_id=f"non-finite-cost-{uuid4().hex}", team_id=team)
             digest: Final = sha256(key.encode()).hexdigest()
-            for alias in (poisoned_alias, control_alias):
-                response = candidate.request(
+            responses: Final = tuple(
+                candidate.request(
                     "POST",
                     "/v1/chat/completions",
                     {
@@ -140,7 +140,9 @@ def test_a_non_finite_cost_never_blocks_the_next_requests_spend_rows(
                     },
                     key=key,
                 )
-                assert response.status_code == 200, response.text
+                for alias in (poisoned_alias, control_alias)
+            )
+            assert all(response.status_code == 200 for response in responses), [response.text for response in responses]
 
             expected: Final = {poisoned_alias: pytest.approx(poisoned_spend), control_alias: pytest.approx(TOKEN_PRICE)}
             spend_logs: Final = _both_requests_rows(

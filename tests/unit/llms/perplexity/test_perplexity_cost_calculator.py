@@ -9,6 +9,7 @@ import json
 import math
 import os
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -139,6 +140,21 @@ class TestPerplexityCostCalculator:
 
         assert prompt_cost == 0.0
         assert completion_cost == 0.008
+
+    @pytest.mark.parametrize(
+        "reported_cost",
+        [float("nan"), float("inf"), {"total_cost": float("nan")}],
+        ids=["nan", "inf", "nan-total-cost-dict"],
+    )
+    def test_a_non_finite_perplexity_cost_is_priced_like_no_reported_cost(self, reported_cost: float | dict):
+        unreported: Final = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        reported: Final = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        reported.cost = reported_cost
+
+        token_priced: Final = perplexity_cost_per_token(model="sonar-pro", usage=unreported)
+
+        assert sum(token_priced) > 0
+        assert perplexity_cost_per_token(model="sonar-pro", usage=reported) == token_priced
 
     OFF_PEAK_MODEL = "sonar-off-peak-test"
     OFF_PEAK_WINDOW = "14:00-00:00"
