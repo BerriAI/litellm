@@ -53,7 +53,8 @@ def is_unauthorized_error(exception: BaseException | None) -> bool:
     if not isinstance(exception, (HTTPException, ProxyException)):
         return False
 
-    status_code: Final[object] = exception.code if isinstance(exception, ProxyException) else exception.status_code
+    code: Final[object] = getattr(exception, "code", None)
+    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
     return str(status_code) == str(status.HTTP_401_UNAUTHORIZED)
 
 
