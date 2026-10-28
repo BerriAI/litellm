@@ -122,7 +122,7 @@ general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
 ```
 
-Add one entry per model. On Azure, ask the user for each deployment's name and use `azure/<deployment name>` as `model`, since Azure routes by deployment and a name from the lookup works only when the deployment has that same name. Providers that need more than a key, like Azure or Bedrock, list their `litellm_params` on their page under https://docs.litellm.ai/docs/providers. Point every secret at `.env` through `os.environ/NAME` the same way
+Add one entry per model. On Azure, ask the user for each deployment's name and the model it runs. Use `azure/<deployment name>` as `model`, since Azure routes by deployment and a name from the lookup works only when the deployment has that same name, and add `model_info:` with `base_model: azure/<model it runs>` to the entry, since LiteLLM prices each call by that name. Providers that need more than a key, like Azure or Bedrock, list their `litellm_params` on their page under https://docs.litellm.ai/docs/providers. Point every secret at `.env` through `os.environ/NAME` the same way
 
 ## 6. Their own Postgres, on the uv path
 
@@ -147,7 +147,7 @@ Bind to `127.0.0.1` unless the user wants other machines to reach it
 uv, in one shell command that starts with the loader line, since the installed `litellm` does not read `.env` by itself:
 
 ```bash
-export PATH="$(uv tool dir --bin):$PATH"
+export PATH="$HOME/.local/bin:$PATH"; export PATH="$(uv tool dir --bin):$PATH"
 nohup litellm --config config.yaml --host 127.0.0.1 --port 4000 > litellm.log 2>&1 &
 echo $! > litellm.pid
 ```
