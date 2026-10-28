@@ -91,6 +91,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
+from litellm.litellm_core_utils.get_llm_provider_logic import strip_api_routing_prefix
 from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
@@ -6418,29 +6419,30 @@ def _strip_mantle_region_prefix(model: str) -> str:
 
 
 def get_potential_model_names(model: str, custom_llm_provider: str | None) -> PotentialModelNamesAndCustomLLMProvider:
+    routed_model: Final = strip_api_routing_prefix(model)
     if custom_llm_provider is None:
         # Get custom_llm_provider
         try:
             get_llm_provider: Final = litellm_utils.get_llm_provider
-            split_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+            split_model, custom_llm_provider, _, _ = get_llm_provider(model=routed_model)
         except Exception:
-            split_model = model
-        combined_model_name = model
-        stripped_model_name = _strip_model_name(model=model, custom_llm_provider=custom_llm_provider)
+            split_model = routed_model
+        combined_model_name = routed_model
+        stripped_model_name = _strip_model_name(model=routed_model, custom_llm_provider=custom_llm_provider)
         combined_stripped_model_name = stripped_model_name
-        provider_prefixed_model_name = model
-    elif custom_llm_provider and model.startswith(
+        provider_prefixed_model_name = routed_model
+    elif custom_llm_provider and routed_model.startswith(
         custom_llm_provider + "/"
     ):  # handle case where custom_llm_provider is provided and model starts with custom_llm_provider
-        split_model = model.split("/", 1)[1]
-        combined_model_name = model
+        split_model = routed_model.split("/", 1)[1]
+        combined_model_name = routed_model
         stripped_model_name = _strip_model_name(model=split_model, custom_llm_provider=custom_llm_provider)
         combined_stripped_model_name = f"{custom_llm_provider}/{stripped_model_name}"
-        provider_prefixed_model_name = f"{custom_llm_provider}/{model}"
+        provider_prefixed_model_name = f"{custom_llm_provider}/{routed_model}"
     else:
-        split_model = model
-        combined_model_name = f"{custom_llm_provider}/{model}"
-        stripped_model_name = _strip_model_name(model=model, custom_llm_provider=custom_llm_provider)
+        split_model = routed_model
+        combined_model_name = f"{custom_llm_provider}/{routed_model}"
+        stripped_model_name = _strip_model_name(model=routed_model, custom_llm_provider=custom_llm_provider)
         combined_stripped_model_name = f"{custom_llm_provider}/{stripped_model_name}"
         provider_prefixed_model_name = combined_model_name
 

@@ -1565,6 +1565,35 @@ def test_get_model_info_bedrock_mantle_region_prefix_falls_back_to_the_mantle_ro
         assert info["input_cost_per_token"] > 0, model
 
 
+@pytest.mark.parametrize(
+    "model, unprefixed",
+    [
+        ("openai/responses/gpt-6.1-sol", "gpt-6.1-sol"),
+        ("openai/responses/gpt-4o", "gpt-4o"),
+        ("openai/responses/o3", "o3"),
+        ("openai/chat_completions/gpt-6.1-sol", "gpt-6.1-sol"),
+        ("azure/responses/gpt-6.1-sol", "azure/gpt-6.1-sol"),
+    ],
+)
+def test_get_model_info_ignores_an_api_routing_selector(local_model_cost_map, model, unprefixed):
+    """An API-selector segment picks which provider API serves the call, so it must resolve
+    to the same cost-map row as the name without it. Only supported_openai_params may
+    differ, because the supported params genuinely vary by API surface."""
+    routed: Final = litellm.get_model_info(model=model)
+    bare: Final = litellm.get_model_info(model=unprefixed)
+
+    assert {k: v for k, v in routed.items() if k != "supported_openai_params"} == {
+        k: v for k, v in bare.items() if k != "supported_openai_params"
+    }, f"{model} did not resolve like {unprefixed}"
+
+
+@pytest.mark.parametrize("selector", ["responses/", "chat_completions/"])
+def test_get_model_info_still_raises_for_an_unmapped_model_behind_a_routing_selector(local_model_cost_map, selector):
+    """Dropping the selector must not turn an unmapped model into a priced one."""
+    with pytest.raises(litellm.ModelNotMappedError):
+        litellm.get_model_info(model=f"openai/{selector}gpt-not-a-real-model-xyz")
+
+
 def test_openai_models_in_model_info(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
