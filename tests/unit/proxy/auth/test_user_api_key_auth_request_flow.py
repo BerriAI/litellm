@@ -5465,9 +5465,9 @@ async def _custom_auth_that_is_never_called(request: Request, api_key: str) -> U
 
 
 def _token_built_by_custom_auth_with_its_own_cap() -> UserAPIKeyAuth:
-    token: Final = UserAPIKeyAuth(api_key="sk-custom", end_user_id="eu-1", end_user_model_max_budget=_END_USER_MODEL_CAPS)
-    token.authenticated_by_custom_auth = True
-    return token
+    return UserAPIKeyAuth(
+        api_key="sk-custom", end_user_id="eu-1", end_user_model_max_budget=_END_USER_MODEL_CAPS
+    ).model_copy(update={"authenticated_by_custom_auth": True})
 
 
 def _master_key_token_custom_auth_handed_back_with_another_end_users_cap() -> UserAPIKeyAuth:
