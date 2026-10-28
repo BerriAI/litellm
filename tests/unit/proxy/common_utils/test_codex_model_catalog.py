@@ -136,13 +136,56 @@ def test_alias_of_a_known_upstream_model_takes_stock_metadata_under_its_own_name
 
 
 @pytest.mark.parametrize(("max_input_tokens", "expected"), [(100000, 100000), (922000, 272000), (None, 272000)])
-def test_alias_takes_codexs_context_window_capped_at_its_listed_max_input_tokens(max_input_tokens, expected):
+def test_alias_with_deployment_defaults_caps_codexs_window_at_its_listed_max_input_tokens(max_input_tokens, expected):
     stock = MappingProxyType({"gpt-5.5": _stock("gpt-5.5").model_copy(update={"context_window": 272000})})
     alias = _row("team-55", upstream_model="openai/gpt-5.5", max_input_tokens=max_input_tokens)
 
-    (entry,) = json.loads(codex_models_response_json((alias,), stock=stock, instructions=_PROMPT).json)["models"]
+    body = codex_models_response_json((alias,), stock=stock, instructions=_PROMPT, alias_defaults="deployment")
 
-    assert entry["context_window"] == expected
+    assert json.loads(body.json)["models"][0]["context_window"] == expected
+
+
+def test_alias_with_deployment_defaults_drops_codexs_tier_and_upgrade_while_the_native_name_keeps_them():
+    rows = (_row("gpt-6-sol"), _row("team-sol", upstream_model="gpt-6-sol"), _row("team-55", upstream_model="gpt-5.5"))
+    codex = {entry["slug"]: entry for entry in _models(*rows)}
+    deployment = {entry["slug"]: entry for entry in _models(*rows, alias_defaults="deployment")}
+
+    assert deployment["gpt-6-sol"] == codex["gpt-6-sol"]
+    assert (codex["team-sol"]["default_service_tier"], codex["team-55"]["upgrade"]) == (
+        "priority",
+        {"model": "gpt-6-sol"},
+    )
+    assert _tiers(codex["team-sol"]) == _tiers(codex["gpt-6-sol"]) != []
+    assert [
+        (deployment[slug]["service_tiers"], deployment[slug]["default_service_tier"])
+        for slug in ("team-sol", "team-55")
+    ] == [
+        ([], None),
+        ([], None),
+    ]
+    assert deployment["team-55"]["upgrade"] is None
+    assert deployment["team-sol"]["model_messages"] == codex["team-sol"]["model_messages"]
+
+
+@pytest.mark.parametrize(("pinned", "expected"), [("high", "high"), ("turbo", "medium"), (None, "medium")])
+def test_alias_with_deployment_defaults_starts_at_the_reasoning_effort_its_deployments_pin(pinned, expected):
+    stock = CodexStockModel.model_validate(
+        {
+            "slug": "gpt-5.5",
+            "display_name": "GPT-5.5",
+            "priority": 1,
+            "visibility": "list",
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": [{"effort": e, "description": e} for e in ("low", "medium", "high")],
+        }
+    )
+    alias = _row("team-55", upstream_model="gpt-5.5", reasoning_effort=pinned)
+
+    body = codex_models_response_json(
+        (alias,), stock=MappingProxyType({"gpt-5.5": stock}), instructions=_PROMPT, alias_defaults="deployment"
+    )
+
+    assert json.loads(body.json)["models"][0]["default_reasoning_level"] == expected
 
 
 @pytest.mark.parametrize(

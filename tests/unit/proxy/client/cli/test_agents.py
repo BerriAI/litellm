@@ -774,8 +774,44 @@ class TestCodexModelSync:
             "slug": "api-terra",
             "display_name": "api-terra",
             "priority": 0,
+            "service_tiers": [],
+            "default_service_tier": None,
         }
         assert "supports_search_tool" not in entries["m"]
+
+    def test_alias_gets_no_upgrade_nudge_away_from_its_own_name(self, tmp_path):
+        listing = self._listing(self._row("gpt-5.6-terra"), self._row("api-54"))
+        deployment = {"model_name": "api-54", "litellm_params": {"model": "openai/gpt-5.4"}}
+        self._sync(listing, tmp_path, model_info=_FakeResponse(200, {"data": [deployment]}))
+
+        entry = self._entries(tmp_path)["api-54"]
+        assert (entry["comp_hash"], entry["upgrade"]) == (_STOCK_MODELS["gpt-5.4"]["comp_hash"], None)
+
+    @pytest.mark.parametrize(
+        ("pins", "expected"),
+        [
+            (("high",), "high"),
+            (("high", "high"), "high"),
+            (("high", None), "medium"),
+            (("high", "low"), "medium"),
+            (({"effort": "high"},), "medium"),
+        ],
+        ids=["one_deployment", "every_deployment_agrees", "one_unpinned", "pins_differ", "non_string_pin"],
+    )
+    def test_alias_starts_at_the_reasoning_effort_every_deployment_pins(self, tmp_path, pins, expected):
+        deployments = [
+            {
+                "model_name": "api-terra",
+                "litellm_params": {"model": "openai/gpt-5.6-terra", **({"reasoning_effort": p} if p else {})},
+            }
+            for p in pins
+        ]
+        self._sync(
+            self._listing(self._row("api-terra")), tmp_path, model_info=_FakeResponse(200, {"data": deployments})
+        )
+
+        entry = self._entries(tmp_path)["api-terra"]
+        assert (entry["comp_hash"], entry["default_reasoning_level"]) == ("terra-hash", expected)
 
     @pytest.mark.parametrize(
         "deployments",
@@ -784,7 +820,12 @@ class TestCodexModelSync:
                 {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.6-terra"}},
                 {"model_name": "api-terra", "litellm_params": {"model": "gpt-5.6-terra"}},
             ],
-            [{"model_name": "api-terra", "litellm_params": {"model": "gpt-5.6-terra", "custom_llm_provider": "openai"}}],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "gpt-5.6-terra", "custom_llm_provider": "openai"},
+                }
+            ],
             [
                 {
                     "model_name": "api-terra",
@@ -808,7 +849,9 @@ class TestCodexModelSync:
         ],
     )
     def test_alias_whose_deployments_all_route_to_one_openai_model_gets_its_entry(self, tmp_path, deployments):
-        self._sync(self._listing(self._row("api-terra")), tmp_path, model_info=_FakeResponse(200, {"data": deployments}))
+        self._sync(
+            self._listing(self._row("api-terra")), tmp_path, model_info=_FakeResponse(200, {"data": deployments})
+        )
 
         assert self._entries(tmp_path)["api-terra"]["comp_hash"] == _STOCK_MODELS["gpt-5.6-terra"]["comp_hash"]
 
