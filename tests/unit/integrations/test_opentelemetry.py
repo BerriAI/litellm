@@ -48,6 +48,7 @@ from litellm.integrations.opentelemetry import (
     RAW_REQUEST_SPAN_NAME,
     _normalize_team_metadata_keys,
 )
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy import proxy_server
 from litellm.proxy._types import ManagementEndpointLoggingPayload, ProxyException, SpanAttributes
@@ -1047,6 +1048,15 @@ class TestOpenTelemetrySemconvStability(unittest.TestCase):
         h = self._make(env="gen_ai_latest_experimental")
         kwargs = {"model": "claude-sonnet-4-5", "call_type": "unknown"}
         self.assertEqual(h._get_span_name(kwargs), "chat claude-sonnet-4-5")
+
+    def test_passthrough_operation_names_the_span(self) -> None:
+        h: Final = self._make(env="gen_ai_latest_experimental")
+        kwargs: Final = {
+            "model": "unknown",
+            "call_type": "pass_through_endpoint",
+            PASSTHROUGH_OPERATION_KEY: GenAIOperation.RETRIEVAL,
+        }
+        self.assertEqual(h._get_span_name(kwargs), "retrieval unknown")
 
     def test_generation_name_metadata_overrides_semconv_name(self):
         h = self._make(env="gen_ai_latest_experimental")
