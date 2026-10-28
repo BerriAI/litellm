@@ -8,8 +8,10 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+import respx
 from pydantic import ValidationError
 
+import litellm
 
 from litellm.llms.dashscope.common_utils import DashScopeError
 from litellm.llms.dashscope.rerank.transformation import (
@@ -450,3 +452,35 @@ def test_transform_rerank_response_shape_errors_do_not_echo_the_payload():
         _transform({"results": [["leaked document text"]]})
 
     assert "leaked document text" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("provider", "rerank_env"),
+    [
+        ("dashscope", "DASHSCOPE_API_BASE_RERANK"),
+        ("qwencloud", "QWENCLOUD_API_BASE_RERANK"),
+        ("qwen_ai_platform", "QWEN_AI_PLATFORM_API_BASE_RERANK"),
+    ],
+)
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks",
+        "https://dashscope-intl.aliyuncs.com/compatible-api/v1",
+    ],
+)
+def test_rerank_sends_an_explicit_compatible_api_base_over_the_rerank_env(
+    monkeypatch: pytest.MonkeyPatch, provider: str, rerank_env: str, api_base: str
+):
+    monkeypatch.setenv("DASHSCOPE_API_BASE", "https://dashscope-intl.aliyuncs.com")
+    monkeypatch.setenv(rerank_env, DEFAULT_RERANK_URL)
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post("https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks").respond(
+            200, json={"id": "r1", "results": [{"index": 0, "relevance_score": 0.9}], "usage": {"total_tokens": 5}}
+        )
+        response: Final = litellm.rerank(
+            model=f"{provider}/qwen3-rerank", query="q", documents=["a"], api_base=api_base, api_key="sk-test"
+        )
+
+    assert response.results == [{"index": 0, "relevance_score": 0.9}]
