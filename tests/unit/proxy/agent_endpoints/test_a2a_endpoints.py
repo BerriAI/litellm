@@ -1058,6 +1058,7 @@ async def test_subscribe_to_task_calls_pre_call_hook():
     """tasks/resubscribe must run pre_call_hook so guardrails configured on
     the agent are enforced before streaming begins."""
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
 
     agent = _make_agent_mock()
     mock_request = _make_request_mock("tasks/resubscribe", {"id": "task-1"})
@@ -1083,7 +1084,7 @@ async def test_subscribe_to_task_calls_pre_call_hook():
         async for chunk in response:
             yield chunk
 
-    mock_proxy_logging = MagicMock()
+    mock_proxy_logging: Final = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.pre_call_hook = AsyncMock(
         side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
     )

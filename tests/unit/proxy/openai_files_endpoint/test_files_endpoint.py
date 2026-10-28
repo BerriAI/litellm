@@ -722,6 +722,16 @@ def _router_with_executed_batch_model() -> Router:
                 "litellm_params": {"model": "gemini/gemini-2.0-flash"},
                 "model_info": {"id": "gemini-2.0-flash-id"},
             },
+            {
+                "model_name": "vertex-batch-drop",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "drop_params": True},
+                "model_info": {"id": "vertex-batch-drop-id"},
+            },
+            {
+                "model_name": "vertex-batch-keep",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "drop_params": False},
+                "model_info": {"id": "vertex-batch-keep-id"},
+            },
         ]
     )
 
@@ -937,6 +947,39 @@ def test_batch_upload_for_a_provider_model_still_goes_to_the_provider(batch_uplo
     stored.assert_not_awaited()
     provider_upload.assert_awaited_once()
     assert provider_upload.call_args.kwargs["custom_llm_provider"] == "gemini"
+
+
+@pytest.mark.parametrize(
+    "model, expected_drop_params",
+    [("vertex-batch-drop", True), ("vertex-batch-keep", False)],
+)
+def test_batch_upload_for_a_provider_model_carries_the_deployment_drop_params(
+    batch_upload_seams, model: str, expected_drop_params: bool
+):
+    _, provider_upload, _ = batch_upload_seams
+
+    response = _upload_batch_file({"x-litellm-model": model}, {})
+
+    assert response.status_code == 200, response.text
+    assert provider_upload.call_args.kwargs["drop_params"] is expected_drop_params
+
+
+def test_batch_upload_for_a_provider_model_without_deployment_drop_params_sends_no_drop_params(batch_upload_seams):
+    _, provider_upload, _ = batch_upload_seams
+
+    response = _upload_batch_file({"x-litellm-model": "gemini-2.0-flash"}, {})
+
+    assert response.status_code == 200, response.text
+    assert "drop_params" not in provider_upload.call_args.kwargs
+
+
+def test_batch_upload_keeps_the_callers_drop_params_over_the_deployment(batch_upload_seams):
+    _, provider_upload, _ = batch_upload_seams
+
+    response = _upload_batch_file({"x-litellm-model": "vertex-batch-keep", "user-agent": "claude-cli/2.1.0"}, {})
+
+    assert response.status_code == 200, response.text
+    assert provider_upload.call_args.kwargs["drop_params"] is True
 
 
 @pytest.mark.skip(reason="mock respx fails on ci/cd - unclear why")
