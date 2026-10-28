@@ -512,10 +512,53 @@ def test_other_prioritized_endpoints_are_served_once_and_billed(
     marker: Final = new_marker()
     answer: Final = call(gateway, endpoint, model, marker)
     identity: Final = assert_served(answer, marker)
-    if endpoint == "queue":
+    if endpoint in ("queue", "queue-stream"):
         assert answer.headers.get("x-litellm-priority") == "1", answer.headers
     assert_once(received_markers(wire), (marker,))
     spend_row_lands(identity)
+
+
+@pytest.mark.parametrize("field", ({}, {"priority": "high", "drop_params": True}), ids=("missing", "dropped"))
+def test_queue_route_refuses_a_request_it_cannot_queue_before_the_upstream(
+    gateway: Gateway, rig_model: tuple[str, Wire], field: Mapping[str, JsonValue]
+) -> None:
+    model, wire = rig_model
+    marker: Final = new_marker()
+    answer: Final = post(gateway, "/queue/chat/completions", chat_body(model, marker, **field))
+    assert answer.status == 400, (answer.status, answer.text)
+    error: Final = JSON_OBJECT.validate_json(answer.text)["error"]
+    assert isinstance(error, dict), answer.text
+    assert (error["type"], error["param"]) == ("invalid_request_error", "priority"), answer.text
+    assert_never(received_markers(wire), (marker,))
+
+
+def anthropic_error(status: int) -> Reply:
+    body: Final = {"type": "error", "error": {"type": "invalid_request_error", "message": f"scripted {status}"}}
+    return Reply(status=status, body=json.dumps(body).encode())
+
+
+@pytest.mark.parametrize(
+    ("status", "provider_model", "base_path", "respond"),
+    (
+        (400, "openai/gpt-4o-mini", "/v1", answering_model_discovery(lambda _: openai_error(400))),
+        (402, "anthropic/claude-sonnet-5-5", "", lambda _: anthropic_error(402)),
+    ),
+    ids=("openai-400", "anthropic-402"),
+)
+def test_queue_route_answers_a_provider_bad_request_with_its_own_status(
+    gateway: Gateway, status: int, provider_model: str, base_path: str, respond: Callable[[Request], Reply]
+) -> None:
+    marker: Final = new_marker()
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=provider_model, api_base=wire.url + base_path)
+        answer: Final = post(gateway, "/queue/chat/completions", chat_body(model, marker, priority=1))
+        assert marker in received_markers(wire)
+    assert answer.status == status, (answer.status, answer.text)
+    error: Final = JSON_OBJECT.validate_json(answer.text)["error"]
+    assert isinstance(error, dict), answer.text
+    assert error["type"] == "invalid_request_error", answer.text
+    assert f"scripted {status}" in str(error["message"]), answer.text
+    assert "Authentication Error" not in str(error["message"]), answer.text
 
 
 def upstream_body_for(wire: Wire, marker: str) -> dict[str, JsonValue]:
@@ -749,6 +792,19 @@ def test_waiter_proceeds_once_the_entry_ahead_is_cleared(pair: Pair) -> None:
         write_queue(pair.cache, group, [entry for entry in entries if entry_priority(entry) == 2])
         assert_refused_before_the_router_timeout(waiter.result(timeout=30))
     assert_drained(pair.cache, group)
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_request_pinned_to_a_deployment_id_is_served_ahead_of_an_earlier_queue_entry(pair: Pair) -> None:
+    deployment: Final = f"{PAIR_GROUPS[0]}-deployment"
+    write_queue(pair.cache, deployment, [GHOST_ENTRY])
+    marker: Final = new_marker()
+    answer: Final = post(pair.second, "/v1/chat/completions", chat_body(deployment, marker, priority=2))
+    assert_served(answer, marker)
+    assert_prioritized(answer)
+    assert answer.seconds < PROMPT_SECONDS, answer.seconds
+    assert queue_entries(pair.cache, deployment) == [GHOST_ENTRY]
+    assert_once(received_markers(pair.wire), (marker,))
 
 
 def pinned_connection(gateway: Gateway) -> http.client.HTTPConnection:
@@ -1313,8 +1369,7 @@ def test_queue_route_without_priority_takes_the_default(defaulted: Defaulted, en
     marker: Final = new_marker()
     answer: Final = call(defaulted.pair.first, endpoint, group, marker, priority=None)
     assert_served(answer, marker)
-    if endpoint == "queue":
-        assert answer.headers.get("x-litellm-priority") == str(DEFAULT_PRIORITY), answer.headers
+    assert answer.headers.get("x-litellm-priority") == str(DEFAULT_PRIORITY), answer.headers
     assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
 
 
