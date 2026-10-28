@@ -2626,12 +2626,12 @@ def test_served_version_falls_back_to_header_when_unconfigured():
     assert _served_version(_agent(None), _request_with_a2a_header(None)) == "0.3"
 
 
-def _sse_agent_handler(upstream_response: httpx.Response):
-    mock_async_client = MagicMock()
+def _sse_agent_handler(upstream_response: httpx.Response) -> MagicMock:
+    mock_async_client: Final = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
     mock_async_client.send = AsyncMock(return_value=upstream_response)
 
-    mock_handler = MagicMock()
+    mock_handler: Final = MagicMock()
     mock_handler.client = mock_async_client
     return mock_handler
 

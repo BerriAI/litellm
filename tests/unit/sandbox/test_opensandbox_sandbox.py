@@ -32,7 +32,7 @@ def _line_stream(lines: list[str]) -> httpx.Response:
 
 
 class FakeResponse:
-    def __init__(self, *, json_data=None, status_code=200):
+    def __init__(self, *, json_data: object = None, status_code: int = 200) -> None:
         self._json = json_data
         self.status_code = status_code
 
