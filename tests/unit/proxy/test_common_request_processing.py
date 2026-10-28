@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import copy
 import datetime
 import json
@@ -4064,6 +4065,72 @@ class TestHasAttributeErrorInChain:
         exc_a.__context__ = exc_b
         exc_b.__context__ = exc_a  # circular
         assert _has_attribute_error_in_chain(exc_a) is False
+
+
+_COMPACTION_ITEM: Final = {
+    "type": "compaction",
+    "encrypted_content": json.dumps({"type": "compaction", "content": "the cat is named Biscuit"}),
+}
+_HISTORY_BEFORE_COMPACTION: Final = (
+    {"role": "user", "content": "a long turn " * 200},
+    {"role": "assistant", "content": "a long reply " * 200},
+)
+_TURN_AFTER_COMPACTION: Final = {"role": "user", "content": "what is the cat's name?"}
+
+
+class TestHandleLLMApiExceptionPricesWhatTheServerDispatched:
+    async def _failed_prompt_tokens(
+        self,
+        route_type: Literal["acompletion", "aresponses"],
+        logged_call_type: str,
+        request_input: list[dict[str, str]],
+    ) -> int:
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4o", "input": request_input})
+        cursor_caller: Final = ProxyUserAPIKeyAuth(request_route="/cursor/chat/completions")
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.headers = {}
+        proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alert_types = []
+        _, logging_obj = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=cursor_caller,
+            proxy_logging_obj=proxy_logging,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type=route_type,
+        )
+        logging_obj.model_call_details.update(
+            first_api_call_start_time=datetime.datetime.now(),
+            messages=request_input,
+            call_type=logged_call_type,
+        )
+        with pytest.raises(ProxyException):
+            await processing_obj.handle_llm_api_exception(
+                e=Exception("boom"),
+                user_api_key_dict=cursor_caller,
+                proxy_logging_obj=proxy_logging,
+            )
+        return processing_obj.data["combined_usage_object"].prompt_tokens
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "route_type, logged_call_type, trims_at_the_compaction",
+        [("aresponses", "aresponses", True), ("acompletion", "responses", False)],
+    )
+    async def test_a_failed_call_counts_from_the_newest_compaction_only_when_dispatched_as_responses(
+        self,
+        route_type: Literal["acompletion", "aresponses"],
+        logged_call_type: str,
+        trims_at_the_compaction: bool,
+    ) -> None:
+        async def prompt_tokens(request_input: list[dict[str, str]]) -> int:
+            return await self._failed_prompt_tokens(route_type, logged_call_type, request_input)
+
+        resent: Final = await prompt_tokens([*_HISTORY_BEFORE_COMPACTION, _COMPACTION_ITEM, _TURN_AFTER_COMPACTION])
+        dispatched_after_trim: Final = await prompt_tokens([_COMPACTION_ITEM, _TURN_AFTER_COMPACTION])
+
+        assert (resent == dispatched_after_trim) is trims_at_the_compaction
+        assert resent >= dispatched_after_trim
 
 
 @pytest.mark.asyncio
@@ -8574,10 +8641,10 @@ class TestStreamingClientDisconnectBilling:
         through the translate_completion_output_params_streaming result to the
         inner chat stream's collected chunks or a disconnect bills nothing.
         """
-        from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
+        from litellm.llms.anthropic.messages.adapters.streaming_iterator import (
             AnthropicSSEStream,
         )
-        from litellm.llms.anthropic.pass_through.adapters.transformation import (
+        from litellm.llms.anthropic.messages.adapters.transformation import (
             AnthropicAdapter,
         )
         from litellm.router import FallbackAwareAnthropicMessagesStream
@@ -9114,7 +9181,7 @@ def _apply_stream_usage_tracking(
 
     @pytest.mark.asyncio
     async def test_disconnect_bills_partial_default_route_messages_stream_through_the_responses_adapter(self):
-        from litellm.llms.anthropic.pass_through.responses_adapters.streaming_iterator import (
+        from litellm.llms.anthropic.messages.responses_adapters.streaming_iterator import (
             AnthropicResponsesStreamWrapper,
         )
         from litellm.router import FallbackAwareAnthropicMessagesStream
@@ -10109,6 +10176,32 @@ class TestInjectCostIntoUsageDict:
 
 
 class TestProcessChunkWithCostInjection:
+    @pytest.mark.parametrize("model", ["claude-opus-5-5", "vertex_ai/claude-opus-5-5"])
+    @pytest.mark.parametrize("search_requests", [None, "null", 0, 1, 2])
+    def test_claude_search_stream_cost_matches_complete_usage(
+        self, monkeypatch: pytest.MonkeyPatch, model: str, search_requests: int | Literal["null"] | None
+    ) -> None:
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        usage: Final = litellm.Usage(
+            prompt_tokens=10760,
+            completion_tokens=399,
+            total_tokens=11159,
+            server_tool_use={"web_search_requests": search_requests} if isinstance(search_requests, int) else None,
+        )
+        wire_usage: Final = usage.model_dump() | ({"server_tool_use": None} if search_requests == "null" else {})
+        event: Final = {"object": "chat.completion.chunk", "choices": [], "usage": wire_usage}
+        chunk: Final = f"data: {json.dumps(event)}\n\n".encode()
+
+        result: Final = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(chunk, model)
+
+        assert isinstance(result, bytes)
+        payload: Final = json.loads(result.decode().removeprefix("data: "))
+        expected_cost: Final = litellm.completion_cost(
+            model=model, completion_response=litellm.ModelResponse(usage=usage)
+        )
+        assert payload["usage"]["cost"] == pytest.approx(expected_cost)
+        assert "cost" not in event["usage"]
+
     def test_complete_usage_frame_chunk_is_injected(self, monkeypatch):
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
         chunk = (
@@ -10817,6 +10910,7 @@ class TestDetachedStreamFailureHook:
                 "user_api_key_dict": user_api_key_dict,
                 "original_exception": failure,
                 "request_data": processing_obj.data,
+                "dispatched_call_type": "anthropic_messages",
             }
         ]
 
@@ -11830,7 +11924,7 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
 
     def test_recomputed_cost_prices_the_reasoning_tokens_of_the_bridged_chat_completion(self):
         from litellm.types.utils import CompletionTokensDetailsWrapper, ModelResponse, Usage
-        from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+        from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 
         model = "dashscope/qwen-turbo"
         pricing = litellm.get_model_info(model)
@@ -11960,3 +12054,140 @@ class TestResponseCostFromLoggingObjForCacheHits:
         )
 
         assert cost == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["messages", "openai"])
+@pytest.mark.parametrize("keepalive", ["disabled", "fast", "pinged"])
+async def test_completed_synthetic_stream_reuses_capacity_without_freeing_another_request(
+    surface: Literal["messages", "openai"],
+    keepalive: Literal["disabled", "fast", "pinged"],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
+        FakeAnthropicMessagesStreamIterator,
+    )
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.sse_keepalive import SSE_COMMENT_PING_BYTES
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.utils import InternalUsageCache, hash_token
+    from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+
+    def clock() -> datetime.datetime:
+        return datetime.datetime(2026, 1, 1)
+
+    cache: Final = DualCache()
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(cache), time_provider=clock
+    )
+    logger: Final = ProxyLogging(user_api_key_cache=cache)
+    logger.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    auth: Final = ProxyUserAPIKeyAuth(api_key=hash_token("sk-synthetic-stream"), max_parallel_requests=2)
+    counter: Final = f"{{api_key:{auth.api_key}}}:max_parallel_requests"
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", logger)
+
+    async def admit(call_id: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={"model": "test-model", "litellm_call_id": call_id},
+            call_type="anthropic_messages",
+        )
+
+    async def request(call_id: str) -> None:
+        upstream_answers: Final = asyncio.Event()
+        if keepalive != "pinged":
+            upstream_answers.set()
+
+        async def produce() -> StreamingResponse:
+            await admit(call_id)
+            with pytest.raises(HTTPException) as rejected:
+                await contextvars.Context().run(asyncio.create_task, admit("overlapping"))
+            assert rejected.value.status_code == 429
+            await upstream_answers.wait()
+            body: Final = AnthropicMessagesResponse(
+                id=call_id,
+                type="message",
+                role="assistant",
+                model="test-model",
+                content=[{"type": "text", "text": "Search completed"}],
+                stop_reason="end_turn",
+                stop_sequence=None,
+                usage={"input_tokens": 0, "output_tokens": 0},
+            )
+            source: Final = FakeAnthropicMessagesStreamIterator(body)
+            data: Final = {"model": "test-model", "litellm_call_id": call_id}
+            stream: Final = (
+                ProxyBaseLLMRequestProcessing.async_sse_data_generator(source, auth, data, logger)
+                if surface == "messages"
+                else proxy_server.async_data_generator(source, auth, data)
+            )
+            return StreamingResponse(stream)
+
+        response: Final = await open_sse_before_first_byte(
+            produce(), None if keepalive == "disabled" else 0.001 if keepalive == "pinged" else 60.0
+        )
+        first: Final = await anext(response.body_iterator)
+        if keepalive == "pinged":
+            assert first == SSE_COMMENT_PING_BYTES
+            upstream_answers.set()
+        frames: Final = (first, *tuple([frame async for frame in response.body_iterator]))
+        wire: Final = b"".join(frame.encode() if isinstance(frame, str) else frame for frame in frames)
+        assert b'"type": "message_stop"' in wire
+
+    await contextvars.Context().run(asyncio.create_task, admit("still-streaming"))
+    for index in range(4):
+        await contextvars.Context().run(asyncio.create_task, request(f"completed-{index}"))
+        occupied: Final = await cache.async_get_cache(counter)
+        assert isinstance(occupied, dict) and len(occupied) == 1, occupied
+
+
+@pytest.mark.asyncio
+async def test_completed_stream_cleanup_does_not_release_an_unowned_legacy_slot() -> None:
+    from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
+    from litellm.proxy.utils import InternalUsageCache, hash_token
+
+    def clock() -> datetime.datetime:
+        return datetime.datetime(2026, 1, 1)
+
+    cache: Final = DualCache()
+    limiter: Final = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache), clock=clock)
+    logger: Final = ProxyLogging(user_api_key_cache=cache)
+    logger.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    auth: Final = ProxyUserAPIKeyAuth(api_key=hash_token("sk-legacy-stream"), max_parallel_requests=1)
+    await limiter.async_pre_call_hook(auth, cache, {}, "acompletion")
+
+    await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
+        request=None,
+        request_data={},
+        response=None,
+        stream_completed=True,
+        user_api_key_dict=auth,
+        proxy_logging_obj=logger,
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await limiter.async_pre_call_hook(auth, cache, {}, "acompletion")
+    assert rejected.value.status_code == 429
+
+
+def test_maybe_get_model_id_reads_the_chat_metadata_the_router_updated_in_place():
+    processing_obj: Final = ProxyBaseLLMRequestProcessing(data={"metadata": {"model_info": {"id": "declared-text"}}})
+
+    assert processing_obj.maybe_get_model_id(None) == "declared-text"
+
+
+def test_maybe_get_model_id_prefers_litellm_metadata_over_caller_metadata_without_a_deployment():
+    processing_obj: Final = ProxyBaseLLMRequestProcessing(
+        data={
+            "metadata": {"trace_id": "t-1"},
+            "litellm_metadata": {"model_info": {"id": "vision"}},
+        }
+    )
+
+    assert processing_obj.maybe_get_model_id(None) == "vision"
+
+
+def test_maybe_get_model_id_returns_none_before_the_router_picked_a_deployment():
+    assert ProxyBaseLLMRequestProcessing(data={"metadata": {}}).maybe_get_model_id(None) is None
