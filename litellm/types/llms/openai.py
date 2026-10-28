@@ -703,6 +703,19 @@ class ChatCompletionRedactedThinkingBlock(TypedDict, total=False):
     index: ReadOnly[int]
 
 
+class OpenAIChatCompletionRefusalObject(TypedDict):
+    """Assistant content part holding the refusal text of a turn the model declined."""
+
+    type: Literal["refusal"]
+    refusal: str
+
+
+class ChatCompletionRefusalObject(
+    OpenAIChatCompletionRefusalObject, total=False
+):  # litellm wrapper on top of openai object for handling cached content
+    cache_control: ChatCompletionCachedContent
+
+
 class ChatCompletionReasoningSummaryTextBlock(TypedDict, total=False):
     type: Required[Literal["summary_text"]]
     text: str
@@ -869,6 +882,7 @@ OpenAIMessageContentListBlock = (
     | ChatCompletionDocumentObject
     | ChatCompletionVideoObject
     | ChatCompletionFileObject
+    | ChatCompletionRefusalObject
 )
 
 OpenAIMessageContent = str | Iterable[OpenAIMessageContentListBlock]

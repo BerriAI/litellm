@@ -48156,6 +48156,29 @@
           "title": "ChatCompletionRedactedThinkingBlock",
           "type": "object"
         },
+        "ChatCompletionRefusalObject": {
+          "description": "Assistant content part holding the refusal text of a turn the model declined.",
+          "properties": {
+            "cache_control": {
+              "$ref": "#/components/schemas/ChatCompletionCachedContent"
+            },
+            "refusal": {
+              "title": "Refusal",
+              "type": "string"
+            },
+            "type": {
+              "const": "refusal",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "refusal"
+          ],
+          "title": "ChatCompletionRefusalObject",
+          "type": "object"
+        },
         "ChatCompletionSystemMessage": {
           "properties": {
             "cache_control": {
@@ -48501,6 +48524,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/ChatCompletionFileObject"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ChatCompletionRefusalObject"
                       }
                     ]
                   },

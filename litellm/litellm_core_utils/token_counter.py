@@ -61,6 +61,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionDocumentObject,
     ChatCompletionRedactedThinkingBlock,
+    ChatCompletionRefusalObject,
     ChatCompletionThinkingBlock,
     ChatCompletionToolParam,
     OpenAIMessageContentListBlock,
@@ -1039,6 +1040,7 @@ def _count_content_list(
         OpenAIMessageContentListBlock
         | ChatCompletionThinkingBlock
         | ChatCompletionRedactedThinkingBlock
+        | ChatCompletionRefusalObject
         | AnthropicMessagesTextParam
         | AnthropicMessagesImageParam
         | AnthropicMessagesDocumentParam
@@ -1053,8 +1055,11 @@ def _count_content_list(
         for c in content_list:
             if isinstance(c, str):
                 num_tokens += count_function(c)
-            elif c["type"] == "text":
-                num_tokens += count_function(str(c.get("text", "")))
+            elif c["type"] in ("text", "refusal"):
+                # `refusal` is OpenAI's content part for a turn the model declined.
+                # It is plain text, so it counts like a text part - without this,
+                # replaying a refused assistant message in the history blows up here.
+                num_tokens += count_function(str(c.get("text") or c.get("refusal") or ""))
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
@@ -1107,7 +1112,7 @@ def _count_content_list(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"tool_reference, search_result)."
+                    f"tool_reference, search_result, refusal)."
                 )
         return num_tokens
     except Exception as e:
