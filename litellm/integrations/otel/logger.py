@@ -218,7 +218,9 @@ class OpenTelemetryV2(CustomLogger):
             mappers=resolve_mappers(self.config.mapper_names),
             event_recorder=self._init_events(logger_provider),
         )
-        self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
+        self._tenant_tracers = TenantTracerCache(
+            self.config, callback_name, LITELLM_TRACER_NAME, console_default=console_default
+        )
         self._open_llm_calls: OrderedDict[str, _LLMCallSpan] = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
 

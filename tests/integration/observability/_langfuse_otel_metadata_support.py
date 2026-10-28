@@ -269,7 +269,11 @@ def langfuse_rig(
             },
             config=path,
             workers=2,
-            remove_environment=remove_environment,
+            remove_environment=(
+                remove_environment
+                if operator_keys
+                else (*remove_environment, "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
+            ),
         ) as owned:
             yield LangfuseRig(owned.gateway, provider, collector, owned)
 

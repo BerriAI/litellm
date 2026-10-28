@@ -4604,9 +4604,9 @@ class TestConsolePlaceholder:
 
         assert self._received(capture, build_tracer_provider(langfuse_preset()))[None] == ("chat gpt-4",)
 
-    def test_the_otel_callback_prints_when_nothing_else_is_configured(
-        self, monkeypatch: pytest.MonkeyPatch, capture: "_ExporterCapture"
-    ) -> None:
+    @pytest.fixture
+    def otel_callback(self, monkeypatch: pytest.MonkeyPatch, capture: "_ExporterCapture") -> OpenTelemetryV2:
+        """The plain ``otel`` callback with nothing else configured, built the way the proxy builds it."""
         from litellm.litellm_core_utils import litellm_logging as logging_module
 
         self._no_otel_env(monkeypatch)
@@ -4614,15 +4614,30 @@ class TestConsolePlaceholder:
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
         monkeypatch.setattr(logging_module, "_in_memory_loggers", [])
         is_otel_v2_enabled.cache_clear()
-        try:
-            otel_cb: Final = logging_module.build_custom_logger_compatible_class(
-                "otel", internal_usage_cache=None, llm_router=None
-            )
+        built: Final = logging_module.build_custom_logger_compatible_class(
+            "otel", internal_usage_cache=None, llm_router=None
+        )
+        assert isinstance(built, OpenTelemetryV2)
+        return built
 
-            assert isinstance(otel_cb, OpenTelemetryV2)
-            assert self._received(capture, otel_cb.tracer_provider) == {None: ("chat gpt-4",)}
-        finally:
-            is_otel_v2_enabled.cache_clear()
+    def test_the_otel_callback_prints_when_nothing_else_is_configured(
+        self, otel_callback: OpenTelemetryV2, capture: "_ExporterCapture"
+    ) -> None:
+        assert self._received(capture, otel_callback.tracer_provider) == {None: ("chat gpt-4",)}
+
+    def test_the_otel_callback_prints_a_call_for_a_key_with_its_own_service_name(
+        self, otel_callback: OpenTelemetryV2, capture: "_ExporterCapture"
+    ) -> None:
+        """A key or team ``otel_service_name`` moves the call onto a second provider built for that name."""
+        kwargs: Final = {
+            **_closed_chat_call_kwargs(),
+            "litellm_params": {"metadata": {"user_api_key_auth_metadata": {"otel_service_name": "payments-gateway"}}},
+        }
+
+        otel_callback.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+        asyncio.run(otel_callback.async_log_success_event(kwargs, None, None, None))
+
+        assert capture.received() == {None: ("chat gpt-4o",)}
 
     @pytest.mark.parametrize(
         ("env", "expected"),
