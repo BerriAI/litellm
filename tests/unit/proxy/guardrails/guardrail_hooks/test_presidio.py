@@ -15,27 +15,25 @@ from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
 import aiohttp
+import pytest
 from aiohttp import web
 from aiohttp.client_proto import ResponseHandler
 from aiohttp.test_utils import TestServer
-import pytest
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
-
 
 import litellm
 from litellm import mock_completion
 from litellm.caching.caching import DualCache
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-    PresidioPerRequestConfig,
     OPTIONAL_PresidioPIIMasking,
+    PresidioPerRequestConfig,
 )
-from litellm.exceptions import GuardrailRaisedException
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import PresidioAnalyzeRequest, PresidioAnalyzeResponseItem
 from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
-from litellm.exceptions import BlockedPiiEntityError
 
 
 def _make_mock_session_iterator(json_response, status=200, content_type="application/json", text_response=""):
@@ -4434,9 +4432,9 @@ async def test_pii_masking_replays_a_byte_identical_prefix_across_turns(mock_use
 async def test_initialized_presidio_scans_selected_surface(surface: str, action: PiiAction, has_tokens: bool) -> None:
     from mcp.types import CallToolResult, TextContent
 
-    from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import MCPGuardrailTranslationHandler
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
     from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.proxy.mcp_server.guardrail_translation.handler import MCPGuardrailTranslationHandler
 
     params: Final = LitellmParams(
         guardrail="presidio",

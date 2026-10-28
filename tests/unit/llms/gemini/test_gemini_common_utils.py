@@ -355,6 +355,25 @@ class TestGeminiModelInfo:
         assert result == expected
 
 
+@pytest.mark.parametrize(
+    ("body", "error", "message"),
+    [
+        ([], TypeError, "list indices must be integers or slices, not str"),
+        ({"models": None}, TypeError, "'NoneType' object is not iterable"),
+        ({"models": [{"name": 1}]}, AttributeError, "'int' object has no attribute 'replace'"),
+    ],
+)
+def test_get_models_malformed_listing_raises_the_error_of_the_failing_lookup(
+    body: JsonValue, error: type[Exception], message: str, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.get("https://models.test/v1beta/models").respond(200, json=body)
+
+    with pytest.raises(error, match=message) as raised:
+        GeminiModelInfo().get_models(api_key="test-key", api_base="https://models.test")
+
+    assert raised.type is error
+
+
 class TestGoogleAIStudioTokenCounter:
     """Test suite for GoogleAIStudioTokenCounter class"""
 
