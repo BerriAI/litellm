@@ -122,25 +122,21 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         returned_response: Final = ModelResponse(**response_json)
         set_provider_response_headers_in_hidden_params(returned_response, response.headers)
 
-        src_hidden: Final[dict[str, object]] = (
-            model_response.hidden_params
-        )  # mutable-ok: ModelResponse.hidden_params is a mutable dict  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # ModelResponse.hidden_params is untyped dict
-        dst_hidden: Final[dict[str, object]] = (
-            returned_response.hidden_params
-        )  # mutable-ok: ModelResponse.hidden_params is a mutable dict  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # ModelResponse.hidden_params is untyped dict
-        for k, v in src_hidden.items():
-            if k not in dst_hidden:
-                dst_hidden[k] = v
+        sh: Final[dict[str, object]] = model_response.hidden_params  # mutable-ok: dict  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped
+        dh: Final[dict[str, object]] = returned_response.hidden_params  # mutable-ok: dict  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped
+        for k, v in sh.items():
+            if k not in dh:
+                dh[k] = v
 
         resolved_provider: Final = custom_llm_provider or (
-            src_hidden["custom_llm_provider"]
-            if "custom_llm_provider" in src_hidden and isinstance(src_hidden["custom_llm_provider"], str)
+            sh["custom_llm_provider"]
+            if "custom_llm_provider" in sh and isinstance(sh["custom_llm_provider"], str)
             else None
         )
         if custom_llm_provider is not None:
             returned_response.model = custom_llm_provider + "/" + (returned_response.model or "")
         elif resolved_provider is not None:
-            dst_hidden["custom_llm_provider"] = resolved_provider
+            dh["custom_llm_provider"] = resolved_provider
             if (
                 returned_response.model
                 and "/" in returned_response.model
@@ -167,14 +163,12 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         if "custom_llm_provider" in litellm_params and isinstance(
-            litellm_params["custom_llm_provider"],  # pyright: ignore[reportUnknownArgumentType]  # litellm_params is untyped dict
+            litellm_params["custom_llm_provider"],  # pyright: ignore[reportUnknownArgumentType]  # untyped
             str,
         ):
-            model_hidden: Final[dict[str, object]] = (
-                model_response.hidden_params
-            )  # mutable-ok: ModelResponse.hidden_params is a mutable dict  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # ModelResponse.hidden_params is untyped dict
-            if "custom_llm_provider" not in model_hidden:
-                model_hidden["custom_llm_provider"] = litellm_params["custom_llm_provider"]  # pyright: ignore[reportUnknownArgumentType]  # litellm_params is untyped dict
+            mh: Final[dict[str, object]] = model_response.hidden_params  # mutable-ok: dict  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped
+            if "custom_llm_provider" not in mh:
+                mh["custom_llm_provider"] = litellm_params["custom_llm_provider"]  # pyright: ignore[reportUnknownArgumentType]  # untyped
         return OpenAILikeChatConfig._transform_response(
             model=model,
             response=raw_response,
