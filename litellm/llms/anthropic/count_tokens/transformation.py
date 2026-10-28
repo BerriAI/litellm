@@ -172,7 +172,6 @@ _OPENAI_RESPONSES_BUILT_IN_TOOL_TYPES: Final = frozenset(
         "local_shell",
         "mcp",
         "shell",
-        "tool_search",
         "web_search",
         "web_search_2025_08_26",
         "web_search_preview",
@@ -181,16 +180,39 @@ _OPENAI_RESPONSES_BUILT_IN_TOOL_TYPES: Final = frozenset(
 )
 
 
+_CHAT_INFERENCE_TRANSLATED_TOOL_TYPES: Final = frozenset(("namespace", "tool_search"))
+
+
 def _is_responses_built_in_tool(tool: Mapping[str, object]) -> bool:
     tool_type: Final = tool.get("type")
     return isinstance(tool_type, str) and tool_type in _OPENAI_RESPONSES_BUILT_IN_TOOL_TYPES
+
+
+def _is_chat_inference_translated_tool(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = tool.get("type")
+    return isinstance(tool_type, str) and tool_type in _CHAT_INFERENCE_TRANSLATED_TOOL_TYPES
+
+
+def _needs_tool_translation(tool: Mapping[str, object]) -> bool:
+    return _is_chat_tool(tool) or _is_chat_inference_translated_tool(tool) or _is_responses_built_in_tool(tool)
 
 
 def _gets_placeholder_name(tool: Mapping[str, object]) -> bool:
     from litellm.llms.anthropic.messages.adapters.transformation import is_provider_native_tool_dict
 
     name: Final = tool.get("name")
-    return not (_is_chat_tool(tool) or is_provider_native_tool_dict(tool) or (isinstance(name, str) and name.strip()))
+    return not (
+        _is_chat_tool(tool)
+        or _is_chat_inference_translated_tool(tool)
+        or is_provider_native_tool_dict(tool)
+        or (isinstance(name, str) and name.strip())
+    )
+
+
+def _chat_tools_for(tool: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    from litellm.litellm_core_utils.prompt_templates.factory import chat_completion_tools_for
+
+    return (tool,) if _is_chat_inference_translated_tool(tool) else chat_completion_tools_for(tool)
 
 
 def _untranslatable_input(
@@ -248,9 +270,7 @@ def _translated_chat_request(
     chat_params: Mapping[str, object],
     translator: _ChatRequestTranslator,
 ) -> _ChatParams:
-    from litellm.litellm_core_utils.prompt_templates.factory import chat_completion_tools_for
-
-    chat_tools: Final = [dict(chat_tool) for chat_tool in chain.from_iterable(map(chat_completion_tools_for, tools))]
+    chat_tools: Final = [dict(chat_tool) for chat_tool in chain.from_iterable(map(_chat_tools_for, tools))]
     openai_params: Final = {name: value for name, value in chat_params.items() if name != "drop_params"}
     mapped_params: Final = {**openai_params, **({"tools": chat_tools} if chat_tools else {})}
     chat_messages: Final = cast(  # cast-ok: chat-shaped request messages, read the way chat inference reads them
@@ -280,9 +300,8 @@ def anthropic_fields_for_chat_tool_use(
     counted_tools: Final = tools or ()
     if (
         not chat_params
-        and not any(map(_is_chat_tool, counted_tools))
+        and not any(map(_needs_tool_translation, counted_tools))
         and not any(map(_needs_chat_translation, messages))
-        and not any(map(_is_responses_built_in_tool, counted_tools))
     ):
         return None
     untranslatable: Final = _untranslatable_input(messages, counted_tools)

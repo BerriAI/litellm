@@ -721,7 +721,6 @@ async def test_counter_rejects_input_chat_translation_would_leave_out_without_ca
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport_clients")
 @_COUNTERS
@@ -736,6 +735,65 @@ async def test_counter_sends_a_tool_with_a_non_string_type_to_anthropic_as_given
 
     assert result is not None
     assert [body.get("tools") for body in bodies] == [[tool]]
+
+
+_CRM_NAMESPACE_TOOL: Final[dict[str, JsonValue]] = {
+    "type": "namespace",
+    "name": "crm",
+    "description": "CRM lookups",
+    "tools": [
+        {
+            "type": "function",
+            "name": "find_owner",
+            "description": "Find the owner of an account",
+            "parameters": {"type": "object", "properties": {"account": {"type": "string"}}, "required": ["account"]},
+        }
+    ],
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize(
+    "tools",
+    (
+        pytest.param([{"type": "tool_search"}], id="tool-search-alone"),
+        pytest.param(
+            [
+                {"type": "tool_search"},
+                {
+                    "type": "function",
+                    "function": {"name": "get_weather", "parameters": _WEATHER_SCHEMA},
+                    "defer_loading": True,
+                },
+            ],
+            id="tool-search-with-deferred-function",
+        ),
+        pytest.param([_CRM_NAMESPACE_TOOL], id="namespace-alone"),
+        pytest.param([_CHAT_WEATHER_TOOL, _CRM_NAMESPACE_TOOL], id="namespace-with-function"),
+    ),
+)
+async def test_counter_sends_the_tools_chat_inference_makes_from_tool_search_and_namespace(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    tools: list[dict[str, JsonValue]],
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [{"role": "user", "content": "Who owns the north region account?"}]
+    config: Final = AnthropicConfig()
+    inference: Final = config.transform_request(
+        model="claude-opus-5-5",
+        messages=deepcopy(messages),
+        optional_params=config.map_openai_params({"tools": deepcopy(tools)}, {}, "claude-opus-5-5", drop_params=False),
+        litellm_params={},
+        headers={},
+    )
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, tools, "openai")
+
+    assert result is not None
+    assert [body.get("tools") for body in bodies] == [inference["tools"]]
+
 
 _ANSWER_SCHEMA: Final[dict[str, JsonValue]] = {
     "type": "object",
