@@ -2365,19 +2365,20 @@ class ProxyBaseLLMRequestProcessing:
         if isinstance(model, str):
             reject_url_valued_destination("model", model)
 
+        body_model: Final[object] = self.data.get("model")  # pyright: ignore[reportUnknownVariableType]  # self.data is an untyped dict body
         resolved_model: Final = resolve_inference_model(
-            self.data.get("model"),
+            body_model,
             general_settings,
             user_model,
             model,
             kind="image_edit" if route_type == "aimage_edit" else "completion",
         )
         self.data["model"] = resolved_model
-        # Auth read the body model (requested_model above). When the endpoint model from
-        # the URL overrides it, the served model was never checked, so authorize the
-        # resolved name here, before any alias rewrite. A request whose model came from
-        # the body was already checked by auth, so it is left alone.
-        if llm_router is not None and isinstance(model, str) and model and model != requested_model:
+        # Auth read the body model. When the endpoint model from the URL overrides it,
+        # the served model was never checked, so authorize the resolved name here, before
+        # any alias rewrite. A request whose model came from the body was already checked
+        # by auth, so it is left alone.
+        if llm_router is not None and isinstance(model, str) and model and model != body_model:
             await can_key_call_requested_models(
                 model=resolved_model, valid_token=user_api_key_dict, llm_router=llm_router
             )
