@@ -657,8 +657,8 @@ class BaseDecisionsConfig(ABC):
         raw_response: httpx.Response,
         request: DecisionsIRRequest,
     ) -> DecisionsIRResponse:
-        payload: Final[object] = _PAYLOAD_ADAPTER.validate_json(raw_response.content)
         try:
+            payload: Final[object] = _PAYLOAD_ADAPTER.validate_json(raw_response.content)
             return self.parse_response(payload, request)
         except ValidationError as error:
             raise DecisionsResponseValidationError(
