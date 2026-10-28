@@ -1,9 +1,9 @@
 import asyncio
 import contextvars
 import importlib
-from collections.abc import Coroutine, Mapping
+from collections.abc import Collection, Coroutine, Mapping
 from functools import partial
-from typing import TYPE_CHECKING, Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -61,6 +61,7 @@ from litellm.types.utils import (
     ProviderRoutingHints,
 )
 from litellm.utils import (
+    EXTRA_BODY_ROUTING_KEYS,
     ImageResponse,
     ProviderConfigManager,
     get_llm_provider,
@@ -466,7 +467,7 @@ def image_generation(
             litellm.LlmProviders.QWENCLOUD,
             litellm.LlmProviders.QWEN_AI_PLATFORM,
             litellm.LlmProviders.EDENAI,
-        ):
+        ) or (custom_llm_provider == litellm.LlmProviders.TENCENT and image_generation_config is not None):
             if image_generation_config is None:
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
 
@@ -807,6 +808,32 @@ def image_variation(
     return response
 
 
+_IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
+_DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
+_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
+
+
+def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
+    try:
+        return _ADDITIONAL_DROP_PARAMS.validate_python(additional_drop_params)
+    except ValidationError:
+        return ()
+
+
+def _tokenhub_passthrough_edit_params(
+    non_default_params: Mapping[str, object],
+    extra_body: Mapping[str, object] | None,
+    mapped_params: Collection[str],
+    additional_drop_params: Collection[str] | None,
+) -> Mapping[str, object]:
+    dropped: Final = frozenset(additional_drop_params or ())
+    unmapped_excluded: Final = _DROP_PARAM_KWARGS | _IMAGE_EDIT_OPENAI_PARAMS | frozenset(mapped_params) | dropped
+    return {
+        **{key: value for key, value in non_default_params.items() if key not in unmapped_excluded},
+        **{key: value for key, value in (extra_body or {}).items() if key not in dropped | EXTRA_BODY_ROUTING_KEYS},
+    }
+
+
 @client
 def image_edit(
     image: FileTypes | list[FileTypes] | None = None,
@@ -935,22 +962,24 @@ def image_edit(
             raise ValueError(f"image edit is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
+        provider_supported_params: Final[frozenset[str]] = frozenset(
+            image_edit_provider_config.get_supported_openai_params(model)
+        )
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: Final[ImageEditOptionalRequestParams] = (
             _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
                 local_vars,
-                provider_supported_params=frozenset(
-                    image_edit_provider_config.get_supported_openai_params(model)
-                ).intersection(non_default_params),
+                provider_supported_params=provider_supported_params.intersection(non_default_params),
             )
         )
         # Get optional parameters for the responses API
+        additional_drop_params: Final = _listed_drop_params(kwargs.get("additional_drop_params"))
         image_edit_request_params: Final[dict] = _get_ImageEditRequestUtils().get_optional_params_image_edit(
             model=model,
             image_edit_provider_config=image_edit_provider_config,
             image_edit_optional_params=image_edit_optional_params,
             drop_params=kwargs.get("drop_params"),
-            additional_drop_params=kwargs.get("additional_drop_params"),
+            additional_drop_params=additional_drop_params,
         )
 
         if image_edit_provider_config.use_multipart_form_data() and (
@@ -1039,7 +1068,19 @@ def image_edit(
             image=images,
             prompt=prompt,
             image_edit_provider_config=image_edit_provider_config,
-            image_edit_optional_request_params=image_edit_request_params,
+            image_edit_optional_request_params={
+                **image_edit_request_params,
+                **(
+                    _tokenhub_passthrough_edit_params(
+                        non_default_params,
+                        extra_body if isinstance(extra_body, dict) else None,
+                        provider_supported_params,
+                        additional_drop_params,
+                    )
+                    if custom_llm_provider == litellm.LlmProviders.TENCENT.value
+                    else {}
+                ),
+            },
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
