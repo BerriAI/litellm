@@ -140,7 +140,7 @@ def _channel_count(value: object) -> int | None:
 
 def _results_channel_count(frame: Mapping[str, object]) -> int | None:
     match frame.get("channel_index"):
-        case [object(), int() as channels]:
+        case list([object(), object() as channels]):
             return _channel_count(channels)
         case _:
             return None
