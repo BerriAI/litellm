@@ -2,6 +2,7 @@ import base64
 import json
 from typing import Final
 
+import h11
 import pytest
 
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
@@ -130,7 +131,11 @@ class TestGetChatGPTSessionId:
 
     @pytest.mark.parametrize(
         "first, second",
-        [("a\nb", "a\tb"), (json.loads('"conv-\\ud800"'), json.loads('"conv-\\udc00"'))],
+        [
+            ("a\nb", "a\tb"),
+            (json.loads('"conv-\\ud800"'), json.loads('"conv-\\udc00"')),
+            ("conv-123 ", " conv-123"),
+        ],
     )
     def test_header_unsafe_cache_keys_map_to_distinct_stable_header_values(self, first, second):
         first_id: Final = get_chatgpt_session_id({"prompt_cache_key": first})
@@ -139,4 +144,5 @@ class TestGetChatGPTSessionId:
         assert first_id is not None and second_id is not None
         assert first_id == get_chatgpt_session_id({"prompt_cache_key": first})
         assert first_id != second_id
-        assert all(value.isascii() and value.isprintable() for value in (first_id, second_id))
+        for value in (first_id, second_id):
+            h11.Request(method="POST", target="/", headers=[("host", "chatgpt.com"), ("session_id", value)])

@@ -402,7 +402,7 @@ def _prompt_cache_session_id(prompt_cache_key: object) -> str | None:
         return None
     return (
         prompt_cache_key
-        if _safe_header_value(prompt_cache_key) == prompt_cache_key
+        if _safe_header_value(prompt_cache_key.strip()) == prompt_cache_key
         else hashlib.sha256(prompt_cache_key.encode("utf-8", "surrogatepass")).hexdigest()
     )
 
