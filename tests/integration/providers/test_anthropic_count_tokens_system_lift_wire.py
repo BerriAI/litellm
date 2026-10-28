@@ -37,6 +37,7 @@ from integration.providers._count_tokens_system_lift import (
     REMINDER,
     RESPONSES_REQUEST_OPTIONS,
     RESPONSES_TOOL_USE,
+    RESPONSES_TOOLS,
     STRING_CASE,
     TOKEN_COUNTING_BETA,
     TOOLS,
@@ -603,7 +604,24 @@ def _generating(provider: _Provider) -> Callable[[Request], Reply]:
     return respond
 
 
-@pytest.mark.parametrize("request_body", RESPONSES_TOOL_USE.values(), ids=RESPONSES_TOOL_USE.keys())
+_REWRITTEN_TOOL_USE: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyType(
+    {
+        **RESPONSES_TOOL_USE,
+        "file-search": {
+            "input": WEATHER_QUESTION,
+            "tools": [{"type": "file_search", "vector_store_ids": ["vs_audit_weather"]}],
+        },
+        "additional-tools": {
+            "input": [
+                {"role": "user", "content": WEATHER_QUESTION},
+                {"type": "additional_tools", "tools": RESPONSES_TOOLS},
+            ],
+        },
+    }
+)
+
+
+@pytest.mark.parametrize("request_body", _REWRITTEN_TOOL_USE.values(), ids=_REWRITTEN_TOOL_USE.keys())
 def test_responses_input_tokens_counts_what_responses_inference_sends(
     deployment: _Deployment, gateway: Gateway, request_body: dict[str, JsonValue]
 ) -> None:
@@ -640,6 +658,79 @@ def test_responses_input_tokens_counts_the_request_options_responses_inference_s
         assert _payload(response)["input_tokens"] == _COUNT, response.text
         inference, counted = _inference_and_count(peer)
         assert count_request_fields(counted) == inference_count_fields(inference), (counted, inference)
+
+
+def _without_cache_marks(value: JsonValue) -> JsonValue:
+    if isinstance(value, dict):
+        return {key: _without_cache_marks(item) for key, item in value.items() if key != "cache_control"}
+    if isinstance(value, list):
+        return [_without_cache_marks(item) for item in value]
+    return value
+
+
+def test_responses_input_tokens_leaves_out_the_cache_marks_responses_inference_sends(
+    deployment: _Deployment, gateway: Gateway
+) -> None:
+    marked: Final[dict[str, JsonValue]] = {"type": "ephemeral"}
+    request_body: Final[dict[str, JsonValue]] = {
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": f"Weather note {index}.", "cache_control": marked}
+                    for index in range(2)
+                ],
+            },
+            {"role": "user", "content": WEATHER_QUESTION},
+        ],
+        "tools": RESPONSES_TOOLS,
+    }
+    with wire_server(_generating(deployment.provider), port=deployment.port) as peer:
+        generated: Final = gateway.request(
+            "POST", "/v1/responses", {**request_body, "model": deployment.model, "max_output_tokens": 16}
+        )
+        assert generated.status_code == 200, generated.text
+        response: Final = gateway.request(
+            "POST", "/v1/responses/input_tokens", {**request_body, "model": deployment.model}
+        )
+        assert _payload(response)["input_tokens"] == _COUNT, response.text
+        inference, counted = (counted_fields(body) for body in _inference_and_count(peer))
+        assert "cache_control" in json.dumps(inference), inference
+        assert "cache_control" not in json.dumps(counted), counted
+        assert counted == _without_cache_marks(inference), (counted, inference)
+
+
+_UNCOUNTABLE_TOOLS: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyType(
+    {
+        "computer_use_preview": {
+            "type": "computer_use_preview",
+            "display_width": 1024,
+            "display_height": 768,
+            "environment": "browser",
+        },
+        "mcp": {
+            "type": "mcp",
+            "server_label": "docs",
+            "server_url": "http://127.0.0.1:9/sse",
+            "require_approval": "never",
+        },
+    }
+)
+
+
+@pytest.mark.parametrize("tool", _UNCOUNTABLE_TOOLS.values(), ids=_UNCOUNTABLE_TOOLS.keys())
+def test_responses_input_tokens_rejects_a_tool_it_cannot_count_without_calling_the_peer(
+    deployment: _Deployment, gateway: Gateway, tool: dict[str, JsonValue]
+) -> None:
+    with _listening(deployment) as peer:
+        response: Final = gateway.request(
+            "POST",
+            "/v1/responses/input_tokens",
+            {"model": deployment.model, "input": WEATHER_QUESTION, "tools": [tool]},
+        )
+        assert response.status_code == 400, response.text
+        assert tool["type"] in response.text, response.text
+        assert peer.drain() == ()
 
 
 def _text_blocks(message: JsonValue) -> JsonValue:
