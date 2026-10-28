@@ -4064,6 +4064,67 @@ async def test_hosted_vllm_decisions_sends_input_images_to_systemone(
     assert async_only_image_fetch.fetched == (["https://images.example/input.png"] if remote_image else [])
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remote_image", (False, True), ids=("inline", "remote"))
+async def test_openrouter_decisions_sends_input_images_in_state_order(
+    respx_mock: respx.MockRouter,
+    remote_image: bool,
+    async_only_image_fetch: AsyncOnlyImageFetch,
+) -> None:
+    image: Final[str] = "https://images.example/input.png" if remote_image else "data:image/png;base64,AA=="
+    expected_image: Final[str] = async_only_image_fetch.data_url if remote_image else image
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="openrouter/typesafe/jev-1.14",
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Listing photo:"},
+                    {"type": "input_image", "image_url": image},
+                    {"type": "input_text", "text": "Is it damaged?"},
+                ],
+            }
+        ],
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_key="caller-key",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "typesafe/jev-1.14",
+        "state": [
+            "Listing photo:",
+            {"type": "image_url", "image_url": {"url": expected_image}},
+            "Is it damaged?",
+        ],
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert response.answers[0].probability == 0.9
+
+
+def test_openrouter_systemone_moves_images_into_state(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+
+    litellm.systemone(
+        model="openrouter/typesafe/jev-1.14",
+        state={"ticket": 1234},
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        images=["data:image/jpeg;base64,AA==", {"content_type": "image/webp", "base64": "BB=="}],
+        api_key="caller-key",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "typesafe/jev-1.14",
+        "state": [
+            '{"ticket": 1234}',
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AA=="}},
+            {"type": "image_url", "image_url": {"url": "data:image/webp;base64,BB=="}},
+        ],
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
 def test_hosted_vllm_systemone_forwards_images(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
