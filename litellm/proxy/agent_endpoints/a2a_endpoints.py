@@ -788,6 +788,7 @@ async def invoke_agent_a2a(
             proxy_config=proxy_config,
             route_type="asend_message",
             version=version,
+            defer_async_logging=method == "message/send",
         )
         request_data = data
 

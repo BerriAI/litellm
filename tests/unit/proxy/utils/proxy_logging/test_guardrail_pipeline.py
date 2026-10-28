@@ -28,6 +28,7 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
@@ -1203,6 +1204,24 @@ def _two_step_pipeline_data(
     }
 
 
+def _logging_obj(*, defer: bool) -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="m",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=None,
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    logging_obj.defer_async_logging = defer
+    return logging_obj
+
+
+def _logged_after_response_hooks(data: dict[str, object]) -> dict[str, object]:
+    return {**data, "litellm_logging_obj": _logging_obj(defer=True)}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("first_on_pass", "expected_calls", "expected_header"),
@@ -1351,7 +1370,7 @@ async def test_post_call_pipeline_steps_are_named_only_once_they_run(
 
     data: Final = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
-        data=_two_step_pipeline_data("post_call", "allow"),
+        data=_logged_after_response_hooks(_two_step_pipeline_data("post_call", "allow")),
         call_type="completion",
     )
     assert "applied_guardrails" not in data["metadata"]
@@ -1383,7 +1402,7 @@ async def test_post_call_pipeline_names_every_step_that_ran_in_metadata_after_a_
 
     data: Final = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
-        data=_two_step_pipeline_data("post_call", "next"),
+        data=_logged_after_response_hooks(_two_step_pipeline_data("post_call", "next")),
         call_type="completion",
     )
     await proxy_logging.post_call_success_hook(
@@ -1399,6 +1418,20 @@ async def test_post_call_pipeline_names_every_step_that_ran_in_metadata_after_a_
     ("asks_for", "request_route", "streams_live", "expected_header"),
     [
         pytest.param({"stream": False}, "/custom/stream", False, None, id="whole-response"),
+        pytest.param(
+            {"litellm_logging_obj": None},
+            "/v1/images/generations",
+            False,
+            ["first", "second"],
+            id="whole-response-logged-before-it-runs",
+        ),
+        pytest.param(
+            {"litellm_logging_obj": _logging_obj(defer=False)},
+            "/v1/chat/completions",
+            False,
+            ["first", "second"],
+            id="whole-response-log-not-deferred",
+        ),
         pytest.param({"stream": True}, "/v1/chat/completions", False, None, id="stream-held-for-the-pipeline"),
         pytest.param({"stream": True}, "/v1/chat/completions", True, ["first", "second"], id="stream-released-live"),
         pytest.param(
@@ -1420,7 +1453,9 @@ async def test_pre_call_hook_names_up_front_the_post_call_steps_a_stream_runs_af
     for guardrail in guardrails:
         guardrail.streaming_buffer_until_moderated = not streams_live
     monkeypatch.setattr(litellm, "callbacks", guardrails)
-    data: Final = _two_step_pipeline_data("post_call", "next", first_on_fail="next", second_on_fail="next")
+    data: Final = _logged_after_response_hooks(
+        _two_step_pipeline_data("post_call", "next", first_on_fail="next", second_on_fail="next")
+    )
     data.update(asks_for)
 
     result: Final = await proxy_logging.pre_call_hook(
@@ -1442,7 +1477,7 @@ async def test_pre_call_hook_names_up_front_the_post_call_steps_the_llm_pass_thr
 ) -> None:
     guardrails: Final = [_PipelineStepGuardrail(name, "post_call") for name in ("first", "second")]
     monkeypatch.setattr(litellm, "callbacks", guardrails)
-    data: Final = _two_step_pipeline_data("post_call", "allow")
+    data: Final = _logged_after_response_hooks(_two_step_pipeline_data("post_call", "allow"))
     data["stream"] = stream
 
     result: Final = await proxy_logging.pre_call_hook(

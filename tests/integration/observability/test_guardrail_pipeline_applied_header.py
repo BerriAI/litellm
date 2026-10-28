@@ -183,6 +183,8 @@ def _completion(request: Request) -> Reply:
         return _bedrock_reply(request)
     if request.target == "/v1/responses":
         return _responses_reply(request)
+    if request.target == "/v1/images/generations":
+        return Reply(body=json.dumps({"created": 1, "data": [{"b64_json": "aW1n", "revised_prompt": None}]}).encode())
     assert request.target == "/v1/chat/completions", request.target
     identity: Final = f"chatcmpl-{uuid.uuid4().hex}"
     if json.loads(request.body).get("stream") is True:
@@ -661,6 +663,37 @@ def test_a_pass_through_route_names_its_response_pipeline_up_front_because_its_h
     assert response.status_code == 200, response.text
     assert _steps_that_ran(rig) == (_RESPONSE_FIRST,)
     assert [request.target.rsplit("/", 1)[1] for request in rig.upstream.drain()] == [action]
+    assert sorted(response.headers.get(_HEADER, "").split(",")) == [_RESPONSE_FIRST, _RESPONSE_SECOND], dict(
+        response.headers
+    )
+    rows: Final = eventually(
+        lambda: rig.gateway.rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
+        lambda found: len(found) == 1,
+        seconds=70,
+    )
+    assert sorted(object_value(rows[0]["metadata"]).get("applied_guardrails") or []) == [
+        _RESPONSE_FIRST,
+        _RESPONSE_SECOND,
+    ], rows
+
+
+def test_an_image_generation_names_its_response_pipeline_up_front_because_its_spend_log_is_built_first(
+    rig: _Rig,
+) -> None:
+    rig.upstream.drain()
+    with rig.gateway.scenario() as scenario:
+        image_model: Final = scenario.model(
+            model="openai/dall-e-3", api_base=f"{rig.upstream.url}/v1", api_key="sk-fixture"
+        )
+        team: Final = scenario.team(metadata={"tags": [_RESPONSE_STOPS_AFTER_FIRST]})
+        response: Final = rig.gateway.request(
+            "POST",
+            "/v1/images/generations",
+            {"model": image_model, "prompt": f"a cat {uuid.uuid4().hex}", "size": "1024x1024"},
+            key=scenario.key(team_id=team),
+        )
+    assert response.status_code == 200, response.text
+    assert [request.target for request in rig.upstream.drain()] == ["/v1/images/generations"]
     assert sorted(response.headers.get(_HEADER, "").split(",")) == [_RESPONSE_FIRST, _RESPONSE_SECOND], dict(
         response.headers
     )

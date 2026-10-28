@@ -2279,6 +2279,7 @@ class ProxyBaseLLMRequestProcessing:
         rate_limited_model: str | None = None,
         skip_guardrails: bool = False,
         logging_auth: UserAPIKeyAuth | None = None,
+        defer_async_logging: bool = False,
     ) -> tuple[dict, LiteLLMLoggingObj]:
         start_time: Final = datetime.now()  # start before calling guardrail hooks
 
@@ -2444,6 +2445,10 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+        # Set before pre_call_hook: its guardrail sweep leaves a whole response's pipeline
+        # steps for the executor to name only when the success log waits for them.
+        if defer_async_logging:
+            logging_obj.defer_async_logging = True
 
         # Merge model-level guardrails before pre_call_hook so DB/UI-configured
         # guardrails actually execute on pre_call. Without this, guardrails set
@@ -2534,6 +2539,7 @@ class ProxyBaseLLMRequestProcessing:
         model: str | None,
         route_type: str,
         llm_router: Router | None,
+        defer_async_logging: bool = False,
     ) -> tuple[dict, LiteLLMLoggingObj]:
         from litellm.proxy.common_utils.proxy_rate_limit_error import (
             PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
@@ -2574,6 +2580,7 @@ class ProxyBaseLLMRequestProcessing:
                 model=model,
                 route_type=route_type,
                 llm_router=llm_router,
+                defer_async_logging=defer_async_logging,
             )
         except ProxyRateLimitError as original_exc:
             rate_limited_data: Final = self.data
@@ -2630,6 +2637,7 @@ class ProxyBaseLLMRequestProcessing:
                             route_type=route_type,
                             llm_router=llm_router,
                             rate_limited_model=original_model,
+                            defer_async_logging=defer_async_logging,
                         )
                     except ProxyRateLimitError as fallback_exc:
                         if is_hard_per_model_limit(fallback_exc):
@@ -2860,6 +2868,11 @@ class ProxyBaseLLMRequestProcessing:
         requested_model_from_client: Final[str | None] = client_model if isinstance(client_model, str) else None
         self._debug_log_request_payload()
 
+        # Defer async logging when post-call guardrails are configured so the
+        # StandardLoggingPayload is built after guardrails write to metadata.
+        # Cache the result to avoid scanning litellm.callbacks twice.
+        _post_call_guardrails_active: Final = self._has_post_call_guardrails()
+
         if skip_pre_call_logic:
             logging_obj = self.data.get("litellm_logging_obj")
             if logging_obj is None:
@@ -2884,13 +2897,10 @@ class ProxyBaseLLMRequestProcessing:
                 model=model,
                 route_type=route_type,
                 llm_router=llm_router,
+                defer_async_logging=_post_call_guardrails_active
+                and not self._is_streaming_request(data=self.data, is_streaming_request=is_streaming_request),  # pyright: ignore[reportUnknownMemberType]  # self.data is the untyped request dict
             )
             phase_event("litellm.request.pre_call_completed")
-
-        # Defer async logging when post-call guardrails are configured so the
-        # StandardLoggingPayload is built after guardrails write to metadata.
-        # Cache the result to avoid scanning litellm.callbacks twice.
-        _post_call_guardrails_active: Final = self._has_post_call_guardrails()
 
         # Non-streaming: defer the create_task in wrapper_async so the
         # SLP is built after guardrails write to metadata.  Streaming

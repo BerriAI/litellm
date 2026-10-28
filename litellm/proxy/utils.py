@@ -722,19 +722,29 @@ def _ran_or_runs_outside_pipelines(
     )
 
 
+def _success_log_waits_for_response_hooks(data: Mapping[str, object]) -> bool:
+    logging_obj: Final = data.get("litellm_logging_obj")
+    return isinstance(logging_obj, Logging) and logging_obj.defer_async_logging
+
+
 def _post_call_steps_named_before_headers(
     data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, call_type: str
 ) -> frozenset[str]:
     """
     Post_call pipeline steps the executor names, as it runs them, before the response
-    headers go out: every step of a whole response, and of a streamed one the steps of
-    the pipelines that hold the stream until they finish. The LLM pass-through route builds
+    headers go out and the success log is built: every step of a whole response whose
+    success log waits for the response hooks, and of a streamed one the steps of the
+    pipelines that hold the stream until they finish. The LLM pass-through route builds
     its headers before any response step runs, so none of its steps.
     """
     if call_type == CallTypes.allm_passthrough_route.value:
         return frozenset()
     if data.get("stream") is not True and data.get("method") not in A2A_STREAMING_METHODS:
-        return pipeline_managed_guardrail_names(data, "post_call")
+        return (
+            pipeline_managed_guardrail_names(data, "post_call")
+            if _success_log_waits_for_response_hooks(data)
+            else frozenset()
+        )
     gated: Final = _stream_gated_pipelines(data, user_api_key_dict)
     return frozenset() if _pipelines_stream_live(gated) else _pipeline_step_guardrail_names(gated)
 
@@ -746,9 +756,10 @@ def _pipeline_steps_that_have_not_run(
     Guardrails only policy pipelines run whose pre_call hook has not run for this request:
     pre_call steps a pipeline skipped and the post_call steps the executor names when it
     runs them. A stream runs a pipeline it cannot hold as guardrails on their own, and one
-    whose steps all stream live after the headers go out, and the LLM pass-through route runs
-    its response steps after its headers are built, so those steps are named up front like
-    any other guardrail.
+    whose steps all stream live after the headers go out, the LLM pass-through route runs
+    its response steps after its headers are built, and a route whose success log does not
+    wait for the response hooks builds that log first, so those steps are named up front
+    like any other guardrail.
     """
     pre_call: Final = pipeline_managed_guardrail_names(data, "pre_call")
     post_call: Final = _post_call_steps_named_before_headers(data, user_api_key_dict, call_type)
