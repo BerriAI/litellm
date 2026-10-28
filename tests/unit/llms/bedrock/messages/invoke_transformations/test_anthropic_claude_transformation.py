@@ -4270,3 +4270,23 @@ def test_bedrock_messages_drops_tool_changes_from_a_system_turn_an_older_model_g
     assert any(block["type"] == "tool_addition" for block in blocks) is not drop_params
     assert {"type": "text", "text": "A weather tool is now available"} in blocks
     assert all(message.role != "system" for message in sent)
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("drop_params", (True, False))
+def test_bedrock_messages_sends_the_binding_beta_with_block_binding_whatever_drop_params(drop_params: bool) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 2048,
+            "thinking": {"type": "enabled", "budget_tokens": 1024, "block_binding": BLOCK_BINDING},
+        },
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    assert result["thinking"]["block_binding"] == BLOCK_BINDING
+    assert "thinking-binding-controls-2026-08-01" in result["anthropic_beta"]

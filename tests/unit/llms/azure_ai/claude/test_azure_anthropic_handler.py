@@ -6,6 +6,7 @@ sys.path.insert(
 )
 
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -272,3 +273,40 @@ def test_completion_surfaces_the_status_and_headers_of_a_rejected_request():
     assert rejected.value.status_code == 400
     assert rejected.value.litellm_response_headers["x-request-id"] == "req-1"
     assert "max_tokens too large" in str(rejected.value)
+
+
+@respx.mock
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_completion_drops_block_binding_without_its_beta_only_under_drop_params(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx.post("https://example-resource.services.ai.azure.com/anthropic/v1/messages").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "msg_bound",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+    block_binding: Final = {"prefix_mismatch_behavior": "error"}
+
+    litellm.completion(
+        model="azure_ai/claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://example-resource.services.ai.azure.com/anthropic",
+        api_key="azure-test-key",
+        thinking={"type": "enabled", "budget_tokens": 1024, "block_binding": block_binding},
+        drop_params=drop_params,
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["thinking"]["budget_tokens"] == 1024
+    assert ("block_binding" in sent["thinking"]) is not drop_params

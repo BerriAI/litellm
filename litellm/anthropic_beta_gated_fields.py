@@ -292,10 +292,20 @@ def log_beta_gated_strips(stripped: Sequence[str], model: str | None, provider: 
     if not stripped:
         return
     verbose_logger.warning(
-        "Stripped %s from the request for model=%s provider=%s because this leg does not carry the "
-        "anthropic-beta that gates them (see anthropic_beta_headers_config.json). The request is sent "
-        "without those fields instead of failing with a provider 400.",
+        "Stripped %s from the request for model=%s provider=%s because drop_params is on and the request "
+        "does not send the anthropic-beta that gates them on this provider (see anthropic_beta_headers_config.json). "
+        "Send that beta to keep them where the provider accepts it.",
         sorted(set(stripped)),
         model,
         provider,
     )
+
+
+def strip_beta_gated_request_body(
+    request: Mapping[str, object], headers: object, *, drop_params: object, model: str | None, provider: str
+) -> Mapping[str, object]:
+    gated: Final = strip_beta_gated_request_fields(
+        request, active_beta_values(headers, request.get("anthropic_beta") or ()), drop_params=drop_params
+    )
+    log_beta_gated_strips(gated.stripped, model=model, provider=provider)
+    return gated.request

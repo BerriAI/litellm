@@ -7,7 +7,6 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.anthropic_beta_gated_fields import (
-    StrippedMessages,
     log_beta_gated_strips,
     strip_beta_gated_native_request,
     strip_beta_gated_system_messages,
@@ -228,6 +227,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         else:
             return system_param
 
+    def _strip_beta_gated_system_turns(
+        self, messages: Sequence[object], model: str, drop_params: object
+    ) -> tuple[Mapping[str, object], ...]:
+        validated: Final = _MESSAGE_MAPPINGS.validate_python(messages)
+        gated: Final = strip_beta_gated_system_messages(validated, frozenset(), drop_params=drop_params)
+        log_beta_gated_strips(gated.stripped, model=model, provider=self.custom_llm_provider or "anthropic")
+        return _MESSAGE_MAPPINGS.validate_python(gated.messages) if gated.stripped else validated
+
     def _normalize_system_role_messages(
         self, anthropic_messages_request: dict, model: str, drop_params: object
     ) -> None:
@@ -271,22 +278,22 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             len(messages),
         )
         hoisted: Final = messages[:leading_count]
-        keeps_system_turns: Final = supports_factory(
-            model=model,
-            custom_llm_provider=self.custom_llm_provider,
-            key="supports_mid_conversation_system",
-        )
-        trailing_messages: Final = _MESSAGE_MAPPINGS.validate_python(messages[leading_count:])  # pyright: ignore[reportUnknownArgumentType]  # messages comes from the bare request dict
-        gated: Final = (
-            StrippedMessages(messages=trailing_messages, stripped=())
-            if keeps_system_turns
-            else strip_beta_gated_system_messages(trailing_messages, frozenset(), drop_params=drop_params)
-        )
-        log_beta_gated_strips(gated.stripped, model=model, provider=self.custom_llm_provider or "anthropic")
         remaining: Final = (
             messages[leading_count:]
-            if keeps_system_turns
-            else list(convert_mid_conversation_system_turns(_MESSAGE_MAPPINGS.validate_python(gated.messages)))
+            if supports_factory(
+                model=model,
+                custom_llm_provider=self.custom_llm_provider,
+                key="supports_mid_conversation_system",
+            )
+            else list(
+                convert_mid_conversation_system_turns(
+                    self._strip_beta_gated_system_turns(
+                        messages[leading_count:],  # pyright: ignore[reportUnknownArgumentType]  # messages comes from the bare request dict
+                        model=model,
+                        drop_params=drop_params,
+                    )
+                )
+            )
         )
         if hoisted or remaining != messages:
             anthropic_messages_request["messages"] = remaining
