@@ -23,10 +23,21 @@ def _deployment_image_token_pricing(model_info: ModelInfo | None) -> ModelInfo |
     return priced
 
 
+def _deployment_prices_per_image_only(model_info: ModelInfo | None) -> bool:
+    return (
+        model_info is not None
+        and model_info.get("output_cost_per_image") is not None
+        and model_info.get("output_cost_per_image_token") is None
+        and model_info.get("output_cost_per_token") is None
+    )
+
+
 def image_cost_calculator(model: str, image_response: ImageResponse, model_info: ModelInfo | None = None) -> float:
     resolved_model_info: Final = resolve_image_model_info(
         model=model, custom_llm_provider="tencent", model_info=_deployment_image_token_pricing(model_info)
     )
+    if _deployment_prices_per_image_only(model_info):
+        return flat_image_cost(resolved_model_info, image_response)
     token_based_cost: Final = calculate_image_response_cost_from_usage(
         model=model,
         image_response=image_response,

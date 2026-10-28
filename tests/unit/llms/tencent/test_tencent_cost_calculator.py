@@ -86,7 +86,16 @@ async def test_a_deployment_priced_tencent_image_model_outside_seedream_bills_it
     assert response._hidden_params["response_cost"] == pytest.approx(0.04)
 
 
-def test_a_seedream_deployment_priced_per_token_in_the_ui_bills_its_own_rate() -> None:
+@pytest.mark.parametrize(
+    ("deployment_price", "expected_cost"),
+    [
+        ({"output_cost_per_token": 0.000001}, 11250 * 0.000001),
+        ({"output_cost_per_image": 0.05}, 0.05),
+    ],
+)
+def test_a_seedream_deployment_priced_in_the_ui_bills_its_own_rate(
+    deployment_price: dict[str, float], expected_cost: float
+) -> None:
     def respond(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -104,7 +113,7 @@ def test_a_seedream_deployment_priced_per_token_in_the_ui_bills_its_own_rate() -
                 "litellm_params": {
                     "model": "tencent/seedream-image-v5.0-flash",
                     "api_key": "sk-tokenhub",
-                    "output_cost_per_token": 0.000001,
+                    **deployment_price,
                 },
             }
         ]
@@ -116,4 +125,4 @@ def test_a_seedream_deployment_priced_per_token_in_the_ui_bills_its_own_rate() -
         client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
     )
 
-    assert response._hidden_params["response_cost"] == pytest.approx(11250 * 0.000001)
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)

@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import override
 
 from litellm.exceptions import AuthenticationError, UnsupportedParamsError
+from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -69,9 +70,8 @@ def is_tokenhub_image_model(model: str) -> bool:
 
 
 def tokenhub_image_url(api_base: str | None) -> str:
-    base: Final = (api_base or get_secret_str("TENCENT_API_BASE") or TOKENHUB_API_BASE).rstrip("/")
-    versioned_base: Final = base if base.endswith("/v1") else f"{base}/v1"
-    return f"{versioned_base}{TOKENHUB_IMAGE_PATH}"
+    base: Final = api_base or get_secret_str("TENCENT_API_BASE") or TOKENHUB_API_BASE
+    return join_api_base(ensure_api_route(base, "v1"), TOKENHUB_IMAGE_PATH)
 
 
 def tokenhub_image_headers(headers: Mapping[str, str], api_key: str | None, model: str) -> Mapping[str, str]:

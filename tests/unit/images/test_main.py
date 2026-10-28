@@ -147,6 +147,24 @@ def test_image_edit_prices_a_vertex_deployment_at_its_configured_location(
     assert cost_at("us-central1") == pytest.approx(0.044)
 
 
+def test_image_edit_accepts_a_string_additional_drop_params(respx_mock: respx.MockRouter) -> None:
+    edits_route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
+        return_value=httpx.Response(status_code=200, json={"created": 1792551838, "data": [{"b64_json": "aW1n"}]})
+    )
+
+    response: Final = litellm.image_edit(
+        model="openai/gpt-image-2.5-sunburst",
+        image=b"\x89PNG\r\n\x1a\nfakepng",
+        prompt="make the circle blue",
+        api_key="sk-test",
+        quality="high",
+        additional_drop_params="quality",
+    )
+
+    assert edits_route.called
+    assert response.data[0].b64_json == "aW1n"
+
+
 class TestCustomLogger(CustomLogger):
     __test__ = False
 

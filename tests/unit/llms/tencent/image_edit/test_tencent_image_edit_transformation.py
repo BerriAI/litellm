@@ -113,6 +113,14 @@ def test_edit_is_not_offered_for_tencent_models_outside_seedream() -> None:
         ({"watermark": "false", "seed": "7"}, {"watermark": False, "seed": 7}),
         ({"watermark": "True", "seed": "-1"}, {"watermark": True, "seed": -1}),
         ({"watermark": "maybe"}, {"watermark": "maybe"}),
+        (
+            {"layer_decomposition": "true", "optimize_prompt_options[mode]": "fast"},
+            {"layer_decomposition": True, "optimize_prompt_options": {"mode": "fast"}},
+        ),
+        (
+            {"sequential_image_generation_options[max_images]": "3", "user": "12345"},
+            {"sequential_image_generation_options": {"max_images": 3}, "user": "12345"},
+        ),
     ],
 )
 def test_edit_parses_tokenhub_values_sent_as_form_strings(

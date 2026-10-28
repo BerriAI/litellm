@@ -801,7 +801,14 @@ def image_variation(
 
 _IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
 _DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
-_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[list[str] | None](list[str] | None)
+_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
+
+
+def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
+    try:
+        return _ADDITIONAL_DROP_PARAMS.validate_python(additional_drop_params)
+    except ValidationError:
+        return ()
 
 
 def _tokenhub_passthrough_edit_params(
@@ -957,7 +964,7 @@ def image_edit(
             )
         )
         # Get optional parameters for the responses API
-        additional_drop_params: Final = _ADDITIONAL_DROP_PARAMS.validate_python(kwargs.get("additional_drop_params"))
+        additional_drop_params: Final = _listed_drop_params(kwargs.get("additional_drop_params"))
         image_edit_request_params: Final[dict] = _get_ImageEditRequestUtils().get_optional_params_image_edit(
             model=model,
             image_edit_provider_config=image_edit_provider_config,

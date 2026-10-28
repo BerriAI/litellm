@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 import httpx
 from httpx._types import RequestFiles
@@ -26,16 +26,52 @@ if TYPE_CHECKING:
 
 _IMAGES: Final = TypeAdapter(tuple[object, ...])
 _FORM_BOOLEANS: Final = MappingProxyType({"true": True, "false": False})
+_OPENAI_PARAMS: Final = frozenset(TOKENHUB_IMAGE_PARAMS)
+
+_FormEntries: TypeAlias = tuple[tuple[tuple[str, ...], object], ...]
 
 
-def _form_field_value(key: str, value: object) -> object:
-    match key, value:
-        case "watermark", str() if value.lower() in _FORM_BOOLEANS:
+def _form_scalar(value: object) -> object:
+    match value:
+        case str() if value.lower() in _FORM_BOOLEANS:
             return _FORM_BOOLEANS[value.lower()]
-        case "seed", str() if value.removeprefix("-").isdigit():
+        case str() if value.removeprefix("-").isdigit():
             return int(value)
         case _:
             return value
+
+
+def _form_path(key: str) -> tuple[str, ...]:
+    root, bracket, rest = key.partition("[")
+    if not bracket or not rest.endswith("]"):
+        return (key,)
+    return (root, *rest.removesuffix("]").split("]["))
+
+
+def _nested_form_value(entries: _FormEntries) -> object:
+    match entries:
+        case (((), value),):
+            return _form_scalar(value)
+        case _:
+            return _nested_form_fields(tuple(entry for entry in entries if entry[0]))
+
+
+def _nested_form_fields(entries: _FormEntries) -> Mapping[str, object]:
+    roots: Final = tuple(dict.fromkeys(path[0] for path, _ in entries))
+    return {
+        root: _nested_form_value(tuple((path[1:], value) for path, value in entries if path[0] == root))
+        for root in roots
+    }
+
+
+def _tokenhub_form_params(params: Mapping[str, object]) -> Mapping[str, object]:
+    tokenhub_entries: Final = tuple(
+        (_form_path(key), value) for key, value in params.items() if key not in _OPENAI_PARAMS
+    )
+    return {
+        **{key: value for key, value in params.items() if key in _OPENAI_PARAMS},
+        **_nested_form_fields(tokenhub_entries),
+    }
 
 
 class TencentImageEditConfig(BaseImageEditConfig):
@@ -91,7 +127,7 @@ class TencentImageEditConfig(BaseImageEditConfig):
             "model": model,
             "prompt": prompt,
             "images": tuple(image_to_data_url(img) for img in images if img is not None),
-            **{key: _form_field_value(key, value) for key, value in image_edit_optional_request_params.items()},
+            **_tokenhub_form_params(image_edit_optional_request_params),
         }, ()
 
     @override
