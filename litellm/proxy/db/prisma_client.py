@@ -36,6 +36,7 @@ from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
     from prisma import Prisma
+    from prisma.client import TransactionManager
     from prisma.types import HttpConfig
 
 _ENVIRONMENT_VARIABLES_REVISION_MIGRATION: Final = "20261015120000_add_environment_variables_revision_trigger"
@@ -903,6 +904,10 @@ class PrismaWrapper:
         def is_connected(self) -> bool: ...
 
         async def disconnect(self, timeout: float | timedelta | None = None) -> None: ...
+
+        def tx(
+            self, *, max_wait: int | timedelta = timedelta(seconds=2), timeout: int | timedelta = timedelta(seconds=5)
+        ) -> TransactionManager: ...
 
     def __getattr__(self, name: str):
         """
