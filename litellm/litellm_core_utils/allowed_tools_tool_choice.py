@@ -2,12 +2,13 @@ from collections.abc import Mapping, Sequence, Set
 from typing import Final, Literal, TypeVar
 
 from openai.types.responses.tool_choice_allowed_param import ToolChoiceAllowedParam
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, model_validator
 
 from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.litellm_core_utils.tool_fields import first_validation_error
 
 PROVIDERS_ACCEPTING_ALLOWED_TOOLS: Final = frozenset({"openai", "azure", "litellm_proxy"})
+_FLAT_SHAPE_FIELDS: Final = frozenset({"mode", "tools"})
 
 
 class _AllowedTools(BaseModel):
@@ -22,6 +23,12 @@ class ChatAllowedToolChoice(BaseModel):
 
     type: Literal["allowed_tools"]
     allowed_tools: _AllowedTools
+
+    @model_validator(mode="after")
+    def _reject_flat_shape_fields(self) -> "ChatAllowedToolChoice":
+        if self.model_extra is not None and not _FLAT_SHAPE_FIELDS.isdisjoint(self.model_extra):
+            raise ValueError("send either the nested `allowed_tools` or the flat `mode` and `tools`, not both")
+        return self
 
 
 class ResponsesAllowedToolChoice(BaseModel):
@@ -79,6 +86,12 @@ def chat_allowed_tool_choice(
 ) -> Mapping[str, JsonValue]:
     choice: Final = _json_choice(allowed_tool_choice)
     match choice:
+        case {"type": choice_type, "allowed_tools": {"tools": list() as tools, **allowed_tools_fields}, **fields}:
+            return {
+                **fields,
+                "type": choice_type,
+                "allowed_tools": {**allowed_tools_fields, "tools": [_chat_tool(tool) for tool in tools]},
+            }
         case {"type": choice_type, "mode": mode, "tools": list() as tools, **allowed_tools_fields}:
             return {
                 "type": choice_type,

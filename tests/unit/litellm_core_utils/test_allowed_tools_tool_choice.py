@@ -93,8 +93,9 @@ def test_a_choice_that_is_not_a_valid_allowed_tools_choice_is_rejected(choice):
             "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": "a"}}]},
         },
         {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "a"}]},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "name": "a"}]}},
     ],
-    ids=["chat", "responses"],
+    ids=["chat", "responses", "chat_with_responses_tool_entries"],
 )
 def test_a_provider_that_takes_allowed_tools_gets_either_shape_nested(choice):
     assert tool_choice_for_provider(choice, custom_llm_provider="openai", model="gpt-4.1-mini", drop_params=False) == {
@@ -118,6 +119,15 @@ def test_a_choice_other_than_allowed_tools_passes_through(choice):
         ({"type": "allowed_tools", "mode": "any", "tools": [{"type": "function", "name": "a"}]}, "tool_choice.mode"),
         ({"type": "allowed_tools"}, "tool_choice.mode"),
         ({"type": "allowed_tools", "allowed_tools": "get_weather", "mode": "auto"}, "tool_choice.allowed_tools"),
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": "a"}}]},
+                "mode": "required",
+                "tools": [{"type": "function", "name": "b"}],
+            },
+            "tool_choice",
+        ),
     ],
 )
 def test_a_malformed_choice_is_a_one_line_400_naming_its_field(choice, field):
