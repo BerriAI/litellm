@@ -4559,7 +4559,9 @@ class TestConsolePlaceholder:
     only while it is the provider's sole exporter."""
 
     @staticmethod
-    def _received(monkeypatch, config: OpenTelemetryV2Config) -> Mapping[str | None, tuple[str, ...]]:
+    def _received(
+        monkeypatch: pytest.MonkeyPatch, config: OpenTelemetryV2Config
+    ) -> Mapping[str | None, tuple[str, ...]]:
         capture: Final = TestArizeTenantOnly._capture_exporters(monkeypatch)
         provider: Final = build_tracer_provider(config)
         emit(provider)
@@ -4567,13 +4569,13 @@ class TestConsolePlaceholder:
         return capture.received()
 
     @staticmethod
-    def _operator_langfuse(monkeypatch) -> None:
+    def _operator_langfuse(monkeypatch: pytest.MonkeyPatch) -> None:
         for name in _OTEL_SHORTHAND_ENV:
             monkeypatch.delenv(name, raising=False)
         monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-operator")
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-operator")
 
-    def test_a_credentialed_langfuse_exports_to_langfuse_alone(self, monkeypatch):
+    def test_a_credentialed_langfuse_exports_to_langfuse_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._operator_langfuse(monkeypatch)
         config: Final = langfuse_preset()
         langfuse_headers: Final = next(
@@ -4582,13 +4584,15 @@ class TestConsolePlaceholder:
 
         assert self._received(monkeypatch, config) == {langfuse_headers: ("chat gpt-4",)}
 
-    def test_a_console_exporter_the_operator_named_still_prints(self, monkeypatch):
+    def test_a_console_exporter_the_operator_named_still_prints(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._operator_langfuse(monkeypatch)
         monkeypatch.setenv("OTEL_EXPORTER", "console")
 
         assert self._received(monkeypatch, langfuse_preset())[None] == ("chat gpt-4",)
 
-    def test_the_placeholder_still_prints_when_nothing_else_is_configured(self, monkeypatch):
+    def test_the_placeholder_still_prints_when_nothing_else_is_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         for name in _OTEL_SHORTHAND_ENV:
             monkeypatch.delenv(name, raising=False)
 

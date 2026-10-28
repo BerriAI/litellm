@@ -1,3 +1,4 @@
+import os
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
@@ -26,6 +27,7 @@ def test_langfuse_otel_prints_spans_to_stdout_only_when_the_operator_asks(
             {},
             marker,
             overrides={"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "span_only", **overrides},
+            remove_environment=tuple(name for name in os.environ if name.startswith("OTEL_")),
         ) as rig,
         rig.candidate.scenario() as scenario,
     ):

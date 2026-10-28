@@ -210,6 +210,7 @@ def langfuse_rig(
     sink_reply: Callable[[Request], Reply] | None = None,
     overrides: Mapping[str, str] | None = None,
     model_list: Callable[[str], Sequence[Mapping[str, object]]] | None = None,
+    remove_environment: tuple[str, ...] = (),
 ) -> Iterator[LangfuseRig]:
     def upstream(request: Request) -> Reply:
         if request.method == "GET":
@@ -264,6 +265,7 @@ def langfuse_rig(
             },
             config=path,
             workers=2,
+            remove_environment=remove_environment,
         ) as owned:
             yield LangfuseRig(owned.gateway, provider, collector, owned)
 
