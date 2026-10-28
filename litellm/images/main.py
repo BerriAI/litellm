@@ -284,8 +284,12 @@ def image_generation(
         extra_headers: Final = kwargs.get("extra_headers", None)
         headers: Final[dict] = kwargs.get("headers", None) or {}
         base_model: Final = kwargs.get("base_model", None)
-        max_retries: Final = kwargs.get("max_retries")
-        is_router_call: Final = any("model_group" in (kwargs.get(k) or ()) for k in ("metadata", "litellm_metadata"))
+        call_kwargs: Final = cast(Mapping[str, object], kwargs)  # cast-ok: image_generation's **kwargs is untyped
+        max_retries: Final = call_kwargs.get("max_retries")
+        is_router_call: Final = any(
+            isinstance(call_metadata := call_kwargs.get(k), Mapping) and "model_group" in call_metadata
+            for k in ("metadata", "litellm_metadata")
+        )
         if extra_headers is not None:
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
