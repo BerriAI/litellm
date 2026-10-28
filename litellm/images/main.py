@@ -1,9 +1,9 @@
 import asyncio
 import contextvars
 import importlib
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from functools import partial
-from typing import TYPE_CHECKING, Final, Literal, Optional, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -70,18 +70,60 @@ from litellm.utils import (
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
-_ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
+_ImageEditRequestUtils_cache: type["ImageEditRequestUtils"] | None = None
 
 
-def _get_ImageEditRequestUtils() -> "ImageEditRequestUtils":
+def _get_ImageEditRequestUtils() -> type["ImageEditRequestUtils"]:
     """Get ImageEditRequestUtils, loading it lazily if needed."""
     global _ImageEditRequestUtils_cache
     if _ImageEditRequestUtils_cache is None:
         # Access via module to trigger __getattr__ if not cached
-        module: Final = importlib.import_module(__name__)
-        _ImageEditRequestUtils_cache = module.ImageEditRequestUtils
+        from litellm.images import main as images_main
+
+        _ImageEditRequestUtils_cache = images_main.ImageEditRequestUtils
     assert _ImageEditRequestUtils_cache is not None  # Type narrowing for type checker
     return _ImageEditRequestUtils_cache
+
+
+def _chatgpt_image_params(kwargs: Mapping[str, object]) -> GenericLiteLLMParams:
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    headers: Final = ResponsesAPIRequestUtils.merge_client_forwarded_headers(
+        TypeAdapter[dict[str, object] | None](dict[str, object] | None).validate_python(kwargs.get("extra_headers")),
+        TypeAdapter[dict[str, str] | None](dict[str, str] | None).validate_python(kwargs.get("headers")),
+    )
+    return GenericLiteLLMParams.model_validate({**kwargs, "extra_headers": headers})
+
+
+def _chatgpt_image_headers(model: str, params: GenericLiteLLMParams, headers: Mapping[str, str]) -> Mapping[str, str]:
+    from litellm.llms.chatgpt.common_utils import get_chatgpt_request_credential
+    from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
+
+    credential: Final = get_chatgpt_request_credential(params)
+    credential_headers: Final = (
+        {
+            "Authorization": f"Bearer {credential.access_token}",
+            **({"ChatGPT-Account-Id": credential.account_id} if credential.account_id else {}),
+        }
+        if credential is not None
+        else {}
+    )
+    explicit_account_id: Final = next(
+        (value for name, value in headers.items() if name.lower() == "chatgpt-account-id"), None
+    )
+    auth_headers: Final = ChatGPTResponsesAPIConfig().validate_environment(
+        headers=credential_headers, model=model, litellm_params=params
+    )
+    return {
+        **{k: v for k, v in auth_headers.items() if k.lower() not in ("content-type", "accept")},
+        **{
+            k: v
+            for k, v in headers.items()
+            if k.lower() not in ("authorization", "chatgpt-account-id", "cookie", "x-litellm-api-key")
+        },
+        **({"ChatGPT-Account-Id": explicit_account_id} if credential is None and explicit_account_id else {}),
+        "Accept": "application/json",
+    }
 
 
 ##### Image Generation #######################
@@ -120,6 +162,12 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
             model=model,
             custom_llm_provider=provider_hints.get("custom_llm_provider"),
             api_base=provider_hints.get("api_base"),
+            litellm_params=(
+                _chatgpt_image_params(TypeAdapter(dict[str, object]).validate_python(kwargs))
+                if provider_hints.get("custom_llm_provider") == "chatgpt"
+                or (isinstance(model, str) and model.startswith("chatgpt/"))
+                else None
+            ),
         )
 
         # Await normally
@@ -239,12 +287,18 @@ def image_generation(
         if extra_headers is not None:
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
+        chatgpt_params: Final = (
+            _chatgpt_image_params(TypeAdapter(dict[str, object]).validate_python({**kwargs, "api_key": api_key}))
+            if custom_llm_provider == "chatgpt" or (model is not None and model.startswith("chatgpt/"))
+            else None
+        )
         dynamic_api_key: str | None = None
         if model is not None or custom_llm_provider is not None:
             model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
+                litellm_params=chatgpt_params,
             )
         else:
             model = "dall-e-2"
@@ -267,7 +321,10 @@ def image_generation(
             "size",
             "style",
         ]
-        non_default_params: Final = filter_out_litellm_params(kwargs, excluding=openai_params)
+        non_default_params: Final = filter_out_litellm_params(
+            kwargs,
+            excluding=[*openai_params, "extra_headers", "headers"] if chatgpt_params is not None else openai_params,
+        )
 
         image_generation_config: BaseImageGenerationConfig | None = None
         if custom_llm_provider is not None and custom_llm_provider in LlmProviders._member_map_.values():
@@ -489,7 +546,7 @@ def image_generation(
             or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
-            if extra_headers is not None:
+            if extra_headers is not None and chatgpt_params is None:
                 optional_params["extra_headers"] = extra_headers
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Final[str | None] = kwargs.get("organization", None)
@@ -505,7 +562,17 @@ def image_generation(
                 organization=organization,
                 aimg_generation=aimg_generation,
                 client=client,
-                headers=headers,
+                headers=(
+                    dict(
+                        _chatgpt_image_headers(
+                            model,
+                            chatgpt_params.model_copy(update={"api_key": dynamic_api_key or api_key}),
+                            TypeAdapter(dict[str, str]).validate_python(headers),
+                        )
+                    )
+                    if chatgpt_params is not None
+                    else headers
+                ),
                 litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "bedrock":

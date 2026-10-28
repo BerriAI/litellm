@@ -34,7 +34,7 @@ import type { Tag } from "./tag_management/types";
 import { ModelTeamSelect } from "./view_model/ModelTeamSelect";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { formatPtuUtcDisplay, utcIsoToPickerValue } from "../utils/ptuDatetime";
-import { isMaskedSecret } from "../utils/maskedSecretUtils";
+import { editableModelExtraParams, parseModelExtraParams } from "../utils/modelEditParams";
 import {
   MAX_COST_PER_PTU_PER_HOUR,
   MAX_PTU_COUNT,
@@ -127,22 +127,13 @@ const modelEditShape = {
 
 type ModelEditFieldName = keyof typeof modelEditShape;
 
-const isJson = (value: string): boolean => {
-  try {
-    JSON.parse(value);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 const buildSchema = (ptuEnabled: boolean, isFieldTouched: (field: TouchedPricingField) => boolean) =>
   z.object(modelEditShape).superRefine((values, ctx) => {
     const reject = (path: ModelEditFieldName, message: string) =>
       ctx.addIssue({ code: "custom", path: [path], message });
 
-    if (values.litellm_extra_params && !isJson(values.litellm_extra_params)) {
-      reject("litellm_extra_params", "Please enter valid JSON");
+    if (parseModelExtraParams(values.litellm_extra_params) === null) {
+      reject("litellm_extra_params", "Please enter a valid JSON object");
     }
 
     // antd validates only mounted fields, and the PTU block does not render when the flag is off.
@@ -245,15 +236,7 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
   // antd never mounted this field for a non-wildcard model, so the key must be absent, not null.
   ...(isWildcardModel ? { health_check_model: localModelData.model_info?.health_check_model } : {}),
   litellm_credential_name: localModelData.litellm_params?.litellm_credential_name ?? null,
-  litellm_extra_params: JSON.stringify(
-    Object.fromEntries(
-      Object.entries(localModelData.litellm_params || {}).filter(
-        ([key, value]) => key !== "litellm_credential_name" && !isMaskedSecret(value),
-      ),
-    ),
-    null,
-    2,
-  ),
+  litellm_extra_params: JSON.stringify(editableModelExtraParams(localModelData.litellm_params ?? {}), null, 2),
   team_id: localModelData.model_info?.team_id ?? undefined,
 });
 
@@ -775,7 +758,7 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               <FieldLabel>
                 LiteLLM Params
                 <DocsHint
-                  text="Optional litellm params used for making a litellm.completion() call. Some params are automatically added by LiteLLM."
+                  text="Additional parameters for model requests. Settings with dedicated fields above are edited there. Remove a key here to delete its saved value."
                   href="https://docs.litellm.ai/docs/completion/input"
                 />
               </FieldLabel>
@@ -784,9 +767,10 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
                   {({ value, ...control }) => (
                     <Textarea
                       {...control}
+                      aria-label="LiteLLM Params"
                       value={(value as string) ?? ""}
                       rows={4}
-                      placeholder={'{\n  "rpm": 100,\n  "timeout": 0,\n  "stream_timeout": 0\n}'}
+                      placeholder={'{\n  "drop_params": true\n}'}
                     />
                   )}
                 </FormField>

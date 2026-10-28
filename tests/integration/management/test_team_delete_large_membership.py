@@ -727,7 +727,7 @@ def _models_status(proxy: Gateway, key: str) -> int:
 
 
 def _statuses(proxy: Gateway, keys: Sequence[str]) -> dict[int, int]:
-    with ThreadPoolExecutor(max_workers=16) as pool:
+    with ThreadPoolExecutor(max_workers=2) as pool:
         statuses: Final = tuple(pool.map(lambda key: _models_status(proxy, key), keys))
     return {status: statuses.count(status) for status in frozenset(statuses)}
 

@@ -1857,6 +1857,32 @@ def test_resolve_llm_passthrough_timeout_validates_only_the_winning_value(
     assert resolve_llm_passthrough_timeout(kwargs=kwargs, litellm_params=litellm_params) == expected
 
 
+def test_resolve_llm_passthrough_timeout_uses_the_deployment_timeout_for_the_requests_service_tier():
+    litellm_params = {
+        "timeout": 610,
+        "stream_timeout": 30,
+        "timeout_by_service_tier": {"flex": 900},
+        "stream_timeout_by_service_tier": {"flex": 950},
+    }
+    assert resolve_llm_passthrough_timeout(kwargs={"service_tier": "flex"}, litellm_params=litellm_params) == 900.0
+    assert resolve_llm_passthrough_timeout(kwargs={"service_tier": "default"}, litellm_params=litellm_params) == 610.0
+    assert (
+        resolve_llm_passthrough_timeout(kwargs={"service_tier": "flex", "timeout": 20}, litellm_params=litellm_params)
+        == 20.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(kwargs={"service_tier": "flex", "stream": True}, litellm_params=litellm_params)
+        == 950.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"service_tier": "flex", "stream": True},
+            litellm_params={"timeout": 610, "stream_timeout": 30, "timeout_by_service_tier": {"flex": 900}},
+        )
+        == 30.0
+    )
+
+
 def test_resolve_llm_passthrough_timeout_rejects_a_non_numeric_winner():
     with pytest.raises(ValidationError):
         resolve_llm_passthrough_timeout(kwargs={"timeout": httpx.Timeout(30.0)})
@@ -1894,6 +1920,40 @@ async def test_pass_through_request_uses_resolved_timeout():
 
             mock_get_client.assert_called_once()
             assert mock_get_client.call_args[1]["params"]["timeout"] == 1500
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allow_client_pricing_override", [True, False])
+async def test_pass_through_request_strips_client_guardrail_information(allow_client_pricing_override: bool):
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=RuntimeError("stop before upstream"))
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException):
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(
+                    metadata={"allow_client_pricing_override": allow_client_pricing_override}
+                ),
+                custom_body={
+                    "model": "gpt-4o",
+                    "input_cost_per_token": 0.5,
+                    "metadata": {
+                        "trace_id": "keep-me",
+                        "standard_logging_guardrail_information": [{"guardrail_name": "forged", "guardrail_cost": 5.0}],
+                    },
+                },
+            )
+
+    hooked_body: Final = mock_proxy_logging.pre_call_hook.call_args.kwargs["data"]
+    assert hooked_body["metadata"] == {"trace_id": "keep-me"}
+    assert ("input_cost_per_token" in hooked_body) is allow_client_pricing_override
 
 
 @pytest.mark.asyncio
@@ -6700,6 +6760,7 @@ async def _run_upstream_reporting_passthrough(
     status_code: int = 200,
     cost_per_request: float | None = None,
     request_headers: Mapping[str, str] | None = None,
+    request_body: Mapping[str, object] | None = None,
 ) -> tuple[list[object], MagicMock]:
     """Drive a generic pass-through against an upstream that reports its own
     cost/usage. Returns (recorded standard logging payloads, proxy logging mock)."""
@@ -6715,13 +6776,14 @@ async def _run_upstream_reporting_passthrough(
     )
     try:
         with ExitStack() as stack:
-            mock_proxy_logging, enqueued = _enter_upstream_usage_mocks(stack, {})
+            mock_proxy_logging, enqueued = _enter_upstream_usage_mocks(stack, dict(request_body or {}))
             with _recording_success_callback() as recorder:
                 await pass_through_request(
                     request=_relay_client_request(method="POST", headers=request_headers),
                     target="http://internal-api.test/v1/summarize",
                     custom_headers={},
                     user_api_key_dict=UserAPIKeyAuth(api_key="sk-upstream-usage", team_id="team-fil"),
+                    custom_body=dict(request_body) if request_body else None,
                     cost_per_request=cost_per_request,
                 )
                 for coroutine in enqueued:
@@ -6820,12 +6882,72 @@ async def test_passthrough_error_response_without_usage_headers_records_no_spend
     assert "combined_usage_object" not in request_data
 
 
+_UPSTREAM_SUMMARIZER_HEADERS: Final = MappingProxyType(
+    {
+        "x-litellm-response-cost": "0.0123",
+        "x-litellm-total-tokens": "4210",
+        "x-litellm-upstream-model": "support-summarizer",
+    }
+)
+
+
 @pytest.mark.asyncio
-async def test_streaming_passthrough_records_cost_and_tokens_reported_by_upstream():
+@pytest.mark.parametrize("request_body", [None, {"model": "gpt-4o"}], ids=["no_body_model", "body_model"])
+async def test_passthrough_records_model_reported_by_upstream(request_body: Mapping[str, object] | None):
+    """A product endpoint takes no `model`, so without the header its spend lands
+    under `unknown`. The upstream's name wins over a body `model` too, and the
+    reported cost is kept even though the name is not in the price map."""
+    payloads, _ = await _run_upstream_reporting_passthrough(_UPSTREAM_SUMMARIZER_HEADERS, request_body=request_body)
+
+    assert len(payloads) == 1
+    logged: Final = cast(types_utils.StandardLoggingPayload, payloads[0])
+    assert (logged["model"], logged["response_cost"], logged["total_tokens"]) == (
+        "support-summarizer",
+        0.0123,
+        4210,
+    ), logged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_body", "expected_model"),
+    [(None, "unknown"), ({"model": "gpt-4o"}, "gpt-4o")],
+    ids=["no_body_model", "body_model"],
+)
+async def test_passthrough_without_model_header_keeps_request_model(
+    request_body: Mapping[str, object] | None, expected_model: str
+):
+    payloads, _ = await _run_upstream_reporting_passthrough(
+        {"x-litellm-response-cost": "0.0123", "x-litellm-total-tokens": "4210"}, request_body=request_body
+    )
+
+    assert len(payloads) == 1
+    assert cast(types_utils.StandardLoggingPayload, payloads[0])["model"] == expected_model, payloads[0]
+
+
+@pytest.mark.asyncio
+async def test_passthrough_records_upstream_reported_model_on_error_response():
+    import litellm
+
+    _, mock_proxy_logging = await _run_upstream_reporting_passthrough(
+        _UPSTREAM_SUMMARIZER_HEADERS, status_code=500, request_body={"model": "gpt-4o"}
+    )
+
+    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+    request_data: Final = mock_proxy_logging.post_call_failure_hook.await_args.kwargs["request_data"]
+    assert (request_data["model"], request_data["response_cost"], request_data["combined_usage_object"]) == (
+        "support-summarizer",
+        0.0123,
+        litellm.Usage(total_tokens=4210),
+    ), request_data
+
+
+@pytest.mark.asyncio
+async def test_streaming_passthrough_records_cost_tokens_and_model_reported_by_upstream():
     """
-    The totals are reported in the response headers, which are known before the
-    first byte of the stream, so a streamed pass-through must record the same
-    spend a buffered one does.
+    The totals and model name are reported in the response headers, which are
+    known before the first byte of the stream, so a streamed pass-through must
+    record the same spend and model a buffered one does.
     """
     from fastapi.responses import StreamingResponse
 
@@ -6838,6 +6960,7 @@ async def test_streaming_passthrough_records_cost_and_tokens_reported_by_upstrea
                 "content-type": "text/event-stream",
                 "x-litellm-response-cost": "0.00312",
                 "x-litellm-total-tokens": "4021",
+                "x-litellm-upstream-model": "support-summarizer",
             },
             stream=_RecordingUpstreamByteStream((b'data: {"delta": "hi"}\n\n',)),
         ),
@@ -6864,6 +6987,7 @@ async def test_streaming_passthrough_records_cost_and_tokens_reported_by_upstrea
     assert len(recorder.payloads) == 1
     assert recorder.payloads[0]["response_cost"] == 0.00312
     assert recorder.payloads[0]["total_tokens"] == 4021
+    assert recorder.payloads[0]["model"] == "support-summarizer"
 
 
 @pytest.mark.asyncio
@@ -8510,6 +8634,7 @@ PROXY_STAMPED_NAMES: Final = frozenset(
         "litellm_trusted_callback_vars",
         "_litellm_addressed_response_id",
         "_litellm_strip_stream_usage",
+        "_litellm_stream_usage_injected",
         "client_side_timeout",
         "model_file_id_mapping",
     )
@@ -10311,3 +10436,39 @@ def test_init_kwargs_no_authenticated_identity_field_is_client_settable(mock_req
     metadata: Final = result["litellm_params"]["metadata"]
     survived: Final = {key: metadata.get(key) for key in expected if metadata.get(key) != expected[key]}
     assert survived == {}, f"client-supplied values survived for: {sorted(survived)}"
+
+@pytest.mark.asyncio
+async def test_direct_passthrough_keeps_mapped_baggage_tags_outside_upstream_body():
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy.utils import ProxyLogging
+
+    async def receive():
+        return {"type": "http.request", "body": b'{"model":"qa-model"}'}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/openai/v1/chat/completions",
+            "query_string": b"",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"baggage", b"entrypoint=a"),
+                (b"x-litellm-tags", b"existing"),
+            ],
+        },
+        receive,
+    )
+    admitted = await read_request_body(request)
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request,
+        admitted,
+        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        None,
+        UserApiKeyCache(),
+    )
+    metadata = _update_metadata_with_tags_in_header(request, {})
+    assert metadata["tags"] == ["existing", "usecase:a"]
+    assert await read_request_body(request) == {"model": "qa-model"}

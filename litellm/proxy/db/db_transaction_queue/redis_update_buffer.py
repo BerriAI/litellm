@@ -9,8 +9,10 @@ import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from functools import reduce
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
+from pydantic import TypeAdapter
 from redis.exceptions import RedisError
 
 from litellm._internal_context import with_service_target
@@ -26,6 +28,7 @@ from litellm.constants import (
     REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
     REDIS_SPEND_LOGS_BUFFER_KEY,
     REDIS_SPEND_LOGS_BUFFER_MAX_ROWS,
+    REDIS_TOOL_DISCOVERY_BUFFER_KEY,
     REDIS_UPDATE_BUFFER_KEY,
     REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
 )
@@ -41,12 +44,17 @@ from litellm.proxy._types import (
     DBSpendUpdateTransactions,
     Litellm_EntityType,
     SpendUpdateQueueItem,
+    ToolDiscoveryQueueItem,
 )
 from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
     DailySpendUpdateQueue,
 )
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
+from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
+    ToolDiscoveryQueue,
+    aggregate_tool_discoveries,
+)
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     WindowSpendTransaction,
     WindowSpendUpdateQueue,
@@ -98,6 +106,7 @@ _SPEND_TRANSACTION_FIELDS: Final[tuple[_SpendTransactionField, ...]] = (
 )
 
 _ValueT = TypeVar("_ValueT")
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _spend_log_json_default(value: object) -> str:
@@ -109,7 +118,7 @@ def _encode_spend_log_row(row: SpendLogRow) -> str:
 
 
 def _decode_spend_log_row(encoded: str) -> dict[str, object] | None:
-    decoded: Final = json.loads(encoded)
+    decoded: Final = _DECODED_JSON.validate_python(json.loads(encoded))
     return decoded if isinstance(decoded, dict) else None
 
 
@@ -131,6 +140,9 @@ def _merged_entity_transactions(
         (_entity_transactions(transaction, field) for transaction in list_of_transactions),
         {},
     )
+
+
+_TOOL_DISCOVERY_ITEMS: Final = TypeAdapter(list[ToolDiscoveryQueueItem])
 
 
 class RedisUpdateBuffer:
@@ -168,9 +180,11 @@ class RedisUpdateBuffer:
     @with_service_target(SPEND_QUEUE_TARGET)
     async def _store_transactions_in_redis(
         self,
-        transactions: Mapping[str, BaseDailySpendTransaction] | None,
+        transactions: dict[str, BaseDailySpendTransaction] | None,  # mutable-ok: add_update requires dict
         redis_key: str,
         service_type: ServiceTypes,
+        *,
+        source_queue: DailySpendUpdateQueue,
     ) -> None:
         """
         Helper method to store transactions in Redis and emit an event
@@ -179,6 +193,7 @@ class RedisUpdateBuffer:
             transactions: The transactions to store
             redis_key: The Redis key to store under
             service_type: The service type for event emission
+            source_queue: The in-memory queue to restore transactions to if Redis push fails
         """
         if transactions is None or len(transactions) == 0:
             return
@@ -191,6 +206,15 @@ class RedisUpdateBuffer:
                 key=redis_key,
                 values=list_of_transactions,
             )
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "Spend tracking - failed to push spend updates to Redis (redis_key=%s). "
+                "Restoring them to the in-memory queue for retry on next tick. Error: %s",
+                redis_key,
+                str(e),
+            )
+            await source_queue.add_update(transactions)
+        else:
             verbose_proxy_logger.debug(
                 "Spend tracking - pushed spend updates to Redis buffer. redis_key=%s, buffer_size=%s",
                 redis_key,
@@ -199,12 +223,6 @@ class RedisUpdateBuffer:
             await self._emit_new_item_added_to_redis_buffer_event(
                 queue_size=current_redis_buffer_size,
                 service=service_type,
-            )
-        except Exception as e:
-            verbose_proxy_logger.error(
-                "Spend tracking - failed to push spend updates to Redis (redis_key=%s). Error: %s",
-                redis_key,
-                str(e),
             )
 
     @with_service_target(SPEND_QUEUE_TARGET)
@@ -552,6 +570,56 @@ class RedisUpdateBuffer:
             )
 
     @with_service_target(SPEND_QUEUE_TARGET)
+    async def store_tool_discoveries_in_redis(self, tool_discovery_queue: ToolDiscoveryQueue) -> None:
+        """Move this worker's pending tool rows to Redis so only the leader writes LiteLLM_ToolTable."""
+        if self.redis_cache is None:
+            return
+        items: Final = tool_discovery_queue.flush()
+        if not items:
+            return
+        try:
+            _ = await self.redis_cache.async_rpush_pipeline(
+                rpush_list=[
+                    RedisPipelineRpushOperation(key=REDIS_TOOL_DISCOVERY_BUFFER_KEY, values=[safe_dumps(items)])
+                ]
+            )
+        except (RedisError, OSError, asyncio.TimeoutError) as e:
+            verbose_proxy_logger.error(
+                "Tool discovery - failed to push %d tool rows to Redis, restoring them for the next tick. Error: %s",
+                len(items),
+                str(e),
+            )
+            for item in items:
+                tool_discovery_queue.add_update(item)
+
+    @with_service_target(SPEND_QUEUE_TARGET)
+    async def restore_tool_discoveries_to_redis(self, items: Sequence[ToolDiscoveryQueueItem]) -> None:
+        """Put drained tool rows back for the next drain after a write that provably did not apply."""
+        if self.redis_cache is None or not items:
+            return
+        _ = await self.redis_cache.async_rpush_pipeline(
+            rpush_list=[
+                RedisPipelineRpushOperation(key=REDIS_TOOL_DISCOVERY_BUFFER_KEY, values=[safe_dumps(list(items))])
+            ]
+        )
+
+    @with_service_target(SPEND_QUEUE_TARGET)
+    async def get_all_tool_discoveries_from_redis_buffer(self) -> tuple[ToolDiscoveryQueueItem, ...]:
+        """Drain every worker's tool rows and fold them to one row per tool_name."""
+        if self.redis_cache is None:
+            return ()
+        popped: Final = await self.redis_cache.async_lpop_pipeline(
+            lpop_list=[
+                RedisPipelineLpopOperation(key=REDIS_TOOL_DISCOVERY_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT)
+            ]
+        )
+        entries: Final = popped[0] if popped else None
+        if not entries:
+            return ()
+        batches: Final = tuple(_TOOL_DISCOVERY_ITEMS.validate_json(entry) for entry in entries)
+        return aggregate_tool_discoveries(chain.from_iterable(batches))
+
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def store_spend_logs_in_redis(
         self,
         rows: Sequence[SpendLogRow],
@@ -793,6 +861,7 @@ class RedisUpdateBuffer:
             transactions=daily_tag_spend_update_transactions,
             redis_key=REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
             service_type=ServiceTypes.REDIS_DAILY_TAG_SPEND_UPDATE_QUEUE,
+            source_queue=daily_tag_spend_update_queue,
         )
 
     @with_service_target(SPEND_QUEUE_TARGET)
