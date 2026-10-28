@@ -35,6 +35,8 @@ from litellm.types.utils import StandardCallbackDynamicParams
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.proxy._types import UserAPIKeyAuth
+
     Span = _Span
 else:
     Span = Any
@@ -124,6 +126,15 @@ def _starts_its_own_trace(span: object, kwargs: Mapping[str, object]) -> bool:
         and _parent_of(proxy_span) is None
         and proxy_span.get_span_context().span_id == parent.span_id
     )
+
+
+def _a_destination_carries_the_trace() -> bool:
+    """Whether this request resolved a key's or team's ``langfuse_otel`` destination, whose fan-out sends it the whole
+    trace."""
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.plumbing.context import destination_backends
+
+    return ExporterOwner.LANGFUSE_OTEL in destination_backends()
 
 
 class LangfuseOtelLogger(OpenTelemetry):
@@ -540,6 +551,27 @@ class LangfuseOtelLogger(OpenTelemetry):
         which in turn prevents empty traces from being sent to Langfuse.
         """
         return None
+
+    def _emit_once(
+        self,
+        kwargs: dict[str, object],  # mutable-ok: the v1 dedupe marker is written into the request's kwargs
+        *scope: object,
+    ) -> bool:
+        """Whether to emit this span: once per request, and never for a request a Langfuse destination carries."""
+        return not _a_destination_carries_the_trace() and super()._emit_once(kwargs, *scope)  # pyright: ignore[reportUnknownMemberType]  # the v1 hook takes a bare dict
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict[str, object],  # mutable-ok: the v1 hook contract
+        original_exception: Exception,
+        user_api_key_dict: "UserAPIKeyAuth",
+        traceback_str: str | None = None,
+    ) -> None:
+        """Record the proxy failure of a request no Langfuse destination carries."""
+        if not _a_destination_carries_the_trace():
+            await super().async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # the v1 hook takes a bare dict
+                request_data, original_exception, user_api_key_dict, traceback_str
+            )
 
     async def async_service_success_hook(self, *args, **kwargs):
         """

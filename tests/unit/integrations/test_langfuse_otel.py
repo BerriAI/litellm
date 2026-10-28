@@ -1,9 +1,12 @@
+import asyncio
 import base64
+import contextvars
 import json
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -12,12 +15,16 @@ from openai.types.responses import ResponseFunctionToolCall
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import Span
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME, OpenTelemetry, OpenTelemetryConfig
+from litellm.integrations.otel.model.destination import OtelDestination
+from litellm.integrations.otel.plumbing.context import set_request_destinations
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import Choices, ModelResponse, StandardCallbackDynamicParams
 
@@ -1507,3 +1514,54 @@ def test_langfuse_otel_does_not_start_proxy_request_span() -> None:
     finally:
         langfuse_provider.shutdown()
         generic_provider.shutdown()
+
+
+def _spans_the_legacy_logger_exports(destinations: tuple[OtelDestination, ...]) -> tuple[str, ...]:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    with patch.dict(os.environ, LANGFUSE_ENV_ONLY, clear=True):
+        logger: Final = LangfuseOtelLogger(tracer_provider=provider)
+    at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    kwargs: Final = {**CHAT_KWARGS, "litellm_params": {"metadata": {}}}
+    server_span: Final = provider.get_tracer("proxy").start_span("POST /v1/chat/completions")
+
+    async def log() -> None:
+        set_request_destinations(destinations)
+        logger.log_success_event(dict(kwargs), _chat_response("ok"), at, at)
+        await logger.async_log_failure_event({**kwargs, "exception": ValueError("boom")}, None, at, at)
+        await logger.async_post_call_failure_hook(
+            {}, ValueError("boom"), SimpleNamespace(parent_otel_span=server_span, team_id=None, team_alias=None)
+        )
+
+    try:
+        contextvars.copy_context().run(asyncio.run, log())
+        return tuple(span.name for span in exporter.get_finished_spans())
+    finally:
+        provider.shutdown()
+
+
+_LANGFUSE_DESTINATION: Final = OtelDestination(
+    endpoint="http://tenant.local/api/public/otel",
+    headers={"Authorization": "Basic dGVuYW50"},
+    callback_name="langfuse_otel",
+)
+
+
+def test_a_request_with_a_langfuse_destination_exports_nothing_through_the_legacy_logger() -> None:
+    assert _spans_the_legacy_logger_exports((_LANGFUSE_DESTINATION,)) == ()
+
+
+def test_a_request_without_a_langfuse_destination_still_exports_through_the_legacy_logger() -> None:
+    logged: Final = (
+        "litellm_request",
+        "raw_gen_ai_request",
+        "litellm_request",
+        "Failed Proxy Server Request",
+        "POST /v1/chat/completions",
+    )
+
+    assert _spans_the_legacy_logger_exports(()) == logged
+    assert _spans_the_legacy_logger_exports((_LANGFUSE_DESTINATION.model_copy(update={"callback_name": "arize"}),)) == (
+        logged
+    )
