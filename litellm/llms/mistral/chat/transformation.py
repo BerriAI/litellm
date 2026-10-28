@@ -6,16 +6,17 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from itertools import accumulate, count
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 import httpx
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    handle_messages_with_content_list_to_str_conversion,
+    convert_content_list_to_str,
     strip_litellm_internal_message_fields,
     strip_none_values_from_message,
 )
@@ -29,8 +30,8 @@ from litellm.router_utils.reasoning_effort_capability import (
     nearest_declared_reasoning_effort,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.mistral import MistralTextBlock, MistralThinkingBlock, MistralToolCallMessage
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage, ChatCompletionTextObject
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object, supports_reasoning
 
@@ -56,6 +57,10 @@ def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: 
 
 
 _NO_TOOL_CALL_TURN: Final[tuple[int, frozenset[str]]] = (-1, frozenset())
+
+
+def _is_json_array(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: a decoded JSON array is a list
+    return isinstance(value, list)
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -118,11 +123,14 @@ class MistralConfig(OpenAIGPTConfig):
     def custom_llm_provider(self) -> str:
         return "mistral"
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
-        is_magistral: Final = "magistral" in model.lower()
-        accepts_reasoning_effort: Final = is_magistral or supports_reasoning(
+    def _accepts_reasoning(self, model: str) -> bool:
+        return "magistral" in model.lower() or supports_reasoning(
             model=model, custom_llm_provider=self.custom_llm_provider
         )
+
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        is_magistral: Final = "magistral" in model.lower()
+        accepts_reasoning_effort: Final = self._accepts_reasoning(model)
         return [
             "stream",
             "temperature",
@@ -260,25 +268,32 @@ class MistralConfig(OpenAIGPTConfig):
         The above statement is not valid now. Need to plan to remove all the #1,2,3
         Mistral API supports content as a list.
         """
-        messages = [self._strip_output_only_fields(m) for m in messages]
+        keeps_reasoning: Final = self._accepts_reasoning(model)
+        final_position: Final = len(messages) - 1
+        replayed_messages: Final = [
+            MistralConfig._with_replayed_reasoning(m, keeps_reasoning, position == final_position)
+            for position, m in enumerate(messages)
+        ]
 
         ## 1. If 'image_url' or 'file' in content, then transform with base class and mistral-specific handling
-        for m in messages:
+        for m in replayed_messages:
             _content_block = m.get("content")
             if _content_block and isinstance(_content_block, list):
                 if any(c.get("type") in ["image_url", "file"] for c in _content_block):
                     if is_async:
-                        return self._transform_messages_async(messages, model)
+                        return self._transform_messages_async(replayed_messages, model)
                     else:
-                        messages = self._transform_messages_sync(messages, model)
-                        return messages
+                        return self._transform_messages_sync(replayed_messages, model)
 
         ## 2. If content is list, then convert to string
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
+        flattened_messages: Final = tuple(
+            MistralConfig._with_flattened_content(m, keeps_reasoning) for m in replayed_messages
+        )
 
         ## 3. Handle name in message
         prepared_messages: Final = tuple(
-            MistralConfig._handle_tool_call_message(MistralConfig._handle_name_in_message(m)) for m in messages
+            MistralConfig._handle_tool_call_message(MistralConfig._handle_name_in_message(m))
+            for m in flattened_messages
         )
         empty_flags: Final = tuple(map(MistralConfig._is_empty_assistant_message, prepared_messages))
         tool_call_turns: Final = accumulate(
@@ -442,17 +457,163 @@ class MistralConfig(OpenAIGPTConfig):
 
         return cleaned_tools
 
-    @classmethod
-    def _strip_output_only_fields(cls, message: AllMessageValues) -> AllMessageValues:
-        """
-        LiteLLM attaches output-only fields (``reasoning_content``, ``thinking_blocks``,
-        ``provider_specific_fields``) to assistant responses. Mistral's input schema forbids
-        unknown fields, so replaying them verbatim in a follow-up turn triggers a
-        422 ``extra_forbidden``. Drop them before the request is sent.
-        """
+    @staticmethod
+    def _is_mistral_think_chunk(part: object) -> bool:
+        match part:
+            case {"type": "thinking", "thinking": list()}:
+                return True
+            case _:
+                return False
+
+    @staticmethod
+    def _text_item_text(item: object) -> str | None:
+        match item:
+            case {"type": "text", "text": str(text)}:
+                return text
+            case _:
+                return None
+
+    @staticmethod
+    def _sendable_think_chunk(
+        chunk: object, items: Sequence[object], may_stay_open: bool
+    ) -> MistralThinkingBlock | None:
+        text_items: Final = [
+            MistralTextBlock(type="text", text=text)
+            for text in map(MistralConfig._text_item_text, items)
+            if text is not None
+        ]
+        if not text_items:
+            return None
+        match chunk:
+            case {"closed": False} if not may_stay_open:
+                return MistralThinkingBlock(type="thinking", thinking=text_items)
+            case {"closed": bool(closed)}:
+                return MistralThinkingBlock(type="thinking", thinking=text_items, closed=closed)
+            case _:
+                return MistralThinkingBlock(type="thinking", thinking=text_items)
+
+    @staticmethod
+    def _sendable_part(part: object, may_stay_open: bool) -> object | None:
+        match part:
+            case {"type": "thinking", "thinking": object() as items} if _is_json_array(items):
+                return MistralConfig._sendable_think_chunk(part, items, may_stay_open)
+            case _:
+                return part
+
+    @staticmethod
+    def _with_sendable_think_chunks(
+        message: AllMessageValues, content_parts: tuple[object, ...], may_end_open: bool
+    ) -> AllMessageValues:
+        last_position: Final = len(content_parts) - 1
+        sendable_parts: Final = [
+            sendable
+            for position, part in enumerate(content_parts)
+            if (sendable := MistralConfig._sendable_part(part, may_end_open and position == last_position)) is not None
+        ]
+        return cast(  # cast-ok: Mistral's ThinkChunk is outside the OpenAI assistant content union
+            AllMessageValues, {**message, "content": sendable_parts or None}
+        )
+
+    @staticmethod
+    def _thinking_block_text(block: object) -> str:
+        match block:
+            case {"type": "thinking", "thinking": str(thinking)}:
+                return thinking
+            case _:
+                return ""
+
+    @staticmethod
+    def _replayed_reasoning_text(message: ChatCompletionAssistantMessage) -> str | None:
+        reasoning_content: Final = message.get("reasoning_content")
+        if isinstance(reasoning_content, str) and reasoning_content.strip():
+            return reasoning_content
+        thinking_blocks: Final = message.get("thinking_blocks")
+        thinking_text: Final = (
+            "".join(map(MistralConfig._thinking_block_text, thinking_blocks))
+            if isinstance(thinking_blocks, list)
+            else ""
+        )
+        return thinking_text if thinking_text.strip() else None
+
+    @staticmethod
+    def _assistant_content_parts(message: ChatCompletionAssistantMessage) -> tuple[object, ...] | None:
+        match message.get("content"):
+            case None | "":
+                return ()
+            case str(text):
+                return (ChatCompletionTextObject(type="text", text=text),)
+            case list(parts) | tuple(parts):
+                return tuple(parts)
+            case _:
+                return None
+
+    @staticmethod
+    def _is_prefix_turn(message: object) -> bool:
+        match message:
+            case {"prefix": True}:
+                return True
+            case _:
+                return False
+
+    @staticmethod
+    def _with_replayed_reasoning(
+        message: AllMessageValues, keeps_reasoning: bool, is_final_turn: bool
+    ) -> AllMessageValues:
         if message["role"] != "assistant":
             return message
-        return strip_litellm_internal_message_fields(message)
+        stripped_message: Final = strip_litellm_internal_message_fields(message)
+        content_parts: Final = MistralConfig._assistant_content_parts(message)
+        if not keeps_reasoning:
+            return MistralConfig._without_think_chunks(stripped_message, content_parts)
+        if content_parts is not None and any(map(MistralConfig._is_mistral_think_chunk, content_parts)):
+            return MistralConfig._with_sendable_think_chunks(
+                stripped_message, content_parts, is_final_turn and MistralConfig._is_prefix_turn(message)
+            )
+        reasoning_text: Final = MistralConfig._replayed_reasoning_text(message)
+        has_turn_output: Final = bool(content_parts) or bool(message.get("tool_calls"))
+        if reasoning_text is None or content_parts is None or not has_turn_output:
+            return stripped_message
+        think_chunk: Final = MistralThinkingBlock(
+            type="thinking", thinking=[MistralTextBlock(type="text", text=reasoning_text)], closed=True
+        )
+        return cast(  # cast-ok: Mistral's ThinkChunk is outside the OpenAI assistant content union
+            AllMessageValues, {**stripped_message, "content": [think_chunk, *content_parts]}
+        )
+
+    @staticmethod
+    def _without_think_chunks(message: AllMessageValues, content_parts: tuple[object, ...] | None) -> AllMessageValues:
+        if content_parts is None or not any(map(MistralConfig._is_mistral_think_chunk, content_parts)):
+            return message
+        kept_parts: Final = [part for part in content_parts if not MistralConfig._is_mistral_think_chunk(part)]
+        return cast(  # cast-ok: an assistant turn takes a content list or no content
+            AllMessageValues, {**message, "content": kept_parts or None}
+        )
+
+    @staticmethod
+    def _with_flattened_content(message: AllMessageValues, keeps_reasoning: bool) -> AllMessageValues:
+        flattened_text: Final = convert_content_list_to_str(message)
+        match message:
+            case {"role": "assistant", "content": list(content)} if keeps_reasoning and any(
+                map(MistralConfig._is_mistral_think_chunk, content)
+            ):
+                text_parts: Final = (
+                    (ChatCompletionTextObject(type="text", text=flattened_text),) if flattened_text else ()
+                )
+                think_chunks: Final = tuple(filter(MistralConfig._is_mistral_think_chunk, content))
+                sent_chunks: Final = tuple(
+                    sendable
+                    for chunk in think_chunks
+                    if (sendable := MistralConfig._sendable_part(chunk, not text_parts)) is not None
+                )
+                return cast(  # cast-ok: Mistral's ThinkChunk is outside the OpenAI assistant content union
+                    AllMessageValues, {**message, "content": [*sent_chunks, *text_parts]}
+                )
+            case _ if flattened_text:
+                return cast(  # cast-ok: every message role takes str content
+                    AllMessageValues, {**message, "content": flattened_text}
+                )
+            case _:
+                return message
 
     @classmethod
     def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:
