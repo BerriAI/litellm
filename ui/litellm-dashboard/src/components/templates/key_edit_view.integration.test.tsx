@@ -2542,6 +2542,37 @@ describe("KeyEditView", () => {
       expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("duration", null);
     });
 
+    it("omits an untouched blank duration for an expiring key", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock, {
+        ...MOCK_KEY_DATA,
+        expires: "2026-12-31T00:00:00Z",
+        duration: undefined,
+      });
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(onSubmitMock).toHaveBeenCalledTimes(1));
+      expect(onSubmitMock.mock.calls[0][0]).not.toHaveProperty("duration");
+    });
+
+    it("submits a typed expiry duration", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock, {
+        ...MOCK_KEY_DATA,
+        expires: "2026-12-31T00:00:00Z",
+        duration: undefined,
+      });
+      await screen.findByRole("button", { name: /save changes/i });
+
+      fireEvent.change(screen.getByPlaceholderText("e.g., 30d"), { target: { value: "30d" } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(onSubmitMock).toHaveBeenCalledTimes(1));
+      expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("duration", "30d");
+    });
+
     it("carries a typed value from every free-text and numeric control into the payload", async () => {
       const onSubmitMock = vi.fn().mockResolvedValue(undefined);
       renderForPayload(onSubmitMock);

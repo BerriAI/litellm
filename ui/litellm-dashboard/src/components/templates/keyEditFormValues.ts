@@ -215,7 +215,7 @@ export const toSubmittedValues = (
   team_id: values.team_id,
   logging_settings: values.logging_settings,
   metadata: values.metadata,
-  duration: values.duration,
+  ...(typeof values.duration === "string" && values.duration.trim() === "" ? {} : { duration: values.duration }),
   token: values.token,
   disabled_callbacks: values.disabled_callbacks,
   auto_rotate: values.auto_rotate,
