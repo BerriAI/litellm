@@ -6,6 +6,7 @@ import ssl
 import sys
 import typing
 import urllib.request
+import weakref
 from collections.abc import Callable, Generator
 from typing import ClassVar, Final
 
@@ -107,6 +108,24 @@ def map_aiohttp_exceptions() -> Generator[None, None, None]:
 
         message: Final = str(exc)
         raise mapped_exc(message) from exc
+
+
+def _release_transport_anchor(_transport: object) -> None:
+    """Release a transport anchored to a response stream. See ``_anchor_transport_to``."""
+
+
+def _anchor_transport_to(stream: "AiohttpResponseStream", transport: object) -> None:
+    """Keep the transport alive for as long as the stream can still read.
+
+    The transport finalizer closes the session it owns, and nothing on the path from a
+    live response back to that session references the transport, so a client dropped
+    mid-stream would close the session under the body. ``weakref.finalize`` holds the
+    transport in its own registry rather than on the stream, which keeps the transport
+    out of the response's reference cycle (an exception carrying the response, for one)
+    so it is finalized by refcount once the anchor drops and can still schedule an async
+    close, instead of being collected in the same cyclic pass as the session it closes.
+    """
+    weakref.finalize(stream, _release_transport_anchor, transport)
 
 
 class AiohttpResponseStream(httpx.AsyncByteStream):
@@ -463,10 +482,12 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 # Re-raise if it's a different RuntimeError
                 raise
 
+        stream: Final = AiohttpResponseStream(response)
+        _anchor_transport_to(stream, self)
         return httpx.Response(
             status_code=response.status,
             headers=response.headers,
-            stream=AiohttpResponseStream(response),
+            stream=stream,
             request=request,
         )
 
