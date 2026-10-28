@@ -888,7 +888,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
             .mount(&upstream)
             .await;
-        let response = litellm_http::Client::plain_for_test()
+        let response = litellm_http::Client::for_test()
             .get(upstream.uri())
             .send()
             .await

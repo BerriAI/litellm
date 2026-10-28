@@ -108,7 +108,7 @@ fn config(base: String, timeout: Option<Duration>) -> OpenAiEmbedderConfig {
 async fn posts_embeddings_request_and_parses_vector() {
     let server = TestHttpServer::response("200 OK", r#"{"data":[{"embedding":[0.1,0.2]}]}"#).await;
     let embedder = OpenAiEmbedder::new(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         config(
             format!("{}/", server.base_url()),
             Some(Duration::from_secs(1)),
@@ -161,7 +161,7 @@ async fn status_timeout_and_body_errors_are_unavailable(
     let server =
         TestHttpServer::response_after(status, body, Duration::from_millis(delay_ms)).await;
     let embedder = OpenAiEmbedder::new(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         config(server.base_url(), timeout),
     );
     assert_eq!(embedder.async_embed("hello", None).await, expected);
@@ -170,7 +170,7 @@ async fn status_timeout_and_body_errors_are_unavailable(
 #[rstest]
 fn sync_embedding_is_unsupported() {
     let embedder = OpenAiEmbedder::new(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         config("http://127.0.0.1:9".to_owned(), None),
     );
     assert_eq!(

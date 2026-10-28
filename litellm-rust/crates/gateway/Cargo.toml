@@ -21,7 +21,7 @@ litellm-auth-types.workspace = true
 litellm-config.workspace = true
 litellm-circuit-breaker.workspace = true
 litellm-redis-client.workspace = true
-litellm-http = { workspace = true, features = ["mcp"] }
+litellm-http.workspace = true
 litellm-llms.workspace = true
 litellm-secrets.workspace = true
 litellm-tracing.workspace = true

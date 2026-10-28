@@ -13,7 +13,7 @@ async fn insert_rejects_invalid_identifiers(
     #[case] table: &str,
     #[case] invalid_database: bool,
 ) {
-    let client = Client::no_redirect_for_test();
+    let client = Client::for_test();
     let connection = Connection::writer("http://localhost:8123").expect("valid URL");
     let result = insert_encoded_rows(&client, &connection, database, table, "token", "{}").await;
 
@@ -24,7 +24,7 @@ async fn insert_rejects_invalid_identifiers(
 #[rstest]
 #[tokio::test]
 async fn read_rejects_empty_sql() {
-    let client = Client::no_redirect_for_test();
+    let client = Client::for_test();
     let connection = Connection::reader("http://localhost:8123", "litellm").expect("valid URL");
 
     assert!(matches!(
@@ -87,7 +87,7 @@ async fn typed_fetch_encodes_parameters_and_validates_rows(
         .expect(2)
         .mount(&server)
         .await;
-    let client = Client::no_redirect_for_test();
+    let client = Client::for_test();
     let connection = Connection::parse(&server.uri()).unwrap();
     let params = QueryParams {
         signed: i64::MIN,
@@ -131,7 +131,7 @@ async fn server_result_limits_allow_smaller_pages_without_retrying_other_failure
         .await;
     let connection = Connection::parse(&server.uri()).unwrap();
     let error = execute_read(
-        &Client::no_redirect_for_test(),
+        &Client::for_test(),
         &connection,
         "SELECT 1",
         &BTreeMap::new(),
@@ -174,7 +174,7 @@ async fn insert_timeout_environment_child() {
         .mount(&server)
         .await;
     let result = insert_encoded_rows(
-        &Client::no_redirect_for_test(),
+        &Client::for_test(),
         &Connection::parse(&server.uri()).unwrap(),
         "traces",
         "otel_traces",
