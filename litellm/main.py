@@ -69,7 +69,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.allowed_tools_tool_choice import allowed_tool_choice_dropped
+from litellm.litellm_core_utils.allowed_tools_tool_choice import tool_choice_for_provider
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
@@ -5860,15 +5860,11 @@ def completion(
             "response_format": response_format,
             "seed": seed,
             "tools": tools,
-            "tool_choice": (
-                None
-                if allowed_tool_choice_dropped(
-                    _OPAQUE_VALUE_ADAPTER.validate_python(tool_choice),
-                    custom_llm_provider=custom_llm_provider,
-                    model=model,
-                    drop_params=drops_unsupported_params,
-                )
-                else tool_choice
+            "tool_choice": tool_choice_for_provider(
+                _OPAQUE_VALUE_ADAPTER.validate_python(tool_choice),
+                custom_llm_provider=custom_llm_provider,
+                model=model,
+                drop_params=drops_unsupported_params,
             ),
             "max_retries": max_retries,
             "logprobs": logprobs,

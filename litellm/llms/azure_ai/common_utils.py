@@ -151,6 +151,10 @@ def azure_ai_supports_native_responses(model: str | None, api_base: str | None) 
     return AzureFoundryModelInfo.get_azure_ai_route(model) == "default"
 
 
+def azure_ai_routes_to_openai_chat(model: str) -> bool:
+    return "claude" not in model.lower() and AzureFoundryModelInfo.get_azure_ai_route(model) != "agents"
+
+
 def foundry_chat_rejects_function_tools_while_reasoning(
     model: str, reasoning_effort: str | Mapping[str, object] | None
 ) -> bool:

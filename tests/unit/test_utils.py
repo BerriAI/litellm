@@ -8280,46 +8280,6 @@ CHAT_ALLOWED_TOOLS: Final = {
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-@pytest.mark.parametrize(
-    "tool_choice",
-    [
-        CHAT_ALLOWED_TOOLS,
-        {
-            "type": "allowed_tools",
-            "mode": "required",
-            "tools": [
-                {"type": "function", "name": "get_weather"},
-                {"type": "custom", "name": "apply_patch"},
-                {"type": "mcp", "server_label": "deepwiki"},
-            ],
-        },
-    ],
-    ids=["chat_nested", "responses_flat"],
-)
-def test_validate_tool_choice_allowed_tools_takes_the_chat_shape(tool_choice):
-    """Both OpenAI allowed_tools shapes are accepted and come out in the chat completions shape."""
-    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL) == CHAT_ALLOWED_TOOLS
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-@pytest.mark.parametrize(
-    "tool_choice",
-    [
-        {"type": "allowed_tools"},
-        {"type": "allowed_tools", "mode": "required"},
-        {"type": "allowed_tools", "allowed_tools": {"mode": "sometimes", "tools": []}},
-        {"type": "allowed_tools", "allowed_tools": "get_weather", "mode": "auto"},
-        {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": []}},
-        {"type": "allowed_tools", "mode": "auto", "tools": []},
-    ],
-)
-def test_validate_tool_choice_malformed_allowed_tools_is_a_400(tool_choice):
-    with pytest.raises(litellm.BadRequestError, match="Invalid tool choice") as exc_info:
-        validate_chat_completion_tool_choice(tool_choice, model=MODEL)
-    assert exc_info.value.status_code == 400
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_get_optional_params_leaves_allowed_tools_to_its_caller():
     """Direct callers like Bedrock batch build provider params here, so the provider check stays in completion()."""
     optional_params: Final = get_optional_params(

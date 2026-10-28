@@ -5563,7 +5563,15 @@ def test_completion_sends_allowed_tools_nested_to_openai_shaped_providers(
 
 
 @pytest.mark.parametrize(
-    "model", ["anthropic/claude-haiku-4-5", "gemini/gemini-2.5-flash", "ollama/llama3", "deepseek/deepseek-chat"]
+    "model",
+    [
+        "anthropic/claude-haiku-4-5",
+        "gemini/gemini-2.5-flash",
+        "ollama/llama3",
+        "deepseek/deepseek-chat",
+        "azure_ai/claude-haiku-4-5",
+        "azure_ai/agents/asst_abc123",
+    ],
 )
 def test_completion_rejects_allowed_tools_a_provider_cannot_take(model: str) -> None:
     with pytest.raises(
@@ -5594,6 +5602,26 @@ def test_drop_params_sends_tools_without_an_allowed_tools_choice_a_provider_cann
         api_base="http://localhost:12346/v1",
         api_key="fake_api_key",
         drop_params=drop == "per_call",
+    )
+
+    assert mock_route.called
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert "tool_choice" not in sent, sent
+    assert [tool["function"]["name"] for tool in sent["tools"]] == ["get_weather", "get_time"]
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-4.1-mini", "deepseek/deepseek-chat"])
+def test_drop_params_sends_tools_without_a_malformed_allowed_tools_choice(respx_mock: respx.MockRouter, model: str) -> None:
+    mock_route: Final = _mock_chat_completion(respx_mock)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "What time is it?"}],
+        tools=ALLOWED_TOOLS_REQUEST_TOOLS,
+        tool_choice={"type": "allowed_tools", "allowed_tools": {"mode": "any", "tools": []}},
+        api_base="http://localhost:12346/v1",
+        api_key="fake_api_key",
+        drop_params=True,
     )
 
     assert mock_route.called

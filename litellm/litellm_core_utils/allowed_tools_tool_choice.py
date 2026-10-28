@@ -1,12 +1,13 @@
 from collections.abc import Mapping, Sequence, Set
-from typing import Final, Literal
+from typing import Final, Literal, TypeVar
 
 from openai.types.responses.tool_choice_allowed_param import ToolChoiceAllowedParam
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
-from litellm.exceptions import UnsupportedParamsError
+from litellm.exceptions import BadRequestError, UnsupportedParamsError
+from litellm.litellm_core_utils.tool_fields import first_validation_error
 
-PROVIDERS_ACCEPTING_ALLOWED_TOOLS: Final = frozenset({"openai", "azure", "azure_ai", "litellm_proxy"})
+PROVIDERS_ACCEPTING_ALLOWED_TOOLS: Final = frozenset({"openai", "azure", "litellm_proxy"})
 
 
 class _AllowedTools(BaseModel):
@@ -37,10 +38,16 @@ class _AllowedToolChoiceRequest(BaseModel):
     tool_choice: ChatAllowedToolChoice | ResponsesAllowedToolChoice
 
 
-ALLOWED_TOOL_CHOICE: Final[TypeAdapter[ChatAllowedToolChoice | ResponsesAllowedToolChoice]] = TypeAdapter(
-    ChatAllowedToolChoice | ResponsesAllowedToolChoice
-)
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, JsonValue])
+_ToolChoiceT: Final = TypeVar("_ToolChoiceT")
+
+
+def parse_allowed_tool_choice(tool_choice: object) -> ChatAllowedToolChoice | ResponsesAllowedToolChoice:
+    match tool_choice:
+        case {"allowed_tools": object()}:
+            return ChatAllowedToolChoice.model_validate(tool_choice)
+        case _:
+            return ResponsesAllowedToolChoice.model_validate(tool_choice)
 
 
 def _json_choice(choice: ChatAllowedToolChoice | ResponsesAllowedToolChoice) -> Mapping[str, JsonValue]:
@@ -96,7 +103,7 @@ def responses_allowed_tool_choice(
     }
 
 
-def _is_allowed_tools_choice(tool_choice: object) -> bool:
+def is_allowed_tools_choice(tool_choice: object) -> bool:
     match tool_choice:
         case {"type": "allowed_tools"}:
             return True
@@ -104,13 +111,35 @@ def _is_allowed_tools_choice(tool_choice: object) -> bool:
             return False
 
 
-def allowed_tool_choice_dropped(
-    tool_choice: object, *, custom_llm_provider: str, model: str, drop_params: bool
-) -> bool:
-    if not _is_allowed_tools_choice(tool_choice) or custom_llm_provider in PROVIDERS_ACCEPTING_ALLOWED_TOOLS:
-        return False
+def _accepts_allowed_tools(custom_llm_provider: str, model: str) -> bool:
+    match custom_llm_provider:
+        case "azure_ai":
+            from litellm.llms.azure_ai.common_utils import azure_ai_routes_to_openai_chat
+
+            return azure_ai_routes_to_openai_chat(model)
+        case _:
+            return custom_llm_provider in PROVIDERS_ACCEPTING_ALLOWED_TOOLS
+
+
+def tool_choice_for_provider(
+    tool_choice: _ToolChoiceT, *, custom_llm_provider: str, model: str, drop_params: bool
+) -> _ToolChoiceT | Mapping[str, JsonValue] | None:
+    if not is_allowed_tools_choice(tool_choice):
+        return tool_choice
+    try:
+        allowed_tool_choice: Final = parse_allowed_tool_choice(tool_choice)
+    except ValidationError as exc:
+        if drop_params:
+            return None
+        raise BadRequestError(
+            message=f"Invalid allowed_tools tool_choice, {first_validation_error(exc, prefix=('tool_choice',))}. To drop it, set `litellm.drop_params=True`",
+            model=model,
+            llm_provider=custom_llm_provider,
+        ) from exc
+    if _accepts_allowed_tools(custom_llm_provider, model):
+        return dict(chat_allowed_tool_choice(allowed_tool_choice))
     if drop_params:
-        return True
+        return None
     raise UnsupportedParamsError(
         message=f"{custom_llm_provider} does not support an allowed_tools tool_choice, for model={model}. To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
         model=model,
@@ -118,9 +147,13 @@ def allowed_tool_choice_dropped(
     )
 
 
-def _function_name(tool: JsonValue) -> str | None:
+def function_or_custom_tool_name(tool: object) -> str | None:
     match tool:
-        case {"type": "function", "function": {"name": str() as name}} | {"type": "function", "name": str() as name}:
+        case (
+            {"type": "function", "function": {"name": str() as name}}
+            | {"type": "custom", "custom": {"name": str() as name}}
+            | {"type": "function" | "custom", "name": str() as name}
+        ):
             return name
         case _:
             return None
@@ -142,13 +175,13 @@ def _with_allowed_tools(choice: Mapping[str, JsonValue], tools: Sequence[JsonVal
             return {**choice, "tools": [*tools]}
 
 
-def pruned_allowed_tool_choice(request: object, removed_function_names: Set[str]) -> JsonValue | None:
+def pruned_allowed_tool_choice(request: object, removed_tool_names: Set[str]) -> JsonValue | None:
     try:
         choice: Final = _json_choice(_AllowedToolChoiceRequest.model_validate(request).tool_choice)
     except ValidationError:
         return None
     tools: Final = _allowed_tools_list(choice)
-    kept: Final = [tool for tool in tools if _function_name(tool) not in removed_function_names]
+    kept: Final = [tool for tool in tools if function_or_custom_tool_name(tool) not in removed_tool_names]
     if len(kept) == len(tools):
         return None
     return _with_allowed_tools(choice, kept) if kept else "none"

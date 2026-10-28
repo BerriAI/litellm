@@ -3,11 +3,13 @@ from typing import Final
 import pytest
 from pydantic import ValidationError
 
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
-    ALLOWED_TOOL_CHOICE,
     chat_allowed_tool_choice,
+    parse_allowed_tool_choice,
     pruned_allowed_tool_choice,
     responses_allowed_tool_choice,
+    tool_choice_for_provider,
 )
 
 CHAT_CHOICE: Final = {
@@ -35,11 +37,11 @@ RESPONSES_CHOICE: Final = {
 
 
 def test_chat_shape_flattens_for_responses_keeping_every_tool_field():
-    assert responses_allowed_tool_choice(ALLOWED_TOOL_CHOICE.validate_python(CHAT_CHOICE)) == RESPONSES_CHOICE
+    assert responses_allowed_tool_choice(parse_allowed_tool_choice(CHAT_CHOICE)) == RESPONSES_CHOICE
 
 
 def test_responses_shape_nests_for_chat_keeping_its_tool_names():
-    assert chat_allowed_tool_choice(ALLOWED_TOOL_CHOICE.validate_python(RESPONSES_CHOICE)) == {
+    assert chat_allowed_tool_choice(parse_allowed_tool_choice(RESPONSES_CHOICE)) == {
         "type": "allowed_tools",
         "allowed_tools": {
             "mode": "required",
@@ -58,12 +60,12 @@ def test_responses_shape_nests_for_chat_keeping_its_tool_names():
     ids=["chat", "responses"],
 )
 def test_each_shape_is_unchanged_when_already_in_the_target_shape(convert, choice):
-    assert convert(ALLOWED_TOOL_CHOICE.validate_python(choice)) == choice
+    assert convert(parse_allowed_tool_choice(choice)) == choice
 
 
 def test_tools_given_as_a_tuple_are_accepted():
     choice: Final = {"type": "allowed_tools", "mode": "auto", "tools": ({"type": "function", "name": "get_weather"},)}
-    assert chat_allowed_tool_choice(ALLOWED_TOOL_CHOICE.validate_python(choice))["allowed_tools"] == {
+    assert chat_allowed_tool_choice(parse_allowed_tool_choice(choice))["allowed_tools"] == {
         "mode": "auto",
         "tools": [{"type": "function", "function": {"name": "get_weather"}}],
     }
@@ -80,7 +82,58 @@ def test_tools_given_as_a_tuple_are_accepted():
 )
 def test_a_choice_that_is_not_a_valid_allowed_tools_choice_is_rejected(choice):
     with pytest.raises(ValidationError):
-        ALLOWED_TOOL_CHOICE.validate_python(choice)
+        parse_allowed_tool_choice(choice)
+
+
+@pytest.mark.parametrize(
+    "choice",
+    [
+        {
+            "type": "allowed_tools",
+            "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": "a"}}]},
+        },
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "a"}]},
+    ],
+    ids=["chat", "responses"],
+)
+def test_a_provider_that_takes_allowed_tools_gets_either_shape_nested(choice):
+    assert tool_choice_for_provider(choice, custom_llm_provider="openai", model="gpt-4.1-mini", drop_params=False) == {
+        "type": "allowed_tools",
+        "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": "a"}}]},
+    }
+
+
+@pytest.mark.parametrize("choice", ["required", {"type": "function", "function": {"name": "a"}}, None])
+def test_a_choice_other_than_allowed_tools_passes_through(choice):
+    assert (
+        tool_choice_for_provider(choice, custom_llm_provider="anthropic", model="claude", drop_params=False) is choice
+    )
+
+
+@pytest.mark.parametrize(
+    ("choice", "field"),
+    [
+        ({"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": []}}, "tool_choice.allowed_tools.tools"),
+        ({"type": "allowed_tools", "mode": "auto", "tools": []}, "tool_choice.tools"),
+        ({"type": "allowed_tools", "mode": "any", "tools": [{"type": "function", "name": "a"}]}, "tool_choice.mode"),
+        ({"type": "allowed_tools"}, "tool_choice.mode"),
+        ({"type": "allowed_tools", "allowed_tools": "get_weather", "mode": "auto"}, "tool_choice.allowed_tools"),
+    ],
+)
+def test_a_malformed_choice_is_a_one_line_400_naming_its_field(choice, field):
+    with pytest.raises(BadRequestError) as exc_info:
+        tool_choice_for_provider(choice, custom_llm_provider="openai", model="gpt-4.1-mini", drop_params=False)
+    assert exc_info.value.status_code == 400
+    assert f"{field}:" in exc_info.value.message
+    assert "\n" not in exc_info.value.message
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "anthropic"])
+def test_a_malformed_choice_is_dropped_under_drop_params(custom_llm_provider):
+    choice: Final = {"type": "allowed_tools", "mode": "any", "tools": []}
+    assert (
+        tool_choice_for_provider(choice, custom_llm_provider=custom_llm_provider, model="m", drop_params=True) is None
+    )
 
 
 @pytest.mark.parametrize(
@@ -102,6 +155,27 @@ def test_a_choice_that_is_not_a_valid_allowed_tools_choice_is_rejected(choice):
 )
 def test_removed_functions_are_pruned_from_the_choice_in_its_own_shape(choice, expected):
     assert pruned_allowed_tool_choice({"tool_choice": choice}, {"get_weather"}) == expected
+
+
+@pytest.mark.parametrize(
+    ("choice", "expected"),
+    [
+        (
+            CHAT_CHOICE,
+            {
+                **CHAT_CHOICE,
+                "allowed_tools": {
+                    **CHAT_CHOICE["allowed_tools"],
+                    "tools": CHAT_CHOICE["allowed_tools"]["tools"][::2],
+                },
+            },
+        ),
+        (RESPONSES_CHOICE, {**RESPONSES_CHOICE, "tools": RESPONSES_CHOICE["tools"][::2]}),
+    ],
+    ids=["chat", "responses"],
+)
+def test_removed_custom_tools_are_pruned_from_the_choice_in_its_own_shape(choice, expected):
+    assert pruned_allowed_tool_choice({"tool_choice": choice}, {"apply_patch"}) == expected
 
 
 def test_a_choice_left_with_no_tools_becomes_none():

@@ -2803,6 +2803,33 @@ class TestOpenAIResponsesHandlerToolInjection:
         assert [tool["name"] for tool in result["tools"]] == ["get_weather"]
         assert result["tool_choice"] == expected
 
+    @pytest.mark.asyncio
+    async def test_a_custom_tool_the_guardrail_removes_is_pruned_from_allowed_tools(self):
+        data = {
+            "input": [{"role": "user", "content": "What time is it?", "type": "message"}],
+            "tools": [
+                {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+                {"type": "custom", "name": "get_time"},
+            ],
+            "tool_choice": {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [{"type": "function", "name": "get_weather"}, {"type": "custom", "name": "get_time"}],
+            },
+            "model": "gpt-4",
+        }
+
+        result = await OpenAIResponsesHandler().process_input_messages(
+            data, ToolDroppingGuardrail(guardrail_name="test")
+        )
+
+        assert [tool["name"] for tool in result["tools"]] == ["get_weather"]
+        assert result["tool_choice"] == {
+            "type": "allowed_tools",
+            "mode": "required",
+            "tools": [{"type": "function", "name": "get_weather"}],
+        }
+
 
 COMPRESSED_MARKER = "[compressed document; retrieve the full text with hash=b573993006976af767214fac]"
 
