@@ -480,14 +480,26 @@ class Clock:
         return self.now
 
 
+def _pre_call(check: ModelRateLimitingCheck, deployment: dict[str, object]) -> object:
+    return check.pre_call_check(deployment)
+
+
+async def _async_pre_call(check: ModelRateLimitingCheck, deployment: dict[str, object]) -> object:
+    return await check.async_pre_call_check(deployment)
+
+
+async def _async_log_success(check: ModelRateLimitingCheck, kwargs: dict[str, object]) -> None:
+    await check.async_log_success_event(kwargs, None, None, None)
+
+
 class TestDailyLimits:
     def test_pre_call_check_rejects_the_request_over_rpd(self):
         check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
 
-        assert check.pre_call_check(RPD_DEPLOYMENT) == RPD_DEPLOYMENT
-        assert check.pre_call_check(RPD_DEPLOYMENT) == RPD_DEPLOYMENT
+        assert _pre_call(check, RPD_DEPLOYMENT) == RPD_DEPLOYMENT
+        assert _pre_call(check, RPD_DEPLOYMENT) == RPD_DEPLOYMENT
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            check.pre_call_check(RPD_DEPLOYMENT)
+            _pre_call(check, RPD_DEPLOYMENT)
 
         assert "RPD limit=2, current usage=3" in str(exc_info.value)
         assert "rpd limit=2. current usage=3. id=daily-test-id, model_group=daily-model" in exc_info.value.response.text
@@ -496,10 +508,10 @@ class TestDailyLimits:
     async def test_async_pre_call_check_rejects_the_request_over_rpd_and_lets_the_router_retry(self):
         check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
 
-        assert await check.async_pre_call_check(RPD_DEPLOYMENT) == RPD_DEPLOYMENT
-        assert await check.async_pre_call_check(RPD_DEPLOYMENT) == RPD_DEPLOYMENT
+        assert await _async_pre_call(check, RPD_DEPLOYMENT) == RPD_DEPLOYMENT
+        assert await _async_pre_call(check, RPD_DEPLOYMENT) == RPD_DEPLOYMENT
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            await check.async_pre_call_check(RPD_DEPLOYMENT)
+            await _async_pre_call(check, RPD_DEPLOYMENT)
 
         assert "RPD limit=2" in str(exc_info.value)
         assert exc_info.value.num_retries is None
@@ -516,11 +528,11 @@ class TestDailyLimits:
             }
         }
 
-        await check.async_log_success_event(kwargs, None, None, None)
-        assert await check.async_pre_call_check(deployment) == deployment
-        await check.async_log_success_event(kwargs, None, None, None)
+        await _async_log_success(check, kwargs)
+        assert await _async_pre_call(check, deployment) == deployment
+        await _async_log_success(check, kwargs)
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            await check.async_pre_call_check(deployment)
+            await _async_pre_call(check, deployment)
 
         assert "TPD limit=100, current usage=120" in str(exc_info.value)
 
@@ -531,7 +543,7 @@ class TestDailyLimits:
         check = ModelRateLimitingCheck(dual_cache=DualCache(redis_cache=redis_cache), clock=Clock(DAY_ONE))
 
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            check.pre_call_check(deployment)
+            _pre_call(check, deployment)
 
         assert "TPD limit=100, current usage=100" in str(exc_info.value)
         assert redis_cache.get_cache.call_args.kwargs["key"] == "daily-test-id:gpt-4.1-mini:tpd:2026-10-28"
@@ -539,17 +551,17 @@ class TestDailyLimits:
     def test_rpd_count_starts_fresh_after_utc_midnight(self):
         clock = Clock(DAY_ONE)
         check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
-        check.pre_call_check(RPD_DEPLOYMENT)
-        check.pre_call_check(RPD_DEPLOYMENT)
+        _pre_call(check, RPD_DEPLOYMENT)
+        _pre_call(check, RPD_DEPLOYMENT)
         with pytest.raises(litellm.RateLimitError):
-            check.pre_call_check(RPD_DEPLOYMENT)
+            _pre_call(check, RPD_DEPLOYMENT)
 
         clock.now = DAY_ONE + timedelta(seconds=30)
 
-        assert check.pre_call_check(RPD_DEPLOYMENT) == RPD_DEPLOYMENT
-        assert check.pre_call_check(RPD_DEPLOYMENT) == RPD_DEPLOYMENT
+        assert _pre_call(check, RPD_DEPLOYMENT) == RPD_DEPLOYMENT
+        assert _pre_call(check, RPD_DEPLOYMENT) == RPD_DEPLOYMENT
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            check.pre_call_check(RPD_DEPLOYMENT)
+            _pre_call(check, RPD_DEPLOYMENT)
         assert "current usage=3" in str(exc_info.value)
 
     @pytest.mark.parametrize(
@@ -565,7 +577,7 @@ class TestDailyLimits:
         check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(now))
 
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            check.pre_call_check(deployment)
+            _pre_call(check, deployment)
 
         assert exc_info.value.response.headers["retry-after"] == str(seconds_to_midnight)
 

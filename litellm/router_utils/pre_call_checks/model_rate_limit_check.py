@@ -127,6 +127,17 @@ class ModelRateLimitingCheck(CustomLogger):
         # so the warning is logged once per deployment rather than per request.
         self._io_token_conflict_warned_ids: set[str] = set()
 
+    def _increment(self, key: str, value: int, ttl: int) -> int:
+        return self.dual_cache.increment_cache(key=key, value=value, ttl=ttl)
+
+    async def _async_increment(
+        self, key: str, value: int, ttl: int, parent_otel_span: Span | None = None
+    ) -> int | None:
+        count: Final = await self.dual_cache.async_increment_cache(
+            key=key, value=value, ttl=ttl, parent_otel_span=parent_otel_span
+        )
+        return None if count is None else int(count)
+
     def _warn_io_token_and_tpm_rpm_coexist_once(self, deployment: dict) -> None:
         tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
         if tpm_limit is None and rpm_limit is None:
@@ -200,7 +211,7 @@ class ModelRateLimitingCheck(CustomLogger):
             if current_tpd is not None and current_tpd >= tpd_limit:
                 raise deployment.limit_error("tpd", tpd_limit, current_tpd, now)
         if rpd_limit is not None:
-            current_rpd: Final = self.dual_cache.increment_cache(key=rpd_key, value=1, ttl=RoutingArgs.daily_ttl)
+            current_rpd: Final = self._increment(rpd_key, 1, RoutingArgs.daily_ttl)
             if current_rpd > rpd_limit:
                 raise deployment.limit_error("rpd", rpd_limit, current_rpd, now)
 
@@ -216,11 +227,9 @@ class ModelRateLimitingCheck(CustomLogger):
             if current_tpd is not None and current_tpd >= tpd_limit:
                 raise deployment.limit_error("tpd", tpd_limit, current_tpd, now)
         if rpd_limit is not None:
-            current_rpd: Final = await self.dual_cache.async_increment_cache(
-                key=rpd_key, value=1, ttl=RoutingArgs.daily_ttl, parent_otel_span=parent_otel_span
-            )
+            current_rpd: Final = await self._async_increment(rpd_key, 1, RoutingArgs.daily_ttl, parent_otel_span)
             if current_rpd is not None and current_rpd > rpd_limit:
-                raise deployment.limit_error("rpd", rpd_limit, int(current_rpd), now)
+                raise deployment.limit_error("rpd", rpd_limit, current_rpd, now)
 
     def _get_cache_keys(self, deployment: dict, current_minute: str) -> tuple[str, str]:
         """Get the cache keys for TPM and RPM tracking."""
@@ -308,7 +317,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check RPM limit (atomic increment-first to avoid race conditions)
             if rpm_limit is not None:
-                current_rpm: Final = self.dual_cache.increment_cache(key=rpm_key, value=1, ttl=RoutingArgs.ttl)
+                current_rpm: Final = self._increment(rpm_key, 1, RoutingArgs.ttl)
                 if current_rpm is not None and current_rpm > rpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
@@ -392,12 +401,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check RPM limit (atomic increment-first to avoid race conditions)
             if rpm_limit is not None:
-                current_rpm: Final = await self.dual_cache.async_increment_cache(
-                    key=rpm_key,
-                    value=1,
-                    ttl=RoutingArgs.ttl,
-                    parent_otel_span=parent_otel_span,
-                )
+                current_rpm: Final = await self._async_increment(rpm_key, 1, RoutingArgs.ttl, parent_otel_span)
                 if current_rpm is not None and current_rpm > rpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
@@ -477,12 +481,9 @@ class ModelRateLimitingCheck(CustomLogger):
 
             verbose_router_logger.debug("[TPM TRACKING] Incrementing %s by %s", tpm_key, total_tokens)
 
-            await self.dual_cache.async_increment_cache(
-                key=tpm_key,
-                value=total_tokens,
-                ttl=RoutingArgs.ttl,
-            )
-            await self.dual_cache.async_increment_cache(key=tpd_key, value=total_tokens, ttl=RoutingArgs.daily_ttl)
+            tokens: Final = int(total_tokens)
+            await self._async_increment(tpm_key, tokens, RoutingArgs.ttl)
+            await self._async_increment(tpd_key, tokens, RoutingArgs.daily_ttl)
 
         except Exception as e:
             verbose_router_logger.debug("Error in ModelRateLimitingCheck.async_log_success_event: %s", e)
@@ -538,12 +539,9 @@ class ModelRateLimitingCheck(CustomLogger):
             tpm_key: Final = f"{model_id}:{model}:tpm:{current_minute}"
             tpd_key: Final = f"{model_id}:{model}:tpd:{dt.strftime(DAY_FORMAT)}"
 
-            self.dual_cache.increment_cache(
-                key=tpm_key,
-                value=total_tokens,
-                ttl=RoutingArgs.ttl,
-            )
-            self.dual_cache.increment_cache(key=tpd_key, value=total_tokens, ttl=RoutingArgs.daily_ttl)
+            tokens: Final = int(total_tokens)
+            self._increment(tpm_key, tokens, RoutingArgs.ttl)
+            self._increment(tpd_key, tokens, RoutingArgs.daily_ttl)
 
         except Exception as e:
             verbose_router_logger.debug("Error in ModelRateLimitingCheck.log_success_event: %s", e)
