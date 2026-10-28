@@ -559,6 +559,24 @@ def tool_output_texts(item: object) -> tuple[tuple[int | None, str], ...]:
     return tuple((index, text) for index, part in enumerate(parts) if (text := _tool_output_part_text(part)))
 
 
+def _textless_tool_call_ids(input_data: "str | ResponseInputParam") -> frozenset[str]:
+    if isinstance(input_data, str):
+        return frozenset()
+    return frozenset(
+        str(stream_item_field(item, "call_id"))
+        for item in input_data
+        if stream_item_field(item, "type") in TOOL_CALL_OUTPUT_ITEM_TYPES and not tool_output_texts(item)
+    )
+
+
+def _is_textless_tool_row(message: Mapping[str, object], textless_call_ids: frozenset[str]) -> bool:
+    return (
+        message.get("role") == "tool"
+        and isinstance(message.get("content"), str)
+        and message.get("tool_call_id") in textless_call_ids
+    )
+
+
 def _rewritten_whole_text(item: object, field: str, guardrail_response: str) -> object | None:
     if isinstance(stream_item_field(item, field), str):
         return guardrail_response
@@ -691,15 +709,22 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Handles both string input and list of message objects.
         """
-        input_data: Final[str | ResponseInputParam | None] = data.get("input")
-        if not isinstance(input_data, (str, list)):
+        raw_input: Final[str | ResponseInputParam | None] = data.get("input")
+        if not isinstance(raw_input, (str, list)):
             return data
+        input_data: Final = cast("str | ResponseInputParam", raw_input)  # cast-ok: fields read via stream_item_field
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
         scan_only: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
         structured_messages: Final = self.get_structured_messages(data)
-        scoped_indices: Final = scoped_structured_message_indices(
-            structured_messages or [], scan_only_tool_results=scan_only, skip_system=skip_system, skip_tool=skip_tool
+        all_messages: Final = structured_messages or []
+        textless_call_ids: Final = _textless_tool_call_ids(input_data)
+        scoped_indices: Final = tuple(
+            index
+            for index in scoped_structured_message_indices(
+                all_messages, scan_only_tool_results=scan_only, skip_system=skip_system, skip_tool=skip_tool
+            )
+            if not _is_textless_tool_row(all_messages[index], textless_call_ids)
         )
         scoped_structured_messages: Final = (
             [structured_messages[index] for index in scoped_indices] if structured_messages else None
