@@ -1128,26 +1128,23 @@ def legacy_update_model_info_changes(
 
     Only fields the caller sent with a value count, so ``ModelInfo`` defaults and the blank
     strings typed clients send for unset fields never overwrite stored values. Server-owned,
-    display-only, team, PTU and pricing fields keep their dedicated write paths, and values
-    echoed from a ``/model/info`` response stay display-only whether or not the echo kept its
-    ``key``: a value equal to the old or new base model's cost map entry (live or as loaded),
-    the entry ``key`` names, or a limit discovered from the upstream. An echoed value that
-    differs from the stored override resets that override (``None``), the way ``update_db_model`` does.
+    display-only, team, PTU and pricing fields keep their dedicated write paths. As on
+    ``update_db_model``, only a body carrying the ``key`` that ``/model/info`` emits is an echo:
+    its values equal to the cost map entry of the base model the row has after the write, the
+    entry ``key`` names, or a limit discovered from the upstream stay display-only, and an echoed
+    value that differs from the stored override resets that override (``None``).
     """
     stored: Final = db_model.model_info.model_dump(exclude_none=True)
-    sent: Final = {
-        k: v
-        for k, v in incoming_model_info.model_dump(exclude_unset=True, exclude_none=True).items()
-        if k not in _LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS and v != ""
-    }
-    live_entries: Final = (_cost_map_entry(db_model, sent), _cost_map_entry(db_model, stored))
-    echo_sources: Final = (
-        *live_entries,
-        *(_loaded_catalog_entry(entry, loaded_catalog) for entry in live_entries),
-        _loaded_catalog_entry(incoming_model_info.model_dump(exclude_none=True), loaded_catalog),
-        discovered_model_info,
+    requested: Final = incoming_model_info.model_dump(exclude_unset=True, exclude_none=True)
+    sent: Final = {k: v for k, v in requested.items() if k not in _LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS and v != ""}
+    echoed: Final = frozenset(
+        echoed_cost_map_fields(
+            requested,
+            _cost_map_entry(db_model, {**stored, **sent}),
+            _loaded_catalog_entry(requested, loaded_catalog),
+            discovered_model_info,
+        )
     )
-    echoed: Final = frozenset(k for k, v in sent.items() if any(source.get(k) == v for source in echo_sources))
     kept: Final = without_server_derived_pricing(sent)
     return MappingProxyType(
         {
@@ -1180,9 +1177,28 @@ async def _locked_legacy_update_model_info_json(
     row: Final = await table.find_unique(where={"model_id": model_id})
     if row is None:
         return None
-    current: Final = Deployment(**row.model_dump())
-    writes: Final = _legacy_update_model_info_writes(current, incoming_model_info, discovered_model_info, member_marker)
-    return current.model_info.model_copy(update=writes).model_dump_json(exclude_none=True) if writes else None
+    payload: Final = row.model_dump()
+    writes: Final = _legacy_update_model_info_writes(
+        Deployment(**payload), incoming_model_info, discovered_model_info, member_marker
+    )
+    if not writes:
+        return None
+    stored_model_info: Final[object] = payload.get("model_info")
+    stored: Final = (
+        TypeAdapter(dict[str, object]).validate_json(stored_model_info)
+        if isinstance(stored_model_info, str)
+        else TypeAdapter(dict[str, object]).validate_python(stored_model_info or {})
+    )
+    return (
+        TypeAdapter(dict[str, object])
+        .dump_json(
+            {
+                **{k: v for k, v in stored.items() if k not in writes},
+                **{k: v for k, v in writes.items() if v is not None},
+            }
+        )
+        .decode()
+    )
 
 
 def _param_keys_to_remove(patch: updateDeployment) -> tuple[str, ...]:

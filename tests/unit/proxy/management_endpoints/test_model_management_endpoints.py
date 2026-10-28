@@ -4,17 +4,18 @@ import contextlib
 import json
 import socket
 from collections.abc import AsyncIterator, Iterator, Mapping
-from dataclasses import dataclass
 from types import MappingProxyType, SimpleNamespace
 from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.models.credentials import CredentialItem
 
 from litellm.proxy._types import (
@@ -1668,19 +1669,20 @@ class _ContendedModelDb:
         self._other_writers = self._other_writers[1:]
 
 
-@dataclass(frozen=True, slots=True)
-class _ServingRouter:
-    model_id: str
-    discovered: Mapping[str, int]
+_AZURE_DEPLOYMENT_PARAMS: Final = MappingProxyType({"model": "azure/my-deployment", "api_key": "sk-existing"})
+_LOCAL_DEPLOYMENT_PARAMS: Final = MappingProxyType(
+    {"model": "hosted_vllm/local-model", "api_base": "https://local.test/v1", "api_key": "local-key"}
+)
 
-    def get_model_ids(self) -> tuple[str, ...]:
-        return (self.model_id,)
 
-    def get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]:
-        return self.discovered
-
-    def config_deployments(self) -> tuple[()]:
-        return ()
+async def _discover_from_upstream(router: Router, model_card: Mapping[str, object]) -> None:
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"data": [dict(model_card)]}))
+    ) as client:
+        handler.client = client
+        await router.arefresh_model_info(client=handler)
 
 
 class TestUpdateModel:
@@ -1692,22 +1694,30 @@ class TestUpdateModel:
     async def _update_model(
         stored_model_info: Mapping[str, object],
         model_info: ModelInfo,
-        discovered: Mapping[str, int] = MappingProxyType({}),
+        litellm_params: Mapping[str, object] = _AZURE_DEPLOYMENT_PARAMS,
+        upstream_model_card: Mapping[str, object] | None = None,
         other_writers: tuple[Mapping[str, object], ...] = (),
     ) -> "_ContendedModelDb":
         db: Final = _ContendedModelDb(
             LiteLLM_ProxyModelTable(
                 model_id="m1",
                 model_name="my-model",
-                litellm_params={"model": "azure/my-deployment", "api_key": "sk-existing"},
+                litellm_params=dict(litellm_params),
                 model_info=dict(stored_model_info),
             ),
             other_writers,
         )
+        router: Final = Router(
+            model_list=[
+                {"model_name": "my-model", "litellm_params": dict(litellm_params), "model_info": {"id": "m1"}}
+            ]
+        )
+        if upstream_model_card is not None:
+            await _discover_from_upstream(router, upstream_model_card)
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", db),
-            patch("litellm.proxy.proxy_server.llm_router", _ServingRouter(model_id="m1", discovered=discovered)),
+            patch("litellm.proxy.proxy_server.llm_router", router),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
             patch("litellm.proxy.proxy_server.premium_user", True),
             patch(  # test-quality-ok: [TQ008] the route reloads the proxy-global router with no seam to inject
@@ -1793,29 +1803,24 @@ class TestUpdateModel:
         assert not {"key", "max_tokens", "input_cost_per_token"} & persisted.keys()
 
     @pytest.mark.asyncio
-    async def test_update_model_does_not_pin_catalog_values_echoed_without_a_key(self):
+    async def test_update_model_saves_typed_values_that_equal_the_catalog(self):
         import litellm
 
         catalog_entry: Final = litellm.get_model_info(model="azure/gpt-4o")
-        deliberate_max_output_tokens: Final = catalog_entry["max_output_tokens"] // 2
+        typed: Final = {
+            "max_tokens": catalog_entry["max_tokens"],
+            "max_input_tokens": catalog_entry["max_input_tokens"],
+            "supports_vision": catalog_entry["supports_vision"],
+        }
 
         db: Final = await self._update_model(
-            {"id": "m1"},
-            ModelInfo(
-                id="m1",
-                base_model="azure/gpt-4o",
-                max_tokens=catalog_entry["max_tokens"],
-                max_input_tokens=catalog_entry["max_input_tokens"],
-                supports_vision=catalog_entry["supports_vision"],
-                max_output_tokens=deliberate_max_output_tokens,
-            ),
+            {"id": "m1", "max_input_tokens": catalog_entry["max_input_tokens"] // 2},
+            ModelInfo(id="m1", base_model="azure/gpt-4o", **typed),
         )
 
         persisted: Final = db.row.model_info
         assert persisted is not None
-        assert persisted["base_model"] == "azure/gpt-4o"
-        assert persisted["max_output_tokens"] == deliberate_max_output_tokens
-        assert not {"max_tokens", "max_input_tokens", "supports_vision"} & persisted.keys()
+        assert {k: persisted.get(k) for k in typed} == typed
 
     @pytest.mark.asyncio
     async def test_update_model_keeps_stored_value_when_a_field_is_sent_blank(self):
@@ -1868,40 +1873,39 @@ class TestUpdateModel:
 
         assert dict(changes) == {"base_model": "test-provider/next"}
 
-    def test_update_model_does_not_pin_the_previous_base_models_loaded_catalog_value_echoed_without_a_key(self):
+    @pytest.mark.asyncio
+    async def test_update_model_saves_a_value_the_previous_base_model_has_in_the_catalog(self):
         import litellm
-        from litellm.proxy.management_endpoints.model_management_endpoints import legacy_update_model_info_changes
 
         previous: Final = litellm.get_model_info(model="azure/gpt-4o")
-        loaded_max_tokens: Final = previous["max_tokens"] + 1
-        catalog: Final = MappingProxyType({previous["key"]: MappingProxyType({"max_tokens": loaded_max_tokens})})
-        stored: Final = Deployment(
-            model_name="my-model",
-            litellm_params=LiteLLM_Params(model="test-provider/my-deployment"),
-            model_info=ModelInfo(id="m1", base_model="azure/gpt-4o"),
+
+        db: Final = await self._update_model(
+            {"id": "m1", "base_model": "azure/gpt-4o", "max_input_tokens": previous["max_input_tokens"] // 2},
+            ModelInfo(id="m1", base_model="azure/gpt-4.1", max_input_tokens=previous["max_input_tokens"]),
         )
 
-        changes: Final = legacy_update_model_info_changes(
-            stored,
-            ModelInfo(id="m1", base_model="test-provider/next", max_tokens=loaded_max_tokens),
-            loaded_catalog=lambda: catalog,
-        )
-
-        assert dict(changes) == {"base_model": "test-provider/next"}
+        persisted: Final = db.row.model_info
+        assert persisted is not None
+        assert {k: persisted.get(k) for k in ("base_model", "max_input_tokens")} == {
+            "base_model": "azure/gpt-4.1",
+            "max_input_tokens": previous["max_input_tokens"],
+        }
 
     @pytest.mark.asyncio
-    async def test_update_model_does_not_pin_discovered_limits_or_team_access_echoed_without_a_key(self):
+    async def test_update_model_does_not_pin_discovered_limits_or_team_access_echoed_from_model_info(self):
         db: Final = await self._update_model(
             {"id": "m1"},
             ModelInfo(
                 id="m1",
                 base_model="test-provider/test-model",
+                key="test-provider/test-model",
                 max_input_tokens=128000,
                 max_output_tokens=64000,
                 direct_access=True,
                 access_via_team_ids=["team-a"],
             ),
-            discovered=MappingProxyType({"max_input_tokens": 128000, "max_output_tokens": 32000}),
+            litellm_params=_LOCAL_DEPLOYMENT_PARAMS,
+            upstream_model_card=MappingProxyType({"id": "local-model", "max_model_len": 128000, "max_output_tokens": 32000}),
         )
 
         persisted: Final = db.row.model_info
@@ -1909,6 +1913,17 @@ class TestUpdateModel:
         assert persisted["base_model"] == "test-provider/test-model"
         assert persisted["max_output_tokens"] == 64000
         assert not {"max_input_tokens", "direct_access", "access_via_team_ids"} & persisted.keys()
+
+    @pytest.mark.asyncio
+    async def test_update_model_does_not_copy_litellm_params_pricing_into_model_info(self):
+        db: Final = await self._update_model(
+            {"id": "m1"},
+            ModelInfo(id="m1", tier="paid"),
+            litellm_params={**_AZURE_DEPLOYMENT_PARAMS, "input_cost_per_token": 0.000003},
+        )
+
+        persisted: Final = db.row.model_info
+        assert persisted == {"id": "m1", "tier": "paid"}
 
     @pytest.mark.asyncio
     async def test_update_model_resets_a_stored_override_echoed_back_at_its_catalog_value(self):
