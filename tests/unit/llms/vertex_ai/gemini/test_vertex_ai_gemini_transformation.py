@@ -3016,3 +3016,28 @@ def test_anthropic_messages_history_replays_to_gemini_without_claude_signature()
     assert signatures == [_get_dummy_thought_signature()]
     assert [part for part in parts if part.get("text") == thinking] == [{"thought": True, "text": thinking}]
     assert next(part for part in parts if "function_call" in part)["thoughtSignature"] == _get_dummy_thought_signature()
+
+def test_parallel_tool_calls_with_identical_name_and_arguments() -> None:
+    """Parallel tool calls with identical name and arguments must both be preserved.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/48831
+    """
+    messages: Final = [
+        {"role": "user", "content": "What time is it? Ask twice."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_time", "arguments": "{}"}},
+                {"id": "call_2", "type": "function", "function": {"name": "get_time", "arguments": "{}"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "12:00"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "12:01"},
+    ]
+
+    contents = gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
+    model_parts = next(c["parts"] for c in contents if c.get("role") == "model")
+    function_calls = [p for p in model_parts if "function_call" in p or "functionCall" in p]
+    assert len(function_calls) == 2
+
