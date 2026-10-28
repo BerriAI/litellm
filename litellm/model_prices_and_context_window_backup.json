@@ -77180,5 +77180,100 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "ismscopilot/isms-fast": {
+        "input_cost_per_token": 2.8e-06,
+        "litellm_provider": "ismscopilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 8.8e-06,
+        "source": "https://www.ismscopilot.com/products/api",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": false,
+        "supports_native_streaming": true,
+        "supports_reasoning": false,
+        "supports_response_schema": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": false,
+        "supports_vision": false
+    },
+    "ismscopilot/isms-fast-eu": {
+        "input_cost_per_token": 2.8e-06,
+        "litellm_provider": "ismscopilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 8.8e-06,
+        "source": "https://www.ismscopilot.com/products/api",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": false,
+        "supports_native_streaming": true,
+        "supports_reasoning": false,
+        "supports_response_schema": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": false,
+        "supports_vision": false
+    },
+    "ismscopilot/isms-mini": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "ismscopilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "source": "https://www.ismscopilot.com/products/api",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": false,
+        "supports_native_streaming": true,
+        "supports_reasoning": false,
+        "supports_response_schema": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": false,
+        "supports_vision": false
+    },
+    "ismscopilot/isms-thinking": {
+        "input_cost_per_token": 2.8e-06,
+        "litellm_provider": "ismscopilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 8.8e-06,
+        "source": "https://www.ismscopilot.com/products/api",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": false,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": false,
+        "supports_vision": false
+    },
+    "ismscopilot/isms-thinking-eu": {
+        "input_cost_per_token": 2.8e-06,
+        "litellm_provider": "ismscopilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 8.8e-06,
+        "source": "https://www.ismscopilot.com/products/api",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": false,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": false,
+        "supports_vision": false
     }
 }

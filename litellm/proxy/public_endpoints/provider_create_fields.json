@@ -3492,6 +3492,34 @@
     "default_model_placeholder": "scx-ai/GLM-5.2"
   },
   {
+    "provider": "ISMSCOPILOT",
+    "provider_display_name": "ISMS Copilot",
+    "litellm_provider": "ismscopilot",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": "An sk-isms- key from https://platform.ismscopilot.com/keys",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.ismscopilot.com/v1",
+        "tooltip": "Optional. Leave blank to use the provider's default endpoint.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "ismscopilot/isms-fast"
+  },
+  {
     "provider": "INFERENCEAPIS",
     "provider_display_name": "Inference APIs",
     "litellm_provider": "inferenceapis",
