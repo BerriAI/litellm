@@ -1882,27 +1882,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return status_mapping.get(status, "stop")
 
 
-_EVENT_PAYLOAD_ADAPTER: Final = TypeAdapter(dict[str, object])
-
-
-def _with_inner_bill_as_usage_cost(
+def _event_dict_with_inner_bill(
     event: BaseModel,
 ) -> dict[str, object]:  # mutable-ok: chunk_parser takes the plain dict model_dump returns
-    """The inner Responses call already billed its spend row and left the bill in hidden ``response_cost``. The
-    chat stream built on top of it reads that bill from ``usage.cost``, where a priced upstream would put it."""
-    dumped: Final = _EVENT_PAYLOAD_ADAPTER.validate_python(event.model_dump())
-    response_payload: Final = dumped.get("response")
-    if not isinstance(response_payload, dict):
-        return dumped
-    response_dict: Final = _EVENT_PAYLOAD_ADAPTER.validate_python(response_payload)
-    usage_payload: Final = response_dict.get("usage")
-    if not isinstance(usage_payload, dict):
-        return dumped
-    usage_dict: Final = _EVENT_PAYLOAD_ADAPTER.validate_python(usage_payload)
-    bill: Final = (get_hidden_params(getattr(event, "response", None)) or {}).get("response_cost")
-    if usage_dict.get("cost") is not None or isinstance(bill, bool) or not isinstance(bill, (int, float)):
-        return dumped
-    return {**dumped, "response": {**response_dict, "usage": {**usage_dict, "cost": float(bill)}}}
+    """``event.model_dump()``, with ``response.usage.cost`` set to the inner Responses call's bill (its hidden
+    ``response_cost``) when the upstream left ``cost`` unset. Any other event is dumped as is."""
+    response: Final = getattr(event, "response", None)
+    usage: Final = getattr(response, "usage", None)
+    bill: Final = (get_hidden_params(response) or {}).get("response_cost")
+    if not isinstance(response, BaseModel) or not isinstance(usage, BaseModel):
+        return event.model_dump()
+    if getattr(usage, "cost", None) is not None or isinstance(bill, bool) or not isinstance(bill, (int, float)):
+        return event.model_dump()
+    billed_usage: Final = usage.model_copy(update={"cost": float(bill)})
+    return event.model_copy(update={"response": response.model_copy(update={"usage": billed_usage})}).model_dump()
 
 
 class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
@@ -1926,7 +1919,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         from pydantic import BaseModel
 
         if isinstance(str_line, BaseModel):
-            return self.chunk_parser(_with_inner_bill_as_usage_cost(str_line))
+            return self.chunk_parser(_event_dict_with_inner_bill(str_line))
 
         if not str_line or str_line.startswith("event:"):
             # ignore.
