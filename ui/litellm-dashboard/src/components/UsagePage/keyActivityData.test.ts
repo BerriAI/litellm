@@ -80,6 +80,38 @@ const pageRow = (api_key: string): KeySpendActivityRow => ({
 });
 
 describe("key activity data", () => {
+  it("retains unattributed totals and unknown models in key details", () => {
+    const unattributed = {
+      metrics: completeMetrics,
+      metadata: { key_alias: "Unattributed", key_exists: false },
+    };
+    const response: DailyActivityAggregatedResponse = {
+      ...aggregatedResponse,
+      results: [
+        {
+          date: "2026-09-27",
+          metrics: completeMetrics,
+          breakdown: {
+            api_keys: { unattributed },
+            models: {
+              "unknown-model": {
+                metrics: completeMetrics,
+                metadata: {},
+                api_key_breakdown: { unattributed },
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    const detail = keyDetailFromResponse(response, "unattributed", []);
+    expect(detail?.total_requests).toBe(2);
+    expect(detail?.total_spend).toBe(1.25);
+    expect(detail?.top_models.map((model) => model.model)).toEqual(["unknown-model"]);
+    expect(detail?.daily_data[0].metrics.api_requests).toBe(2);
+  });
+
   it("builds overall totals from metadata and daily data from complete daily metrics", () => {
     const summary = overallUsageMetrics(
       toDailyData(aggregatedResponse),

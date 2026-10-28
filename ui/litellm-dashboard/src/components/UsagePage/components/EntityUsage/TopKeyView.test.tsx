@@ -503,6 +503,7 @@ describe("TopKeyView", () => {
         {...baseProps}
         topKeys={[
           { api_key: "session-key", key_alias: null, user: "alice@example.com", key_exists: false, spend: 100 },
+          { api_key: "unattributed", key_alias: "Unattributed", user: null, key_exists: false, spend: 25 },
           { api_key: "stored-key", key_alias: "Stored", user: null, key_exists: true, spend: 50 },
         ]}
       />,
@@ -510,11 +511,14 @@ describe("TopKeyView", () => {
 
     expect(screen.getByRole("button", { name: "stored-key" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "session-key" })).not.toBeInTheDocument();
+    expect(screen.getByText("Unattributed")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "unattributed" })).not.toBeInTheDocument();
+    await user.click(screen.getByText("unattributed"));
     await user.click(screen.getByText("session-key"));
 
     await user.click(screen.getByRole("radio", { name: "Chart View" }));
     const bars = chartBars(container);
-    expect(bars).toHaveLength(2);
+    expect(bars).toHaveLength(3);
     bars.forEach((bar) => fireEvent.click(bar));
 
     expect(await screen.findByText("Key Info View for stored-key")).toBeInTheDocument();
