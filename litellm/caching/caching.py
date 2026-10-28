@@ -44,7 +44,9 @@ from .s3_cache import S3Cache
 RESPONSE_CACHE_TARGET: Final = "llm_response"
 _ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token"})
 _DECODED_LITERAL: Final = TypeAdapter(object)
-_REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(list[dict[str, object]], config=ConfigDict(strict=True))
+_REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
+    list[dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 @contextmanager

@@ -302,6 +302,28 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
                     texts.append(data["delta"]["text"])
         return texts
 
+    def test_off_schema_delta_is_skipped_without_ending_the_text_scan(self):
+        events = [
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "abc"}},
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "thinking_delta", "text": None}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "def"}},
+        ]
+        chunk = "".join(f"event: content_block_delta\ndata: {json.dumps(event)}\n\n" for event in events).encode()
+
+        assert AnthropicMessagesHandler().get_streaming_string_so_far([chunk]) == "abcdef"
+
+    def test_off_schema_message_delta_does_not_hide_a_later_stop_reason(self):
+        events = [
+            {"type": "message_delta", "delta": None},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}},
+        ]
+        chunk = "".join(f"event: message_delta\ndata: {json.dumps(event)}\n\n" for event in events).encode()
+
+        scan_key = AnthropicMessagesHandler().get_streaming_scan_key([chunk])
+
+        assert scan_key is not None
+        assert scan_key.stream_ended is True
+
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_rewrites_writes_text_back_into_sse_chunks(self):
         handler = AnthropicMessagesHandler()

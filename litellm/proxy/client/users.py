@@ -6,8 +6,8 @@ from pydantic import ConfigDict, TypeAdapter
 
 from .exceptions import NotFoundError, UnauthorizedError
 
-_JSON_VALUE: Final = TypeAdapter(object, config=ConfigDict(strict=True))
-_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_JSON_VALUE: Final = TypeAdapter(object, config=ConfigDict(strict=True, hide_input_in_errors=True))
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class UsersManagementClient:

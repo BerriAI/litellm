@@ -1823,7 +1823,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                         delta: _SSETextDelta = data.get("delta", {})
                         if delta.get("type") == "text_delta":
                             text += delta.get("text", "")
-                    except json.JSONDecodeError:
+                    except (json.JSONDecodeError, ValidationError):
                         verbose_proxy_logger.warning("Failed to parse JSON from SSE data: %s", data_line)
 
         except Exception as e:
@@ -1887,7 +1887,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                                 stop_reason: object = delta.get("stop_reason")
                                 if stop_reason is not None:
                                     return True
-                            except json.JSONDecodeError:
+                            except (json.JSONDecodeError, ValidationError):
                                 verbose_proxy_logger.warning("Failed to parse JSON from SSE data: %s", data_line)
 
                 except Exception as e:

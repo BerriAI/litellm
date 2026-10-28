@@ -22,7 +22,7 @@ from litellm.utils import convert_to_model_response_object
 
 from ..common_utils import EdenAIException, authorized_headers, endpoint_url, reported_cost
 
-_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 def _form_fields(model: str, optional_params: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: httpx form data

@@ -4,7 +4,7 @@ https://docs.cohere.com/reference/rerank
 
 """
 
-from typing import Literal
+from typing import Literal, overload
 
 from pydantic import ConfigDict, PrivateAttr
 from typing_extensions import ReadOnly, Required, TypedDict
@@ -94,6 +94,18 @@ class RerankResponse(LiteLLMBaseModel):
     @hidden_params.setter
     def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
+
+    @overload
+    def __getitem__(self, key: Literal["id"]) -> str | None: ...
+
+    @overload
+    def __getitem__(self, key: Literal["results"]) -> list[RerankResponseResult] | None: ...
+
+    @overload
+    def __getitem__(self, key: Literal["meta"]) -> RerankResponseMeta | None: ...
+
+    @overload
+    def __getitem__(self, key: str) -> object: ...
 
     def __getitem__(self, key: str) -> object:
         return self.__dict__[key]

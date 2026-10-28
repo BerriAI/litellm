@@ -21,13 +21,13 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow"))
 class _MAIImageUsageDetails(TypedDict, total=False):
     text_tokens: ReadOnly[NotRequired[int | float | None]]
     image_tokens: ReadOnly[NotRequired[int | float | None]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow"))
 class _MAIImageUsage(TypedDict, total=False):
     input_tokens_details: ReadOnly[NotRequired[object]]
     num_input_text_tokens: ReadOnly[NotRequired[int | float | None]]
@@ -39,7 +39,7 @@ class _MAIImageUsage(TypedDict, total=False):
     total_tokens: ReadOnly[NotRequired[int | float | None]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow"))
 class _MAIImageResponse(TypedDict, total=False):
     usage: ReadOnly[NotRequired[object]]
 
