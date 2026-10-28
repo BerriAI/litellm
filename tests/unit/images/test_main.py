@@ -184,7 +184,7 @@ async def test_image_generation_rejects_non_integer_retries_before_sending(is_as
                     client=client,
                     max_retries="invalid",
                 )
-    assert raised.value.status_code == 400
+    assert raised.value.status_code == 422
     assert "max retries must be an int" in raised.value.message
     assert requests.qsize() == 0
 
