@@ -702,6 +702,36 @@ def test_streaming_responses_opens_the_gateway_tool_call_empty_and_streams_its_a
         assert len(rig.upstream_tools()) == 2
 
 
+STREAM_END_EVENT: Final[Mapping[Surface, str]] = {
+    "chat": "data: [DONE]",
+    "responses": "response.completed",
+    "messages": "message_stop",
+    "messages_bridge": "message_stop",
+}
+
+
+@pytest.mark.parametrize("surface", SURFACES)
+def test_streamed_auto_execute_gives_back_the_keys_only_parallel_slot_once_the_stream_ends(
+    gateway: Gateway, surface: Surface
+) -> None:
+    with _rig(gateway, surface) as rig:
+        key: Final = rig.scenario.key(object_permission={"mcp_servers": [rig.server_id]}, max_parallel_requests=1)
+        streamed: Final = rig.send(key, [AUTO], stream=True)
+        assert streamed.status_code == 200, streamed.text
+        assert streamed.headers["content-type"].startswith("text/event-stream"), streamed.headers
+        assert STREAM_END_EVENT[surface] in streamed.text, streamed.text
+        assert ANSWER in streamed.text, streamed.text
+        assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
+        follow_up: Final = eventually(
+            lambda: rig.send(key, [], prompt=f"{DIRECT} {rig.alias}"),
+            lambda response: response.status_code == 200,
+            seconds=20,
+            return_last_on_timeout=True,
+        )
+        assert follow_up.status_code == 200, follow_up.text
+        assert rig.final_text(follow_up.json()) == ANSWER
+
+
 def test_streaming_chat_through_a_toolset_gateway_url_serves_a_team_key_without_its_own_grant(
     gateway: Gateway,
 ) -> None:
@@ -918,6 +948,45 @@ def test_nonstream_failed_follow_up_bills_round_one_on_the_failure_row(
             )
             == []
         )
+
+
+NO_CACHE: Final = {"no-cache": True}
+
+
+def _upstream_rounds(rig: Rig) -> tuple[int, int]:
+    answered: Final = tuple(
+        _has_tool_result(JSON_OBJECT.validate_json(request.body))
+        for request in rig.wire.drain()
+        if request.method == "POST"
+    )
+    return answered.count(False), answered.count(True)
+
+
+def _billed_rows(call_id: str, call_type: str, billed: float) -> list[dict[str, JsonValue]]:
+    return eventually(
+        lambda: read_rows(
+            'SELECT status, spend FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s AND call_type=%s',
+            (call_id, call_type),
+        ),
+        lambda found: sum(float(str(row["spend"])) for row in found) >= billed * (1 - 1e-6),
+        seconds=70,
+    )
+
+
+@pytest.mark.parametrize(("surface", "call_type"), (("responses", "aresponses"), ("chat", "acompletion")))
+def test_nonstream_follow_up_failing_on_every_retry_bills_each_attempts_first_round_on_one_failure_row(
+    gateway: Gateway, surface: Surface, call_type: str
+) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND, follow_up_fails=True)
+    with _rig(gateway, surface, billing=billing, prices={**PRICES, "num_retries": 2}) as rig:
+        response: Final = rig.send(_granted_key(rig), [AUTO], cache=NO_CACHE)
+        assert response.status_code == 500 and FOLLOW_UP_OUTAGE in response.text, response.text
+        first_rounds, follow_ups = _upstream_rounds(rig)
+        assert first_rounds == follow_ups > 1, (first_rounds, follow_ups)
+        paid: Final = _price(*(FIRST_ROUND,) * first_rounds)
+        rows: Final = _billed_rows(response.headers["x-litellm-call-id"], call_type, paid)
+        assert [row["status"] for row in rows] == ["failure"], rows
+        assert float(str(rows[0]["spend"])) == pytest.approx(paid), rows
 
 
 def _tool_rows(call_id: str, expected: int) -> list[dict[str, JsonValue]]:

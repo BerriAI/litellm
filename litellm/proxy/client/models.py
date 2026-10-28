@@ -158,7 +158,7 @@ class ModelsManagementClient:
         model_id: str | None = None,
         model_name: str | None = None,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Get information about a specific model by its ID or name.
 
@@ -168,7 +168,7 @@ class ModelsManagementClient:
             return_request (bool): If True, returns the prepared request object instead of executing it
 
         Returns:
-            Union[Dict[str, Any], requests.Request]: Either the model information from the server or
+            dict[str, object] | requests.Request: Either the model information from the server or
             a prepared request object if return_request is True
 
         Raises:
