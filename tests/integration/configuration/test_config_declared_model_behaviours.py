@@ -18,6 +18,8 @@ from tests.integration._support.wire import Reply
 _TAGGED_GROUP: Final = "tag-filtered-group"
 _TAGGED_IDS: Final = frozenset({"tag-filtered-team-a", "tag-filtered-team-b"})
 _VISION_MODEL: Final = "llava-hf"
+_LEGACY_LIMIT_MODEL: Final = "legacy-max-tokens-model"
+_LEGACY_LIMIT: Final = 4096
 _ITEMS: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
@@ -47,6 +49,15 @@ def _config(directory: Path) -> Path:
             },
             "model_info": {"supports_vision": True},
         },
+        {
+            "model_name": _LEGACY_LIMIT_MODEL,
+            "litellm_params": {
+                "model": "openai/legacy-max-tokens-model",
+                "api_key": "sk-fixture",
+                "api_base": "http://127.0.0.1:9/v1",
+            },
+            "model_info": {"max_tokens": _LEGACY_LIMIT},
+        },
     ]
     configuration.setdefault("router_settings", {})["enable_tag_filtering"] = True
     path: Final = directory / "config-declared-models.yaml"
@@ -68,6 +79,14 @@ def declared(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
         ) as owned,
     ):
         yield owned
+
+
+def test_model_info_reports_legacy_max_tokens_as_both_token_limits(declared: Gateway) -> None:
+    listing: Final = _ITEMS.validate_python(declared.get("/model/info")["data"])
+    legacy: Final = [item for item in listing if item["model_name"] == _LEGACY_LIMIT_MODEL]
+    assert len(legacy) == 1, [item["model_name"] for item in listing]
+    info: Final = object_value(legacy[0]["model_info"])
+    assert (info["max_input_tokens"], info["max_output_tokens"]) == (_LEGACY_LIMIT, _LEGACY_LIMIT), info
 
 
 def test_model_info_reports_the_vision_capability_declared_in_the_config(declared: Gateway) -> None:

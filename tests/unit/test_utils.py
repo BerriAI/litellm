@@ -2301,6 +2301,43 @@ def test_get_model_info_derives_max_tokens_from_the_input_limit_when_the_row_has
     assert info["max_output_tokens"] is None
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_register_model_legacy_max_tokens_only_entry_keeps_its_token_limits() -> None:
+    model: Final = "legacy-max-tokens-chat-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "max_tokens": 4096,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    info: Final = litellm.get_model_info(model, custom_llm_provider="openai")
+    assert (info["max_input_tokens"], info["max_output_tokens"]) == (4096, 4096)
+    assert litellm.get_max_tokens(model) == 4096
+    trimmed: Final = trim_messages([{"role": "user", "content": "x " * 10000}], model=model)
+    assert get_token_count(messages=trimmed, model=model) <= 4096
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_register_model_legacy_max_tokens_does_not_replace_declared_token_limits() -> None:
+    model: Final = "gpt-4o"
+    before: Final = litellm.get_model_info(model, custom_llm_provider="openai")
+    litellm.register_model(
+        {model: {"litellm_provider": "openai", "mode": "chat", "max_tokens": 1}}, persist_across_reloads=False
+    )
+    litellm.get_model_info.cache_clear()
+    after: Final = litellm.get_model_info(model, custom_llm_provider="openai")
+    assert (after["max_input_tokens"], after["max_output_tokens"]) == (
+        before["max_input_tokens"],
+        before["max_output_tokens"],
+    )
+
+
 def test_register_model_price_is_used_for_completion_cost() -> None:
     model: Final = "migration-custom-pricing-model"
     price: Final = {
@@ -8846,6 +8883,23 @@ def test_trimming_with_model_cost_max_input_tokens(model):
     ]
     trimmed_messages = trim_messages(messages, model=model)
     assert get_token_count(trimmed_messages, model=model) < litellm.model_cost[model]["max_input_tokens"]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_trimming_returns_messages_untouched_without_error_when_the_model_has_no_input_limit(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    model: Final = "no-input-limit-chat-model"
+    litellm.register_model(
+        {model: {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}},
+        persist_across_reloads=False,
+    )
+    messages: Final = [{"role": "user", "content": "x " * 10000}]
+    caplog.clear()
+    with caplog.at_level(logging.ERROR):
+        trimmed: Final = trim_messages(messages, model=model)
+    assert trimmed == messages
+    assert caplog.records == []
 
 
 def test_trimming_with_untokenizable_field(caplog: pytest.LogCaptureFixture) -> None:

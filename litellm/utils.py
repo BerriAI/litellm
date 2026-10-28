@@ -3803,6 +3803,25 @@ def _base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
     )
 
 
+_TOKEN_LIMIT_FIELDS: Final = ("max_input_tokens", "max_output_tokens")
+
+
+@lru_cache(maxsize=1)
+def _warn_legacy_max_tokens_once() -> None:
+    verbose_logger.warning(
+        "register_model: `max_tokens` is deprecated in model info, set `max_input_tokens` and `max_output_tokens` "
+        "instead. Until then the legacy value is used for both"
+    )
+
+
+def _with_limits_from_legacy_max_tokens(entry: Mapping[str, object]) -> Mapping[str, object]:
+    legacy: Final = entry.get("max_tokens")
+    if legacy is None or any(entry.get(name) is not None for name in _TOKEN_LIMIT_FIELDS):
+        return entry
+    _warn_legacy_max_tokens_once()
+    return {**entry, **dict.fromkeys(_TOKEN_LIMIT_FIELDS, legacy)}
+
+
 def _registration_write(
     key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
 ) -> _RegistrationWrite:
@@ -3819,7 +3838,9 @@ def _registration_write(
     }
     return _RegistrationWrite(
         key=base.key,
-        entry={**update_dictionary(existing_model, value), **dict.fromkeys(_base_fields_replaced_by(value))},
+        entry=_with_limits_from_legacy_max_tokens(
+            {**update_dictionary(existing_model, value), **dict.fromkeys(_base_fields_replaced_by(value))}
+        ),
     )
 
 
@@ -8211,6 +8232,11 @@ def shorten_message_to_fit_limit(message, tokens_needed, model: str | None, rais
 # LiteLLM token trimmer
 # this code is borrowed from https://github.com/KillianLucas/tokentrim/blob/main/tokentrim/tokentrim.py
 # Credits for this code go to Killian Lucas
+def _registered_input_limit(entry: Mapping[str, object]) -> int | None:
+    limit: Final = entry.get("max_input_tokens")
+    return limit if isinstance(limit, int) else None
+
+
 def trim_messages(
     messages,
     model: str | None = None,
@@ -8237,15 +8263,12 @@ def trim_messages(
     messages = copy.deepcopy(messages)
     try:
         if max_tokens is None:
-            # Check if model is valid
-            if model in litellm.model_cost:
-                max_tokens_for_model: Final = litellm.model_cost[model]["max_input_tokens"]
-                max_tokens = int(max_tokens_for_model * trim_ratio)
-            else:
-                # if user did not specify max (input) tokens
-                # or passed an llm litellm does not know
-                # do nothing, just return messages
+            max_input_tokens: Final = (
+                _registered_input_limit(litellm.model_cost[model]) if model in litellm.model_cost else None
+            )
+            if max_input_tokens is None:
                 return messages
+            max_tokens = int(max_input_tokens * trim_ratio)
 
         system_message = ""
         for message in messages:
