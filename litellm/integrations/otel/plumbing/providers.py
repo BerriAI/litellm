@@ -821,8 +821,18 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             for held_span, held_destination in self._route(request, span, destination, failed, fails_request):
                 self._forward(held_span, held_destination)
         sampled: Final = fails_request and any(_is_sampled(destination) for destination in destinations)
-        for held_span, held_destination in self._settle(request, span, failed, fails_request, sampled):
+        settled, decided_early = self._settle(request, span, failed, fails_request, sampled)
+        for held_span, held_destination in settled:
             self._forward(held_span, held_destination)
+        if decided_early:
+            verbose_logger.warning(
+                "OTel V2 fan-out: %d request trees were decided before their request finished, because more than %d "
+                "were held for sampled or failure-only destinations or one reached %d spans. A failure-only "
+                "destination misses a failure that came after that",
+                decided_early,
+                _MAX_PENDING_TREES,
+                _MAX_PENDING_SPANS_PER_TREE,
+            )
 
     def _request_of(self, span: ReadableSpan, parent_span: Span | None = None) -> _RequestKey:
         """The request ``span`` belongs to, read under ``_lock``: the request recorded while
@@ -895,33 +905,39 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             tree.held.append((span, destination))
             tree.failed = tree.failed or failed
             tree.request_failed = tree.request_failed or fails_request
-            if self._draining or len(tree.held) >= _MAX_PENDING_SPANS_PER_TREE:
+            if self._draining:
                 return self._decide_locked(request)
+            if len(tree.held) >= _MAX_PENDING_SPANS_PER_TREE:
+                return self._decide_early_locked(request)
             return self._decide_oldest_over_bound_locked()
 
     def _decide_oldest_over_bound_locked(self) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
-        """Decide the oldest held tree on what it has once too many are waiting.
+        if len(self._pending) <= _MAX_PENDING_TREES:
+            return ()
+        return self._decide_early_locked(next(iter(self._pending)))
+
+    def _decide_early_locked(self, request: _RequestKey) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
+        """Decide a tree a bound cut short on what it has.
 
         Its request may not have finished, so a ``failure_only`` destination loses a
         failure that comes later, and a sampled one judges it on the outcome so far.
-        Each such decision is counted and the count logged at most once a minute, so
-        the loss is never silent.
+        Each such decision is counted for the warning ``on_end`` logs, so the loss is
+        never silent.
         """
-        if len(self._pending) <= _MAX_PENDING_TREES:
-            return ()
         self._decided_early += 1
+        return self._decide_locked(request)
+
+    def _early_decisions_due_locked(self) -> int:
+        """The trees decided early since the last warning, once a minute has passed since it, else 0."""
+        if not self._decided_early:
+            return 0
         now: Final = time.monotonic()
-        if self._warned_early_at is None or now - self._warned_early_at >= _EARLY_DECISION_WARNING_SECONDS:
-            verbose_logger.warning(
-                "OTel V2 fan-out: %d request trees were decided before their request finished, because more "
-                "than %d were held for sampled or failure-only destinations. A failure-only destination misses "
-                "a failure that came after that",
-                self._decided_early,
-                _MAX_PENDING_TREES,
-            )
-            self._decided_early = 0
-            self._warned_early_at = now
-        return self._decide_locked(next(iter(self._pending)))
+        if self._warned_early_at is not None and now - self._warned_early_at < _EARLY_DECISION_WARNING_SECONDS:
+            return 0
+        decided: Final = self._decided_early
+        self._decided_early = 0
+        self._warned_early_at = now
+        return decided
 
     def _decide(self, request: _RequestKey) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
         with self._lock:
@@ -929,13 +945,15 @@ class TenantFanOutSpanProcessor(SpanProcessor):
 
     def _settle(
         self, request: _RequestKey, span: ReadableSpan, failed: bool, fails_request: bool, sampled: bool
-    ) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
+    ) -> "tuple[tuple[tuple[ReadableSpan, OtelDestination], ...], int]":
         """What the request's held tree exports once the span that just ended was the last
-        of its request still open. The model-call span ends in the post-call callback,
-        after the server span, so a tree is decided when its request goes quiet rather than
-        when its root ends, and a model call that fails late still answers to the error
-        rate. A request whose starts this fan-out never saw (attached mid-flight, or
-        forgotten by the bound) is decided as each of its spans ends.
+        of its request still open, and the count of trees a bound decided early once a
+        warning about them is due, for ``on_end`` to log outside the lock. The model-call
+        span ends in the post-call callback, after the server span, so a tree is decided
+        when its request goes quiet rather than when its root ends, and a model call that
+        fails late still answers to the error rate. A request whose starts this fan-out
+        never saw (attached mid-flight, or forgotten by the bound) is decided as each of
+        its spans ends.
 
         A span that fails a ``sampled`` request before the request has held anything (the
         server span answering an error ahead of an ``llm_only`` destination's model call)
@@ -951,8 +969,8 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 still_open.discard(span.context.span_id)
             if still_open:
                 self._open[request] = still_open
-                return self._decide_oldest_over_bound_locked()
-            return self._decide_locked(request)
+            settled: Final = self._decide_oldest_over_bound_locked() if still_open else self._decide_locked(request)
+            return settled, self._early_decisions_due_locked()
 
     def _decide_locked(self, request: _RequestKey) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
         """Decide once per destination for the held tree; the spans the verdicts keep, and
@@ -1690,23 +1708,19 @@ def _owned_capture_modes(
 
 
 def deliverable_destinations(
-    destinations: Iterable["OtelDestination"],
+    resolve: 'Callable[[], Iterable["OtelDestination"]]',
     provider: trace.TracerProvider | None = None,
 ) -> tuple["OtelDestination", ...]:
-    """The destinations a request can anchor, given what is published to carry them.
+    """The destinations ``resolve`` names that a request can anchor, given what is
+    published to carry them.
 
     Anchoring a destination is what tells the operator's own exporter to stand down
     for that backend, so one nothing can deliver has to be dropped here: with no
     fan-out attached, or with an exporter that will not build, the request keeps
-    exactly the routing it would have had without any override.
+    exactly the routing it would have had without any override. ``resolve`` runs
+    only when a fan-out is attached, so with OTel V2 off nothing is resolved.
     """
-    fan_out: Final = tenant_fan_out(provider)
-    return fan_out.deliverable(destinations) if fan_out is not None else ()
-
-
-def tenant_fan_out(provider: trace.TracerProvider | None = None) -> TenantFanOutSpanProcessor | None:
-    """The fan-out attached to ``provider`` (the OTel global when omitted), if any."""
-    return next(
+    fan_out: Final = next(
         (
             processor
             for processor in _attached_processors(provider if provider is not None else trace.get_tracer_provider())
@@ -1714,6 +1728,7 @@ def tenant_fan_out(provider: trace.TracerProvider | None = None) -> TenantFanOut
         ),
         None,
     )
+    return fan_out.deliverable(resolve()) if fan_out is not None else ()
 
 
 def operator_sink_scopes(*configs: OpenTelemetryV2Config) -> 'Mapping[_SinkKey, "OtelSpanScope"]':

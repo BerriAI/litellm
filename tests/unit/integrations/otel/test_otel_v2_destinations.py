@@ -1064,7 +1064,7 @@ class TestFanOut:
         provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=lambda _d: None))
 
         def run():
-            set_request_destinations(deliverable_destinations((LANGFUSE_DEST,), provider))
+            set_request_destinations(deliverable_destinations(lambda: (LANGFUSE_DEST,), provider))
             emit(provider)
             return request_destinations()
 
@@ -1078,7 +1078,7 @@ class TestFanOut:
         provider = wired_provider(dest_exporter, global_exporter)
 
         def run():
-            set_request_destinations(deliverable_destinations((LANGFUSE_DEST,), provider))
+            set_request_destinations(deliverable_destinations(lambda: (LANGFUSE_DEST,), provider))
             emit(provider)
             return request_destinations()
 
@@ -1102,7 +1102,7 @@ class TestFanOut:
         operator's exporter from writing them."""
         provider = TracerProvider()
 
-        assert deliverable_destinations((LANGFUSE_DEST,), provider) == ()
+        assert deliverable_destinations(lambda: (LANGFUSE_DEST,), provider) == ()
 
     def test_a_protocol_with_no_otlp_transport_is_not_deliverable(self):
         """An unknown exporter kind falls back to the console exporter, which ignores the
@@ -1121,7 +1121,7 @@ class TestFanOut:
         provider.add_span_processor(fan_out)
         fan_out.shutdown()
 
-        assert deliverable_destinations((LANGFUSE_DEST,), provider) == ()
+        assert deliverable_destinations(lambda: (LANGFUSE_DEST,), provider) == ()
 
     def test_the_processor_built_to_check_deliverability_is_the_one_that_exports(self):
         built = []
@@ -1134,7 +1134,7 @@ class TestFanOut:
         provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=factory))
 
         def run():
-            set_request_destinations(deliverable_destinations((LANGFUSE_DEST,), provider))
+            set_request_destinations(deliverable_destinations(lambda: (LANGFUSE_DEST,), provider))
             emit(provider)
 
         in_fresh_context(run)
@@ -1940,9 +1940,7 @@ class TestFailureOnlyDestination:
     def _fan_out(dest_exporter: InMemorySpanExporter, global_exporter: InMemorySpanExporter | None = None):
         provider: Final = TracerProvider()
         if global_exporter is not None:
-            provider.add_span_processor(
-                _OverriddenBackendFilter(SimpleSpanProcessor(global_exporter), "langfuse_otel")
-            )
+            provider.add_span_processor(_OverriddenBackendFilter(SimpleSpanProcessor(global_exporter), "langfuse_otel"))
         provider.add_span_processor(
             TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter))
         )
@@ -2067,6 +2065,24 @@ class TestFailureOnlyDestination:
         assert len(warnings) == 1, warnings
         assert warnings[0].startswith("OTel V2 fan-out: 1 request trees"), warnings[0]
         assert dest_exporter.get_finished_spans() == ()
+
+    def test_a_request_that_outgrows_its_span_cap_warns_that_its_failure_can_be_lost(self, caplog):
+        dest_exporter = InMemorySpanExporter()
+        provider: Final = self._fan_out(dest_exporter)
+
+        def run():
+            set_request_destinations((self.FAILURE_ONLY,))
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/mcp"):
+                for index in range(otel_providers._MAX_PENDING_SPANS_PER_TREE):
+                    tracer.start_span(f"redis {index}").end()
+
+        with caplog.at_level("WARNING", logger="LiteLLM"):
+            in_fresh_context(run)
+
+        warnings: Final = [r.getMessage() for r in caplog.records if "before their request finished" in r.getMessage()]
+        assert len(warnings) == 1, warnings
+        assert warnings[0].startswith("OTel V2 fan-out: 1 request trees"), warnings[0]
 
 
 class TestProviderWiring:
@@ -2267,8 +2283,8 @@ class TestProviderWiring:
         claimed_first = TracerProvider()
 
         assert fan_out_provider() is logger.tracer_provider
-        assert deliverable_destinations((LANGFUSE_DEST,), claimed_first) == ()
-        assert deliverable_destinations((LANGFUSE_DEST,), fan_out_provider()) == (LANGFUSE_DEST,)
+        assert deliverable_destinations(lambda: (LANGFUSE_DEST,), claimed_first) == ()
+        assert deliverable_destinations(lambda: (LANGFUSE_DEST,), fan_out_provider()) == (LANGFUSE_DEST,)
 
     def test_a_legacy_v1_logger_holding_the_registered_slot_does_not_hide_the_fan_out(self, monkeypatch):
         """The proxy publishes with ``registered=None`` when ``open_telemetry_logger``
@@ -2285,7 +2301,7 @@ class TestProviderWiring:
         monkeypatch.setattr(proxy_server, "open_telemetry_logger", OpenTelemetry())
 
         assert fan_out_provider() is v2.tracer_provider
-        assert deliverable_destinations((LANGFUSE_DEST,), fan_out_provider()) == (LANGFUSE_DEST,)
+        assert deliverable_destinations(lambda: (LANGFUSE_DEST,), fan_out_provider()) == (LANGFUSE_DEST,)
 
     def test_without_a_publish_anchoring_attaches_fan_out_to_registered_v2_logger(self, monkeypatch):
         from litellm.proxy import proxy_server
@@ -2295,7 +2311,7 @@ class TestProviderWiring:
         monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
 
         assert fan_out_provider() is logger.tracer_provider
-        assert deliverable_destinations((LANGFUSE_DEST,), fan_out_provider()) == (LANGFUSE_DEST,)
+        assert deliverable_destinations(lambda: (LANGFUSE_DEST,), fan_out_provider()) == (LANGFUSE_DEST,)
 
     def test_concurrent_anchoring_attaches_exactly_one_fan_out(self):
         """Requests race to anchor when the startup publish never ran, and a fan-out
@@ -2369,7 +2385,7 @@ class TestProviderWiring:
             _seed_request_destinations(auth)
             return request_destinations()
 
-        assert deliverable_destinations(expected, TracerProvider()) == ()
+        assert deliverable_destinations(lambda: expected, TracerProvider()) == ()
         assert in_fresh_context(run) == expected
 
     def test_auth_reads_no_key_or_team_config_when_nothing_can_deliver_a_destination(self, monkeypatch):
@@ -3558,7 +3574,7 @@ class TestArizeTenantOnly:
         attach_tenant_fan_out(provider, config)
 
         def run():
-            set_request_destinations(deliverable_destinations((ARIZE_DEST,), provider))
+            set_request_destinations(deliverable_destinations(lambda: (ARIZE_DEST,), provider))
             emit(provider)
 
         in_fresh_context(run)
@@ -3659,7 +3675,7 @@ class TestLangfuseTenantOnly:
         attach_tenant_fan_out(provider, logger.config)
 
         def with_destination() -> None:
-            set_request_destinations(deliverable_destinations((LANGFUSE_DEST,), provider))
+            set_request_destinations(deliverable_destinations(lambda: (LANGFUSE_DEST,), provider))
             emit(provider)
 
         in_fresh_context(with_destination)
@@ -3755,7 +3771,7 @@ class TestLangfuseTenantOnly:
         )
 
         def with_destination() -> None:
-            set_request_destinations(deliverable_destinations((LANGFUSE_DEST,), provider))
+            set_request_destinations(deliverable_destinations(lambda: (LANGFUSE_DEST,), provider))
             emitter.emit(SpanRole.LLM_CALL, call)
 
         in_fresh_context(with_destination)
