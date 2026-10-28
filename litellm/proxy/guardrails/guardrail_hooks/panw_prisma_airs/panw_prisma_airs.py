@@ -577,7 +577,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if request_data.get("server_name"):
             return request_data["server_name"]
         try:
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            from litellm.proxy.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
 

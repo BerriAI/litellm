@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from pydantic import SecretStr
 import respx
 from fastapi import HTTPException, Request
+from pydantic import SecretStr
 
 import litellm
 from litellm._uuid import uuid
@@ -4119,7 +4119,7 @@ class TestCLIKeyRegenerationFlow:
         cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-new-session-key-456"
 
         # Mock the CLI callback and required proxy server components
-        from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+        from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
             assertion_from_sso_login,
         )
 
@@ -9625,7 +9625,7 @@ async def test_redirect_from_openid_persists_assertion_under_canonical_user_id()
     """The browser funnel persists the captured assertion AFTER canonical user
     resolution, keyed by the user_id admission will later resolve (the key-generation
     response user_id), not the raw IdP subject."""
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
         assertion_from_sso_login,
     )
 
@@ -9696,7 +9696,7 @@ async def test_redirect_from_openid_persists_the_login_exchanged_assertion():
     """A server with ``id_jag_subject_source: refresh_token`` needs the refresh token the login
     assertion was exchanged for, so the funnel persists what the login-time exchange returns, not
     the raw capture."""
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
         assertion_from_sso_login,
     )
 
@@ -9921,11 +9921,11 @@ async def test_microsoft_login_asks_for_offline_access_only_while_an_id_jag_serv
 @pytest.mark.asyncio
 async def test_cli_completion_persists_assertion_under_db_user_id():
     """The CLI funnel persists the captured assertion under the DB-resolved user_id."""
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
-        assertion_from_sso_login,
-    )
     from litellm.proxy.management_endpoints.ui_sso import (
         _complete_cli_sso_callback_session,
+    )
+    from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
+        assertion_from_sso_login,
     )
 
     assertion = assertion_from_sso_login(_ema_id_token(), None)
@@ -10041,11 +10041,11 @@ async def test_a_capturing_provider_that_returned_no_id_token_still_warns(monkey
 
 @pytest.mark.asyncio
 async def test_no_warning_when_the_assertion_was_captured(monkeypatch, caplog):
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
-        assertion_from_sso_login,
-    )
     from litellm.proxy.management_endpoints.ui_sso import (
         warn_if_id_jag_assertion_uncaptured,
+    )
+    from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
+        assertion_from_sso_login,
     )
 
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
