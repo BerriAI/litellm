@@ -46,13 +46,13 @@ class VLLMModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:
-        api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE") or get_secret_str("VLLM_API_BASE")
-        if api_base is None:
+        resolved_api_base: Final = api_base or get_secret_str("HOSTED_VLLM_API_BASE") or get_secret_str("VLLM_API_BASE")
+        if resolved_api_base is None:
             raise ValueError(
                 "HOSTED_VLLM_API_BASE or VLLM_API_BASE is not set. Please set an environment variable to use "
                 "VLLM's pass-through - `{LITELLM_API_BASE}/vllm/{endpoint}`."
             )
-        return api_base
+        return resolved_api_base
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
@@ -63,17 +63,19 @@ class VLLMModelInfo(BaseLLMModelInfo):
         return model
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
-        api_base = VLLMModelInfo.get_api_base(api_base)
-        api_key = VLLMModelInfo.get_api_key(api_key)
+        resolved_api_base: Final = VLLMModelInfo.get_api_base(api_base)
+        resolved_api_key: Final = VLLMModelInfo.get_api_key(api_key)
         endpoint: Final = "/v1/models"
-        if api_base is None:
+        if resolved_api_base is None:
             raise ValueError(
                 "HOSTED_VLLM_API_BASE or VLLM_API_BASE is not set. Please set an environment variable to query "
                 "VLLM's `/models` endpoint."
             )
 
-        url: Final = add_path_to_api_base(api_base, endpoint)
-        headers: Final = MappingProxyType({"Authorization": f"Bearer {api_key}"}) if api_key is not None else None
+        url: Final = add_path_to_api_base(resolved_api_base, endpoint)
+        headers: Final = (
+            MappingProxyType({"Authorization": f"Bearer {resolved_api_key}"}) if resolved_api_key is not None else None
+        )
         response: Final = litellm.module_level_client.get(
             url=url,
             headers=headers,
