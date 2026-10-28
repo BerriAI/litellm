@@ -210,9 +210,11 @@ _TRAILING_ERRORS = [
     httpx.RemoteProtocolError("peer closed connection without sending complete message body"),
 ]
 
+_TRAILING_ERRORS_AFTER_COMPLETED = [*_TRAILING_ERRORS, httpx.ReadTimeout("Timeout on reading data from socket")]
+
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS, ids=type)
+@pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS_AFTER_COMPLETED, ids=type)
 async def test_transport_error_after_completed_event_ends_stream_cleanly(trailing_error):
     """A sloppy connection close after `response.completed` must not turn a
     complete stream into an error (regression guard for the transport no longer
@@ -243,7 +245,7 @@ async def test_transport_error_before_completed_event_raises():
             pass
 
 
-@pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS, ids=type)
+@pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS_AFTER_COMPLETED, ids=type)
 def test_sync_transport_error_after_completed_event_ends_stream_cleanly(trailing_error):
     iterator = _make_sync_iterator(
         sse_events=_COMPLETE_STREAM_EVENTS,

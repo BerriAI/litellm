@@ -485,7 +485,7 @@ class _UpstreamThatCompletesThenTimesOut:
 
 
 @pytest.mark.asyncio
-async def test_failure_after_completed_response_does_not_estimate_partial_usage(
+async def test_timeout_after_completed_response_ends_the_stream_and_bills_it_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recorder: Final = FailureRecorder()
@@ -501,17 +501,18 @@ async def test_failure_after_completed_response_does_not_estimate_partial_usage(
     )
     iterator: Final = _live_iterator(logging_obj, upstream=_UpstreamThatCompletesThenTimesOut())
 
-    with pytest.raises(litellm.Timeout, match="Timeout on reading data from socket"):
-        await _ChunkRecorder().drain(iterator)
+    chunks: Final = _ChunkRecorder()
+    await chunks.drain(iterator)
     await iterator._await_pending_logging()
 
+    assert chunks.chunks[-1].type == "response.completed"
     assert len(recorder.success_payloads) == 1
     success_payload: Final = recorder.success_payloads[0]
     response_payload: Final = success_payload["response"]
     assert isinstance(response_payload, dict)
     usage: Final = cast(dict[str, object], response_payload["usage"])
     assert (usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]) == (5, 7, 12)
-    assert len(recorder.failure_payloads) == 1
+    assert recorder.failure_payloads == ()
     assert logging_obj.model_call_details.get("combined_usage_object") is None
 
 

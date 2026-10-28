@@ -1255,6 +1255,9 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 raise StopAsyncIteration from e
             self._raise_for_transport_error(e)
         except httpx.TimeoutException as e:
+            if self.completed_response is not None:
+                self.finished = True
+                raise StopAsyncIteration from e
             self._raise_for_transport_timeout(e)
         except httpx.HTTPError as e:
             # Handle HTTP errors
@@ -1340,6 +1343,9 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 raise StopIteration from e
             self._raise_for_transport_error(e)
         except httpx.TimeoutException as e:
+            if self.completed_response is not None:
+                self.finished = True
+                raise StopIteration from e
             self._raise_for_transport_timeout(e)
         except httpx.HTTPError as e:
             # Handle HTTP errors
