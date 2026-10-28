@@ -10,6 +10,7 @@ import logging
 import math
 import sys
 import time
+import timeit
 from collections.abc import AsyncIterator, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
@@ -10164,6 +10165,22 @@ _CODEX_ENVELOPES: Final = (
     "<environments_instructions>LITELLM ESCALATE environment</environments_instructions>",
     "# AGENTS.md instructions for /repo with spaces/中文\n<INSTRUCTIONS>LITELLM ESCALATE instructions</INSTRUCTIONS>",
 )
+_SCAN_SIZE_FACTOR: Final = 16
+
+
+def _strip_cpu_growth(unit: str, base_repeats: int, marker_pairs: tuple[tuple[str, str], ...]) -> float:
+    """Thread CPU time growth from `base_repeats` copies of `unit` to `_SCAN_SIZE_FACTOR` times as many.
+
+    Best of five runs with GC paused. A busy runner or a slower machine slows both sizes alike, so only the algorithm
+    moves the ratio, which is about the size factor for linear work and its square for quadratic work.
+    """
+    from litellm.router_strategy.complexity_router.complexity_router import _strip_reminder_blocks
+
+    def cpu_seconds(repeats: int) -> float:
+        strip: Final = partial(_strip_reminder_blocks, unit * repeats, marker_pairs)
+        return min(timeit.repeat(strip, timer=time.thread_time, number=1, repeat=5))
+
+    return cpu_seconds(base_repeats * _SCAN_SIZE_FACTOR) / cpu_seconds(base_repeats)
 
 
 class TestContextAwareClassifier:
@@ -11114,22 +11131,20 @@ class TestContextAwareClassifier:
         """Unclosed reminder tags must not make stripping superlinear.
 
         `<system-reminder>.*?` retried its lazy quantifier from every opening tag, so repeated unclosed
-        tags were quadratic: 272KB took 7.6s, reachable by any keyholder pre-routing. The bound is far
-        looser than the linear cost (~1ms) and far under the quadratic one, so it fails loudly without
-        flaking on a slow machine.
+        tags were quadratic: 272KB took 7.6s, reachable by any keyholder pre-routing. The ceiling sits
+        halfway between linear and quadratic growth on a log scale.
         """
-        import time
-
         from litellm.router_strategy.complexity_router.complexity_router import _strip_reminder_blocks
 
-        adversarial = "<system-reminder>" * 60_000
+        pairs: Final = (("<system-reminder>", "</system-reminder>"),)
+        adversarial: Final = "<system-reminder>" * 250
 
-        start = time.perf_counter()
-        result = _strip_reminder_blocks(adversarial)
-        elapsed = time.perf_counter() - start
+        growth: Final = _strip_cpu_growth("<system-reminder>", 250, pairs)
 
-        assert elapsed < 1.0, f"stripping {len(adversarial)} chars took {elapsed:.2f}s; scan is not linear"
-        assert result == adversarial
+        assert growth < _SCAN_SIZE_FACTOR**1.5, (
+            f"{_SCAN_SIZE_FACTOR}x the unclosed tags cost {growth:.0f}x the CPU time; scan is not linear"
+        )
+        assert _strip_reminder_blocks(adversarial, pairs) == adversarial
 
     def test_reminder_scan_stays_linear_in_block_count_across_pairs(self):
         """Many *complete* blocks across several pairs must not go quadratic either.
@@ -11137,22 +11152,21 @@ class TestContextAwareClassifier:
         Collapsing nested and overlapping spans is required for correctness once more than one pair
         is configured, and the obvious way to write it -- folding merged spans into a growing tuple
         -- is quadratic in block count. Unlike the unclosed-tag case above, these blocks all close,
-        so they actually produce spans. This input is a few hundred KB, which any keyholder can send
-        pre-routing, and it fails loudly if the collapse is ever rewritten as a fold.
+        so they actually produce spans. Any keyholder can send this many blocks pre-routing, and it
+        fails loudly if the collapse is ever rewritten as a fold.
         """
-        import time
-
         from litellm.router_strategy.complexity_router.complexity_router import _strip_reminder_blocks
 
-        pairs = (("<a>", "</a>"), ("<b>", "</b>"))
-        adversarial = "<a>x</a><b>y</b>" * 25_000
+        pairs: Final = (("<a>", "</a>"), ("<b>", "</b>"))
 
-        start = time.perf_counter()
-        result = _strip_reminder_blocks(f"{adversarial} what is a splay tree?", pairs)
-        elapsed = time.perf_counter() - start
+        growth: Final = _strip_cpu_growth("<a>x</a><b>y</b>", 1_000, pairs)
 
-        assert elapsed < 1.0, f"stripping {50_000} blocks took {elapsed:.2f}s; collapse is not linear"
-        assert result == "what is a splay tree?"
+        assert growth < _SCAN_SIZE_FACTOR**1.5, (
+            f"{_SCAN_SIZE_FACTOR}x the blocks cost {growth:.0f}x the CPU time; collapse is not linear"
+        )
+        assert _strip_reminder_blocks("<a>x</a><b>y</b>" * 1_000 + " what is a splay tree?", pairs) == (
+            "what is a splay tree?"
+        )
 
     @pytest.mark.asyncio
     async def test_llm_classifier_includes_prior_turns_context(self, llm_complexity_router, mock_router_instance):
