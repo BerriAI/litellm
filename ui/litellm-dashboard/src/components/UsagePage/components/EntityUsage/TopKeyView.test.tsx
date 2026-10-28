@@ -493,6 +493,26 @@ describe("TopKeyView", () => {
     });
   });
 
+  it.each([
+    ["raw:unattributed", "unattributed"],
+    ["raw:raw:unattributed", "raw:unattributed"],
+    ["raw:raw:raw:key", "raw:raw:key"],
+  ])("opens the stored key behind reporting ID %s", async (bucket, key) => {
+    mockKeyInfoV1Call.mockResolvedValue({ key });
+    mockTransformKeyInfo.mockReturnValue({ token: key } as KeyResponse);
+    render(
+      <TopKeyView
+        {...baseProps}
+        topKeys={[{ api_key: bucket, key_alias: "Legacy key", key_exists: true, spend: 2 }]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: bucket }));
+
+    expect(await screen.findByText(`Key Info View for ${key}`)).toBeInTheDocument();
+    expect(mockKeyInfoV1Call).toHaveBeenCalledWith("test-token", key);
+  });
+
   it("should only look up keys that still exist in the database, from both the table and the chart", async () => {
     mockKeyInfoV1Call.mockResolvedValue({ key: "info" });
     mockTransformKeyInfo.mockReturnValue({ transformed: "data" } as unknown as KeyResponse);

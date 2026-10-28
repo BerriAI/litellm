@@ -569,7 +569,7 @@ def daily_activity_scope(
     entity_id_field: str,
     entity_id: str | list[str] | None,
     exclude_entity_ids: list[str] | None,
-    api_key: str | list[str] | None,
+    api_key: str | Sequence[str] | None,
     start_date: str,
     end_date: str,
     model: str | None,

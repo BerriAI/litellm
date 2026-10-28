@@ -404,8 +404,14 @@ def test_query_builders_reject_nonpositive_limits(builder) -> None:
     ("export_type", "group_key", "key_filter", "joins"),
     [
         (ExportType.DAILY, "''", "", ""),
-        (ExportType.DAILY_WITH_KEYS, "scoped.api_key", "api_key <> $3", 'LEFT JOIN "LiteLLM_VerificationToken"'),
-        (ExportType.DAILY_WITH_MODELS, "COALESCE(scoped.model, '')", "api_key <> $3", ""),
+        (
+            ExportType.DAILY_WITH_KEYS,
+            "CASE WHEN api_key = '' THEN 'unattributed' "
+            "WHEN api_key = 'unattributed' OR api_key LIKE 'raw:%' THEN 'raw:' || api_key ELSE api_key END",
+            "api_key <> $3",
+            'LEFT JOIN "LiteLLM_VerificationToken"',
+        ),
+        (ExportType.DAILY_WITH_MODELS, "COALESCE(NULLIF(model, ''), 'unknown-model')", "api_key <> $3", ""),
         (
             ExportType.DAILY_WITH_USERS,
             "COALESCE(vt.user_id, dvt.user_id, '')",

@@ -473,7 +473,7 @@ def build_export_sql(
             {alias_expression} AS entity_alias,
             {output_key} AS api_key,
             {user_fields},
-            {"NULLIF(COALESCE(scoped.model, ''), '')" if export_type is ExportType.DAILY_WITH_MODELS else "NULL::text"} AS model,
+            {_MODEL_EXPR if export_type is ExportType.DAILY_WITH_MODELS else "NULL::text"} AS model,
             COALESCE(SUM(scoped.spend), 0)::float AS spend,
             {flat_cost} AS flat_cost,
             COALESCE(SUM(scoped.prompt_tokens), 0)::bigint AS prompt_tokens,
@@ -511,25 +511,26 @@ def _export_grouping(export_type: ExportType) -> tuple[str, str, str, tuple[str,
         )
     if export_type is ExportType.DAILY_WITH_KEYS:
         return (
-            "scoped.api_key",
-            "NULLIF(scoped.api_key, '')",
-            "MAX(COALESCE(vt.key_alias, dvt.key_alias)) AS key_alias, "
+            _API_KEY_EXPR,
+            _API_KEY_EXPR,
+            "MAX(CASE WHEN scoped.api_key = '' THEN 'Unattributed' "
+            "ELSE COALESCE(vt.key_alias, dvt.key_alias) END) AS key_alias, "
             "MAX(COALESCE(vt.user_id, dvt.user_id)) AS user_id, MAX(u.user_email) AS user_email",
             (
-                'LEFT JOIN "LiteLLM_VerificationToken" vt ON vt.token = scoped.api_key',
+                "LEFT JOIN \"LiteLLM_VerificationToken\" vt ON vt.token = scoped.api_key AND scoped.api_key <> ''",
                 """LEFT JOIN LATERAL (
                     SELECT key_alias, user_id
                     FROM "LiteLLM_DeletedVerificationToken"
                     WHERE token = scoped.api_key
                     ORDER BY deleted_at DESC
                     LIMIT 1
-                ) dvt ON vt.token IS NULL""",
+                ) dvt ON vt.token IS NULL AND scoped.api_key <> ''""",
                 'LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = COALESCE(vt.user_id, dvt.user_id)',
             ),
         )
     if export_type is ExportType.DAILY_WITH_MODELS:
         return (
-            "COALESCE(scoped.model, '')",
+            _MODEL_EXPR,
             "NULL::text",
             "NULL::text AS key_alias, NULL::text AS user_id, NULL::text AS user_email",
             (),

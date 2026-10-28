@@ -1,3 +1,5 @@
+import csv
+import io
 import uuid
 from collections.abc import Sequence
 from datetime import datetime, timedelta
@@ -161,6 +163,60 @@ def test_missing_attribution_key_drilldowns(
         unattributed: Final = next(row for row in rows if row["api_key"] == "unattributed")
         assert object_value(unattributed["metadata"])["key_alias"] == "Unattributed"
         assert object_value(unattributed["metadata"])["key_exists"] is False
+    finally:
+        _clean(day)
+
+
+@pytest.mark.parametrize("format", ["json", "csv"])
+@pytest.mark.parametrize(
+    ("export_type", "field", "expected"),
+    [
+        ("daily_with_keys", "api_key", {"unattributed": 3.0, "raw:unattributed": 2.0, "raw:raw:unattributed": 4.0}),
+        ("daily_with_models", "model", {"unknown-model": 5.0, "known-model": 4.0}),
+    ],
+)
+def test_export_bucket_ids_round_trip_across_streaming_batches(
+    gateway: Gateway, format: str, export_type: str, field: str, expected: dict[str, float]
+) -> None:
+    day: Final = _unique_day()
+    _seed(
+        day,
+        [
+            (_row_id(), "export-user", day, "", None, None, "", None, None, 0, 3.0, 1, 1),
+            (_row_id(), "export-user", day, "", "", "", "", None, None, 0, 0.0, 1, 1),
+            (_row_id(), "export-user", day, "unattributed", "unknown-model", "", "", None, None, 0, 2.0, 1, 1),
+            (_row_id(), "export-user", day, "raw:unattributed", "known-model", "", "", None, None, 0, 4.0, 1, 1),
+        ],
+    )
+    write_rows(
+        'INSERT INTO "LiteLLM_DailyUserSpend" (id, user_id, date, api_key, model, spend, api_requests, updated_at) '
+        "SELECT %s || i, 'export-user', %s, 'raw:a-key-' || i, 'a-model-' || i, 1, 1, now() "
+        "FROM generate_series(1, 1001) i",
+        (str(uuid.uuid4()), day),
+    )
+    params: Final = {"start_date": day, "end_date": day}
+    try:
+        response: Final = gateway.request(
+            "GET", "/user/daily/activity/export", params={**params, "export_type": export_type, "format": format}
+        )
+        assert response.status_code == 200, response.text
+        rows: Final = (
+            _RESULTS.validate_python(response.json())
+            if format == "json"
+            else _RESULTS.validate_python(list(csv.DictReader(io.StringIO(response.text))))
+        )
+        buckets: Final = {str(row[field]): _NUMBER.validate_python(row["spend"]) for row in rows}
+        filler: Final = "raw:raw:a-key-" if field == "api_key" else "a-model-"
+        assert buckets == {**{f"{filler}{i}": 1.0 for i in range(1, 1002)}, **expected}
+        assert len(rows) == len(buckets)
+        assert sum(buckets.values()) == 1010.0
+        for bucket, spend in expected.items():
+            filtered: Final = _activity(gateway, day, **{field: bucket})
+            assert object_value(filtered["metadata"])["total_spend"] == spend
+        if field == "api_key":
+            unattributed: Final = next(row for row in rows if row["api_key"] == "unattributed")
+            assert unattributed["key_alias"] == "Unattributed"
+            assert unattributed["user_id"] in (None, "")
     finally:
         _clean(day)
 

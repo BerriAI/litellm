@@ -7,7 +7,13 @@ import {
   type KeySpendActivityRow,
   toDailyData,
 } from "./dailyActivityApi";
-import { keyDetailFromResponse, mergeKeyActivityPages, overallUsageMetrics } from "./keyActivityData";
+import {
+  keyDetailFromResponse,
+  mergeKeyActivityPages,
+  overallUsageMetrics,
+  reportingKeyId,
+  storedKeyId,
+} from "./keyActivityData";
 
 const completeMetrics: components["schemas"]["SpendMetrics"] = {
   api_requests: 2,
@@ -80,6 +86,18 @@ const pageRow = (api_key: string): KeySpendActivityRow => ({
 });
 
 describe("key activity data", () => {
+  it.each([
+    ["", "unattributed"],
+    ["unattributed", "raw:unattributed"],
+    ["raw:key", "raw:raw:key"],
+    ["raw:raw:key", "raw:raw:raw:key"],
+    ["ordinary-hash", "ordinary-hash"],
+    [" ", " "],
+  ])("round trips stored key %s through reporting", (key, bucket) => {
+    expect(reportingKeyId(key)).toBe(bucket);
+    expect(storedKeyId(bucket)).toBe(key);
+  });
+
   it("retains unattributed totals and unknown models in key details", () => {
     const unattributed = {
       metrics: completeMetrics,
