@@ -53,7 +53,7 @@ _GUARDRAIL_CONFIG_VALIDATOR: Final["TypeAdapter[GuardrailConfigBlock]"] = TypeAd
 @with_config(ConfigDict(extra="allow", strict=True))
 class _CohereGeneration(TypedDict):
     text: ReadOnly[str | None]
-    finish_reason: ReadOnly[str]
+    finish_reason: ReadOnly[str | None]
 
 
 @with_config(ConfigDict(extra="allow", strict=True))
@@ -338,7 +338,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 elif "generations" in cohere_response:
                     outputText = cohere_response["generations"][0]["text"]
                     model_response.choices[0].finish_reason = map_finish_reason(
-                        cohere_response["generations"][0]["finish_reason"]
+                        cohere_response["generations"][0]["finish_reason"] or "stop"
                     )
             elif provider == "anthropic":
                 return litellm.AmazonAnthropicClaudeConfig().transform_response(

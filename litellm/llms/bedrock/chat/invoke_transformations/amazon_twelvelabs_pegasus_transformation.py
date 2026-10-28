@@ -38,8 +38,8 @@ else:
 
 @with_config(ConfigDict(extra="allow", strict=True))
 class _PegasusResponse(TypedDict):
-    message: ReadOnly[NotRequired[str]]
-    finishReason: ReadOnly[NotRequired[str]]
+    message: ReadOnly[NotRequired[str | None]]
+    finishReason: ReadOnly[NotRequired[str | None]]
 
 
 _PEGASUS_RESPONSE: Final = TypeAdapter(_PegasusResponse)
@@ -235,7 +235,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         message_content: Final = completion_response.get("message", "")
 
         # Extract finish reason and map to LiteLLM format
-        finish_reason_raw: Final = completion_response.get("finishReason", "stop")
+        finish_reason_raw: Final = completion_response.get("finishReason") or "stop"
         finish_reason: Final = map_finish_reason(finish_reason_raw)
 
         # Set the response content
