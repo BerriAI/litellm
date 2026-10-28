@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import uuid
 from typing import Final, Literal
 from urllib.parse import parse_qsl, urlsplit
@@ -297,9 +298,6 @@ def test_streamed_response_ids_are_stable_and_retrievable_on_each_alias(
 
 @pytest.mark.parametrize("prefix", _ALIASES)
 def test_retrieve_query_reaches_the_provider(gateway: Gateway, prefix: str) -> None:
-    pytest.skip(
-        "BUG: GET /v1/responses/{id} drops include and starting_after; streamed GET returns 500 for provider SSE"
-    )
     normal_raw_id: Final = f"resp_query_normal_{uuid.uuid4().hex}"
     stream_raw_id: Final = f"resp_query_stream_{uuid.uuid4().hex}"
     normal_include: Final = ["message.output_text.logprobs", "reasoning.encrypted_content"]
@@ -411,6 +409,83 @@ def test_retrieve_query_reaches_the_provider(gateway: Gateway, prefix: str) -> N
                 for request in requests[2:]
             )
             assert actual_queries == expected_queries, requests
+
+
+def _resumed_delta() -> bytes:
+    event: Final = {
+        "type": "response.output_text.delta",
+        "sequence_number": 4,
+        "item_id": "msg_resumed",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "resumed",
+        "logprobs": [],
+    }
+    return f"data: {json.dumps(event)}\n\n".encode()
+
+
+def _sorted_query(request: Request) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted(parse_qsl(urlsplit(request.target).query, keep_blank_values=True)))
+
+
+@pytest.mark.parametrize("prefix", _ALIASES)
+def test_resuming_past_the_last_event_ends_the_stream_without_events(gateway: Gateway, prefix: str) -> None:
+    raw_id: Final = f"resp_resume_end_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return model_discovery_reply(_MODEL)
+        if request.method == "POST":
+            return Reply(body=_response(raw_id))
+        return Reply(content_type="text/event-stream", chunks=())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        client: Final = _client(gateway, gateway.key, prefix)
+        created: Final = client.responses.create(model=model, input="resume past the end")
+        events: Final = tuple(client.responses.retrieve(created.id, stream=True, starting_after=7))
+        requests: Final = drain_contract_requests(wire)
+
+    assert events == ()
+    assert [(request.method, urlsplit(request.target).path) for request in requests] == [
+        ("POST", "/v1/responses"),
+        ("GET", f"/v1/responses/{raw_id}"),
+    ], requests
+    assert _sorted_query(requests[1]) == (("starting_after", "7"), ("stream", "true")), requests[1]
+
+
+@pytest.mark.parametrize("prefix", _ALIASES)
+def test_a_client_leaving_a_resumed_stream_releases_the_provider_connection(gateway: Gateway, prefix: str) -> None:
+    raw_id: Final = f"resp_resume_leave_{uuid.uuid4().hex}"
+    release: Final = threading.Event()
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return model_discovery_reply(_MODEL)
+        if request.method == "POST":
+            return Reply(body=_response(raw_id))
+        return Reply(
+            content_type="text/event-stream",
+            chunks=(_resumed_delta(), b"data: [DONE]\n\n"),
+            gate_after_first=release,
+            heartbeat=b": keepalive\n\n",
+            pause_between_chunks=0.05,
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        client: Final = _client(gateway, gateway.key, prefix)
+        created: Final = client.responses.create(model=model, input="leave a resumed stream")
+        stream: Final = client.responses.retrieve(created.id, stream=True, starting_after=3)
+        try:
+            first: Final = next(iter(stream))
+            stream.close()
+            left_from: Final = wire.disconnected.get(timeout=30)
+        finally:
+            release.set()
+
+    assert first.type == "response.output_text.delta"
+    assert urlsplit(left_from).path == f"/v1/responses/{raw_id}"
 
 
 @pytest.mark.parametrize("prefix", _ALIASES)

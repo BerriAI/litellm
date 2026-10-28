@@ -3155,7 +3155,7 @@ class ProxyBaseLLMRequestProcessing:
                         request_data=self.data,
                         request=request,
                     )
-                    if route_type == "aresponses":
+                    if route_type in ("aresponses", "aget_responses"):
                         selected_data_generator = (
                             ProxyBaseLLMRequestProcessing._wrap_responses_stream_for_container_ownership(
                                 original_stream_response=response,

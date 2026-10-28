@@ -323,7 +323,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         """
         Transform the get response API request into a URL and data
 
@@ -331,7 +331,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - GET /v1/responses/{response_id}
         """
         get_url: Final = self._construct_url_for_response_id_in_path(api_base=api_base, response_id=response_id)
-        data: Final[dict] = {}
+        data: Final[dict[str, str]] = {}
         verbose_logger.debug("get response url=%s", get_url)
         return get_url, data
 

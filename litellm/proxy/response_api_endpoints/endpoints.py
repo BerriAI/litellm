@@ -102,11 +102,11 @@ router: Final = APIRouter()
 _RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdapter(object | None)
 _DECODED_JSON: Final = TypeAdapter(object)
 _PROXY_SERVER_REQUEST_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_RETRIEVE_QUERY_PARAMS: Final = ("include", "include[]", "include_obfuscation", "starting_after", "stream")
 
 _ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
 
-RESPONSES_API_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": ResponsesAPIResponse}}
-RESPONSES_API_CREATE_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {
+RESPONSES_API_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {
     200: {
         "model": ResponsesAPIResponse,
         "content": {
@@ -250,19 +250,19 @@ async def _resolve_cursor_model_variant_before_auth(request: Request) -> None:
     "/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
-    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
+    responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
 @router.post(
     "/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
-    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
+    responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
 @router.post(
     "/openai/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
-    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
+    responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
 async def responses_api(
     request: Request,
@@ -825,6 +825,14 @@ async def get_response(
     data: Final = await read_request_body(request=request)
     read_settles_billing: Final = not carries_client_side_overrides(data)
     data["response_id"] = response_id
+    retrieve_query: Final = {
+        key: values[0] if len(values) == 1 else values
+        for key in _RETRIEVE_QUERY_PARAMS
+        if (values := request.query_params.getlist(key))
+    }
+    if retrieve_query:
+        body_extra_query: Final[object] = data.get("extra_query")
+        data["extra_query"] = {**(body_extra_query if isinstance(body_extra_query, dict) else {}), **retrieve_query}
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         response: Final[object] = await processor.base_process_llm_request(
@@ -836,7 +844,12 @@ async def get_response(
             llm_router=llm_router,
             general_settings=general_settings,
             proxy_config=proxy_config,
-            select_data_generator=select_data_generator,
+            select_data_generator=partial(
+                _streamed_retrieval_data_generator,
+                partial(select_data_generator, responses_stream_errors=True),
+                response_id,
+                read_settles_billing,
+            ),
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,
@@ -910,12 +923,24 @@ async def _bill_finished_background_response(
     fastapi_response: Response,
     read_settles_billing: bool,
 ) -> None:
+    _report_charge(
+        await _settle_finished_background_read(response, response_id, user_api_key_dict, read_settles_billing),
+        fastapi_response,
+    )
+
+
+async def _settle_finished_background_read(
+    response: object,
+    response_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    read_settles_billing: bool,
+) -> "_BilledCharge | None":
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     if not isinstance(response, ResponsesAPIResponse) or not is_background_response(response):
-        return
+        return None
     if response.status not in TERMINAL_RESPONSE_STATUSES:
-        return
+        return None
     managed_files_hook: Final = _managed_files_hook(proxy_logging_obj)
     track_untracked: Final = (
         partial(
@@ -926,12 +951,11 @@ async def _bill_finished_background_response(
         if managed_files_hook is not None
         else None
     )
-    charge: Final = await _settle_background_billing(
+    return await _settle_background_billing(
         (lambda cost_check: cost_check.bill_if_finished(response_id, response, track_untracked))
         if read_settles_billing
         else (lambda cost_check: cost_check.bill_from_deployment(response_id, track_untracked))
     )
-    _report_charge(charge, fastapi_response)
 
 
 class _BilledCharge(Protocol):
@@ -1081,27 +1105,53 @@ def _streamed_background_data_generator(
         user_api_key_dict=user_api_key_dict,
         request_tags=_background_response_spend_tags(request_data),
     )
-    return _bill_streamed_background_response(response, chunks, track_untracked)
+    return _bill_streamed_background_response(
+        response, chunks, partial(_bill_finished_stream, track_untracked=track_untracked)
+    )
+
+
+def _streamed_retrieval_data_generator(
+    select_data_generator: Callable[..., AsyncIterator[str | bytes]],
+    response_id: str,
+    read_settles_billing: bool,
+    response: object,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_data: Mapping[str, object],
+    request: Request | None = None,
+) -> AsyncIterator[str | bytes]:
+    chunks: Final = select_data_generator(
+        response=response, user_api_key_dict=user_api_key_dict, request_data=request_data, request=request
+    )
+    return _bill_streamed_background_response(
+        response,
+        chunks,
+        partial(
+            _settle_finished_background_read,
+            response_id=response_id,
+            user_api_key_dict=user_api_key_dict,
+            read_settles_billing=read_settles_billing,
+        ),
+    )
 
 
 async def _bill_streamed_background_response(
     stream: object,
     chunks: AsyncIterator[str | bytes],
-    track_untracked: Callable[[str, ResponsesAPIResponse], Awaitable[bool]],
+    bill: Callable[[ResponsesAPIResponse], Awaitable[object]],
 ) -> AsyncIterator[str | bytes]:
     async for chunk in chunks:
         completed: object = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(stream)
         if not isinstance(completed, ResponsesAPIResponse):
             yield chunk
             continue
-        await _bill_finished_stream(completed, track_untracked)
+        await bill(completed)
         yield chunk
         async for remaining_chunk in chunks:
             yield remaining_chunk
         return
     late_completed: Final = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(stream)
     if isinstance(late_completed, ResponsesAPIResponse):
-        await _bill_finished_stream(late_completed, track_untracked)
+        await bill(late_completed)
 
 
 async def _bill_finished_stream(

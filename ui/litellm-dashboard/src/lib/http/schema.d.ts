@@ -67086,6 +67086,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResponsesAPIResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -70550,6 +70551,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResponsesAPIResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -81348,6 +81350,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResponsesAPIResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */

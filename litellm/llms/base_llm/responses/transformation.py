@@ -69,6 +69,9 @@ class BaseResponsesAPIConfig(ABC):
     def supports_encrypted_agent_messages(self) -> bool:
         return False
 
+    def supports_streamed_retrieval(self) -> bool:
+        return self.custom_llm_provider in (LlmProviders.OPENAI, LlmProviders.AZURE)
+
     def sign_request(
         self,
         headers: dict,
@@ -209,7 +212,7 @@ class BaseResponsesAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         pass
 
     @abstractmethod
