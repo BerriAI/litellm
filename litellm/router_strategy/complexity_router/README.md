@@ -477,6 +477,12 @@ unless `modality_routing` is also on.
 
 ### Session pin retention
 
+With `classification_mode: user_turn`, a child request carrying `x-parent-session-id` classifies
+its own new asks and stores the tier under its own session ID. Its continuations reuse that tier
+without replacing the parent's tier. Existing trace grouping, per-tier model affinity and deployment
+affinity retain their session identities. A child without a distinct, usable session ID classifies
+without storing a tier pin. `session_affinity: true` retains precedence and the existing shared-pin behavior
+
 `session_affinity_ttl_seconds` is the idle window for both the model pin selected by session affinity and the deployment pin. Every request that reuses a pin refreshes its TTL, so a session actively sending requests stays pinned. After the window passes with no pin reuse, the next request classifies again and creates a fresh pin. Omit the setting to track the default of 3600 seconds.
 
 ### Mid-task stall escalation
