@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _SERVICE_TIER_TO_COST_KEY_SUFFIX,
     BilledTokenRates,
     CostCalculatorUtils,
+    calculate_cache_writing_cost,
     calculate_cost_component,
     generic_cost_per_character,
     generic_cost_per_token,
@@ -316,13 +317,24 @@ def _get_additional_costs(
     return None
 
 
-_TRANSCRIPTION_TOKEN_RATE_KEYS: Final = (
+_TranscriptionRateKey: TypeAlias = Literal[
+    "input_cost_per_second",
+    "output_cost_per_second",
+    "input_cost_per_audio_token",
+    "output_cost_per_audio_token",
+    "input_cost_per_token",
+    "output_cost_per_token",
+]
+_TRANSCRIPTION_TOKEN_RATE_KEYS: Final[tuple[_TranscriptionRateKey, ...]] = (
     "input_cost_per_token",
     "output_cost_per_token",
     "input_cost_per_audio_token",
     "output_cost_per_audio_token",
 )
-_TRANSCRIPTION_SECOND_RATE_KEYS: Final = ("input_cost_per_second", "output_cost_per_second")
+_TRANSCRIPTION_SECOND_RATE_KEYS: Final[tuple[_TranscriptionRateKey, ...]] = (
+    "input_cost_per_second",
+    "output_cost_per_second",
+)
 
 
 def _transcription_uses_token_pricing(
@@ -1244,10 +1256,14 @@ def get_usage_object(
     elif isinstance(usage_obj, dict):
         return Usage(**usage_obj)
     elif isinstance(usage_obj, BaseModel):
-        return Usage(**usage_obj.model_dump())
+        return _usage_from_model(usage_obj)
     else:
         verbose_logger.debug("Unknown usage object type: %s, usage_obj: %s", type(usage_obj), usage_obj)
         return None
+
+
+def _usage_from_model(usage_model: BaseModel) -> Usage:
+    return Usage(**usage_model.model_dump())
 
 
 def _decisions_prompt_tokens_details(usage: DecisionsUsage | OpenAIDecisionUsage) -> PromptTokensDetailsWrapper:
@@ -1607,6 +1623,8 @@ def completion_cost(
     """
     try:
         call_type = infer_call_type(call_type, completion_response) or "completion"
+        if isinstance(completion_response, DecisionsResponse) and completion_response.usage is None:
+            raise ValueError("Cannot calculate Decisions cost: provider did not report usage")
         if pricing_provider is not None:
             custom_llm_provider = pricing_provider  # rebind-ok: model_info.pricing_provider overrides the routing provider for cost-map lookups
 
@@ -1747,7 +1765,7 @@ def completion_cost(
                         setattr(
                             completion_response,
                             "usage",
-                            litellm.Usage(**_usage_for_dump.model_dump()),
+                            _usage_from_model(_usage_for_dump),
                         )
                     if isinstance(usage_obj, (DecisionsUsage, OpenAIDecisionUsage)):
                         _usage = _decisions_usage(usage_obj).model_dump()
@@ -2022,7 +2040,7 @@ def completion_cost(
                         base_pricing_model=(selected_model if base_model is not None and not custom_pricing else None),
                     )
                 elif call_type == _MCP_CALL_TYPE:
-                    from litellm.proxy._experimental.mcp_server.cost_calculator import (
+                    from litellm.proxy.mcp_server.cost_calculator import (
                         MCPCostCalculator,
                     )
 
@@ -2313,6 +2331,8 @@ def response_cost_calculator(
     ### VERTEX LOCATION ###
     vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
     region_name: str | None = None,
+    custom_cost_per_token: CostPerToken | None = None,
+    custom_cost_per_second: float | None = None,
 ) -> float:
     """
     Returns
@@ -2341,6 +2361,8 @@ def response_cost_calculator(
                 optional_params=optional_params,
                 custom_pricing=custom_pricing,
                 base_model=base_model,
+                custom_cost_per_token=custom_cost_per_token,
+                custom_cost_per_second=custom_cost_per_second,
                 prompt=prompt,
                 standard_built_in_tools_params=standard_built_in_tools_params,
                 litellm_model_name=litellm_model_name,
@@ -2924,6 +2946,7 @@ def _batch_rate(
     model_info: ModelInfo,
     key: Literal[
         "input_cost_per_audio_token_batches",
+        "cache_read_input_audio_token_cost_batches",
         "input_cost_per_image_token_batches",
         "input_cost_per_video_token_batches",
     ],
@@ -3009,7 +3032,12 @@ def batch_cost_calculator(
     total_completion_cost = 0.0
     if batch_rates.input is not None:
         total_prompt_cost = _batch_prompt_cost(
-            usage, model_info, batch_rates.input, batch_rates.cache_read, batch_rates.cache_creation
+            usage,
+            model_info,
+            batch_rates.input,
+            batch_rates.cache_read,
+            batch_rates.cache_creation,
+            batch_rates.cache_creation_rates_by_ttl,
         )
     elif input_cost_per_token:
         details: Final = parse_prompt_tokens_details(usage)
@@ -3054,10 +3082,13 @@ def _batch_prompt_cost(
     input_rate: float,
     cache_read_rate: float | None,
     cache_creation_rate: float | None,
+    cache_creation_rates_by_ttl: Mapping[str, float],
 ) -> float:
     details: Final = parse_prompt_tokens_details(usage)
     cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
-    written_tokens: Final = details["cache_creation_tokens"] if cache_creation_rate is not None else 0
+    cached_audio_tokens: Final = details["cache_hit_audio_tokens"] if cache_read_rate is not None else 0
+    bills_cache_writes: Final = cache_creation_rate is not None or bool(cache_creation_rates_by_ttl)
+    written_tokens: Final = details["cache_creation_tokens"] if bills_cache_writes else 0
     audio_tokens, image_tokens, video_tokens = (
         details["audio_tokens"],
         details["image_tokens"],
@@ -3071,13 +3102,27 @@ def _batch_prompt_cost(
         + audio_tokens * _batch_rate(model_info, "input_cost_per_audio_token_batches", input_rate)
         + image_tokens * _batch_rate(model_info, "input_cost_per_image_token_batches", input_rate)
         + video_tokens * _batch_rate(model_info, "input_cost_per_video_token_batches", input_rate)
-        + cached_tokens * (cache_read_rate or 0.0)
-        + written_tokens * (cache_creation_rate or 0.0)
+        + (cached_tokens - cached_audio_tokens) * (cache_read_rate or 0.0)
+        + cached_audio_tokens
+        * _batch_rate(model_info, "cache_read_input_audio_token_cost_batches", cache_read_rate or 0.0)
+        + (
+            calculate_cache_writing_cost(
+                written_tokens,
+                details["cache_creation_token_details"],
+                input_rate if cache_creation_rate is None else cache_creation_rate,
+                cache_creation_rates_by_ttl,
+            )
+            if bills_cache_writes
+            else 0.0
+        )
     )
 
 
+_ATTRIBUTE_VALUE: Final = TypeAdapter(object)
+
+
 def _attribute_value(obj: object, name: str) -> object:
-    return getattr(obj, name)
+    return _ATTRIBUTE_VALUE.validate_python(getattr(obj, name))
 
 
 def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> list[str]:
@@ -3770,7 +3815,25 @@ def _get_model_info_or_none(model: str, custom_llm_provider: str) -> ModelInfo |
         return None
 
 
-def _declared_transcription_rate(info: ModelInfoBase | None, keys: tuple[str, ...]) -> float | None:
+def _model_info_rate(info: ModelInfoBase, key: _TranscriptionRateKey) -> float | None:
+    match key:
+        case "input_cost_per_second":
+            return info.get("input_cost_per_second")
+        case "output_cost_per_second":
+            return info.get("output_cost_per_second")
+        case "input_cost_per_audio_token":
+            return info.get("input_cost_per_audio_token")
+        case "output_cost_per_audio_token":
+            return info.get("output_cost_per_audio_token")
+        case "input_cost_per_token":
+            return info.get("input_cost_per_token")
+        case "output_cost_per_token":
+            return info.get("output_cost_per_token")
+        case _:
+            assert_never(key)
+
+
+def _declared_transcription_rate(info: ModelInfoBase | None, keys: tuple[_TranscriptionRateKey, ...]) -> float | None:
     """First of ``keys`` this entry prices, read off the raw ``litellm.model_cost`` entry
     because ``get_model_info`` synthesizes zero token rates for entries that omit them."""
     if info is None:
@@ -3779,12 +3842,16 @@ def _declared_transcription_rate(info: ModelInfoBase | None, keys: tuple[str, ..
     if declared is None:
         return None
     return next(
-        (float(value) for key in keys if declared.get(key) is not None and (value := info.get(key)) is not None),
+        (
+            float(value)
+            for key in keys
+            if declared.get(key) is not None and (value := _model_info_rate(info, key)) is not None
+        ),
         None,
     )
 
 
-def _transcription_rate(keys: tuple[str, ...], *infos: ModelInfo | None) -> float:
+def _transcription_rate(keys: tuple[_TranscriptionRateKey, ...], *infos: ModelInfoBase | None) -> float:
     rates: Final = (_declared_transcription_rate(info, keys) for info in infos)
     return next((rate for rate in rates if rate is not None), 0.0)
 

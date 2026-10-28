@@ -2,7 +2,12 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    cast,  # noqa: TID251  # SDK file handles have no runtime validation schema
+)
 
 import httpx
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream

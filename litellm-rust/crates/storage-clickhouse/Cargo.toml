@@ -19,6 +19,6 @@ url.workspace = true
 [dev-dependencies]
 litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
-testcontainers-modules = { version = "0.15.0", features = ["clickhouse"] }
+testcontainers-modules = { workspace = true, features = ["clickhouse"] }
 tokio.workspace = true
 wiremock.workspace = true

@@ -3788,7 +3788,7 @@ def test_team_spend_by_user_reachable_by_non_admin(user_role):
         return "allowed"
 
     assert outcome("/team/spend/by_user") == "allowed"
-    assert outcome("/team/spend/by_key").startswith("denied: Only proxy admin")
+    assert outcome("/team/spend/by_key").startswith("denied: Authentication Error, Only proxy admin")
 
 
 def test_user_daily_activity_aggregated_not_covered_by_prefix_match():

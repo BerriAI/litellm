@@ -7,7 +7,7 @@ LITELLM_PROXY_MCP_SERVER_URL: Final = "litellm_proxy"
 LITELLM_PROXY_MCP_SERVER_URL_PREFIX: Final = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
 
 _PROXY_MCP_PATH_RE: Final = re.compile(r"^https?://.+/mcp/([^/]+)$")
-_GATEWAY_REGISTRY_MODULE: Final = "litellm.proxy._experimental.mcp_server.mcp_server_manager"
+_GATEWAY_REGISTRY_MODULE: Final = "litellm.proxy.mcp_server.mcp_server_manager"
 
 
 def _mcp_server_url(tool: object) -> str | None:

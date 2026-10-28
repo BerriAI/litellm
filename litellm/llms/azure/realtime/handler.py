@@ -133,6 +133,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                 - "GA" or "v1": Uses /openai/v1/realtime (GA path)
                 - "beta" or None: Uses /openai/realtime (beta path, default)
             query_params: Extra query params to forward (e.g. intent=transcription).
+            realtime_mode: Realtime surface to target, "realtime" or "translation".
 
         Returns:
             WebSocket URL string

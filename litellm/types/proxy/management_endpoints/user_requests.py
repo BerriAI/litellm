@@ -16,6 +16,8 @@ class NewUserRequestTeam(LiteLLMPydanticObjectBase):
 
 
 class NewUserRequest(GenerateRequestBase):
+    tpm_limit: int | None = Field(default=None, ge=0)
+    rpm_limit: int | None = Field(default=None, ge=0)
     max_budget: float | None = None
     user_email: str | None = None
     user_alias: str | None = None
@@ -47,6 +49,8 @@ class NewUserRequest(GenerateRequestBase):
 
 
 class UpdateUserRequestNoUserIDorEmail(GenerateRequestBase):  # shared with BulkUpdateUserRequest
+    tpm_limit: int | None = Field(default=None, ge=0)
+    rpm_limit: int | None = Field(default=None, ge=0)
     # repr=False keeps the plaintext out of management-endpoint alerts, which str() the request model
     password: str | None = Field(default=None, repr=False)
     spend: float | None = None
