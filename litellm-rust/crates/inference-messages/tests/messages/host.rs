@@ -301,7 +301,7 @@ async fn response_mode_follows_the_intercepted_request(
     let summaries = traces.summaries("litellm.route");
     assert_eq!(summaries.len(), 1);
     let Some(expected_stream) = expected_stream else {
-        assert!(matches!(result, Err(Error::InvalidRequest(_))));
+        assert!(result.unwrap_err().is_request());
         assert!(received(&upstream).await.is_empty());
         assert_eq!(summaries[0]["outcome"], "failure");
         return;
@@ -322,14 +322,17 @@ async fn a_before_send_failure_never_sends(call: MessagesCall) {
     let upstream = upstream([message_response()]).await;
     let host = RecordingHost::new(
         authenticated(call, upstream.uri()),
-        Box::new(|_| Err(Error::InvalidRequest("vetoed by the host".into()))),
+        Box::new(|_| Err(litellm_llms::Error::MissingField("vetoed by the host").into())),
     );
 
     let error = run_through(&host)
         .await
         .expect_err("the host failure fails the call");
 
-    assert_eq!(error, Error::InvalidRequest("vetoed by the host".into()));
+    assert_eq!(
+        error,
+        Error::from(litellm_llms::Error::MissingField("vetoed by the host"))
+    );
     assert!(received(&upstream).await.is_empty());
     assert!(host.raw_responses().is_empty());
 }

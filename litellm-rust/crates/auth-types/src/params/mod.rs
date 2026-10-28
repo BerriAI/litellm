@@ -10,9 +10,16 @@ pub use vertex::VertexParams;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ParamSpec {
     pub setting: &'static str,
+    pub kind: ParamKind,
     pub wire: &'static [&'static str],
     pub module_global: Option<&'static str>,
     pub env: &'static [&'static str],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParamKind {
+    Credential,
+    Setting,
 }
 
 impl ParamSpec {

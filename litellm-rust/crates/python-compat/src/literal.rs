@@ -58,13 +58,6 @@ impl Term {
             kind: Kind::Other,
         }
     }
-
-    fn is_number(&self) -> bool {
-        matches!(
-            self.value,
-            Value::Int(_) | Value::Float(_) | Value::Complex { .. }
-        )
-    }
 }
 
 struct Parser<'a> {
@@ -204,18 +197,25 @@ impl Parser<'_> {
         self.enter()?;
         let operand = self.unary()?;
         self.depth -= 1;
-        if operand.kind != Kind::Constant || !operand.is_number() {
+        if operand.kind != Kind::Constant {
             return Err(Error::InvalidLiteral(self.offset + at));
         }
-        let value = if !negative {
-            operand.value
-        } else {
-            match operand.value {
-                Value::Int(value) => Value::Int(-value),
-                Value::Float(value) => Value::Float(-value),
-                Value::Complex { re, im } => Value::Complex { re: -re, im: -im },
-                _ => unreachable!("checked numeric above"),
-            }
+        let value = match (operand.value, negative) {
+            (value @ (Value::Int(_) | Value::Float(_) | Value::Complex { .. }), false) => value,
+            (Value::Int(value), true) => Value::Int(-value),
+            (Value::Float(value), true) => Value::Float(-value),
+            (Value::Complex { re, im }, true) => Value::Complex { re: -re, im: -im },
+            (
+                Value::None
+                | Value::Bool(_)
+                | Value::Str(_)
+                | Value::Bytes(_)
+                | Value::List(_)
+                | Value::Tuple(_)
+                | Value::Dict(_)
+                | Value::Set(_),
+                _,
+            ) => return Err(Error::InvalidLiteral(self.offset + at)),
         };
         Ok(Term {
             value,

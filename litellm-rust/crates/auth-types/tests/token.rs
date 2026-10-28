@@ -1,5 +1,4 @@
 use std::{
-    error::Error as StdError,
     future::{Future, poll_fn},
     sync::{
         Arc,
@@ -53,7 +52,7 @@ async fn callbacks_acquire_fresh_credentials_on_demand(#[case] access_token: boo
 
 #[rstest]
 #[tokio::test]
-async fn callback_errors_preserve_the_original_source() {
+async fn callback_errors_keep_their_typed_cause() {
     let provider = TokenProviderHandle::from_callback(|| async {
         Err(Error::CredentialAcquisition(ErrorDetail::failed(
             "caller credential",
@@ -62,13 +61,15 @@ async fn callback_errors_preserve_the_original_source() {
     });
 
     let error = provider.acquire().await.unwrap_err();
-    assert!(matches!(error, Error::CredentialAcquisition(_)));
-    let source = std::iter::successors(Some(&error as &(dyn StdError + 'static)), |error| {
-        (*error).source()
-    })
-    .find_map(|error| error.downcast_ref::<std::io::Error>())
-    .unwrap();
-    assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
+    let Error::CredentialAcquisition(ErrorDetail::Failed { cause, .. }) = &error else {
+        panic!("the callback's error passes through unchanged: {error:?}");
+    };
+    assert_eq!(
+        cause
+            .downcast_ref::<std::io::Error>()
+            .map(std::io::Error::kind),
+        Some(std::io::ErrorKind::PermissionDenied)
+    );
 }
 
 struct Release(Arc<AtomicBool>);

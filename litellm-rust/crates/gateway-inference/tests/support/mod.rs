@@ -15,6 +15,7 @@ use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsRes
 use litellm_inference::resources::CoreResources;
 use litellm_secrets::{SecretValue, source::SecretSource};
 use serde_json::Value;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
 
 pub struct NoSecrets;
@@ -165,4 +166,27 @@ impl litellm_gateway_auth::IdentityResolver for TestPermissions {
             })
         })
     }
+}
+
+/// Answers with the SSE head and one event, then drops the connection short of the
+/// announced body length.
+pub async fn truncating_upstream(first_event: &'static str) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let _ = socket.read(&mut request).await;
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{first_event}",
+                    first_event.len() * 2
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+    base
 }

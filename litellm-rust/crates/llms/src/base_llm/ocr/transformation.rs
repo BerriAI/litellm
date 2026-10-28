@@ -194,17 +194,13 @@ pub struct DecodedOcrResponse<T> {
 
 pub fn decode_request_value<T: DeserializeOwned>(value: Value, prefix: &str) -> Result<T, Error> {
     serde_path_to_error::deserialize(value.into_deserializer()).map_err(|error| {
-        Error::RequestField {
-            path: format!("{prefix}.{}", error.path()),
-        }
+        Error::request_field(format!("{prefix}.{}", error.path()), error.into_inner())
     })
 }
 
 pub fn decode_response_value<T: DeserializeOwned>(value: Value, prefix: &str) -> Result<T, Error> {
     serde_path_to_error::deserialize(value.into_deserializer()).map_err(|error| {
-        Error::ResponseField {
-            path: format!("{prefix}.{}", error.path()),
-        }
+        Error::response_field(format!("{prefix}.{}", error.path()), error.into_inner())
     })
 }
 
@@ -213,19 +209,15 @@ pub fn decode_response<T: DeserializeOwned>(
     native: bool,
 ) -> Result<DecodedOcrResponse<T>, Error> {
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    let data = serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
-        Error::ResponseField {
-            path: error.path().to_string(),
-        }
-    })?;
-    deserializer.end().map_err(|_| Error::ResponseField {
-        path: "response".into(),
-    })?;
+    let data = serde_path_to_error::deserialize(&mut deserializer)
+        .map_err(|error| Error::response_field(error.path().to_string(), error.into_inner()))?;
+    deserializer
+        .end()
+        .map_err(|error| Error::response_field("response", error))?;
     let native = if native {
         Some(
-            serde_json::from_slice(bytes).map_err(|_| Error::ResponseField {
-                path: "response".into(),
-            })?,
+            serde_json::from_slice(bytes)
+                .map_err(|error| Error::response_field("response", error))?,
         )
     } else {
         None
@@ -369,12 +361,12 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         &self,
         error_message: String,
         status_code: u16,
-        headers: Vec<(String, String)>,
+        headers: reqwest::header::HeaderMap,
     ) -> Error {
         Error::Provider {
             status: status_code,
             body: error_message,
-            headers,
+            headers: Box::new(headers),
         }
     }
 

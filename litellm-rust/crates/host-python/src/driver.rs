@@ -112,7 +112,7 @@ enum Setup<E> {
 /// The route's public exception for a native failure. When classification itself fails,
 /// that failure is raised with the native error's text as its `__context__`.
 fn classified<H: PythonBinding>(py: Python<'_>, binding: &H, error: ErrorOf<H>) -> PyErr {
-    let native = error.to_string();
+    let native = litellm_error::Report::new(&error).to_string();
     let classifier_error = match binding.map_error(py, error) {
         Ok(failure) => return failure.into(),
         Err(classifier_error) => classifier_error,

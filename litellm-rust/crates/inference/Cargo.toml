@@ -29,6 +29,7 @@ time.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+litellm-error.workspace = true
 litellm-cache-memory.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-llms = { workspace = true, features = ["test-support"] }

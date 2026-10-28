@@ -125,7 +125,10 @@ async fn chat_errors_come_from_core(
     .await;
     assert_eq!(response.status(), status);
     let body = support::json(response).await;
-    assert_eq!(body["error"]["message"], error.to_string());
+    assert_eq!(
+        body["error"]["message"],
+        litellm_error::Report::new(&error).to_string()
+    );
     assert_eq!(body["error"]["code"], status);
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
@@ -193,17 +196,20 @@ async fn transcription_aliases_reach_core_validation(#[case] path: &str) {
 }
 
 #[rstest]
-#[case::no_extension("test")]
-#[case::unsupported_extension("test.invalid")]
+#[case::no_extension("test", json!(null))]
+#[case::unsupported_extension("test.invalid", json!("invalid"))]
 #[tokio::test]
-async fn upload_audio_format_validation_matches_core(#[case] filename: &str) {
+async fn upload_audio_format_validation_matches_core(
+    #[case] filename: &str,
+    #[case] format: Value,
+) {
     let upstream = MockServer::start().await;
     let app = support::app("bedrock/test-model", &upstream.uri());
     let path = "/v1/audio/transcriptions";
     let expected = support::post(
         app.clone(),
         path,
-        json!({"model": "public/model", "audio": {"data": "YWJj", "format": null}}),
+        json!({"model": "public/model", "audio": {"data": "YWJj", "format": format}}),
     )
     .await;
     let payload = format!(

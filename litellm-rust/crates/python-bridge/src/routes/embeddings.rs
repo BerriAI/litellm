@@ -1,14 +1,23 @@
+use litellm_error::Report;
 use pyo3::prelude::*;
 
 use super::NativeCall;
 use crate::errors::RustBridgeDeclined;
 
+#[derive(Debug, thiserror::Error)]
+#[error("native embeddings route is not implemented")]
+struct NotImplemented;
+
+impl From<NotImplemented> for PyErr {
+    fn from(error: NotImplemented) -> Self {
+        RustBridgeDeclined::new_err(Report::new(&error).to_string())
+    }
+}
+
 #[pyfunction]
 pub(crate) fn embedding(call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
     drop(call);
-    Err(RustBridgeDeclined::new_err(
-        "native embeddings route is not implemented",
-    ))
+    Err(NotImplemented.into())
 }
 
 #[pyfunction]

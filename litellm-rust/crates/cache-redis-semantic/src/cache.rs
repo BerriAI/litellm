@@ -63,13 +63,13 @@ impl Inner {
             .arg(CACHE_KEY_FIELD)
             .arg(tag)
             .query::<()>(connection)
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(Error::unavailable)?;
         if let Some(ttl) = ttl {
             redis::cmd("EXPIRE")
                 .arg(&hash_key)
                 .arg(ttl_seconds(ttl))
                 .query::<()>(connection)
-                .map_err(|_| Error::Unavailable)?;
+                .map_err(Error::unavailable)?;
         }
         Ok(())
     }
@@ -111,7 +111,7 @@ impl Inner {
             .arg("vector")
             .arg(vector_buffer(vector))
             .query::<redis::Value>(connection)
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(Error::unavailable)?;
         let Some(fields) = first_document(&result) else {
             return Ok(SemanticLookup::miss(Some(0.0)));
         };

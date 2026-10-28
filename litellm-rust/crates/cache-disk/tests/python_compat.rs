@@ -84,7 +84,7 @@ fn python_read_cases(#[case] row: StoredValue, #[case] expected: ReadExpectation
     match expected {
         ReadExpectation::Bytes(expected) => assert_eq!(result.unwrap().unwrap(), expected),
         ReadExpectation::Miss => assert_eq!(result.unwrap(), None),
-        ReadExpectation::Invalid => assert!(matches!(result, Err(Error::InvalidEntry))),
+        ReadExpectation::Invalid => assert!(matches!(result, Err(Error::InvalidEntry(_)))),
     }
 }
 

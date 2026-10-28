@@ -15,7 +15,7 @@ pub enum Error {
     Request {
         url: String,
         #[source]
-        source: reqwest::Error,
+        source: litellm_http::Error,
     },
     #[error("{url} answered with status {status}")]
     Status { url: String, status: u16 },
@@ -47,10 +47,14 @@ pub enum Error {
         expected: String,
         reported: String,
     },
-    #[error("{agent} cannot talk to the gateway over {wire:?}")]
+    #[error("{agent} cannot talk to the gateway over {wire}")]
     UnsupportedWire { agent: &'static str, wire: Wire },
-    #[error("agent did not finish within {0:?}")]
+    #[error("agent did not finish within {} seconds", .0.as_secs_f64())]
     Timeout(std::time::Duration),
-    #[error("io failure")]
-    Io(#[from] io::Error),
+    #[error("could not install the binary into {}", dir.display())]
+    Install { dir: PathBuf, source: io::Error },
+    #[error("could not run {}", binary.display())]
+    Spawn { binary: PathBuf, source: io::Error },
+    #[error("could not write agent files under {}", home.display())]
+    WriteFiles { home: PathBuf, source: io::Error },
 }

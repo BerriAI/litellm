@@ -128,9 +128,7 @@ pub(crate) fn read(py: Python<'_>) -> PyResult<SecretManagerSnapshot> {
         .system
         .is_some_and(|system| system != backend.system())
     {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "native secret manager system does not match configuration",
-        ));
+        return Err(super::ManagerError::SystemMismatch.into());
     }
     Ok(SecretManagerSnapshot {
         client: SecretManagerClient::Native(Box::new(backend)),

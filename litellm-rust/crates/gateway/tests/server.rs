@@ -94,7 +94,10 @@ async fn authenticates_before_serving_mounted_inference_routes(
     let response = request.send().await.unwrap();
     assert_eq!(response.status().as_u16(), status);
     if status == 400 {
-        let expected = Error::UnknownModel("unconfigured-model".into());
+        let expected = Error::UnknownModel {
+            route: "/v1/messages",
+            model: "unconfigured-model".into(),
+        };
         assert_eq!(
             response.json::<Value>().await.unwrap(),
             expected.body(Some("gateway-test"))

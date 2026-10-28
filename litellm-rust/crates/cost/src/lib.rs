@@ -1,3 +1,7 @@
+mod error;
+
+pub use error::Error;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Rate {
     Missing,
@@ -156,22 +160,6 @@ pub struct EffectiveRates {
     pub cache_write_1h: f64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PricingError {
-    MissingInputRate,
-    MissingOutputRate,
-    InvalidRate,
-    InvalidRegionMultiplier,
-    InvalidBillingTime,
-    InvalidOffPeakWindow,
-    CacheExceedsPrompt,
-    InvalidCacheWriteDetails,
-    TokenCountOverflow,
-    DuplicateTier,
-    DuplicateThreshold,
-    DuplicateThresholdTier,
-}
-
 fn selected_tier(tier: ServiceTier) -> ServiceTier {
     if tier == ServiceTier::Fast {
         ServiceTier::Priority
@@ -210,9 +198,9 @@ fn valid_rates(rates: Rates) -> bool {
     })
 }
 
-fn validate_tiers(tiers: &[TierRates], duplicate: PricingError) -> Result<(), PricingError> {
+fn validate_tiers(tiers: &[TierRates], duplicate: Error) -> Result<(), Error> {
     if tiers.iter().any(|entry| !valid_rates(entry.rates)) {
-        return Err(PricingError::InvalidRate);
+        return Err(Error::InvalidRate);
     }
     if tiers.iter().enumerate().any(|(index, entry)| {
         matches!(
@@ -227,20 +215,20 @@ fn validate_tiers(tiers: &[TierRates], duplicate: PricingError) -> Result<(), Pr
     Ok(())
 }
 
-pub fn compile(pricing: &Pricing<'_>) -> Result<PricingPlan, PricingError> {
+pub fn compile(pricing: &Pricing<'_>) -> Result<PricingPlan, Error> {
     if !valid_rates(pricing.standard) {
-        return Err(PricingError::InvalidRate);
+        return Err(Error::InvalidRate);
     }
-    validate_tiers(pricing.tiers, PricingError::DuplicateTier)?;
+    validate_tiers(pricing.tiers, Error::DuplicateTier)?;
     if let Some(window) = pricing.off_peak {
         if window.start_utc_minute >= 1440
             || window.end_utc_minute > 1440
             || window.start_utc_minute >= window.end_utc_minute
         {
-            return Err(PricingError::InvalidOffPeakWindow);
+            return Err(Error::InvalidOffPeakWindow);
         }
         if !valid_rates(window.rates) {
-            return Err(PricingError::InvalidRate);
+            return Err(Error::InvalidRate);
         }
     }
     let mut thresholds: Vec<_> = pricing
@@ -248,9 +236,9 @@ pub fn compile(pricing: &Pricing<'_>) -> Result<PricingPlan, PricingError> {
         .iter()
         .map(|entry| {
             if !valid_rates(entry.standard) {
-                return Err(PricingError::InvalidRate);
+                return Err(Error::InvalidRate);
             }
-            validate_tiers(entry.tiers, PricingError::DuplicateThresholdTier)?;
+            validate_tiers(entry.tiers, Error::DuplicateThresholdTier)?;
             Ok(CompiledThreshold {
                 above_prompt_tokens: entry.above_prompt_tokens,
                 standard: entry.standard,
@@ -263,7 +251,7 @@ pub fn compile(pricing: &Pricing<'_>) -> Result<PricingPlan, PricingError> {
         .windows(2)
         .any(|pair| pair[0].above_prompt_tokens == pair[1].above_prompt_tokens)
     {
-        return Err(PricingError::DuplicateThreshold);
+        return Err(Error::DuplicateThreshold);
     }
     Ok(PricingPlan {
         standard: pricing.standard,
@@ -274,11 +262,7 @@ pub fn compile(pricing: &Pricing<'_>) -> Result<PricingPlan, PricingError> {
 }
 
 impl PricingPlan {
-    fn resolve_rates(
-        &self,
-        request: &Request,
-        threshold_tokens: u64,
-    ) -> Result<Rates, PricingError> {
+    fn resolve_rates(&self, request: &Request, threshold_tokens: u64) -> Result<Rates, Error> {
         let tier = selected_tier(request.service_tier);
         let base = self
             .tiers
@@ -305,13 +289,13 @@ impl PricingPlan {
                     || window.end_utc_minute > 1440
                     || window.start_utc_minute >= window.end_utc_minute
                 {
-                    return Err(PricingError::InvalidOffPeakWindow);
+                    return Err(Error::InvalidOffPeakWindow);
                 }
                 let minute = request
                     .billed_at_utc_minute
-                    .ok_or(PricingError::InvalidBillingTime)?;
+                    .ok_or(Error::InvalidBillingTime)?;
                 if minute >= 1440 {
-                    return Err(PricingError::InvalidBillingTime);
+                    return Err(Error::InvalidBillingTime);
                 }
                 if (window.start_utc_minute..window.end_utc_minute).contains(&minute) {
                     Ok(window.rates.overlay(selected))
@@ -322,26 +306,26 @@ impl PricingPlan {
         }
     }
 
-    fn checked_rate(rate: Rate, missing: PricingError) -> Result<f64, PricingError> {
+    fn checked_rate(rate: Rate, missing: Error) -> Result<f64, Error> {
         let value = rate.value().ok_or(missing)?;
         if !value.is_finite() || value < 0.0 {
-            return Err(PricingError::InvalidRate);
+            return Err(Error::InvalidRate);
         }
         Ok(value)
     }
 
-    pub fn calculate(&self, request: &Request) -> Result<Cost, PricingError> {
+    pub fn calculate(&self, request: &Request) -> Result<Cost, Error> {
         let usage = request.usage;
         let cached = usage
             .cache_read_tokens
             .checked_add(usage.cache_write_tokens)
-            .ok_or(PricingError::TokenCountOverflow)?;
+            .ok_or(Error::TokenCountOverflow)?;
         let (regular, threshold_tokens) = match usage.prompt_convention {
             PromptConvention::IncludesCache => (
                 usage
                     .prompt_tokens
                     .checked_sub(cached)
-                    .ok_or(PricingError::CacheExceedsPrompt)?,
+                    .ok_or(Error::CacheExceedsPrompt)?,
                 usage.prompt_tokens,
             ),
             PromptConvention::ExcludesCache => (
@@ -349,7 +333,7 @@ impl PricingPlan {
                 usage
                     .prompt_tokens
                     .checked_add(cached)
-                    .ok_or(PricingError::TokenCountOverflow)?,
+                    .ok_or(Error::TokenCountOverflow)?,
             ),
         };
         let writes = match (usage.cache_write_5m_tokens, usage.cache_write_1h_tokens) {
@@ -357,26 +341,20 @@ impl PricingPlan {
             (Some(five), Some(one)) if five.checked_add(one) == Some(usage.cache_write_tokens) => {
                 (five, one)
             }
-            _ => return Err(PricingError::InvalidCacheWriteDetails),
+            _ => return Err(Error::InvalidCacheWriteDetails),
         };
         let rates = self.resolve_rates(request, threshold_tokens)?;
-        let input = Self::checked_rate(rates.input, PricingError::MissingInputRate)?;
-        let output = Self::checked_rate(rates.output, PricingError::MissingOutputRate)?;
-        let read = Self::checked_rate(
-            rates.cache_read.or(rates.input),
-            PricingError::MissingInputRate,
-        )?;
-        let write = Self::checked_rate(
-            rates.cache_write.or(rates.input),
-            PricingError::MissingInputRate,
-        )?;
+        let input = Self::checked_rate(rates.input, Error::MissingInputRate)?;
+        let output = Self::checked_rate(rates.output, Error::MissingOutputRate)?;
+        let read = Self::checked_rate(rates.cache_read.or(rates.input), Error::MissingInputRate)?;
+        let write = Self::checked_rate(rates.cache_write.or(rates.input), Error::MissingInputRate)?;
         let write_1h = Self::checked_rate(
             rates.cache_write_1h.or(rates.cache_write).or(rates.input),
-            PricingError::MissingInputRate,
+            Error::MissingInputRate,
         )?;
         let multiplier = request.region_multiplier.unwrap_or(1.0);
         if !multiplier.is_finite() || multiplier <= 0.0 {
-            return Err(PricingError::InvalidRegionMultiplier);
+            return Err(Error::InvalidRegionMultiplier);
         }
         let cost = Cost {
             uncached_input: regular as f64 * input,
@@ -394,12 +372,12 @@ impl PricingPlan {
             },
         };
         if !cost.total().is_finite() {
-            return Err(PricingError::TokenCountOverflow);
+            return Err(Error::TokenCountOverflow);
         }
         Ok(cost)
     }
 }
 
-pub fn calculate(pricing: &Pricing<'_>, request: &Request) -> Result<Cost, PricingError> {
+pub fn calculate(pricing: &Pricing<'_>, request: &Request) -> Result<Cost, Error> {
     compile(pricing)?.calculate(request)
 }

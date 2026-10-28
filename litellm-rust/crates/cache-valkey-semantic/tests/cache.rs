@@ -83,10 +83,7 @@ fn ok() -> redis::RedisResult<redis::Value> {
 }
 
 fn already_exists() -> redis::RedisResult<redis::Value> {
-    Err(redis::RedisError::from((
-        redis::ErrorKind::Io,
-        "already exists",
-    )))
+    Err(support::server_error("Index already exists"))
 }
 
 fn bulk(value: &[u8]) -> redis::Value {
@@ -250,19 +247,29 @@ fn second_set_skips_create_after_dimension_is_cached(entry: Value, context: Sema
 
 #[rstest]
 #[case::nested_matching(nested_dimension_info(3), Ok(()))]
-#[case::nested_mismatch(nested_dimension_info(2), Err(Error::Unavailable))]
+#[case::nested_mismatch(
+    nested_dimension_info(2),
+    Err("cache is unavailable: index exists with dimension 2, not 3")
+)]
 #[case::flat_matching(flat_dimension_info("3"), Ok(()))]
-#[case::flat_mismatch(flat_dimension_info("2"), Err(Error::Unavailable))]
+#[case::flat_mismatch(
+    flat_dimension_info("2"),
+    Err("cache is unavailable: index exists with dimension 2, not 3")
+)]
 #[case::unreported_dimension_is_accepted(redis::Value::Array(vec![]), Ok(()))]
 fn existing_index_dimension_must_match_embedding(
     #[case] info: redis::Value,
-    #[case] expected: Result<(), Error>,
+    #[case] expected: Result<(), &str>,
     entry: Value,
     context: SemanticCacheContext,
 ) {
     let recording = recording([already_exists(), Ok(info)]);
 
-    assert_eq!(recording.cache.set_cache("key", entry, &context), expected);
+    let result = recording.cache.set_cache("key", entry, &context);
+    assert_eq!(
+        result.map_err(|error| litellm_error::Report::new(&error).to_string()),
+        expected.map_err(str::to_owned)
+    );
 }
 
 #[rstest]
@@ -274,10 +281,10 @@ fn index_creation_failures_are_unavailable(
 ) {
     let recording = recording([reply]);
 
-    assert_eq!(
+    assert!(matches!(
         recording.cache.set_cache("key", entry, &context),
-        Err(Error::Unavailable)
-    );
+        Err(Error::Unavailable(Some(_)))
+    ));
 }
 
 #[rstest]
@@ -291,10 +298,10 @@ fn index_creation_failures_are_unavailable(
         bulk(b"document"),
         redis::Value::Array(vec![bulk(b"vector_distance"), bulk(b"0.1")]),
     ]),
-    Err(Error::InvalidEntry)
+    Err(Error::InvalidEntry(None))
 )]
-#[case::unparsable_distance(search_hit(b"not-json", "abc"), Err(Error::InvalidEntry))]
-#[case::undecodable_response(search_hit(b"not-json", "0.1"), Err(Error::InvalidEntry))]
+#[case::unparsable_distance(search_hit(b"not-json", "abc"), Err(Error::InvalidEntry(None)))]
+#[case::undecodable_response(search_hit(b"not-json", "0.1"), Err(Error::InvalidEntry(None)))]
 fn get_applies_threshold_and_decodes_entry(
     #[case] reply: redis::Value,
     #[case] expected: Result<Option<Value>, Error>,
@@ -302,7 +309,13 @@ fn get_applies_threshold_and_decodes_entry(
 ) {
     let recording = recording([ok(), Ok(reply)]);
 
-    assert_eq!(recording.cache.get_cache("key", &context), expected);
+    let kind = |result: Result<Option<Value>, Error>| {
+        result.map_err(|error| std::mem::discriminant(&error))
+    };
+    assert_eq!(
+        kind(recording.cache.get_cache("key", &context)),
+        kind(expected)
+    );
 }
 
 #[rstest]

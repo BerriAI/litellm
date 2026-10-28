@@ -6,8 +6,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-error.workspace = true
 litellm-core-utils.workspace = true
+litellm-http.workspace = true
 litellm-secrets-types.workspace = true
+reqwest.workspace = true
 rustify.workspace = true
 rustify_derive.workspace = true
 serde.workspace = true

@@ -178,11 +178,11 @@ async fn codec_errors_propagate_without_writing_partial_batches(context: ExactCa
     ]);
     assert_eq!(
         cache.set_cache("invalid", 255, &context),
-        Err(Error::InvalidEntry)
+        Err(Error::InvalidEntry(None))
     );
     assert_eq!(
         cache.async_set_cache("invalid", 255, context.clone()).await,
-        Err(Error::InvalidEntry)
+        Err(Error::InvalidEntry(None))
     );
     assert_eq!(
         cache
@@ -191,7 +191,7 @@ async fn codec_errors_propagate_without_writing_partial_batches(context: ExactCa
                 context.clone(),
             )
             .await,
-        Err(Error::InvalidEntry)
+        Err(Error::InvalidEntry(None))
     );
     assert_eq!(
         cache
@@ -200,15 +200,15 @@ async fn codec_errors_propagate_without_writing_partial_batches(context: ExactCa
                 ("invalid".into(), 255, None),
             ])
             .await,
-        Err(Error::InvalidEntry)
+        Err(Error::InvalidEntry(None))
     );
     assert_eq!(
         cache.get_cache("invalid", &context),
-        Err(Error::InvalidEntry)
+        Err(Error::InvalidEntry(None))
     );
     assert_eq!(
         cache.async_get_cache("invalid", &context).await,
-        Err(Error::InvalidEntry)
+        Err(Error::InvalidEntry(None))
     );
 }
 
@@ -516,7 +516,7 @@ async fn sets_add_members_and_arm_the_default_ttl() {
         cache
             .async_set_cache_sadd("members", Vec::new(), None)
             .await,
-        Err(Error::InvalidEntry)
+        Err(Error::InvalidEntry(None))
     );
 }
 
@@ -547,7 +547,7 @@ async fn queues_push_and_pop_namespaced_lists() {
     );
     assert_eq!(
         cache.async_rpush("queue", Vec::new()).await,
-        Err(Error::InvalidEntry)
+        Err(Error::InvalidEntry(None))
     );
     assert_eq!(
         cache.async_lpop("queue", Some(2)).await.unwrap(),
@@ -673,15 +673,15 @@ async fn rpush_and_trim_raises_when_a_queued_command_fails() {
     )])
     .with_namespace(Some("ns".into()));
 
-    assert_eq!(
+    assert!(matches!(
         cache
             .async_rpush_and_trim("buf", vec!["c".into(), "d".into()], 3)
             .await,
-        Err(Error::Unavailable)
-    );
+        Err(Error::Unavailable(Some(_)))
+    ));
     assert_eq!(
         cache.async_rpush_and_trim("buf", Vec::new(), 3).await,
-        Err(Error::InvalidEntry)
+        Err(Error::InvalidEntry(None))
     );
 }
 
@@ -1122,24 +1122,30 @@ async fn test_connection_reports_success_with_the_python_message() {
 }
 
 #[rstest]
-#[case::unexpected_reply(Ok("NOPE"), "Redis ping returned False", false)]
+#[case::unexpected_reply(Ok("NOPE"), "Redis ping returned False", None)]
 #[case::connection_refused(
     Err(redis::RedisError::from((redis::ErrorKind::Io, "connection refused"))),
     "Redis connection failed:",
-    true
+    Some("connection refused")
 )]
 #[tokio::test]
 async fn test_connection_failures_use_the_python_result_contract(
     #[case] reply: redis::RedisResult<&'static str>,
     #[case] message: &str,
-    #[case] has_error: bool,
+    #[case] cause: Option<&str>,
 ) {
     let cache = json_cache(vec![MockCmd::new(redis::cmd("PING"), reply)]);
 
     let result = cache.test_connection().await.unwrap();
     assert_eq!(result.status, CacheConnectionStatus::Failed);
     assert!(result.message.starts_with(message), "{}", result.message);
-    assert_eq!(result.error.is_some(), has_error);
+    assert_eq!(result.error.is_some(), cause.is_some());
+    assert!(cause.is_none_or(|cause| {
+        result
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains(cause))
+    }));
 }
 
 #[rstest]

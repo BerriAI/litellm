@@ -40,11 +40,9 @@ pub async fn get_secret_from_python_manager(
     };
     match result {
         #[cfg(feature = "google")]
-        Err(Error::Google(litellm_secrets_google::Error::Status(404))) => {
-            Err(Error::ManagedSecretMissing)
-        }
+        Err(Error::Google(error)) if error.is_not_found() => Err(Error::ManagedSecretMissing),
         #[cfg(feature = "azure")]
-        Err(Error::Azure(litellm_secrets_azure::Error::MissingValue)) => Ok(None),
+        Err(Error::Azure(error)) if error.is_missing_value() => Ok(None),
         Ok(None)
             if matches!(manager, SecretManager::External(_))
                 && manager.system() == KeyManagementSystem::AzureKeyVault =>

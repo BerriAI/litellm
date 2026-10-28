@@ -134,9 +134,10 @@ impl LegacyLogging {
     }
 
     fn logger(&self) -> PyResult<&PythonLogger> {
-        self.logger.as_ref().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("call logging is not initialized")
-        })
+        Ok(self
+            .logger
+            .as_ref()
+            .ok_or(crate::error::Error::LoggingNotInitialized)?)
     }
 
     /// The keyword view the rest of the call reads: a copy, so the deployment hook's own

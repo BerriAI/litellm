@@ -201,6 +201,24 @@ async fn logo_discovery_points_to_served_image(dashboard: App) {
 }
 
 #[rstest]
+#[tokio::test]
+async fn unknown_logo_theme_is_rejected_in_the_ui_envelope(dashboard: App) {
+    let response = dashboard
+        .router
+        .oneshot(
+            Request::get("/get_image?theme=purple")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+    assert!(body["error"]["message"].as_str().unwrap().contains("theme"));
+}
+
+#[rstest]
 #[case::logo("/get_image")]
 #[case::logo_dark("/get_image?theme=dark")]
 #[case::monogram("/get_image?variant=monogram")]

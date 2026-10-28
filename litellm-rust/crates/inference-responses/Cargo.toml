@@ -28,6 +28,7 @@ tracing.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-cache.workspace = true
 litellm-cache-memory.workspace = true
+litellm-error.workspace = true
 litellm-host-native.workspace = true
 litellm-inference-testing.workspace = true
 litellm-tracing.workspace = true

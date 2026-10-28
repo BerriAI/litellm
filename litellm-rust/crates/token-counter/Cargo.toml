@@ -14,6 +14,7 @@ tiktoken = ["dep:litellm-token-counter-tiktoken"]
 [dependencies]
 indexmap = { version = "2.14.0", features = ["serde"] }
 itoa = "1.0"
+litellm-error.workspace = true
 litellm-token-counter-fast = { workspace = true, optional = true }
 litellm-token-counter-huggingface = { workspace = true, optional = true }
 litellm-token-counter-tiktoken = { workspace = true, optional = true }

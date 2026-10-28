@@ -55,10 +55,9 @@ impl Embedder for OpenAiEmbedder {
         }
         .send()
         .await
-        .map_err(|_| Error::Unavailable)?
-        .error_for_status()
-        .map_err(|_| Error::Unavailable)?;
-        let body: Value = response.json().await.map_err(|_| Error::Unavailable)?;
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(http_error)?;
+        let body: Value = response.json().await.map_err(http_error)?;
         body.get("data")
             .and_then(Value::as_array)
             .and_then(|data| data.first())
@@ -70,6 +69,14 @@ impl Embedder for OpenAiEmbedder {
                     .map(|value| value.as_f64().map(|value| value as f32))
                     .collect::<Option<Vec<_>>>()
             })
-            .ok_or(Error::Unavailable)
+            .ok_or(Error::unavailable(MissingEmbedding))
     }
 }
+
+fn http_error(error: reqwest::Error) -> Error {
+    Error::unavailable(litellm_http::Error::from(error))
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("embeddings response has no embedding")]
+struct MissingEmbedding;

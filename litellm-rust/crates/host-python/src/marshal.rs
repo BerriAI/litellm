@@ -14,7 +14,8 @@ pub fn from_py_argument<T>(value: &Bound<'_, PyAny>) -> PyResult<T>
 where
     T: DeserializeOwned,
 {
-    pythonize::depythonize(value).map_err(|error| PyValueError::new_err(error.to_string()))
+    pythonize::depythonize(value)
+        .map_err(|error| PyValueError::new_err(litellm_error::Report::new(&error).to_string()))
 }
 
 pub fn from_py<T>(value: &Bound<'_, PyAny>) -> PyResult<T>

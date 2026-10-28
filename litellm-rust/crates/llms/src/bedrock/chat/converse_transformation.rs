@@ -19,7 +19,7 @@ use litellm_llms_types::{
 use serde_json::{Map, Value, json};
 
 use crate::{
-    Error,
+    Error, ErrorDetail,
     base_llm::{
         auth::AuthScheme,
         chat::{
@@ -154,21 +154,16 @@ impl BaseConfig for AmazonConverseConfig {
         response: ProviderChatResponseData,
     ) -> Result<ChatCompletionsResponse, Error> {
         let body = response.body;
-        if !body.is_object() {
-            return Err(Error::InvalidResponse(
-                "converse response is not an object".into(),
-            ));
-        }
-        for field in ["output", "usage"] {
-            if body.get(field).is_none() {
-                return Err(Error::InvalidResponse(
-                    format!("invalid Converse response: missing field `{field}`").into(),
-                ));
-            }
-        }
+        let has_usage = body.get("usage").is_some();
         let response: ConverseResponse = serde_json::from_value(body).map_err(|error| {
-            Error::InvalidResponse(format!("invalid Converse response: {error}").into())
+            Error::InvalidResponse(ErrorDetail::invalid("Converse response", error))
         })?;
+        if !has_usage {
+            return Err(Error::InvalidResponse(ErrorDetail::MissingField {
+                subject: "Converse response",
+                field: "usage",
+            }));
+        }
         // The route declines tool requests, so anything other than a text block
         // is something this path never asked for. Decline; the host falls back.
         if response.message_content_is_non_text() {
@@ -858,34 +853,24 @@ mod tests {
         assert_eq!(err, Error::Unsupported("non-text response content block"));
     }
 
-    #[test]
-    fn errors_on_a_response_missing_required_fields() {
-        assert_eq!(
-            transform_response(json!("nope")).expect_err("not an object"),
-            Error::InvalidResponse("converse response is not an object".to_string().into())
-        );
-        assert_eq!(
-            transform_response(json!({"usage": {}})).expect_err("no output"),
-            Error::InvalidResponse("invalid Converse response: missing field `output`".into())
-        );
-        assert_eq!(
-            transform_response(json!({"output": {"message": {"content": []}}}))
-                .expect_err("no usage"),
-            Error::InvalidResponse("invalid Converse response: missing field `usage`".into())
-        );
-    }
-
-    #[test]
-    fn rejects_malformed_text_and_token_counts() {
-        for response in [
-            json!({"output": {"message": {"content": [{"text": 123}]}}, "usage": {"inputTokens": 1, "outputTokens": 1}}),
-            json!({"output": {"message": {"content": [{"text": "x"}]}}, "usage": {"inputTokens": "1", "outputTokens": 1}}),
-        ] {
-            assert!(matches!(
-                transform_response(response),
-                Err(Error::InvalidResponse(message)) if message.to_string().starts_with("invalid Converse response:")
-            ));
-        }
+    #[rstest::rstest]
+    #[case::not_an_object(json!("nope"), "invalid type")]
+    #[case::no_output(json!({"usage": {"inputTokens": 1, "outputTokens": 1}}), "missing field `output`")]
+    #[case::no_usage(json!({"output": {"message": {"content": []}}}), "missing usage")]
+    #[case::non_string_text(
+        json!({"output": {"message": {"content": [{"text": 123}]}}, "usage": {"inputTokens": 1, "outputTokens": 1}}),
+        "invalid type"
+    )]
+    #[case::non_integer_tokens(
+        json!({"output": {"message": {"content": [{"text": "x"}]}}, "usage": {"inputTokens": "1", "outputTokens": 1}}),
+        "invalid type"
+    )]
+    fn rejects_a_malformed_response(#[case] response: Value, #[case] fact: &str) {
+        let error = transform_response(response).expect_err("malformed response");
+        assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(report.contains("Converse response"), "{report}");
+        assert!(report.contains(fact), "{report}");
     }
 
     #[test]

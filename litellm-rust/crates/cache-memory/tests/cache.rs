@@ -52,7 +52,7 @@ fn measured(capacity: usize) -> InMemoryCache<String> {
         Some(4),
         Some(Arc::new(|value: &String| {
             if value.is_empty() {
-                return Err(Error::InvalidEntry);
+                return Err(Error::InvalidEntry(None));
             }
             Ok(value.len())
         })),
@@ -275,7 +275,7 @@ fn evict_element_if_expired_reports_removal(clock: Clock) {
 #[case::fits("ok", Ok(true))]
 #[case::at_limit("four", Ok(true))]
 #[case::too_large("oversized", Ok(false))]
-#[case::measure_error("", Err(Error::InvalidEntry))]
+#[case::measure_error("", Err(Error::InvalidEntry(None)))]
 fn check_value_size_applies_the_entry_limit(
     #[case] value: &str,
     #[case] expected: Result<bool, Error>,
@@ -310,7 +310,7 @@ fn disabled_size_limited_and_validated_writes_are_observable() {
     assert_eq!(cache.get_cache("small").unwrap(), Some("ok".into()));
     assert_eq!(
         cache.set_cache("invalid", String::new(), None),
-        Err(Error::InvalidEntry)
+        Err(Error::InvalidEntry(None))
     );
     assert_eq!(cache.get_cache("invalid").unwrap(), None);
     cache.delete_cache("small").unwrap();

@@ -8,24 +8,13 @@ use pyo3::{
 };
 
 fn map_error(error: Error) -> PyErr {
-    use litellm_storage_clickhouse::Error as StorageError;
-    match error {
-        Error::InsertTooLarge | Error::Storage(StorageError::InsertTooLarge) => {
-            PyOverflowError::new_err(error.to_string())
-        }
-        Error::InvalidRow
-        | Error::InvalidLimit(_)
-        | Error::InvalidSchema
-        | Error::Storage(
-            StorageError::InvalidRow
-            | StorageError::InvalidLimit(_)
-            | StorageError::InvalidTable
-            | StorageError::InvalidSchema
-            | StorageError::EmptySql
-            | StorageError::InvalidParameters
-            | StorageError::InvalidQuery,
-        ) => PyValueError::new_err(error.to_string()),
-        Error::Migration(_) | Error::Storage(_) => PyRuntimeError::new_err(error.to_string()),
+    let message = litellm_error::Report::new(&error).to_string();
+    if error.is_insert_too_large() {
+        PyOverflowError::new_err(message)
+    } else if error.is_request() {
+        PyValueError::new_err(message)
+    } else {
+        PyRuntimeError::new_err(message)
     }
 }
 
@@ -99,26 +88,22 @@ mod tests {
     use super::*;
     use rstest::rstest;
 
+    use litellm_storage_clickhouse::Error as StorageError;
+
     #[rstest]
-    #[case::row(Error::InvalidRow, "ValueError")]
-    #[case::insert_limit(Error::InvalidLimit("CLICKHOUSE_TRACE_MAX_INSERT_BYTES"), "ValueError")]
-    #[case::insert_timeout(
-        Error::Storage(litellm_storage_clickhouse::Error::InvalidLimit(
-            "CLICKHOUSE_INSERT_TIMEOUT_SECONDS"
-        )),
+    #[case::timestamp(Error::NonIntegerTimestamp { field: "start_time" }, "ValueError")]
+    #[case::insert_limit(
+        StorageError::InvalidLimit("CLICKHOUSE_TRACE_MAX_INSERT_BYTES").into(),
         "ValueError"
     )]
-    #[case::insert_budget(Error::InsertTooLarge, "OverflowError")]
-    #[case::schema(
-        Error::Storage(litellm_storage_clickhouse::Error::SchemaFailed(503)),
-        "RuntimeError"
-    )]
+    #[case::insert_budget(StorageError::InsertTooLarge.into(), "OverflowError")]
+    #[case::schema(StorageError::SchemaFailed(503).into(), "RuntimeError")]
     #[case::migration(
         Error::Migration(sqlx::migrate::MigrateError::VersionMismatch(6)),
         "RuntimeError"
     )]
     #[case::storage(
-        Error::Storage(litellm_storage_clickhouse::Error::InvalidUrl),
+        Config::new("spend".into(), "ftp://localhost", 1).err().unwrap(),
         "RuntimeError"
     )]
     fn spend_failures_preserve_public_exception_types(
@@ -127,13 +112,24 @@ mod tests {
     ) {
         Python::initialize();
         Python::attach(|py| {
-            let message = error.to_string();
+            let message = litellm_error::Report::new(&error).to_string();
             let exception = map_error(error);
             assert_eq!(exception.get_type(py).name().unwrap(), exception_name);
             assert_eq!(
                 exception.value(py).str().unwrap().to_str().unwrap(),
                 message
             );
+        });
+    }
+
+    #[test]
+    fn spend_failures_render_their_cause() {
+        let error = Config::new("spend".into(), "not a url", 1).err().unwrap();
+        let cause = std::error::Error::source(&error).unwrap().to_string();
+        Python::initialize();
+        Python::attach(|py| {
+            let message = map_error(error).value(py).str().unwrap().to_string();
+            assert!(message.ends_with(&cause), "{message}");
         });
     }
 }

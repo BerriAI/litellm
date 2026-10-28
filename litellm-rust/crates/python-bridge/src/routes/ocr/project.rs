@@ -6,14 +6,16 @@ use litellm_inference_ocr::{
     wire::{OcrWireRequest, consumed_optional_params, decode_document, decode_request_input},
 };
 use litellm_llms::base_llm::ocr::error::Error;
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use pyo3::{prelude::*, types::PyDict};
 use serde_json::{Map, Value};
 
 use super::{document::FileDocumentInput, errors::to_pyerr as ocr_error_to_pyerr};
 use crate::{
     coercion::FieldSpec,
     credentials::{self, CallerTokenProvider},
-    marshal::{project_optional_fields, python_timeout_seconds, request_input_sources},
+    marshal::{
+        ArgumentError, project_optional_fields, python_timeout_seconds, request_input_sources,
+    },
     python_settings::{PythonSettings, Snapshot},
 };
 
@@ -30,9 +32,9 @@ struct OcrArguments<'a, 'py> {
 }
 
 impl<'py> OcrArguments<'_, 'py> {
-    fn lookup(&self, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        litellm_host_python::lookup(self.kwargs, self.bound, name)?
-            .ok_or_else(|| PyValueError::new_err(format!("missing argument: {name}")))
+    fn lookup(&self, name: &'static str) -> PyResult<Bound<'py, PyAny>> {
+        Ok(litellm_host_python::lookup(self.kwargs, self.bound, name)?
+            .ok_or(ArgumentError::Required(name))?)
     }
 
     fn model(&self) -> PyResult<String> {
@@ -92,6 +94,7 @@ impl ProjectedDocument {
                 {
                     ocr_error_to_pyerr(Error::RequestField {
                         path: "document.type".into(),
+                        cause: None,
                     })
                 } else {
                     error
@@ -218,8 +221,10 @@ fn fold_module_globals(
 pub(super) const SETTINGS_ERROR_MARKER: &str = "native_settings_error";
 
 fn settings_error(py: Python<'_>, error: PyErr) -> PyErr {
-    error.value(py).setattr(SETTINGS_ERROR_MARKER, true).ok();
-    error
+    match error.value(py).setattr(SETTINGS_ERROR_MARKER, true) {
+        Ok(()) => error,
+        Err(failure) => failure,
+    }
 }
 
 #[cfg(test)]

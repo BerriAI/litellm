@@ -14,24 +14,24 @@ impl CacheCodec for ResponseCacheCodec {
             .timestamp
             .is_some_and(|timestamp| !timestamp.is_finite())
         {
-            return Err(Error::InvalidEntry);
+            return Err(Error::InvalidEntry(None));
         }
         // Python reads a `response` that is either a dict or a serialized string, so every
         // other shape is written serialized. A string on the wire is therefore always a
         // serialized response, which keeps string-valued responses unambiguous.
         if value.timestamp.is_none() || value.response.is_object() {
-            return serde_json::to_vec(value).map_err(|_| Error::InvalidEntry);
+            return serde_json::to_vec(value).map_err(Error::invalid_entry);
         }
-        let response = serde_json::to_string(&value.response).map_err(|_| Error::InvalidEntry)?;
+        let response = serde_json::to_string(&value.response).map_err(Error::invalid_entry)?;
         serde_json::to_vec(&CacheEntry {
             timestamp: value.timestamp,
             response: Value::String(response),
         })
-        .map_err(|_| Error::InvalidEntry)
+        .map_err(Error::invalid_entry)
     }
 
     fn decode(&self, bytes: &[u8]) -> Result<CacheEntry, Error> {
-        let text = std::str::from_utf8(bytes).map_err(|_| Error::InvalidEntry)?;
+        let text = std::str::from_utf8(bytes).map_err(Error::invalid_entry)?;
         let value = decode_value(text)?;
         let Some(timestamp) = value.get("timestamp") else {
             return Ok(CacheEntry {
@@ -40,9 +40,9 @@ impl CacheCodec for ResponseCacheCodec {
             });
         };
         let Some(timestamp) = timestamp.as_f64().filter(|timestamp| timestamp.is_finite()) else {
-            return Err(Error::InvalidEntry);
+            return Err(Error::InvalidEntry(None));
         };
-        let response = match value.get("response").ok_or(Error::InvalidEntry)? {
+        let response = match value.get("response").ok_or(Error::InvalidEntry(None))? {
             Value::String(text) => decode_value(text)?,
             response => response.clone(),
         };
@@ -58,25 +58,25 @@ fn decode_value(text: &str) -> Result<Value, Error> {
         return Ok(value);
     }
     check_literal_depth(text)?;
-    let literal: py_literal::Value = text.parse().map_err(|_| Error::InvalidEntry)?;
+    let literal: py_literal::Value = text.parse().map_err(Error::invalid_entry)?;
     literal_value(literal, 0)
 }
 
 fn literal_value(value: py_literal::Value, depth: usize) -> Result<Value, Error> {
     use py_literal::Value as Literal;
     if depth > 128 {
-        return Err(Error::InvalidEntry);
+        return Err(Error::InvalidEntry(None));
     }
     match value {
         Literal::String(text) => Ok(Value::String(text)),
         Literal::Boolean(value) => Ok(Value::Bool(value)),
         Literal::None => Ok(Value::Null),
         Literal::Integer(value) => {
-            serde_json::from_str(&value.to_string()).map_err(|_| Error::InvalidEntry)
+            serde_json::from_str(&value.to_string()).map_err(Error::invalid_entry)
         }
         Literal::Float(value) => serde_json::Number::from_f64(value)
             .map(Value::Number)
-            .ok_or(Error::InvalidEntry),
+            .ok_or(Error::InvalidEntry(None)),
         Literal::List(values) | Literal::Tuple(values) => values
             .into_iter()
             .map(|value| literal_value(value, depth + 1))
@@ -86,13 +86,13 @@ fn literal_value(value: py_literal::Value, depth: usize) -> Result<Value, Error>
             .into_iter()
             .map(|(key, value)| {
                 let Literal::String(key) = key else {
-                    return Err(Error::InvalidEntry);
+                    return Err(Error::InvalidEntry(None));
                 };
                 Ok((key, literal_value(value, depth + 1)?))
             })
             .collect::<Result<serde_json::Map<_, _>, _>>()
             .map(Value::Object),
-        _ => Err(Error::InvalidEntry),
+        _ => Err(Error::InvalidEntry(None)),
     }
 }
 
@@ -118,7 +118,7 @@ fn check_literal_depth(text: &str) -> Result<(), Error> {
             '[' | '{' | '(' => {
                 depth += 1;
                 if depth > 128 {
-                    return Err(Error::InvalidEntry);
+                    return Err(Error::InvalidEntry(None));
                 }
             }
             ']' | '}' | ')' => depth = depth.saturating_sub(1),

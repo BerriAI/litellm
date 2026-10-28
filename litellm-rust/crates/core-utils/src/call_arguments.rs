@@ -1,5 +1,7 @@
 use std::ops::Deref;
 
+use litellm_error::Source;
+
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
@@ -17,9 +19,11 @@ impl CallArguments {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("invalid argument: {path}")]
+#[error("invalid argument {path}")]
 pub struct ArgumentError {
     pub path: String,
+    #[source]
+    source: Source,
 }
 
 pub fn parse_options<T: DeserializeOwned>(arguments: &CallArguments) -> Result<T, ArgumentError> {
@@ -28,6 +32,7 @@ pub fn parse_options<T: DeserializeOwned>(arguments: &CallArguments) -> Result<T
     );
     serde_path_to_error::deserialize(deserializer).map_err(|error| ArgumentError {
         path: error.path().to_string(),
+        source: Source::new(error.into_inner()),
     })
 }
 
@@ -42,8 +47,8 @@ pub fn compose_body<B: Serialize>(
     body: &B,
     consumed: &[&str],
 ) -> Result<Value, crate::params::Error> {
-    let Value::Object(fields) =
-        serde_json::to_value(body).map_err(|_| crate::params::Error::Body)?
+    let Value::Object(fields) = serde_json::to_value(body)
+        .map_err(|error| crate::params::Error::Serialize(Source::new(error)))?
     else {
         return Err(crate::params::Error::Body);
     };
@@ -183,9 +188,9 @@ mod tests {
         assert_eq!(arguments.get("enabled"), Some(&Value::Null));
         assert_eq!(arguments.get("missing"), None);
         let invalid = serde_json::from_value(json!({"enabled":0})).unwrap();
-        assert_eq!(
-            parse_options::<Options>(&invalid).err().unwrap().path,
-            "enabled"
-        );
+        let error = parse_options::<Options>(&invalid).err().unwrap();
+        assert_eq!(error.path, "enabled");
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(report.starts_with("invalid argument enabled: invalid type"));
     }
 }

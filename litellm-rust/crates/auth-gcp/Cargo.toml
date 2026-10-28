@@ -24,5 +24,6 @@ google-cloud-auth = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 
 [dev-dependencies]
+litellm-error.workspace = true
 rstest.workspace = true
 tempfile.workspace = true

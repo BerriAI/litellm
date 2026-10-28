@@ -79,7 +79,7 @@ impl PythonBinding for ChatCompletionsPythonHost {
         self.0.error(py, error)
     }
     fn host_error(error: &PyErr) -> Error {
-        Error::InvalidRequest(error.to_string().into())
+        crate::routes::inference::host_call_error(error)
     }
 }
 

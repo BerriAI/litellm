@@ -67,6 +67,7 @@ impl OcrConnectionInputs {
                     .map(|value| (name.clone(), value.to_string()))
                     .ok_or_else(|| Error::RequestField {
                         path: format!("extra_headers.{name}"),
+                        cause: None,
                     })
             })
             .collect()
@@ -105,6 +106,7 @@ impl LiteLLMOcrRequest {
                     .filter(|value| *value > 0 && *value <= default_transport.max_response_bytes)
                     .ok_or_else(|| Error::RequestField {
                         path: "max_response_bytes".into(),
+                        cause: None,
                     })
             })
             .transpose()?
@@ -313,7 +315,7 @@ mod tests {
         };
         assert!(matches!(
             error,
-            Error::RequestField { ref path } if path == "extra_headers.x-a"
+            Error::RequestField { ref path, .. } if path == "extra_headers.x-a"
         ));
     }
 }

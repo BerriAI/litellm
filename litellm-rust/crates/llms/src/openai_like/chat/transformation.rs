@@ -123,9 +123,12 @@ impl BaseConfig for OpenAILikeChatConfig {
     ) -> Result<ChatCompletionsResponse, Error> {
         let mut body = response.body;
         sanitize_usage(&mut body);
-        let body = body
-            .as_object()
-            .ok_or_else(|| Error::InvalidResponse("chat response is not an object".into()))?;
+        let body =
+            body.as_object()
+                .ok_or(Error::InvalidResponse(crate::ErrorDetail::Expected {
+                    subject: "chat response",
+                    expected: "an object",
+                }))?;
 
         let choices = body
             .get("choices")
@@ -414,9 +417,13 @@ mod tests {
     #[rstest]
     fn a_missing_api_base_is_an_error() {
         assert!(matches!(
-            OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
-                .get_complete_url(None, "my-model", &params(json!({})), &no_env),
-            Err(Error::InvalidRequest(message)) if message.to_string().starts_with("Missing API Base")
+            OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG.get_complete_url(
+                None,
+                "my-model",
+                &params(json!({})),
+                &no_env
+            ),
+            Err(Error::InvalidRequest(crate::ErrorDetail::MissingApiBase))
         ));
     }
 
