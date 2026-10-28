@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from functools import partial, reduce
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, NamedTuple, NoReturn, Protocol, TypeAlias, overload
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, NoReturn, Protocol, TypeAlias, overload
 
 from fastapi import (
     APIRouter,
@@ -53,7 +53,12 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     delete_cache_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    broadcast_evictions,
+    evict_and_broadcast,
+    evict_local,
+    evict_shared,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     safe_get_request_headers,
@@ -64,6 +69,7 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
+    delete_validated_team_rows,
     new_team,
     team_member_add,
     team_member_delete,
@@ -104,6 +110,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.scim_v2 import *
 
 if TYPE_CHECKING:
+    from prisma import Prisma
     from prisma.models import LiteLLM_VerificationToken as PrismaVerificationToken
 
 
@@ -317,9 +324,13 @@ async def _check_team_exists(team_id: str) -> LiteLLM_TeamTable:
     team: Final = await _table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id})
 
     if not team:
-        raise HTTPException(status_code=404, detail={"error": f"Group not found with ID: {team_id}"})
+        raise _group_not_found(team_id)
 
     return team
+
+
+def _group_not_found(team_id: str) -> HTTPException:
+    return HTTPException(status_code=404, detail={"error": f"Group not found with ID: {team_id}"})
 
 
 def _extract_scim_user_data(user: SCIMUser) -> ScimUserData:
@@ -482,10 +493,7 @@ async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: It
     Recompute and persist each user's global proxy role from their resulting team
     membership. No-op unless scim_admin_group is configured, so a SCIM group write
     that drops a member from the admin group demotes them just like the user
-    endpoints do, and the role is left untouched when the feature is off. The users'
-    rows are locked through ``USER_ROWS_LOCK_SQL`` before their teams are read, the
-    same lock a roster write takes, so a concurrent group push cannot change a
-    member's teams between the read and the role write.
+    endpoints do, and the role is left untouched when the feature is off.
     """
     admin_group: Final = await _get_scim_admin_group()
     if admin_group is None:
@@ -494,28 +502,46 @@ async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: It
     ids: Final = tuple(dict.fromkeys(user_ids))
     if not ids:
         return
-    default_role: Final = _default_scim_user_role()
     async with prisma_client.tx(timeout=ROSTER_TX_TIMEOUT) as tx:
-        await tx.query_raw(USER_ROWS_LOCK_SQL, sorted(ids))
-        rows: Final = await find_many_in(user_tx_db(tx), "user_id", ids)
-        team_ids: Final = tuple(dict.fromkeys(chain.from_iterable(row.teams for row in rows)))
-        teams: Final = await find_many_in(team_tx_db(tx), "team_id", team_ids)
-        alias_of: Final = MappingProxyType({team.team_id: team.team_alias for team in teams})
-        resolved: Final = tuple(
-            (
-                row.user_id,
-                _resolve_scim_user_role(
-                    [SCIMUserGroup(value=team_id, display=alias_of.get(team_id)) for team_id in row.teams],
-                    admin_group,
-                    default_role,
-                ),
-            )
-            for row in rows
+        await _write_scim_member_roles_tx(tx, ids, admin_group=admin_group)
+
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    evict_local(cache_keys=ids, user_api_key_cache=user_api_key_cache)
+    await evict_shared(cache_keys=ids, cache=user_api_key_cache)
+    await broadcast_evictions(cache_keys=ids)
+
+
+async def _write_scim_member_roles_tx(tx: "Prisma", user_ids: Sequence[str], *, admin_group: str) -> None:
+    """
+    Write each user's role resolved from the teams they are in, on ``tx``. The users'
+    rows are locked through ``USER_ROWS_LOCK_SQL`` before their teams are read, the
+    same lock a roster write takes, so a concurrent group push cannot change a
+    member's teams between the read and the role write.
+    """
+    if not user_ids:
+        return
+    default_role: Final = _default_scim_user_role()
+    await tx.query_raw(USER_ROWS_LOCK_SQL, sorted(user_ids))
+    rows: Final = await find_many_in(user_tx_db(tx), "user_id", user_ids)
+    team_ids: Final = tuple(dict.fromkeys(chain.from_iterable(row.teams for row in rows)))
+    teams: Final = await find_many_in(team_tx_db(tx), "team_id", team_ids)
+    alias_of: Final = MappingProxyType({team.team_id: team.team_alias for team in teams})
+    resolved: Final = tuple(
+        (
+            row.user_id,
+            _resolve_scim_user_role(
+                [SCIMUserGroup(value=team_id, display=alias_of.get(team_id)) for team_id in row.teams],
+                admin_group,
+                default_role,
+            ),
         )
-        for role in dict.fromkeys(role for _, role in resolved):
-            await tx.execute_raw(
-                _SET_USER_ROLE_SQL, role, sorted(user_id for user_id, user_role in resolved if user_role == role)
-            )
+        for row in rows
+    )
+    for role in dict.fromkeys(role for _, role in resolved):
+        await tx.execute_raw(
+            _SET_USER_ROLE_SQL, role, sorted(user_id for user_id, user_role in resolved if user_role == role)
+        )
 
 
 class _ResolvedUserMember(NamedTuple):
@@ -3051,7 +3077,8 @@ async def update_group(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def delete_group(
-    group_id: str = Path(..., title="Group ID"),
+    group_id: Annotated[str, Path(title="Group ID")],
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     Delete a group according to SCIM v2 protocol
@@ -3064,23 +3091,22 @@ async def delete_group(
         existing_team: Final = await _check_team_exists(group_id)
         raise_if_teams_hold_ptu_shares((group_id,), llm_router)
 
-        member_ids: Final = await _get_team_member_user_ids_from_team(existing_team)
-
-        # For each member, remove this team from their teams list
-        for member_id in member_ids:
-            user = await _table(UserRepository(prisma_client)).find_unique(where={"user_id": member_id})
-            if user:
-                current_teams = user.teams or []
-                if group_id in current_teams:
-                    new_teams = [t for t in current_teams if t != group_id]
-                    await _table(UserRepository(prisma_client)).update(
-                        where={"user_id": member_id}, data={"teams": new_teams}
-                    )
-
-        await _recompute_scim_member_roles(prisma_client, member_ids)
-
-        # Delete team
-        await _table(TeamRepository(prisma_client)).delete(where={"team_id": group_id})
+        admin_group: Final = await _get_scim_admin_group()
+        deleted: Final = await delete_validated_team_rows(
+            teams=(LiteLLM_TeamTable.model_validate(existing_team.model_dump()),),
+            prisma_client=prisma_client,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key=user_api_key_dict.api_key,
+                user_id=user_api_key_dict.user_id,
+            ),
+            litellm_changed_by=None,
+            before_commit=(
+                None if admin_group is None else partial(_write_scim_member_roles_tx, admin_group=admin_group)
+            ),
+        )
+        if group_id not in deleted.team_ids:
+            raise _group_not_found(group_id)
 
         return Response(status_code=204)
 

@@ -4,7 +4,6 @@ import uuid
 from typing import Final
 
 import pytest
-
 from integration._support.client import Gateway
 from integration._support.mcp import McpPeer, call_tool, register_mcp, tool_names
 from integration._support.wire import Reply, Request, wire_server
@@ -98,10 +97,11 @@ def test_configured_revision_blocks_unadvertised_handshake_and_keeps_allowed_con
     import yaml
     from integration._support.mcp import mcp_peer
     from integration._support.process import owned_proxy
-    from litellm.experimental_mcp_client.client import MCPClient
-    from litellm.types.mcp import MCPTransport
     from mcp import MCPError
     from mcp.types import CallToolRequestParams
+
+    from litellm.mcp_client.client import MCPClient
+    from litellm.types.mcp import MCPTransport
 
     with mcp_peer() as upstream, gateway.scenario() as scenario:
         alias: Final = "restricted" + uuid.uuid4().hex[:8]

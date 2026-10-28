@@ -2,7 +2,7 @@
 ## handler file for TextCompletionCodestral Integration - https://codestral.com/
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import partial
 from typing import Final, Protocol
 
@@ -268,7 +268,7 @@ class CodestralTextCompletion:
             prompt = prompt_factory(model=model, messages=messages)
 
         ## Load Config
-        config: Final = litellm.CodestralTextCompletionConfig.get_config()
+        config: Final[Mapping[str, object]] = litellm.CodestralTextCompletionConfig.get_config()
         for k, v in config.items():
             if (
                 k not in optional_params
