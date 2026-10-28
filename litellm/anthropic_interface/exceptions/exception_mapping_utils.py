@@ -31,6 +31,8 @@ ANTHROPIC_ERROR_TYPE_MAP: Final[dict[int, AnthropicErrorType]] = {
     529: "overloaded_error",
 }
 
+REQUEST_TIMEOUT_STATUS: Final = 408
+
 
 class AnthropicExceptionMapping:
     """
@@ -45,7 +47,9 @@ class AnthropicExceptionMapping:
         named: Final = ANTHROPIC_ERROR_TYPE_MAP.get(status_code)
         if named is not None:
             return named
-        return "invalid_request_error" if 400 <= status_code < 500 else "api_error"
+        if status_code == REQUEST_TIMEOUT_STATUS or not 400 <= status_code < 500:
+            return "api_error"
+        return "invalid_request_error"
 
     @staticmethod
     def create_error_response(

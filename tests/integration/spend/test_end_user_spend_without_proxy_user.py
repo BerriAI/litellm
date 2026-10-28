@@ -121,7 +121,6 @@ def _assert_budget_refusal(response: httpx.Response, end_user: str) -> None:
 
 
 def _assert_messages_budget_refusal(response: httpx.Response, end_user: str) -> None:
-    """A budget refusal on /v1/messages keeps its 422 but answers the Anthropic envelope."""
     assert response.status_code == 422, response.text
     body: Final = _json_object(response.content)
     assert body["type"] == "error", response.text

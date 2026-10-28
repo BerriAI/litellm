@@ -140,11 +140,7 @@ def test_anthropic_count_without_a_provider_credential_is_an_anthropic_401(
             _anthropic(gateway).messages.count_tokens(model=model, messages=_MESSAGES)
         assert raised.value.body == {
             "type": "error",
-            "error": {
-                "type": "authentication_error",
-                "message": raised.value.body["error"]["message"],
-                "litellm_error_type": "token_counting_error",
-            },
+            "error": {"type": "authentication_error", "message": raised.value.body["error"]["message"]},
         }
         assert missing in raised.value.message, raised.value.message
         assert wire.drain() == ()
@@ -214,7 +210,7 @@ def test_anthropic_count_request_errors_use_the_anthropic_envelope(keyless_proxy
         assert rejected.status_code == 400, rejected.text
         body: Final = _JSON_OBJECT.validate_json(rejected.content)
         assert set(body) <= {"type", "error", "request_id"}, body
-        assert body["error"] == {**upstream_error["error"], "litellm_error_type": "token_counting_error"}, body
+        assert body["error"] == upstream_error["error"], body
         assert len(wire.drain()) == 1
 
 

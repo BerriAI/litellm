@@ -49,11 +49,14 @@ const STATUS_TITLES: Readonly<Record<number, string>> = {
 const ANTHROPIC_TYPE_TITLES: Readonly<Record<string, string>> = {
   invalid_request_error: "Request Error",
   authentication_error: "Authentication Error",
+  billing_error: "Request Error",
   permission_error: "Access Denied",
   not_found_error: "Not Found",
+  conflict_error: "Already Exists",
   request_too_large: "Request Error",
   rate_limit_error: "Rate Limit Exceeded",
   api_error: "Server Error",
+  timeout_error: "Server Error",
   overloaded_error: "Service Unavailable",
 };
 
@@ -88,7 +91,7 @@ const proxyTypeOf = (payload: unknown): string | undefined => {
 };
 
 const EMBEDDED_JSON = /\{[\s\S]*\}/;
-const STATUS_BEFORE_JSON = /(\d{3})\s*$/;
+const STATUS_BEFORE_JSON = /(?<!\d)([1-5]\d{2})\s*$/;
 
 const statusBefore = (text: string, embedded: string): number | undefined =>
   toStatus(text.slice(0, text.indexOf(embedded)).match(STATUS_BEFORE_JSON)?.[1]);

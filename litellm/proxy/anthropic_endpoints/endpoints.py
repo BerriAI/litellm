@@ -36,7 +36,7 @@ from litellm.proxy.common_request_processing import (
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.anthropic_error_payload import (
-    anthropic_error_json_response,
+    anthropic_handler_error_json_response,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -56,7 +56,7 @@ router: Final = APIRouter()
 
 
 def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
-    return anthropic_error_json_response(exc, request)
+    return anthropic_handler_error_json_response(exc, request)
 
 
 _TOKEN_COUNT_FIELDS: Final = ("model", "messages", "tools", "system")

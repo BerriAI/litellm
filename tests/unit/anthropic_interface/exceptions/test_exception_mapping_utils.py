@@ -73,12 +73,13 @@ class TestCreateErrorResponse:
             (418, "invalid_request_error"),
             (422, "invalid_request_error"),
             (499, "invalid_request_error"),
+            (408, "api_error"),
             (502, "api_error"),
             (503, "api_error"),
             (599, "api_error"),
         ],
     )
-    def test_a_status_the_docs_do_not_name_is_a_request_error_below_500_and_an_api_error_from_500(
+    def test_a_status_the_docs_do_not_name_is_a_request_error_below_500_except_a_timeout_and_an_api_error_from_500(
         self, status_code: int, expected_error_type: str
     ):
         response = AnthropicExceptionMapping.create_error_response(status_code, "scripted status")

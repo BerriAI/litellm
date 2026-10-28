@@ -1,7 +1,7 @@
 """Auth, budget and model-access failures are raised by ``user_api_key_auth`` before the Messages
 handler runs, so the central handlers pick the Anthropic envelope from the request route."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 
 from fastapi import Request, status
@@ -74,17 +74,14 @@ def _with_litellm_error_type(
     return with_type
 
 
-def _anthropic_error_detail(
-    exc: ProxyException, status_code: int, detail: AnthropicErrorDetail, call_id: str | None
-) -> AnthropicErrorDetail:
-    with_proxy_fields: Final = _with_litellm_error_type(exc, status_code, _with_provider_specific_fields(exc, detail))
+def _with_call_id(detail: AnthropicErrorDetail, call_id: str | None) -> AnthropicErrorDetail:
     if call_id is None:
-        return with_proxy_fields
-    with_call_id: Final[AnthropicErrorDetail] = {**with_proxy_fields, "litellm_call_id": call_id}
+        return detail
+    with_call_id: Final[AnthropicErrorDetail] = {**detail, "litellm_call_id": call_id}
     return with_call_id
 
 
-def anthropic_error_content(
+def anthropic_handler_error_content(
     exc: ProxyException,
     status_code: int,
     request_id: str | None,
@@ -98,12 +95,30 @@ def anthropic_error_content(
     body_call_id: Final = error_body_call_id(general_settings, exc.headers.get(LITELLM_CALL_ID_HEADER))
     content: Final[AnthropicErrorResponse] = {
         **envelope,
-        "error": _anthropic_error_detail(exc, status_code, envelope["error"], body_call_id),
+        "error": _with_call_id(_with_provider_specific_fields(exc, envelope["error"]), body_call_id),
     }
     return content
 
 
-def anthropic_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
+def anthropic_error_content(
+    exc: ProxyException,
+    status_code: int,
+    request_id: str | None,
+    general_settings: Mapping[str, object],
+) -> AnthropicErrorResponse:
+    content: Final = anthropic_handler_error_content(exc, status_code, request_id, general_settings)
+    with_type: Final[AnthropicErrorResponse] = {
+        **content,
+        "error": _with_litellm_error_type(exc, status_code, content["error"]),
+    }
+    return with_type
+
+
+def _anthropic_json_response(
+    exc: ProxyException,
+    request: Request,
+    build_content: Callable[[ProxyException, int, str | None, Mapping[str, object]], AnthropicErrorResponse],
+) -> JSONResponse:
     from litellm.proxy.proxy_server import (
         _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; a JSONResponse returned instead of a raised error must stamp the OTel server span like the global ProxyException handler does
         general_settings_view,
@@ -111,10 +126,16 @@ def anthropic_error_json_response(exc: ProxyException, request: Request) -> JSON
 
     status_code: Final = anthropic_error_status_code(exc)
     _close_dangling_otel_server_span(request, status_code, exc=exc)
-    content: Final = anthropic_error_content(
-        exc, status_code, request.headers.get("x-request-id"), general_settings_view()
-    )
+    content: Final = build_content(exc, status_code, request.headers.get("x-request-id"), general_settings_view())
     return JSONResponse(status_code=status_code, content=content, headers=exc.headers)
+
+
+def anthropic_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
+    return _anthropic_json_response(exc, request, anthropic_error_content)
+
+
+def anthropic_handler_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
+    return _anthropic_json_response(exc, request, anthropic_handler_error_content)
 
 
 def anthropic_internal_server_error_response(request: Request) -> JSONResponse:

@@ -173,6 +173,20 @@ describe("toast", () => {
       expect(sonner.error).toHaveBeenCalledWith("Access Denied", { description: "denied", duration: 6000 });
     });
 
+    it.each([
+      ["billing_error", "Request Error"],
+      ["conflict_error", "Already Exists"],
+      ["timeout_error", "Server Error"],
+    ])("titles an Anthropic %s body with no status as %s", (type, title) => {
+      toast.fromError(JSON.stringify({ type: "error", error: { type, message: "boom" } }));
+      expect(sonner.error).toHaveBeenCalledWith(title, { description: "boom", duration: 6000 });
+    });
+
+    it("reads no status from a number longer than three digits before the envelope", () => {
+      toast.fromError(`request 98765 ${JSON.stringify({ error: { message: "boom" } })}`);
+      expect(sonner.error).toHaveBeenCalledWith("Error", { description: "request 98765 boom", duration: 6000 });
+    });
+
     it("leaves a string alone when its braces are not a JSON envelope", () => {
       toast.fromError("Template {name} is invalid");
       expect(sonner.error).toHaveBeenCalledWith("Error", {

@@ -168,11 +168,6 @@ async def test_openai_exception_handler_never_fabricates_a_call_id(monkeypatch):
     assert "litellm_call_id" not in body["error"]
 
 
-# ---------------------------------------------------------------------------
-# openai_exception_handler: Anthropic envelope on the Messages routes
-# ---------------------------------------------------------------------------
-
-
 def _model_access_denied_exception() -> ProxyException:
     return ProxyException(
         message="Team not allowed to access model. Tried to access gpt-5.6",

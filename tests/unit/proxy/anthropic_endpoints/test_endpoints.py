@@ -172,7 +172,6 @@ class TestProxyExceptionAnthropicEnvelope:
             "error": {
                 "type": "invalid_request_error",
                 "message": "Invalid type for 'metadata': expected an object, but got a string instead.",
-                "litellm_error_type": "bad_request_error",
             },
             "request_id": "req_test_6468",
         }
