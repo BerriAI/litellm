@@ -1033,7 +1033,7 @@ jobs:
           RERUNS: ${{ matrix.reruns }}
           TEST_TIMEOUT_SECONDS: "120"
           DIST: ${{ matrix.dist }}
-          COVERAGE_CORE: sysmon
+          COVERAGE_CORE: ${{ matrix.shard == 'core-utils' && 'ctrace' || 'sysmon' }}
         run: |
           echo "has-coverage=false" >> "$GITHUB_OUTPUT"
           selection="${TEST_PATH}"
