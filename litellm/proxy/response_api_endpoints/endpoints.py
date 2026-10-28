@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import copy
 import json
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
@@ -75,6 +76,7 @@ from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decry
 from litellm.proxy.litellm_pre_call_utils import (
     _CLIENT_PRICING_METADATA_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
+    add_guardrails_from_policy_engine,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
@@ -2017,8 +2019,12 @@ _PII_TOKENS: Final = TypeAdapter(dict[str, str])
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 _GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools")
 _CLIENT_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
-# the guardrail list is merged from key, team and the admission frame; a later frame cannot shrink it
 _CLIENT_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config", "policies")
+_PROXY_ONLY_FRAME_FIELDS: Final = (*_CLIENT_GUARDRAIL_SELECTORS, "include_guardrail_response")
+_NESTED_BODY_ONLY_FIELDS: Final = (*_GUARDED_FRAME_FIELDS, *_PROXY_ONLY_FRAME_FIELDS)
+_GUARDRAIL_NAMES: Final = TypeAdapter(list[str])
+_OBJECTS: Final = TypeAdapter(list[object])
+_TURN_COPIED_CONTAINERS: Final = (list, dict)
 
 
 class _PreCallGuardrailWalk(Protocol):
@@ -2057,21 +2063,21 @@ def _responses_ws_frame_guard(
     async def guard(frame: str) -> GuardedResponsesWsFrame:
         frame_obj: Final = _WS_FRAME.validate_json(frame)
         nested: Final = frame_obj.get("response")
-        if isinstance(nested, dict) and any(key in frame_obj for key in _GUARDED_FRAME_FIELDS):
+        if isinstance(nested, dict) and any(key in frame_obj for key in _NESTED_BODY_ONLY_FIELDS):
             raise ValueError(
-                "response.create carries input, instructions or tools both at the top level and under response"
+                "response.create carries input, instructions, tools or a guardrail field both at the top level "
+                "and under response"
             )
         body: Final = _WS_FRAME.validate_python(nested) if isinstance(nested, dict) else frame_obj
         frame_data: Final = {
             **{
                 key: _without_untrusted_metadata(key, value)
                 for key, value in body.items()
-                if key != "type" and key not in _CLIENT_GUARDRAIL_SELECTORS
+                if key != "type" and key not in _PROXY_ONLY_FRAME_FIELDS
             },
             "model": model,
             "litellm_call_id": str(uuid.uuid4()),
-            # shallow: the bucket carries proxy-owned objects (the OTEL parent span) that cannot be deep-copied
-            metadata_key: {**bucket},
+            metadata_key: await _metadata_with_frame_guardrails(bucket, body, model, metadata_key, user_api_key_dict),
         }
         try:
             guarded_data: Final = await proxy_logging_obj.pre_call_hook(
@@ -2089,7 +2095,11 @@ def _responses_ws_frame_guard(
             raise rerouted
         # a guardrail may delete a field (the Responses translation pops ``instructions``), so start without them
         guarded_fields: Final = {key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data}
-        kept: Final = {key: value for key, value in body.items() if key not in _GUARDED_FRAME_FIELDS}
+        kept: Final = {
+            key: value
+            for key, value in body.items()
+            if key not in _GUARDED_FRAME_FIELDS and key not in _PROXY_ONLY_FRAME_FIELDS
+        }
         rewritten: Final = (
             {**frame_obj, "response": {**kept, **guarded_fields}}
             if isinstance(nested, dict)
@@ -2104,6 +2114,71 @@ def _responses_ws_frame_guard(
         )
 
     return guard
+
+
+async def _metadata_with_frame_guardrails(
+    bucket: Mapping[str, object],
+    body: Mapping[str, object],
+    model: object,
+    metadata_key: str,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Mapping[str, object]:
+    """A frame selects guardrails the way an HTTP ``/v1/responses`` body does, adding to the key, team and policy
+    guardrails the socket was admitted with, so a frame can never shrink that list"""
+    metadata: Final = (
+        await _metadata_with_frame_policies(bucket, body["policies"], model, metadata_key, user_api_key_dict)
+        if "policies" in body
+        else bucket
+    )
+    existing_guardrails: Final = metadata.get("guardrails")
+    existing_config: Final = metadata.get("guardrail_config")
+    return {
+        **metadata,
+        **(
+            {
+                "guardrails": [
+                    *(_OBJECTS.validate_python(existing_guardrails) if isinstance(existing_guardrails, list) else ()),
+                    *_GUARDRAIL_NAMES.validate_python(body["guardrails"]),
+                ]
+            }
+            if "guardrails" in body
+            else {}
+        ),
+        **(
+            {
+                "guardrail_config": {
+                    **(_WS_FRAME.validate_python(existing_config) if isinstance(existing_config, dict) else {}),
+                    **_WS_FRAME.validate_python(body["guardrail_config"]),
+                }
+            }
+            if "guardrail_config" in body
+            else {}
+        ),
+    }
+
+
+async def _metadata_with_frame_policies(
+    bucket: Mapping[str, object],
+    policies: object,
+    model: object,
+    metadata_key: str,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Mapping[str, object]:
+    selection: Final = {
+        "model": model,
+        "policies": policies,
+        metadata_key: {key: _turn_copy(value) for key, value in bucket.items()},
+    }
+    await add_guardrails_from_policy_engine(
+        data=selection, metadata_variable_name=metadata_key, user_api_key_dict=user_api_key_dict
+    )
+    return _WS_FRAME.validate_python(selection[metadata_key])
+
+
+def _turn_copy(value: object) -> object:
+    """Shallow, since the bucket carries proxy-owned objects (the OTEL parent span) that cannot be copied, and the
+    policy engine writes its lists in place"""
+    return copy.copy(value) if type(value) in _TURN_COPIED_CONTAINERS else value
 
 
 def _without_untrusted_metadata(key: str, value: object) -> object:

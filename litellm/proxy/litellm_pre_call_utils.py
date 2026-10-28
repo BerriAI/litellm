@@ -4220,7 +4220,7 @@ def _policy_match_tags(request_data: Mapping[str, object], metadata_variable_nam
 
 
 async def add_guardrails_from_policy_engine(
-    data: dict,
+    data: dict[str, object],  # mutable-ok: pops the request's policies and records the resolved guardrails in place
     metadata_variable_name: str,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
@@ -4263,10 +4263,11 @@ async def add_guardrails_from_policy_engine(
     all_tags: Final = _policy_match_tags(data, metadata_variable_name)
     _team_alias: Final = user_api_key_dict.team_alias
     _key_alias: Final = user_api_key_dict.key_alias
+    _model: Final = data.get("model")
     context: Final = PolicyMatchContext(
         team_alias=_team_alias if isinstance(_team_alias, str) else None,
         key_alias=_key_alias if isinstance(_key_alias, str) else None,
-        model=data.get("model"),
+        model=_model if isinstance(_model, str) else None,
         tags=all_tags,
     )
 

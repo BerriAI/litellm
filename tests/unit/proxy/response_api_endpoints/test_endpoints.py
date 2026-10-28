@@ -2227,6 +2227,112 @@ class TestResponsesWSFirstFrameModelAuth:
         assert scanned["litellm_metadata"]["guardrails"] == ["key-required"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [False, True])
+    async def test_frame_guard_runs_the_guardrails_a_frame_selects_on_top_of_the_admitted_ones(self, nested: bool):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        scans: list[dict] = []
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            scans.append(data)
+            return data
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        admitted = {
+            "model": "gpt-4o-mini",
+            "litellm_metadata": {
+                "guardrails": ["key-required"],
+                "guardrail_config": {"key-required": {"threshold": 1}},
+            },
+        }
+        guard = _responses_ws_frame_guard(admitted, MagicMock(), proxy_logging_obj, MagicMock())
+        selection = {
+            "guardrails": ["frame-pick"],
+            "guardrail_config": {"frame-pick": {"threshold": 2}},
+            "include_guardrail_response": True,
+        }
+        body = {"input": "hi", "store": False, **selection}
+        frame = {"type": "response.create", "response": body} if nested else {"type": "response.create", **body}
+
+        selected = await guard(json.dumps(frame))
+        plain = await guard(json.dumps({"type": "response.create", "input": "again"}))
+
+        assert scans[0]["litellm_metadata"]["guardrails"] == ["key-required", "frame-pick"]
+        assert scans[0]["litellm_metadata"]["guardrail_config"] == {
+            "key-required": {"threshold": 1},
+            "frame-pick": {"threshold": 2},
+        }
+        assert not set(selection) & set(scans[0])
+        unselected = {"input": "hi", "store": False}
+        assert json.loads(selected.frame) == (
+            {"type": "response.create", "response": unselected} if nested else {"type": "response.create", **unselected}
+        )
+        assert scans[1]["litellm_metadata"]["guardrails"] == ["key-required"]
+        assert scans[1]["litellm_metadata"]["guardrail_config"] == {"key-required": {"threshold": 1}}
+        assert json.loads(plain.frame) == {"type": "response.create", "input": "again"}
+        assert admitted["litellm_metadata"] == {
+            "guardrails": ["key-required"],
+            "guardrail_config": {"key-required": {"threshold": 1}},
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "selection", [{"guardrails": "frame-pick"}, {"guardrails": [{"name": "frame-pick"}]}, {"guardrail_config": []}]
+    )
+    async def test_frame_guard_refuses_a_frame_whose_guardrail_selection_is_malformed(self, selection):
+        from pydantic import ValidationError
+
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {"guardrails": ["key-required"]}},
+            MagicMock(),
+            proxy_logging_obj,
+            MagicMock(),
+        )
+
+        with pytest.raises(ValidationError):
+            await guard(json.dumps({"type": "response.create", "input": "hi", **selection}))
+
+        proxy_logging_obj.pre_call_hook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_frame_guard_runs_the_guardrails_of_the_policies_a_frame_selects(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+        from litellm.types.proxy.policy_engine import Policy, PolicyGuardrails
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {"guardrails": ["key-required"]}},
+            UserAPIKeyAuth(api_key="hashed"),
+            proxy_logging_obj,
+            MagicMock(),
+        )
+        policy_registry = get_policy_registry()
+        policy_registry._policies = {}
+        policy_registry._policies_by_id = {}
+        policy_registry._initialized = False
+        try:
+            policy_registry.add_policy("frame-policy", Policy(guardrails=PolicyGuardrails(add=["policy-pick"])))
+
+            guarded = await guard(json.dumps({"type": "response.create", "input": "hi", "policies": ["frame-policy"]}))
+        finally:
+            policy_registry._policies = {}
+            policy_registry._policies_by_id = {}
+            policy_registry._initialized = False
+
+        scanned = proxy_logging_obj.pre_call_hook.await_args.kwargs["data"]
+        assert scanned["litellm_metadata"]["guardrails"] == ["key-required", "policy-pick"]
+        assert "policies" not in scanned
+        assert json.loads(guarded.frame) == {"type": "response.create", "input": "hi"}
+
+    @pytest.mark.asyncio
     async def test_frame_guard_copies_an_admitted_bucket_that_holds_the_otel_parent_span(self):
         import threading
 
@@ -2367,7 +2473,10 @@ class TestResponsesWSFirstFrameModelAuth:
         assert dict(guarded.pii_tokens) == {"<EMAIL_ADDRESS_1>": "alice@example.com"}
 
     @pytest.mark.asyncio
-    async def test_frame_guard_rejects_a_frame_that_carries_input_at_both_levels(self):
+    @pytest.mark.parametrize(
+        "top_level", [{"input": "forbidden"}, {"guardrails": ["frame-pick"]}, {"include_guardrail_response": True}]
+    )
+    async def test_frame_guard_rejects_a_frame_that_carries_input_at_both_levels(self, top_level):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 
         proxy_logging_obj = MagicMock()
@@ -2377,7 +2486,7 @@ class TestResponsesWSFirstFrameModelAuth:
         )
 
         with patch.object(litellm, "callbacks", []), pytest.raises(ValueError, match="both at the top level"):
-            await guard(json.dumps({"type": "response.create", "input": "forbidden", "response": {}}))
+            await guard(json.dumps({"type": "response.create", **top_level, "response": {}}))
 
         proxy_logging_obj.pre_call_hook.assert_not_awaited()
 
