@@ -2864,7 +2864,10 @@ class _FakeDeploymentLookup:
     def __init__(self, deployments):
         self._deployments = deployments
 
-    def get_model_info(self, id):
+    def registry(self):
+        return self
+
+    def deployment_dict(self, id):
         if id not in self._deployments:
             return None
         return {"model_name": "premium-haiku", "model_info": {"id": id, "access_groups": list(self._deployments[id])}}
