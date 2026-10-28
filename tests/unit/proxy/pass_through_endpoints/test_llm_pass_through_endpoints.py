@@ -8543,7 +8543,7 @@ class TestEuJevPassthroughRoute:
         assert not route.called
 
     @pytest.fixture
-    def operator_app(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[list[str]], FastAPI]]:
+    def operator_app(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[list[str], str], FastAPI]]:
         from litellm.proxy._lazy_features import LAZY_FEATURES, attach_lazy_features, reserve_lazy_slot
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             InitPassThroughEndpointHelpers,
@@ -8557,7 +8557,7 @@ class TestEuJevPassthroughRoute:
         litellm.in_memory_llm_clients_cache.flush_cache()
         features: Final = tuple(feature for feature in LAZY_FEATURES if feature.name == "llm_passthrough")
 
-        def build(methods: list[str]) -> FastAPI:
+        def build(methods: list[str], path: str) -> FastAPI:
             app: Final = FastAPI()
             reserve_lazy_slot(app, "llm_passthrough", features=features)
             attach_lazy_features(app, features)
@@ -8566,7 +8566,7 @@ class TestEuJevPassthroughRoute:
             )
             InitPassThroughEndpointHelpers.add_exact_path_route(
                 app=app,
-                path="/eu_jev/v1/systemone",
+                path=path,
                 target="https://operator.example/decide",
                 custom_headers={"x-operator": "on"},
                 forward_headers=None,
@@ -8587,11 +8587,11 @@ class TestEuJevPassthroughRoute:
 
     @pytest.mark.parametrize("root_path", ["", "/tenant-a"])
     def test_a_pass_through_endpoint_configured_at_the_same_path_keeps_serving_it(
-        self, operator_app: Callable[[list[str]], FastAPI], root_path: str
+        self, operator_app: Callable[[list[str], str], FastAPI], root_path: str
     ) -> None:
         with (
             respx.mock(assert_all_called=True) as upstream,
-            TestClient(operator_app(["POST"]), root_path=root_path) as client,
+            TestClient(operator_app(["POST"], "/eu_jev/v1/systemone"), root_path=root_path) as client,
         ):
             route: Final = upstream.post("https://operator.example/decide").respond(200, json={"operator": True})
             response: Final = client.post(f"{root_path}/eu_jev/v1/systemone", json={"state": "x", "stream": True})
@@ -8600,12 +8600,40 @@ class TestEuJevPassthroughRoute:
         assert route.calls.last.request.headers["x-operator"] == "on"
 
     def test_a_post_to_a_get_only_pass_through_at_the_same_path_is_still_refused(
-        self, operator_app: Callable[[list[str]], FastAPI]
+        self, operator_app: Callable[[list[str], str], FastAPI]
     ) -> None:
-        with TestClient(operator_app(["GET"])) as client:
+        with TestClient(operator_app(["GET"], "/eu_jev/v1/systemone")) as client:
             response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x"})
 
         assert response.status_code == 405
+
+    def test_a_pass_through_configured_with_a_trailing_slash_still_gets_the_path_without_one(
+        self, operator_app: Callable[[list[str], str], FastAPI]
+    ) -> None:
+        with (
+            respx.mock(assert_all_called=True) as upstream,
+            TestClient(operator_app(["POST"], "/eu_jev/v1/systemone/")) as client,
+        ):
+            route: Final = upstream.post("https://operator.example/decide").respond(200, json={"operator": True})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x"})
+
+        assert (response.status_code, response.json()) == (200, {"operator": True})
+        assert route.calls.last.request.headers["x-operator"] == "on"
+
+    def test_a_deleted_pass_through_at_the_same_path_stops_forwarding_when_built_in_routes_come_first(
+        self, operator_app: Callable[[list[str], str], FastAPI], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
+
+        monkeypatch.setenv("LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST", "true")
+        app: Final = operator_app(["GET", "PUT"], "/eu_jev/v1/systemone")
+        InitPassThroughEndpointHelpers.remove_endpoint_routes("operator-eu-jev")
+        with respx.mock(assert_all_called=False) as upstream, TestClient(app) as client:
+            operator: Final = upstream.route(host="operator.example").respond(200, json={"operator": True})
+            responses: Final = (client.get("/eu_jev/v1/systemone"), client.put("/eu_jev/v1/systemone", json={}))
+
+        assert [response.status_code for response in responses] == [404, 404]
+        assert not operator.called
 
 
 @pytest.mark.parametrize("provider", ["laya", "bespoke"])

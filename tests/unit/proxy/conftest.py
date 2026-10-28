@@ -7,6 +7,7 @@ import os
 import tempfile
 import warnings
 from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -242,12 +243,12 @@ def secret_vault_factory() -> type[FakeSecretVault]:
     return FakeSecretVault
 
 
-@pytest.fixture
-def configured_eu_jev_route() -> Iterator[None]:
+@contextmanager
+def _eu_jev_route_configured_at(path: str) -> Iterator[None]:
     saved_registry: Final = dict(_registered_pass_through_routes)
     InitPassThroughEndpointHelpers.add_exact_path_route(
         app=FastAPI(),
-        path="/eu_jev/v1/systemone",
+        path=path,
         target="https://operator.example/decide",
         custom_headers=None,
         forward_headers=None,
@@ -262,6 +263,18 @@ def configured_eu_jev_route() -> Iterator[None]:
     finally:
         _registered_pass_through_routes.clear()
         _registered_pass_through_routes.update(saved_registry)
+
+
+@pytest.fixture
+def configured_eu_jev_route() -> Iterator[None]:
+    with _eu_jev_route_configured_at("/eu_jev/v1/systemone"):
+        yield
+
+
+@pytest.fixture
+def configured_eu_jev_route_with_trailing_slash() -> Iterator[None]:
+    with _eu_jev_route_configured_at("/eu_jev/v1/systemone/"):
+        yield
 
 
 @pytest.fixture

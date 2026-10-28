@@ -680,6 +680,14 @@ def test_a_pass_through_configured_at_the_eu_jev_decision_path_is_not_an_llm_rou
     assert RouteChecks.is_llm_api_route(route="/eu_jev/v1/systemone") is False
 
 
+@pytest.mark.usefixtures("configured_eu_jev_route_with_trailing_slash")
+@pytest.mark.parametrize("route", ["/eu_jev/v1/systemone", "/eu_jev/v1/systemone/"])
+def test_a_pass_through_configured_at_the_eu_jev_decision_path_with_a_trailing_slash_is_not_an_llm_route(
+    route: str,
+) -> None:
+    assert RouteChecks.is_llm_api_route(route=route) is False
+
+
 @pytest.mark.parametrize("allowed_route", ["llm_api_routes", "llm_api_routes_without_mcp"])
 def test_an_llm_api_key_can_call_the_built_in_eu_jev_decision_route(allowed_route: str) -> None:
     valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=[allowed_route])

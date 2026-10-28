@@ -2230,7 +2230,9 @@ def create_pass_through_route(
                 stream,
             ) = await _parse_request_data_by_content_type(request)
 
-            if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=path):
+            if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=path) or (
+                custom_llm_provider is None and RouteChecks.is_builtin_eu_jev_decision_route(route=path)
+            ):
                 raise HTTPException(
                     status_code=404,
                     detail=f"Pass-through endpoint {endpoint} not found. This could have been deleted or not yet added to the proxy.",
@@ -3501,16 +3503,24 @@ class InitPassThroughEndpointHelpers:
 
         return None
 
+    @staticmethod
+    def has_configured_route_ignoring_trailing_slash(route: str) -> bool:
+        bare_route: Final = route.rstrip("/")
+        return any(
+            InitPassThroughEndpointHelpers.get_registered_pass_through_route(route=form) is not None
+            for form in (bare_route, f"{bare_route}/")
+        )
+
 
 class YieldsToConfiguredPassThroughRoute(APIRoute):
     def matches(self, scope: Scope) -> tuple[Match, Scope]:
         match, child_scope = super().matches(scope)
         if match is not Match.FULL:
             return match, child_scope
-        configured: Final = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+        configured: Final = InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(
             route=get_request_route(Request(scope))
         )
-        return (match, child_scope) if configured is None else (Match.NONE, {})
+        return (Match.NONE, {}) if configured else (match, child_scope)
 
 
 def _get_combined_pass_through_endpoints(

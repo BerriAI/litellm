@@ -514,7 +514,9 @@ class RouteChecks:
             InitPassThroughEndpointHelpers,
         )
 
-        return InitPassThroughEndpointHelpers.get_registered_pass_through_route(route=route.rstrip("/")) is None
+        return not InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(
+            route=_EU_JEV_DECISION_ROUTE
+        )
 
     @staticmethod
     def _is_get_mcp_server_discovery_route(route: str, request: Request | None) -> bool:
