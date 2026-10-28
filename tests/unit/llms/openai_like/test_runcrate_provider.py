@@ -116,25 +116,36 @@ def test_runcrate_is_available_in_add_model_form():
 
 
 def test_runcrate_supported_endpoints():
-    expected: Final = {
-        "chat_completions": True,
-        "messages": True,
-        "responses": True,
-        "embeddings": False,
-        "image_generations": False,
-        "audio_transcriptions": False,
-        "audio_speech": False,
-        "moderations": False,
-        "batches": False,
-        "rerank": False,
-        "a2a": False,
-        "interactions": False,
+    """The endpoint flags are generated from the runcrate chat rows in the cost map."""
+    supported: Final = {"chat_completions", "messages", "responses"}
+    unsupported: Final = {
+        "embeddings",
+        "image_generations",
+        "audio_transcriptions",
+        "audio_speech",
+        "moderations",
+        "batches",
+        "rerank",
     }
     backup_path = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
     root_path = Path(litellm.__file__).parent.parent / "provider_endpoints_support.json"
 
-    assert json.loads(backup_path.read_text())["providers"]["runcrate"]["endpoints"] == expected
-    assert json.loads(root_path.read_text())["providers"]["runcrate"]["endpoints"] == expected
+    for path in (backup_path, root_path):
+        endpoints = json.loads(path.read_text())["providers"]["runcrate"]["endpoints"]
+        assert all(endpoints[key] for key in supported)
+        assert not any(endpoints[key] for key in unsupported)
+
+
+def test_runcrate_cost_map_rows():
+    model_cost: Final = json.loads(
+        (Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json").read_text()
+    )
+    rows: Final = {key: value for key, value in model_cost.items() if key.startswith("runcrate/")}
+    assert "runcrate/deepseek-ai/DeepSeek-V3.2" in rows
+    for row in rows.values():
+        assert row["litellm_provider"] == "runcrate"
+        assert row["mode"] == "chat"
+        assert 0 < row["input_cost_per_token"] < row["output_cost_per_token"]
 
 
 def test_runcrate_chat_completion_request():
