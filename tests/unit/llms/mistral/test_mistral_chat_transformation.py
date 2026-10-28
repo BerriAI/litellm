@@ -1,4 +1,4 @@
-from typing import List, cast
+from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,8 +8,10 @@ from litellm.llms.mistral.chat.transformation import (
     MistralChatResponseIterator,
     MistralConfig,
 )
+from litellm.llms.vertex_ai.vertex_ai_partner_models.mistral.transformation import VertexAIMistralConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
+from litellm.utils import supports_reasoning
 
 
 @pytest.mark.asyncio
@@ -805,7 +807,7 @@ class TestMistralStripsOutputOnlyFields:
     Regression for https://github.com/BerriAI/litellm/issues/30835.
     """
 
-    def test_assistant_reasoning_content_is_dropped(self):
+    def test_assistant_reasoning_content_is_sent_as_a_thinking_chunk(self):
         messages = cast(
             List[AllMessageValues],
             [
@@ -824,11 +826,10 @@ class TestMistralStripsOutputOnlyFields:
             MistralConfig().transform_messages(messages=messages, model="mistral-medium-3-5"),
         )
 
-        assistant_message = result[-1]
-        assert "reasoning_content" not in assistant_message
-        assert "thinking_blocks" not in assistant_message
-        assert assistant_message["content"] == "Follow-up"
-        assert assistant_message["role"] == "assistant"
+        assert result[-1] == {
+            "role": "assistant",
+            "content": [_think_chunk("Some internal reasoning text."), {"type": "text", "text": "Follow-up"}],
+        }
 
     def test_tool_search_reply_drops_litellm_response_fields(self):
         tool_search_reply = {
@@ -918,6 +919,508 @@ class TestMistralStripsOutputOnlyFields:
             )
 
         assert "reasoning_content" not in result[-1]
+
+
+def _think_chunk(text: str) -> dict[str, object]:
+    return {"type": "thinking", "thinking": [{"type": "text", "text": text}], "closed": True}
+
+
+def _mistral_request_messages(
+    messages: list[dict[str, object]], config: MistralConfig | None = None, model: str = "mistral-medium-3-5"
+) -> list[object]:
+    request: Final = (config or MistralConfig()).transform_request(
+        model=model,
+        messages=cast(List[AllMessageValues], messages),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    return request["messages"]
+
+
+@pytest.mark.parametrize("content", [None, ""], ids=["null", "empty"])
+def test_mistral_sends_reasoning_of_a_tool_call_turn_as_a_thinking_chunk(content: str | None):
+    tool_call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": content,
+                "reasoning_content": "I should call get_weather.",
+                "tool_calls": [tool_call],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+        ]
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [_think_chunk("I should call get_weather.")],
+        "tool_calls": [tool_call],
+    }
+    assert result[2] == {"role": "tool", "tool_call_id": "call_1", "content": "sunny"}
+
+
+def test_mistral_sends_reasoning_ahead_of_a_text_part_list():
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Question?"},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "First. "}, {"type": "text", "text": "Second."}],
+                "reasoning_content": "Two parts.",
+            },
+            {"role": "user", "content": "And then?"},
+        ]
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [_think_chunk("Two parts."), {"type": "text", "text": "First. Second."}],
+    }
+
+
+def test_mistral_drops_a_reasoning_only_assistant_turn_between_a_tool_call_and_its_reply():
+    tool_call: Final = {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "read the log"},
+            {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            {"role": "assistant", "content": None, "reasoning_content": "The log is empty."},
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+        ]
+    )
+
+    assert result == [
+        {"role": "user", "content": "read the log"},
+        {"role": "assistant", "tool_calls": [tool_call]},
+        {"role": "tool", "tool_call_id": "call_1", "content": ""},
+    ]
+
+
+@pytest.mark.parametrize(
+    "assistant_content, reasoning_fields, expected_content",
+    [
+        pytest.param(
+            [{"type": "thinking", "thinking": "R", "signature": "c2ln"}, {"type": "text", "text": "A"}],
+            {"reasoning_content": "R"},
+            [_think_chunk("R"), {"type": "text", "text": "A"}],
+            id="anthropic_thinking_part_with_reasoning_content",
+        ),
+        pytest.param(
+            [{"type": "thinking", "thinking": "R", "signature": "c2ln"}, {"type": "text", "text": "A"}],
+            {},
+            "A",
+            id="anthropic_thinking_part_alone",
+        ),
+        pytest.param(
+            {"type": "text", "text": "A"},
+            {"reasoning_content": "R"},
+            {"type": "text", "text": "A"},
+            id="content_that_is_not_a_list",
+        ),
+    ],
+)
+def test_mistral_never_forwards_a_thinking_part_mistral_cannot_read(
+    assistant_content: object, reasoning_fields: dict[str, object], expected_content: object
+):
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": assistant_content, **reasoning_fields},
+            {"role": "user", "content": "Bye"},
+        ]
+    )
+
+    assert result[1] == {"role": "assistant", "content": expected_content}
+
+
+@pytest.mark.parametrize(
+    "reasoning_fields, expected_reasoning",
+    [
+        pytest.param(
+            {
+                "thinking_blocks": [
+                    {"type": "thinking", "thinking": "Let", "signature": "mistral"},
+                    {"type": "thinking", "thinking": " me", "signature": "mistral"},
+                    {"type": "thinking", "thinking": " think", "signature": "mistral"},
+                ]
+            },
+            "Let me think",
+            id="mistral_stream_fragments",
+        ),
+        pytest.param(
+            {
+                "thinking_blocks": [
+                    {"type": "thinking", "thinking": "Step one.", "signature": "c2lnLTE="},
+                    {"type": "redacted_thinking", "data": "ZW5jcnlwdGVk"},
+                    {"type": "thinking", "thinking": " Step two.", "signature": "c2lnLTI="},
+                ]
+            },
+            "Step one. Step two.",
+            id="anthropic_blocks_with_redacted",
+        ),
+        pytest.param(
+            {"reasoning_content": "  ", "thinking_blocks": [{"type": "thinking", "thinking": "From blocks."}]},
+            "From blocks.",
+            id="blank_reasoning_content_falls_back_to_blocks",
+        ),
+    ],
+)
+def test_mistral_sends_replayed_thinking_blocks_as_one_thinking_chunk(
+    reasoning_fields: dict[str, object], expected_reasoning: str
+):
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Question?"},
+            {"role": "assistant", "content": "Answer.", **reasoning_fields},
+            {"role": "user", "content": "And then?"},
+        ]
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [_think_chunk(expected_reasoning), {"type": "text", "text": "Answer."}],
+    }
+
+
+@pytest.mark.parametrize(
+    "native_content, reasoning_fields",
+    [
+        pytest.param(
+            [
+                {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 518362."}]},
+                {"type": "text", "text": "I have picked it."},
+            ],
+            {},
+            id="native_chunk",
+        ),
+        pytest.param(
+            [
+                {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 518362."}]},
+                {"type": "text", "text": "I have picked it."},
+            ],
+            {"reasoning_content": "I pick 518362.", "thinking_blocks": [{"type": "thinking", "thinking": "I pick"}]},
+            id="native_chunk_and_reasoning_content",
+        ),
+        pytest.param(
+            [
+                {"type": "text", "text": "I have "},
+                {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 518362."}]},
+                {"type": "text", "text": "picked it."},
+            ],
+            {},
+            id="native_chunk_between_text_parts",
+        ),
+    ],
+)
+def test_mistral_keeps_a_native_thinking_chunk_once(
+    native_content: list[dict[str, object]], reasoning_fields: dict[str, object]
+):
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Pick a number."},
+            {"role": "assistant", "content": native_content, **reasoning_fields},
+            {"role": "user", "content": "Which one?"},
+        ]
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 518362."}]},
+            {"type": "text", "text": "I have picked it."},
+        ],
+    }
+
+
+def test_mistral_keeps_a_native_thinking_chunk_with_no_text_part():
+    native_chunk: Final = {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 518362."}], "closed": True}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Pick a number."},
+            {"role": "assistant", "content": [native_chunk]},
+            {"role": "user", "content": "Which one?"},
+        ]
+    )
+
+    assert result[1] == {"role": "assistant", "content": [native_chunk]}
+
+
+@pytest.mark.parametrize(
+    ("inner_items", "expected_content"),
+    [
+        pytest.param(
+            [{"type": "text", "text": "I pick 518362."}, {"type": "reference", "reference_ids": [1]}],
+            [
+                {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 518362."}], "closed": True},
+                {"type": "text", "text": "I have picked it."},
+            ],
+            id="text_and_reference",
+        ),
+        pytest.param(
+            [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}],
+            "I have picked it.",
+            id="only_image_url",
+        ),
+        pytest.param([1, 2], "I have picked it.", id="not_items"),
+    ],
+)
+def test_mistral_sends_only_the_text_items_of_a_native_thinking_chunk(
+    inner_items: list[object], expected_content: object
+):
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Pick a number."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": inner_items, "closed": True},
+                    {"type": "text", "text": "I have picked it."},
+                ],
+            },
+            {"role": "user", "content": "Which one?"},
+        ]
+    )
+
+    assert result[1] == {"role": "assistant", "content": expected_content}
+
+
+def test_mistral_sends_only_the_text_items_of_a_native_thinking_chunk_beside_an_image():
+    image_part: Final = {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": [{"type": "text", "text": "What is this?"}, image_part]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": [{"type": "text", "text": "It has whiskers."}, {"type": "reference", "reference_ids": [1]}],
+                    },
+                    {"type": "text", "text": "A cat."},
+                ],
+            },
+            {"role": "user", "content": "What color?"},
+        ]
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": [{"type": "text", "text": "It has whiskers."}]},
+            {"type": "text", "text": "A cat."},
+        ],
+    }
+
+
+_OPEN_THINK_CHUNK: Final = {
+    "type": "thinking",
+    "thinking": [{"type": "text", "text": "I pick 482913."}],
+    "closed": False,
+}
+_THINK_CHUNK_WITHOUT_CLOSED: Final = {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 482913."}]}
+_PICKED_TEXT: Final = {"type": "text", "text": "I have picked it."}
+
+
+@pytest.mark.parametrize(
+    ("assistant_turn", "later_messages", "expected_turn"),
+    [
+        pytest.param(
+            {"role": "assistant", "content": [_OPEN_THINK_CHUNK, _PICKED_TEXT]},
+            [{"role": "user", "content": "Which one?"}],
+            {"role": "assistant", "content": [_THINK_CHUNK_WITHOUT_CLOSED, _PICKED_TEXT]},
+            id="history_turn",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": [_OPEN_THINK_CHUNK], "prefix": True},
+            [],
+            {"role": "assistant", "content": [_OPEN_THINK_CHUNK], "prefix": True},
+            id="last_chunk_of_final_prefix_turn",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": [_OPEN_THINK_CHUNK, _PICKED_TEXT], "prefix": True},
+            [],
+            {"role": "assistant", "content": [_THINK_CHUNK_WITHOUT_CLOSED, _PICKED_TEXT], "prefix": True},
+            id="final_prefix_turn_with_text_after_the_chunk",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": [_PICKED_TEXT, _OPEN_THINK_CHUNK], "prefix": True},
+            [],
+            {"role": "assistant", "content": [_THINK_CHUNK_WITHOUT_CLOSED, _PICKED_TEXT], "prefix": True},
+            id="final_prefix_turn_with_text_before_the_chunk",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": [_OPEN_THINK_CHUNK]},
+            [],
+            {"role": "assistant", "content": [_THINK_CHUNK_WITHOUT_CLOSED]},
+            id="final_turn_without_prefix",
+        ),
+    ],
+)
+def test_mistral_keeps_an_open_thinking_chunk_only_as_the_last_chunk_of_a_final_prefix_turn(
+    assistant_turn: dict[str, object], later_messages: list[dict[str, object]], expected_turn: dict[str, object]
+):
+    result: Final = _mistral_request_messages(
+        [{"role": "user", "content": "Pick a number."}, assistant_turn, *later_messages]
+    )
+
+    assert result[1] == expected_turn
+
+
+@pytest.mark.parametrize(
+    "reasoning_fields",
+    [
+        pytest.param({}, id="none"),
+        pytest.param({"reasoning_content": None, "thinking_blocks": None}, id="null"),
+        pytest.param({"reasoning_content": ""}, id="empty_reasoning_content"),
+        pytest.param({"reasoning_content": " \n "}, id="blank_reasoning_content"),
+        pytest.param({"thinking_blocks": []}, id="empty_thinking_blocks"),
+        pytest.param({"thinking_blocks": [{"type": "redacted_thinking", "data": "ZW5j"}]}, id="only_redacted"),
+        pytest.param({"thinking_blocks": [{"type": "thinking", "thinking": "  "}]}, id="blank_thinking_block"),
+        pytest.param({"thinking_blocks": "not a list"}, id="thinking_blocks_not_a_list"),
+    ],
+)
+def test_mistral_sends_an_assistant_turn_without_usable_reasoning_as_plain_text(reasoning_fields: dict[str, object]):
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Question?"},
+            {"role": "assistant", "content": "Answer.", **reasoning_fields},
+            {"role": "user", "content": "And then?"},
+        ]
+    )
+
+    assert result[1] == {"role": "assistant", "content": "Answer."}
+
+
+def test_mistral_still_flattens_text_part_lists_to_a_string():
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": [{"type": "text", "text": "Hello "}, {"type": "text", "text": "there"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Hi "}, {"type": "text", "text": "back"}]},
+            {"role": "user", "content": "Bye"},
+        ]
+    )
+
+    assert result == [
+        {"role": "user", "content": "Hello there"},
+        {"role": "assistant", "content": "Hi back"},
+        {"role": "user", "content": "Bye"},
+    ]
+
+
+def test_mistral_sends_reasoning_as_a_thinking_chunk_when_the_request_carries_an_image():
+    data_uri: Final = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+
+    result: Final = _mistral_request_messages(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this"},
+                    {"type": "image_url", "image_url": {"url": data_uri}},
+                ],
+            },
+            {"role": "assistant", "content": "A cat.", "reasoning_content": "It has whiskers."},
+            {"role": "user", "content": "What color?"},
+        ]
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [_think_chunk("It has whiskers."), {"type": "text", "text": "A cat."}],
+    }
+
+
+@pytest.mark.parametrize(
+    "config",
+    [pytest.param(MistralConfig(), id="mistral"), pytest.param(VertexAIMistralConfig(), id="vertex_ai")],
+)
+@pytest.mark.parametrize(
+    "assistant_message",
+    [
+        pytest.param(
+            {"role": "assistant", "content": "I have picked it.", "reasoning_content": "I pick 518362."},
+            id="reasoning_content",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "I have picked it.",
+                "thinking_blocks": [{"type": "thinking", "thinking": "I pick 518362.", "signature": "mistral"}],
+            },
+            id="thinking_blocks",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [_think_chunk("I pick 518362."), {"type": "text", "text": "I have picked it."}],
+            },
+            id="native_chunk",
+        ),
+    ],
+)
+def test_mistral_drops_replayed_reasoning_for_a_model_without_reasoning(
+    config: MistralConfig, assistant_message: dict[str, object]
+):
+    model: Final = "mistral-chat-model-without-reasoning"
+    assert not supports_reasoning(model=model, custom_llm_provider=config.custom_llm_provider)
+
+    result: Final = _mistral_request_messages(
+        [{"role": "user", "content": "Pick a number."}, assistant_message, {"role": "user", "content": "Which one?"}],
+        config=config,
+        model=model,
+    )
+
+    assert result[1] == {"role": "assistant", "content": "I have picked it."}
+
+
+@pytest.mark.parametrize(
+    "config",
+    [pytest.param(MistralConfig(), id="mistral"), pytest.param(VertexAIMistralConfig(), id="vertex_ai")],
+)
+def test_mistral_drops_a_native_chunk_without_text_for_a_model_without_reasoning(config: MistralConfig):
+    tool_call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_time", "arguments": "{}"}}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "What time is it?"},
+            {"role": "assistant", "content": [_think_chunk("I should call get_time.")], "tool_calls": [tool_call]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "12:00"},
+        ],
+        config=config,
+        model="mistral-chat-model-without-reasoning",
+    )
+
+    assert result[1] == {"role": "assistant", "tool_calls": [tool_call]}
+
+
+@pytest.mark.parametrize(
+    "config",
+    [pytest.param(MistralConfig(), id="mistral"), pytest.param(VertexAIMistralConfig(), id="vertex_ai")],
+)
+def test_mistral_drops_a_native_chunk_from_an_image_history_for_a_model_without_reasoning(config: MistralConfig):
+    image_part: Final = {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": [{"type": "text", "text": "What is this?"}, image_part]},
+            {
+                "role": "assistant",
+                "content": [_think_chunk("It has whiskers."), {"type": "text", "text": "A cat."}],
+            },
+            {"role": "user", "content": "What color?"},
+        ],
+        config=config,
+        model="mistral-chat-model-without-reasoning",
+    )
+
+    assert result[1] == {"role": "assistant", "content": [{"type": "text", "text": "A cat."}]}
 
 
 def test_mistral_transform_request_keeps_an_empty_tool_message_after_its_tool_call():
