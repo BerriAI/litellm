@@ -1,4 +1,4 @@
-from typing import List, cast
+from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,8 +8,10 @@ from litellm.llms.mistral.chat.transformation import (
     MistralChatResponseIterator,
     MistralConfig,
 )
+from litellm.llms.vertex_ai.vertex_ai_partner_models.mistral.transformation import VertexAIMistralConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
+from litellm.utils import supports_reasoning
 
 
 @pytest.mark.asyncio
@@ -923,9 +925,11 @@ def _think_chunk(text: str) -> dict[str, object]:
     return {"type": "thinking", "thinking": [{"type": "text", "text": text}], "closed": True}
 
 
-def _mistral_request_messages(messages: list[dict[str, object]]) -> list[object]:
-    request = MistralConfig().transform_request(
-        model="mistral-medium-3-5",
+def _mistral_request_messages(
+    messages: list[dict[str, object]], config: MistralConfig | None = None, model: str = "mistral-medium-3-5"
+) -> list[object]:
+    request: Final = (config or MistralConfig()).transform_request(
+        model=model,
         messages=cast(List[AllMessageValues], messages),
         optional_params={},
         litellm_params={},
@@ -936,10 +940,9 @@ def _mistral_request_messages(messages: list[dict[str, object]]) -> list[object]
 
 @pytest.mark.parametrize("content", [None, ""], ids=["null", "empty"])
 def test_mistral_sends_reasoning_of_a_tool_call_turn_as_a_thinking_chunk(content: str | None):
-    """Regression for https://github.com/BerriAI/litellm/issues/45546."""
-    tool_call = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+    tool_call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
 
-    result = _mistral_request_messages(
+    result: Final = _mistral_request_messages(
         [
             {"role": "user", "content": "Weather in Paris?"},
             {
@@ -961,7 +964,7 @@ def test_mistral_sends_reasoning_of_a_tool_call_turn_as_a_thinking_chunk(content
 
 
 def test_mistral_sends_reasoning_ahead_of_a_text_part_list():
-    result = _mistral_request_messages(
+    result: Final = _mistral_request_messages(
         [
             {"role": "user", "content": "Question?"},
             {
@@ -980,9 +983,9 @@ def test_mistral_sends_reasoning_ahead_of_a_text_part_list():
 
 
 def test_mistral_drops_a_reasoning_only_assistant_turn_between_a_tool_call_and_its_reply():
-    tool_call = {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+    tool_call: Final = {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
 
-    result = _mistral_request_messages(
+    result: Final = _mistral_request_messages(
         [
             {"role": "user", "content": "read the log"},
             {"role": "assistant", "content": None, "tool_calls": [tool_call]},
@@ -1024,7 +1027,7 @@ def test_mistral_drops_a_reasoning_only_assistant_turn_between_a_tool_call_and_i
 def test_mistral_never_forwards_a_thinking_part_mistral_cannot_read(
     assistant_content: object, reasoning_fields: dict[str, object], expected_content: object
 ):
-    result = _mistral_request_messages(
+    result: Final = _mistral_request_messages(
         [
             {"role": "user", "content": "Hi"},
             {"role": "assistant", "content": assistant_content, **reasoning_fields},
@@ -1070,7 +1073,7 @@ def test_mistral_never_forwards_a_thinking_part_mistral_cannot_read(
 def test_mistral_sends_replayed_thinking_blocks_as_one_thinking_chunk(
     reasoning_fields: dict[str, object], expected_reasoning: str
 ):
-    result = _mistral_request_messages(
+    result: Final = _mistral_request_messages(
         [
             {"role": "user", "content": "Question?"},
             {"role": "assistant", "content": "Answer.", **reasoning_fields},
@@ -1117,7 +1120,7 @@ def test_mistral_sends_replayed_thinking_blocks_as_one_thinking_chunk(
 def test_mistral_keeps_a_native_thinking_chunk_once(
     native_content: list[dict[str, object]], reasoning_fields: dict[str, object]
 ):
-    result = _mistral_request_messages(
+    result: Final = _mistral_request_messages(
         [
             {"role": "user", "content": "Pick a number."},
             {"role": "assistant", "content": native_content, **reasoning_fields},
@@ -1135,9 +1138,9 @@ def test_mistral_keeps_a_native_thinking_chunk_once(
 
 
 def test_mistral_keeps_a_native_thinking_chunk_with_no_text_part():
-    native_chunk = {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 518362."}], "closed": True}
+    native_chunk: Final = {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 518362."}], "closed": True}
 
-    result = _mistral_request_messages(
+    result: Final = _mistral_request_messages(
         [
             {"role": "user", "content": "Pick a number."},
             {"role": "assistant", "content": [native_chunk]},
@@ -1162,7 +1165,7 @@ def test_mistral_keeps_a_native_thinking_chunk_with_no_text_part():
     ],
 )
 def test_mistral_sends_an_assistant_turn_without_usable_reasoning_as_plain_text(reasoning_fields: dict[str, object]):
-    result = _mistral_request_messages(
+    result: Final = _mistral_request_messages(
         [
             {"role": "user", "content": "Question?"},
             {"role": "assistant", "content": "Answer.", **reasoning_fields},
@@ -1174,7 +1177,7 @@ def test_mistral_sends_an_assistant_turn_without_usable_reasoning_as_plain_text(
 
 
 def test_mistral_still_flattens_text_part_lists_to_a_string():
-    result = _mistral_request_messages(
+    result: Final = _mistral_request_messages(
         [
             {"role": "user", "content": [{"type": "text", "text": "Hello "}, {"type": "text", "text": "there"}]},
             {"role": "assistant", "content": [{"type": "text", "text": "Hi "}, {"type": "text", "text": "back"}]},
@@ -1190,9 +1193,9 @@ def test_mistral_still_flattens_text_part_lists_to_a_string():
 
 
 def test_mistral_sends_reasoning_as_a_thinking_chunk_when_the_request_carries_an_image():
-    data_uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    data_uri: Final = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
 
-    result = _mistral_request_messages(
+    result: Final = _mistral_request_messages(
         [
             {
                 "role": "user",
@@ -1210,6 +1213,49 @@ def test_mistral_sends_reasoning_as_a_thinking_chunk_when_the_request_carries_an
         "role": "assistant",
         "content": [_think_chunk("It has whiskers."), {"type": "text", "text": "A cat."}],
     }
+
+
+@pytest.mark.parametrize(
+    "config",
+    [pytest.param(MistralConfig(), id="mistral"), pytest.param(VertexAIMistralConfig(), id="vertex_ai")],
+)
+@pytest.mark.parametrize(
+    "assistant_message",
+    [
+        pytest.param(
+            {"role": "assistant", "content": "I have picked it.", "reasoning_content": "I pick 518362."},
+            id="reasoning_content",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "I have picked it.",
+                "thinking_blocks": [{"type": "thinking", "thinking": "I pick 518362.", "signature": "mistral"}],
+            },
+            id="thinking_blocks",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [_think_chunk("I pick 518362."), {"type": "text", "text": "I have picked it."}],
+            },
+            id="native_chunk",
+        ),
+    ],
+)
+def test_mistral_drops_replayed_reasoning_for_a_model_without_reasoning(
+    config: MistralConfig, assistant_message: dict[str, object]
+):
+    model: Final = "mistral-chat-model-without-reasoning"
+    assert not supports_reasoning(model=model, custom_llm_provider=config.custom_llm_provider)
+
+    result: Final = _mistral_request_messages(
+        [{"role": "user", "content": "Pick a number."}, assistant_message, {"role": "user", "content": "Which one?"}],
+        config=config,
+        model=model,
+    )
+
+    assert result[1] == {"role": "assistant", "content": "I have picked it."}
 
 
 def test_mistral_transform_request_keeps_an_empty_tool_message_after_its_tool_call():

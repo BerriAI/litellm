@@ -118,11 +118,14 @@ class MistralConfig(OpenAIGPTConfig):
     def custom_llm_provider(self) -> str:
         return "mistral"
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
-        is_magistral: Final = "magistral" in model.lower()
-        accepts_reasoning_effort: Final = is_magistral or supports_reasoning(
+    def _accepts_reasoning(self, model: str) -> bool:
+        return "magistral" in model.lower() or supports_reasoning(
             model=model, custom_llm_provider=self.custom_llm_provider
         )
+
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        is_magistral: Final = "magistral" in model.lower()
+        accepts_reasoning_effort: Final = self._accepts_reasoning(model)
         return [
             "stream",
             "temperature",
@@ -260,7 +263,8 @@ class MistralConfig(OpenAIGPTConfig):
         The above statement is not valid now. Need to plan to remove all the #1,2,3
         Mistral API supports content as a list.
         """
-        replayed_messages: Final = [MistralConfig._with_replayed_reasoning(m) for m in messages]
+        keeps_reasoning: Final = self._accepts_reasoning(model)
+        replayed_messages: Final = [MistralConfig._with_replayed_reasoning(m, keeps_reasoning) for m in messages]
 
         ## 1. If 'image_url' or 'file' in content, then transform with base class and mistral-specific handling
         for m in replayed_messages:
@@ -273,7 +277,9 @@ class MistralConfig(OpenAIGPTConfig):
                         return self._transform_messages_sync(replayed_messages, model)
 
         ## 2. If content is list, then convert to string
-        flattened_messages: Final = tuple(map(MistralConfig._with_flattened_content, replayed_messages))
+        flattened_messages: Final = tuple(
+            MistralConfig._with_flattened_content(m, keeps_reasoning) for m in replayed_messages
+        )
 
         ## 3. Handle name in message
         prepared_messages: Final = tuple(
@@ -484,10 +490,12 @@ class MistralConfig(OpenAIGPTConfig):
                 return None
 
     @staticmethod
-    def _with_replayed_reasoning(message: AllMessageValues) -> AllMessageValues:
+    def _with_replayed_reasoning(message: AllMessageValues, keeps_reasoning: bool) -> AllMessageValues:
         if message["role"] != "assistant":
             return message
         stripped_message: Final = strip_litellm_internal_message_fields(message)
+        if not keeps_reasoning:
+            return stripped_message
         reasoning_text: Final = MistralConfig._replayed_reasoning_text(message)
         content_parts: Final = MistralConfig._assistant_content_parts(message)
         has_turn_output: Final = bool(content_parts) or bool(message.get("tool_calls"))
@@ -503,10 +511,10 @@ class MistralConfig(OpenAIGPTConfig):
         )
 
     @staticmethod
-    def _with_flattened_content(message: AllMessageValues) -> AllMessageValues:
+    def _with_flattened_content(message: AllMessageValues, keeps_reasoning: bool) -> AllMessageValues:
         flattened_text: Final = convert_content_list_to_str(message)
         match message:
-            case {"role": "assistant", "content": list(content)} if any(
+            case {"role": "assistant", "content": list(content)} if keeps_reasoning and any(
                 map(MistralConfig._is_mistral_think_chunk, content)
             ):
                 text_parts: Final = (
