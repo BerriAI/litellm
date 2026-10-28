@@ -4,7 +4,7 @@ import os
 import threading
 import time
 from collections.abc import Callable, Iterator
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from queue import SimpleQueue
 from typing import Final, Optional
@@ -511,19 +511,25 @@ def test_a_failed_cold_token_request_fails_only_the_caller_that_made_it() -> Non
 
 
 @dataclass(frozen=True, slots=True)
-class _DownCredential:
+class _ScriptedCredential:
+    expiries: Iterator[int | None] = field(default_factory=lambda: itertools.repeat(None))
+    attempts: Iterator[int] = field(default_factory=itertools.count)
     requests: SimpleQueue[None] = field(default_factory=SimpleQueue)
     answers: threading.Semaphore = field(default_factory=lambda: threading.Semaphore(0))
 
     def get_token_info(self, *_: str, options: TokenRequestOptions | None = None) -> AccessTokenInfo:
         self.requests.put(None)
         self.answers.acquire(timeout=5)
-        raise ClientAuthenticationError("Entra is down")
+        attempt: Final = next(self.attempts)
+        expires_on: Final = next(self.expiries)
+        if expires_on is None:
+            raise ClientAuthenticationError("Entra is down")
+        return AccessTokenInfo(f"token-{attempt}", expires_on)
 
 
-def test_an_entra_outage_fails_every_concurrent_caller_after_one_shared_retry() -> None:
-    credential: Final = _DownCredential()
-    provider: Final = single_flight_bearer_token_provider(credential, _SCOPE)
+def _answer_together(
+    provider: Callable[[], str], credential: _ScriptedCredential, token_requests: int
+) -> tuple[Future[str], ...]:
     start: Final = threading.Barrier(_CONCURRENT_CALLERS)
 
     def call() -> str:
@@ -532,17 +538,50 @@ def test_an_entra_outage_fails_every_concurrent_caller_after_one_shared_retry() 
 
     with ThreadPoolExecutor(max_workers=_CONCURRENT_CALLERS) as pool:
         calls: Final = tuple(pool.submit(call) for _ in range(_CONCURRENT_CALLERS))
-        for _ in range(2):
+        for _ in range(token_requests):
             credential.requests.get(timeout=5)
             time.sleep(_JOIN_WINDOW_SECONDS)
             credential.answers.release()
+    return calls
 
-    assert all(isinstance(call.exception(), ClientAuthenticationError) for call in calls)
+
+def test_an_entra_outage_retries_only_the_first_failed_token_request() -> None:
+    credential: Final = _ScriptedCredential()
+    provider: Final = single_flight_bearer_token_provider(credential, _SCOPE)
+
+    first_burst: Final = _answer_together(provider, credential, token_requests=2)
+    later_burst: Final = _answer_together(provider, credential, token_requests=1)
+
+    assert all(isinstance(call.exception(), ClientAuthenticationError) for call in first_burst + later_burst)
     assert credential.requests.qsize() == 0
+
+
+def test_waiting_callers_retry_a_failed_token_request_again_once_entra_recovers() -> None:
+    credential: Final = _ScriptedCredential(iter((None, None, _LONG_EXPIRED, None, _LONG_EXPIRED)))
+    provider: Final = single_flight_bearer_token_provider(credential, _SCOPE)
+    _answer_together(provider, credential, token_requests=2)
+    credential.answers.release()
+    assert provider() == "token-2"
+    credential.requests.get_nowait()
+
+    recovered: Final = _answer_together(provider, credential, token_requests=2)
+
+    assert sorted(call.exception() is None for call in recovered) == [False] + [True] * (_CONCURRENT_CALLERS - 1)
+    assert {call.result() for call in recovered if call.exception() is None} == {"token-4"}
+
+
+def test_a_failed_refresh_keeps_the_valid_token_for_the_request_that_made_it() -> None:
+    credential: Final = _ScriptedCredential(iter((int(time.time()) + 120, None)))
+    provider: Final = single_flight_bearer_token_provider(credential, _SCOPE)
+    credential.answers.release(2)
+
+    assert (provider(), provider()) == ("token-0", "token-0")
+    assert credential.requests.qsize() == 2
 
 
 @dataclass(frozen=True, slots=True)
 class _ExpiringSoonTokens:
+    first_lifetime_seconds: int = 120
     requests: SimpleQueue[None] = field(default_factory=SimpleQueue)
     refresh_started: threading.Event = field(default_factory=threading.Event)
     release: threading.Event = field(default_factory=threading.Event)
@@ -550,7 +589,7 @@ class _ExpiringSoonTokens:
     def next_token(self) -> tuple[str, int]:
         self.requests.put(None)
         if self.requests.qsize() == 1:
-            return "expiring-token", int(time.time()) + 120
+            return "expiring-token", int(time.time()) + self.first_lifetime_seconds
         self.refresh_started.set()
         self.release.wait(5)
         return "refreshed-token", _YEAR_2100
@@ -598,4 +637,22 @@ def test_callers_during_a_refresh_keep_the_valid_token_while_one_of_them_refresh
             tokens.release.set()
 
     assert (refresh.result(), provider()) == ("refreshed-token", "refreshed-token")
+    assert tokens.requests.qsize() == 2
+
+
+def test_callers_during_a_refresh_wait_for_the_new_token_when_the_valid_one_is_about_to_expire() -> None:
+    tokens: Final = _ExpiringSoonTokens(first_lifetime_seconds=30)
+    provider: Final = single_flight_bearer_token_provider(_ExpiringSoonTokenInfoCredential(tokens), _SCOPE)
+    assert provider() == "expiring-token"
+
+    with ThreadPoolExecutor(max_workers=_CONCURRENT_CALLERS) as pool:
+        refresh: Final = pool.submit(provider)
+        assert tokens.refresh_started.wait(5)
+        others: Final = tuple(pool.submit(provider) for _ in range(_CONCURRENT_CALLERS - 1))
+        try:
+            assert not wait(others, timeout=_JOIN_WINDOW_SECONDS).done
+        finally:
+            tokens.release.set()
+
+    assert tuple(call.result() for call in (refresh, *others)) == ("refreshed-token",) * _CONCURRENT_CALLERS
     assert tokens.requests.qsize() == 2

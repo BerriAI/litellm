@@ -13,39 +13,41 @@ _R: Final = TypeVar("_R")
 class SingleFlight(Generic[_R]):
     lock: threading.Lock = field(default_factory=threading.Lock)
     in_flight: Future[_R] | None = None
+    last_flight_failed: bool = False
 
     def run(self, fetch: Callable[[], _R], while_busy: _R | None = None) -> _R:
-        return self._run(fetch, while_busy, retries_left=1)
-
-    def _run(self, fetch: Callable[[], _R], while_busy: _R | None, retries_left: int) -> _R:
         leader: Final[Future[_R]] = Future()
         with self.lock:
             in_flight: Final = self.in_flight
+            retry_if_it_fails: Final = not self.last_flight_failed
             if in_flight is None:
                 self.in_flight = leader
         if in_flight is not None:
-            return self._follow(in_flight, fetch, while_busy, retries_left)
+            return self._follow(in_flight, fetch, while_busy, retry_if_it_fails)
         try:
             result: Final = fetch()
         except BaseException as error:
+            self._land(failed=True)
             leader.set_exception(error)
             raise
-        else:
-            leader.set_result(result)
-            return result
-        finally:
-            with self.lock:
-                self.in_flight = None
+        self._land(failed=False)
+        leader.set_result(result)
+        return result
 
-    def _follow(self, in_flight: Future[_R], fetch: Callable[[], _R], while_busy: _R | None, retries_left: int) -> _R:
+    def _land(self, failed: bool) -> None:
+        with self.lock:
+            self.in_flight = None
+            self.last_flight_failed = failed
+
+    def _follow(self, in_flight: Future[_R], fetch: Callable[[], _R], while_busy: _R | None, retry: bool) -> _R:
         if while_busy is not None:
             return while_busy
         try:
             return in_flight.result()
         except Exception:
-            if retries_left == 0:
+            if not retry:
                 raise
-            return self._run(fetch, while_busy, retries_left - 1)
+            return self.run(fetch, while_busy)
 
 
 @dataclass(frozen=True, slots=True)

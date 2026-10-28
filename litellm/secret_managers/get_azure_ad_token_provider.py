@@ -11,6 +11,8 @@ from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
 )
 
+_HELD_TOKEN_EXPIRY_MARGIN_SECONDS: Final = 60
+
 if TYPE_CHECKING:
     from azure.core.credentials import (
         AccessToken,
@@ -54,7 +56,9 @@ class _HeldToken:
 
     def still_valid(self) -> str | None:
         held: Final = self.token
-        return held.token if held is not None and held.expires_on > time.time() else None
+        if held is None or held.expires_on - time.time() <= _HELD_TOKEN_EXPIRY_MARGIN_SECONDS:
+            return None
+        return held.token
 
 
 @dataclass(slots=True)
@@ -111,6 +115,7 @@ def _supports_token_info(
 def single_flight_bearer_token_provider(
     credential: "TokenCredential | SupportsTokenInfo", scope: str
 ) -> Callable[[], str]:
+    from azure.core.exceptions import AzureError
     from azure.identity import get_bearer_token_provider
 
     held: Final = _HeldToken()
@@ -120,8 +125,17 @@ def single_flight_bearer_token_provider(
     provider: Final = get_bearer_token_provider(watched, scope)
     token_request: Final[SingleFlight[str]] = SingleFlight()
 
+    def fetch_or_keep_held_token() -> str:
+        try:
+            return provider()
+        except AzureError:
+            held_token: Final = held.still_valid()
+            if held_token is None:
+                raise
+            return held_token
+
     def bearer_token() -> str:
-        return token_request.run(provider, while_busy=held.still_valid())
+        return token_request.run(fetch_or_keep_held_token, while_busy=held.still_valid())
 
     return bearer_token
 

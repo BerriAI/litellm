@@ -168,13 +168,18 @@ def _is_token_endpoint(request: Request) -> bool:
     return _identity_resource(request) is not None or request.target.endswith(_EXCHANGE_SUFFIX)
 
 
-def _managed_identity(resource: str, hold: _Hold | None, lifetime_seconds: int = _TOKEN_LIFETIME_SECONDS) -> Reply:
+def _managed_identity(
+    resource: str,
+    hold: _Hold | None,
+    lifetime_seconds: int = _TOKEN_LIFETIME_SECONDS,
+    access_token: str | None = None,
+) -> Reply:
     if hold is not None and resource == hold.resource:
         hold.arrivals.put(resource)
         hold.release.wait(_HOLD_SECONDS)
     return _json(
         {
-            "access_token": _identity_token(resource),
+            "access_token": access_token or _identity_token(resource),
             "expires_on": str(int(time.time()) + lifetime_seconds),
             "resource": resource,
             "token_type": "Bearer",
@@ -394,12 +399,13 @@ def _herd(
 
 def test_concurrent_requests_inside_the_refresh_window_share_one_refresh_and_keep_the_valid_token(rig: _Rig) -> None:
     resource: Final = f"api://audit-refresh-{uuid.uuid4().hex}"
+    refreshed: Final = f"mi-token-refreshed:{resource}"
     hold: Final = _Hold(resource)
     edge: Final = _scripted_identity(
         resource,
         (
             lambda: _managed_identity(resource, None, _INSIDE_REFRESH_WINDOW_SECONDS),
-            lambda: _managed_identity(resource, hold),
+            lambda: _managed_identity(resource, hold, access_token=refreshed),
         ),
     )
 
@@ -407,6 +413,9 @@ def test_concurrent_requests_inside_the_refresh_window_share_one_refresh_and_kee
 
     assert [response.status_code for response in responses] == [200] * (_HERD + 1), [r.text for r in responses]
     assert _identity_fetches(requests, resource) == 2
+    assert sorted(call.headers.get("authorization", "") for call in _provider_calls(requests)) == sorted(
+        [f"Bearer {_identity_token(resource)}"] * _HERD + [f"Bearer {refreshed}"]
+    )
 
 
 def test_a_failed_cold_fetch_fails_only_the_request_that_made_it(rig: _Rig) -> None:
