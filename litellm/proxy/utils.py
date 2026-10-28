@@ -345,6 +345,7 @@ _VIEW_SETUP_GATE_TABLE: Final = '"LiteLLM_SpendLogs"'
 _VIEW_SETUP_GATE_PROBE_ROWS: Final = TypeAdapter(tuple[Mapping[str, bool], ...])
 _DELEGATED_ATTRIBUTE: Final = TypeAdapter(object)
 _REQUESTED_GUARDRAILS: Final = TypeAdapter(tuple[object, ...])
+_DECISIONS_CALL_TYPES: Final = frozenset((CallTypes.decisions.value, CallTypes.adecisions.value))
 
 _ViewSetupOutcome: TypeAlias = Literal["ready", "timed_out"]
 _ViewSetupAttempt: TypeAlias = Literal["ready", "table_missing"] | Exception
@@ -741,10 +742,16 @@ def _warn_on_guardrails_that_cannot_scan(requested: tuple[object, ...], call_typ
     )
     if unscannable:
         verbose_proxy_logger.warning(
-            "Guardrails %s do not implement apply_guardrail, so they cannot scan the text of %s requests",
+            "Guardrails %s do not implement apply_guardrail, so they %s",
             ", ".join(unscannable),
-            call_type,
+            _unscanned_request_text(call_type),
         )
+
+
+def _unscanned_request_text(call_type: str) -> str:
+    if call_type in _DECISIONS_CALL_TYPES:
+        return f"skip the question instructions of {call_type} requests and see the input only where their own hook reads it"
+    return f"cannot scan the text of {call_type} requests"
 
 
 def _merge_pipeline_metadata_bucket(data: dict, bucket_key: str, modified_bucket_value: object) -> None:

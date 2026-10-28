@@ -1205,9 +1205,24 @@ class _ReadsNoDecisionText(CustomGuardrail):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("call_type", "listed"), (("aextraction", False), ("acompletion", True)))
+@pytest.mark.parametrize(
+    ("call_type", "listed", "warning"),
+    (
+        (
+            "aextraction",
+            False,
+            "Guardrails requested-native, default-native do not implement apply_guardrail, so they cannot scan the text of aextraction requests",
+        ),
+        (
+            "adecisions",
+            False,
+            "Guardrails requested-native, default-native do not implement apply_guardrail, so they skip the question instructions of adecisions requests and see the input only where their own hook reads it",
+        ),
+        ("acompletion", True, None),
+    ),
+)
 async def test_requested_guardrail_without_apply_guardrail_is_listed_only_where_it_reads_the_text(
-    monkeypatch, caplog, call_type, listed
+    monkeypatch, caplog, call_type, listed, warning
 ):
     requested = _ReadsNoDecisionText("requested-native")
     default_on = _ReadsNoDecisionText("default-native", default_on=True)
@@ -1228,14 +1243,10 @@ async def test_requested_guardrail_without_apply_guardrail_is_listed_only_where_
 
     assert requested.native_hooks_ran == [call_type]
     assert ("requested-native" in _applied_guardrails(result)) is listed
-    warnings = [record.getMessage() for record in caplog.records if "cannot scan" in record.getMessage()]
-    assert warnings == (
-        []
-        if listed
-        else [
-            "Guardrails requested-native, default-native do not implement apply_guardrail, so they cannot scan the text of aextraction requests"
-        ]
-    )
+    warnings = [
+        record.getMessage() for record in caplog.records if "do not implement apply_guardrail" in record.getMessage()
+    ]
+    assert warnings == ([] if warning is None else [warning])
 
 
 class _ReroutesToPrivateModel(CustomGuardrail):
