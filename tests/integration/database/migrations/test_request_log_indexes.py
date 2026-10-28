@@ -44,7 +44,7 @@ API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttim
 CALL_ID_INDEX_MIGRATION: Final = "20260831120001_spend_logs_litellm_call_id_index"
 API_KEY_INDEX: Final = "LiteLLM_SpendLogs_api_key_startTime_idx"
 CALL_ID_INDEX: Final = "LiteLLM_SpendLogs_litellm_call_id_idx"
-ERROR_INDEX: Final = "LiteLLM_SpendLogs_error_startTime_idx"
+ERROR_INDEX: Final = "LiteLLM_SpendLogs_error_code_startTime_idx"
 START_TIME_INDEX: Final = "LiteLLM_SpendLogs_startTime_idx"
 PARTITIONED_PARENT_ERROR: Final = 'cannot create index on partitioned table "LiteLLM_SpendLogs" concurrently'
 ORIGINAL_MIGRATION_SQL: Final = MappingProxyType(
@@ -311,7 +311,7 @@ def test_a_partitioned_spend_logs_upgrade_builds_every_index_per_partition_and_a
 
     _assert_index_covers_every_partition(partitioned_database, API_KEY_INDEX, "api_key_startTime_idx")
     _assert_index_covers_every_partition(partitioned_database, CALL_ID_INDEX, "litellm_call_id_idx")
-    _assert_index_covers_every_partition(partitioned_database, ERROR_INDEX, "error_startTime_idx")
+    _assert_index_covers_every_partition(partitioned_database, ERROR_INDEX, "error_code_startTime_idx")
     ledger: Final = _assert_every_ledger_row_is_finished(partitioned_database)
     _assert_no_pending_migrations(partitioned_database)
     oids: Final = _index_oids(partitioned_database)
@@ -346,7 +346,7 @@ def test_a_plain_spend_logs_upgrade_builds_every_index_and_a_second_job_run_rebu
 
     assert _index_validity(scratch_database, "api_key_startTime_idx") == {API_KEY_INDEX: True}
     assert _index_validity(scratch_database, "litellm_call_id_idx") == {CALL_ID_INDEX: True}
-    assert _index_validity(scratch_database, "error_startTime_idx") == {ERROR_INDEX: True}
+    assert _index_validity(scratch_database, "error_code_startTime_idx") == {ERROR_INDEX: True}
     _assert_every_ledger_row_is_finished(scratch_database)
     _assert_no_pending_migrations(scratch_database)
     oids: Final = _index_oids(scratch_database)
@@ -573,11 +573,11 @@ def test_partitioning_a_table_the_index_job_already_covered_moves_its_indexes_as
         _indexed_table(scratch_database, "LiteLLM_SpendLogs_legacy_litellm_call_id_idx") == "LiteLLM_SpendLogs_legacy"
     )
     assert (
-        _indexed_table(scratch_database, "LiteLLM_SpendLogs_legacy_error_startTime_idx") == "LiteLLM_SpendLogs_legacy"
+        _indexed_table(scratch_database, "LiteLLM_SpendLogs_legacy_error_code_startTime_idx") == "LiteLLM_SpendLogs_legacy"
     )
     assert ensure_request_log_indexes(scratch_database, "public") is True
     _assert_index_covers_every_partition(scratch_database, CALL_ID_INDEX, "litellm_call_id_idx")
-    _assert_index_covers_every_partition(scratch_database, ERROR_INDEX, "error_startTime_idx")
+    _assert_index_covers_every_partition(scratch_database, ERROR_INDEX, "error_code_startTime_idx")
 
 
 @requires_db

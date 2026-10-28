@@ -44,7 +44,7 @@ INDEXES_IN_PLACE: Final = "Request-log indexes are all in place"
 INDEX_BUILD_LINES: Final = ("Building index", "Attached index")
 BUILD_SECONDS: Final = 60
 ORIGINAL_SPEND_LOGS_INDEXES: Final = ("LiteLLM_SpendLogs_api_key_startTime_idx", "LiteLLM_SpendLogs_litellm_call_id_idx")
-SPEND_LOGS_INDEXES: Final = (*ORIGINAL_SPEND_LOGS_INDEXES, "LiteLLM_SpendLogs_error_startTime_idx")
+SPEND_LOGS_INDEXES: Final = (*ORIGINAL_SPEND_LOGS_INDEXES, "LiteLLM_SpendLogs_error_code_startTime_idx")
 POPULATED_PARTITIONS: Final = MappingProxyType(
     {
         "LiteLLM_SpendLogs_p2026_08": ("2026-08-01", "2026-09-01"),

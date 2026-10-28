@@ -15,7 +15,7 @@ from psycopg.types.json import Jsonb
 
 pytestmark: Final = pytest.mark.timeout(240)
 
-ERROR_INDEX: Final = "LiteLLM_SpendLogs_error_startTime_idx"
+ERROR_INDEX: Final = "LiteLLM_SpendLogs_error_code_startTime_idx"
 INDEXES_IN_PLACE: Final = "Request-log indexes are all in place"
 SUCCESS_ROWS: Final = 5000
 

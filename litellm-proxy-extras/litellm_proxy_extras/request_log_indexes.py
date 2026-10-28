@@ -70,8 +70,8 @@ REQUEST_LOG_INDEXES: Final = (
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_litellm_call_id_idx", '("litellm_call_id")'),
     RequestLogIndex(
         "LiteLLM_SpendLogs",
-        "LiteLLM_SpendLogs_error_startTime_idx",
-        '("startTime")',
+        "LiteLLM_SpendLogs_error_code_startTime_idx",
+        "((metadata->'error_information'->>'error_code'), \"startTime\")",
         "jsonb_typeof(metadata->'error_information') = 'object'",
     ),
 )
