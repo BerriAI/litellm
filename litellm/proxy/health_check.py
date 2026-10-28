@@ -551,10 +551,13 @@ async def _run_model_health_check(model: dict):
         model_info, litellm_params
     )
     timeout: Final = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
+    probe_params: Final = (
+        {**litellm_params, "model_info": {"mode": model_info["mode"]}} if "mode" in model_info else litellm_params
+    )
 
     return await run_with_timeout(
         litellm.ahealth_check(
-            litellm_params,
+            probe_params,
             mode=mode,
             prompt=DEFAULT_HEALTH_CHECK_PROMPT,
             input=["test from litellm"],

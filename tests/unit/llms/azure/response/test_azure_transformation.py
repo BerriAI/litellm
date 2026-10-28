@@ -21,6 +21,7 @@ from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+from tests.unit.proxy.conftest import httpx_transport
 
 
 @pytest.mark.serial
@@ -98,6 +99,69 @@ def test_get_complete_url():
     expected = "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
 
     assert result == expected
+
+
+@pytest.mark.parametrize(
+    ("base_path", "expected_path"),
+    [
+        ("/foundry/openai/openai/v1", "/foundry/openai/openai/v1/responses?api-version=v1"),
+        ("/foundry/openai/openai/v1/", "/foundry/openai/openai/v1/responses?api-version=v1"),
+        ("/foundry/openai/openai/v1/responses", "/foundry/openai/openai/v1/responses?api-version=v1"),
+        ("/foundry/openai/openai/v1/responses/", "/foundry/openai/openai/v1/responses?api-version=v1"),
+        (
+            "/openai/v1?redirect=/openai/v1/responses",
+            "/openai/v1/responses?redirect=%2Fopenai%2Fv1%2Fresponses&api-version=v1",
+        ),
+        (
+            "/openai/v1?tenant=example&api-version=preview",
+            "/openai/v1/responses?tenant=example&api-version=preview",
+        ),
+        (
+            "/openai/v1/responses?api-version=2025-04-01-preview",
+            "/openai/v1/responses?api-version=2025-04-01-preview",
+        ),
+        (
+            "/openai/v1/responses?redirect=/openai/responses",
+            "/openai/v1/responses?redirect=%2Fopenai%2Fresponses&api-version=v1",
+        ),
+        ("/foo%2Fbar/openai/v1?tenant=example", "/foo%2Fbar/openai/v1/responses?tenant=example&api-version=v1"),
+        (
+            "/foo%3Fbar/openai/v1/responses?tenant=example",
+            "/foo%3Fbar/openai/v1/responses?tenant=example&api-version=v1",
+        ),
+        ("/openai", "/openai/v1/responses?api-version=v1"),
+        ("/foundry/openai", "/foundry/openai/v1/responses?api-version=v1"),
+    ],
+)
+def test_explicit_v1_api_base_preserves_the_gateway_prefix_and_query(base_path: str, expected_path: str) -> None:
+    result: Final = AzureOpenAIResponsesAPIConfig().get_complete_url(
+        api_base=f"https://gateway.example.com{base_path}", litellm_params={"api_version": "v1"}
+    )
+
+    assert result == f"https://gateway.example.com{expected_path}"
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "expected_version"),
+    [
+        ({}, AZURE_DEFAULT_RESPONSES_API_VERSION),
+        ({"api_version": "v1"}, "v1"),
+        ({"api_version": "latest"}, "latest"),
+        ({"api_version": "preview"}, "preview"),
+        ({"api_version": "2025-04-01-preview"}, "2025-04-01-preview"),
+        ({"api_version": "2024-10-21"}, AZURE_DEFAULT_RESPONSES_API_VERSION),
+        ({"api_version": "2024-10-21", "responses_api_version": "preview"}, "preview"),
+    ],
+)
+def test_explicit_v1_api_base_keeps_responses_api_version_selection(
+    litellm_params: dict[str, str], expected_version: str
+) -> None:
+    result: Final = AzureOpenAIResponsesAPIConfig().get_complete_url(
+        api_base="https://gateway.example.com/foundry/openai/openai/v1",
+        litellm_params=litellm_params,
+    )
+
+    assert result == f"https://gateway.example.com/foundry/openai/openai/v1/responses?api-version={expected_version}"
 
 
 @pytest.mark.serial
@@ -727,16 +791,21 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 
-def test_azure_responses_gpt6_astra_reasoning_effort_none_unlocks_temperature(local_model_cost_map: None):
-    """Foundry's gpt-6-astra accepts reasoning.effort='none' with a non-default temperature
-    while OpenAI's gpt-6-astra does not, so the gate must read the azure/ cost-map entry
-    for the bare deployment name rather than OpenAI's."""
+def test_azure_responses_reasoning_effort_none_unlocks_temperature_off_the_azure_row(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+):
+    """The gate reads the azure/ cost-map entry for the bare deployment name rather than OpenAI's
+    twin: with OpenAI's gpt-6-sol row turned off for none, azure/gpt-6-sol's row still lets none
+    through and, only then, a non-default temperature."""
+    monkeypatch.setitem(
+        litellm.model_cost, "gpt-6-sol", {**litellm.model_cost["gpt-6-sol"], "supports_none_reasoning_effort": False}
+    )
     params = AzureOpenAIResponsesAPIConfig().map_openai_params(
         response_api_optional_params=ResponsesAPIOptionalRequestParams(
             temperature=0.2,
             reasoning={"effort": "none"},
         ),
-        model="gpt-6-astra",
+        model="gpt-6-sol",
         drop_params=False,
     )
     assert params["temperature"] == 0.2
@@ -753,6 +822,116 @@ def test_azure_responses_gpt6_astra_rejects_temperature_while_reasoning(local_mo
             model="gpt-6-astra",
             drop_params=False,
         )
+
+
+@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6.1-sol"])
+@pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+def test_azure_responses_gpt6_effort_levels_follow_the_azure_row(local_model_cost_map: None, model: str, level: str):
+    """A bare deployment name reads the azure/ row, opt-out for every level but max, so the none
+    and minimal Foundry refuses on this route (live 400s on 2026-10-01 for gpt-6-astra and 2026-10-02
+    for gpt-6.1-sol) are dropped or refused here while the max it honors goes through whatever the
+    route-blind flag says."""
+    forwarded = (
+        level == "max" or litellm.model_cost[f"azure/{model}"].get(f"supports_{level}_reasoning_effort") is not False
+    )
+    dropped = AzureOpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": level}),
+        model=model,
+        drop_params=True,
+    )
+    assert ("reasoning" in dropped) is forwarded
+    if forwarded:
+        kept = AzureOpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": level}),
+            model=model,
+            drop_params=False,
+        )
+        assert kept["reasoning"] == {"effort": level}
+    else:
+        with pytest.raises(litellm.UnsupportedParamsError):
+            AzureOpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": level}),
+                model=model,
+                drop_params=False,
+            )
+
+
+def test_azure_gpt6_astra_keeps_max_on_this_route_whatever_its_row_says(local_model_cost_map: None):
+    """Pinned on purpose: the row-derived test above exempts max by hand, so this one has to fail
+    if the gate ever reads the flag. A Foundry gpt-6-astra deployment answered reasoning.effort max
+    through /v1/responses with 200, the effort echoed back and reasoning tokens billed, on
+    2026-10-01, while chat refuses the same level, as OpenAI's chat does. The row keeps max off for
+    the adapter and the picker, and this gate still forwards it even under drop_params."""
+    assert litellm.model_cost["azure/gpt-6-astra"]["supports_max_reasoning_effort"] is False
+    kept = AzureOpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": "max"}),
+        model="gpt-6-astra",
+        drop_params=True,
+    )
+    assert kept["reasoning"] == {"effort": "max"}
+
+
+@pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+def test_azure_responses_effort_gate_fires_when_azure_ai_prefix_survives_provider_remap(
+    local_model_cost_map: None, level: str
+):
+    """litellm.responses(model="azure_ai/gpt-6.1-sol", api_base=<Foundry host>) is re-routed to the
+    azure provider with the prefix intact, so this config sees the prefixed name. The gate used to
+    skip every prefixed name as another provider's pass-through, and a live Foundry gpt-6.1-sol
+    answered the forwarded none and minimal with 400 on 2026-10-02 even under drop_params. The
+    prefixed name reads the azure_ai/ row and drops or refuses exactly what that row turns off."""
+    forwarded = (
+        level == "max"
+        or litellm.model_cost["azure_ai/gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is not False
+    )
+    dropped = AzureOpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            max_output_tokens=60, reasoning={"effort": level}
+        ),
+        model="azure_ai/gpt-6.1-sol",
+        drop_params=True,
+    )
+    assert ("reasoning" in dropped) is forwarded
+    if forwarded:
+        return
+    with pytest.raises(litellm.UnsupportedParamsError):
+        AzureOpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                max_output_tokens=60, reasoning={"effort": level}
+            ),
+            model="azure_ai/gpt-6.1-sol",
+            drop_params=False,
+        )
+
+
+def test_azure_responses_prefixed_name_reads_the_foundry_row_not_the_azure_twin(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+):
+    """The rows are made to disagree on low, a level neither real row flags, so the prefixed name
+    proving it reads azure_ai/gpt-6-sol cannot pass by reading azure/gpt-6-sol, which the bare
+    deployment name keeps reading."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure_ai/gpt-6-sol",
+        {**litellm.model_cost["azure_ai/gpt-6-sol"], "supports_low_reasoning_effort": False},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/gpt-6-sol",
+        {**litellm.model_cost["azure/gpt-6-sol"], "supports_low_reasoning_effort": True},
+    )
+    prefixed = AzureOpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": "low"}),
+        model="azure_ai/gpt-6-sol",
+        drop_params=True,
+    )
+    assert "reasoning" not in prefixed
+    bare = AzureOpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": "low"}),
+        model="gpt-6-sol",
+        drop_params=True,
+    )
+    assert bare["reasoning"] == {"effort": "low"}
 
 
 _COMPLETED_RESPONSE: Final = {
@@ -830,6 +1009,119 @@ def test_dated_ga_api_version_sends_responses_to_the_unset_api_version_url(
     assert text == "Done."
     assert route.call_count == 1
     assert route.calls[0].request.url == _unset_api_version_responses_url()
+
+
+_COMPLETED_RESPONSE_SSE: Final = "".join(
+    f"data: {json.dumps(event)}\n\n"
+    for event in (
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 0,
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Done.",
+        },
+        {"type": "response.completed", "sequence_number": 1, "response": _COMPLETED_RESPONSE},
+    )
+)
+
+
+@pytest.fixture
+def gateway_responses(respx_mock: respx.MockRouter, stream: bool) -> respx.Route:
+    body: Final = _COMPLETED_RESPONSE_SSE if stream else json.dumps(_COMPLETED_RESPONSE)
+    content_type: Final = "text/event-stream" if stream else "application/json"
+    return respx_mock.post(
+        "https://gateway.example.com/foundry/openai/openai/v1/responses?api-version=v1"
+    ).mock(return_value=httpx.Response(200, text=body, headers={"content-type": content_type}))
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_explicit_v1_base_sends_responses_to_the_gateway(gateway_responses: respx.Route, stream: bool) -> None:
+    response: Final = litellm.responses(
+        model="azure/gpt-6.1-sol",
+        input="hi",
+        api_base="https://gateway.example.com/foundry/openai/openai/v1",
+        api_key="azure-test-key",
+        api_version="v1",
+        stream=stream,
+    )
+    text: Final = (
+        "".join(event.delta for event in response if event.type == "response.output_text.delta")
+        if stream
+        else response.output[0].content[0].text
+    )
+
+    assert text == "Done."
+    assert gateway_responses.call_count == 1
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_explicit_v1_base_sends_bridged_chat_to_the_gateway(gateway_responses: respx.Route, stream: bool) -> None:
+    response: Final = litellm.completion(
+        model="azure/responses/gpt-6.1-sol",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://gateway.example.com/foundry/openai/openai/v1",
+        api_key="azure-test-key",
+        api_version="v1",
+        stream=stream,
+    )
+    text: Final = (
+        "".join(chunk.choices[0].delta.content or "" for chunk in response)
+        if stream
+        else response.choices[0].message.content
+    )
+
+    assert text == "Done."
+    assert gateway_responses.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.parametrize("stream", [False, True])
+async def test_explicit_v1_base_sends_async_responses_to_the_gateway(
+    gateway_responses: respx.Route, stream: bool
+) -> None:
+    response: Final = await litellm.aresponses(
+        model="azure/gpt-6.1-sol",
+        input="hi",
+        api_base="https://gateway.example.com/foundry/openai/openai/v1",
+        api_key="azure-test-key",
+        api_version="v1",
+        stream=stream,
+    )
+    text: Final = (
+        "".join([event.delta async for event in response if event.type == "response.output_text.delta"])
+        if stream
+        else response.output[0].content[0].text
+    )
+
+    assert text == "Done."
+    assert gateway_responses.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.parametrize("stream", [False, True])
+async def test_explicit_v1_base_sends_async_bridged_chat_to_the_gateway(
+    gateway_responses: respx.Route, stream: bool
+) -> None:
+    response: Final = await litellm.acompletion(
+        model="azure/responses/gpt-6.1-sol",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://gateway.example.com/foundry/openai/openai/v1",
+        api_key="azure-test-key",
+        api_version="v1",
+        stream=stream,
+    )
+    text: Final = (
+        "".join([chunk.choices[0].delta.content or "" async for chunk in response])
+        if stream
+        else response.choices[0].message.content
+    )
+
+    assert text == "Done."
+    assert gateway_responses.call_count == 1
 
 
 _LIFECYCLE_BODIES: Final = {

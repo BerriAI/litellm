@@ -1,4 +1,5 @@
 
+import base64
 import copy
 import json
 from collections.abc import Mapping
@@ -38,6 +39,33 @@ def test_vertex_ai_anthropic_thinking_param(model, expected_thinking):
         assert "thinking" in supported_openai_params
     else:
         assert "thinking" not in supported_openai_params
+
+
+@pytest.mark.parametrize(
+    ("labels", "headers", "expected_header"),
+    [
+        ({"team": "triage", "env": "prod"}, {}, {"team": "triage", "env": "prod"}),
+        ({"team": "triage", "cost": 3}, {}, {"team": "triage"}),
+        ({"cost": 3}, {}, None),
+        ("team=triage", {}, None),
+        ({"team": "triage"}, {"x-vertex-ai-labels": "e30="}, {}),
+    ],
+    ids=["string_labels", "non_string_values_dropped", "no_string_values", "not_a_mapping", "caller_header_wins"],
+)
+def test_vertex_anthropic_labels_move_from_body_to_header(
+    labels: object, headers: dict[str, str], expected_header: dict[str, str] | None
+) -> None:
+    body: Final = VertexAIAnthropicConfig().transform_request(
+        model="claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Hi"}],
+        optional_params={"max_tokens": 16, "anthropic_version": "vertex-2023-10-16", "labels": labels},
+        litellm_params={},
+        headers=headers,
+    )
+    sent_labels: Final = next((value for name, value in headers.items() if name.lower() == "x-vertex-ai-labels"), None)
+
+    assert "labels" not in body
+    assert (None if sent_labels is None else json.loads(base64.b64decode(sent_labels))) == expected_header
 
 
 @pytest.mark.parametrize(
@@ -916,6 +944,44 @@ def test_sanitize_folds_output_format_into_output_config(model: str, data: dict,
 
     assert "output_format" not in request
     assert request["output_config"] == expected_output_config
+
+
+def _vertex_chat_request_with_output_format(
+    output_format: object, litellm_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    return VertexAIAnthropicConfig().transform_request(
+        model="claude-opus-4-6",
+        messages=[{"role": "user", "content": "What is 6 times 7?"}],
+        optional_params={"max_tokens": 64, "output_format": output_format},
+        litellm_params=dict(litellm_params),
+        headers={},
+    )
+
+
+def test_vertex_chat_request_drops_a_malformed_output_format_under_per_request_drop_params():
+    request: Final = _vertex_chat_request_with_output_format("json", {"drop_params": True})
+
+    assert "output_format" not in request
+    assert "output_config" not in request
+
+
+def test_vertex_chat_request_drops_a_malformed_output_format_under_the_global_drop_params_flag(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    request: Final = _vertex_chat_request_with_output_format("json", {})
+
+    assert "output_format" not in request
+    assert "output_config" not in request
+
+
+def test_vertex_chat_request_rejects_a_malformed_output_format_without_drop_params_naming_the_proxy_setting():
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        _vertex_chat_request_with_output_format("json", {})
+
+    assert error.value.status_code == 400
+    assert "litellm_settings:\n drop_params: true" in str(error.value)
 
 
 def test_vertex_ai_native_response_format_reaches_vertex_as_output_config_format(local_model_cost_map):

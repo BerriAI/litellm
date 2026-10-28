@@ -31,7 +31,7 @@ from integration._support.wire import Reply, Request, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
-pytestmark = pytest.mark.timeout(300)
+pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 
 _MODEL: Final = "sm-openai-chaos"
 _ALIASES: Final = (

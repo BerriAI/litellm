@@ -3,7 +3,6 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 """
 
 import json
-import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from itertools import accumulate, chain
 from types import MappingProxyType
@@ -41,7 +40,11 @@ from litellm.responses.sse_output_recovery import (
     record_output_item_chunk,
     record_output_text_chunk,
 )
-from litellm.responses.utils import ResponsesAPIRequestUtils, normalize_responses_api_stream_options
+from litellm.responses.utils import (
+    ResponsesAPIRequestUtils,
+    normalize_responses_api_stream_options,
+    opt_in_auto_reasoning_summary,
+)
 from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
@@ -174,6 +177,16 @@ def _without_audio_input_parts_in_item(value: object) -> object:
 
 def _without_audio_input_parts(input_items: list[object]) -> list[object]:
     return [_without_audio_input_parts_in_item(item) for item in input_items]
+
+
+def _effort_with_requested_summary(nested_effort: object, top_level_effort: object) -> object:
+    match top_level_effort, nested_effort:
+        case {"summary": str() as summary}, str() as effort:
+            return {"effort": effort, "summary": summary}
+        case {"summary": str() as summary}, Mapping() as reasoning if "summary" not in reasoning:
+            return {**reasoning, "summary": summary}
+        case _:
+            return nested_effort
 
 
 def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
@@ -953,6 +966,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         optional_params: dict,
         responses_api_request: "ResponsesAPIOptionalRequestParams",
         drop_params: bool = False,
+        model: str | None = None,
+        custom_llm_provider: str | None = None,
     ) -> None:
         """Map optional_params into responses_api_request (mutates in place)."""
         for key, value in optional_params.items():
@@ -984,7 +999,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "previous_response_id":
                 responses_api_request["previous_response_id"] = value
             elif key == "reasoning_effort":
-                responses_api_request["reasoning"] = self.map_reasoning_effort(value)
+                responses_api_request["reasoning"] = self.map_reasoning_effort(value, model, custom_llm_provider)
             elif key == "web_search_options":
                 self._add_web_search_tool(responses_api_request, value)
 
@@ -1100,6 +1115,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             optional_params,
             responses_api_request,
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
+            model=model,
+            custom_llm_provider=_served_provider(litellm_params),
         )
 
         stream: Final = optional_params.get("stream") or litellm_params.get("stream", False)
@@ -1705,30 +1722,33 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # Extract supported params from extra_body and merge into optional_params
         extra_body_copy: Final = extra_body.copy()
+        top_level_effort: Final = cast(object, optional_params.get("reasoning_effort"))  # cast-ok: upcast
         for key, value in extra_body_copy.items():
             if key in supported_responses_api_params:
                 # Prefer extra_body value if it exists (may have more complete info like summary in reasoning_effort)
-                optional_params[key] = extra_body.pop(key)
+                extra_body.pop(key)
+                optional_params[key] = (
+                    _effort_with_requested_summary(cast(object, value), top_level_effort)  # cast-ok: upcast
+                    if key == "reasoning_effort"
+                    else value
+                )
 
         return optional_params
 
-    def map_reasoning_effort(self, reasoning_effort: object) -> Reasoning:
+    def map_reasoning_effort(
+        self, reasoning_effort: object, model: str | None = None, custom_llm_provider: str | None = None
+    ) -> Reasoning:
         # If dict is passed, convert it directly to Reasoning object
         if isinstance(reasoning_effort, dict):
             return Reasoning(
                 **cast(Reasoning, reasoning_effort)  # cast-ok: dict is forwarded verbatim to the provider
             )
 
-        # Check if auto-summary is enabled via flag or environment variable
-        # Priority: litellm.reasoning_auto_summary flag > LITELLM_REASONING_AUTO_SUMMARY env var
-        auto_summary_enabled: Final = (
-            litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
-        )
-
+        summary: Final = opt_in_auto_reasoning_summary(model, custom_llm_provider)
         return (
-            Reasoning(effort=reasoning_effort, summary="detailed")
-            if auto_summary_enabled
-            else Reasoning(effort=reasoning_effort)
+            Reasoning(effort=reasoning_effort)
+            if summary is None
+            else Reasoning(effort=reasoning_effort, summary=summary)
         )
 
     _map_reasoning_effort = map_reasoning_effort

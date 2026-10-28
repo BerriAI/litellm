@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -39,6 +40,8 @@ from .base import OpenAIGuardrailBase
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIModerationResponse
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _config_secret(value: object) -> object:
@@ -151,7 +154,9 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             timeout=self.timeout,
         )
 
-        verbose_proxy_logger.debug("OpenAI Moderation guard response: %s", response.json())
+        verbose_proxy_logger.debug(
+            "OpenAI Moderation guard response: %s", _DECODED_JSON.validate_python(response.json())
+        )
 
         if response.status_code != 200:
             raise HTTPException(
@@ -199,6 +204,9 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
                     "moderation_result": violation_details,
                 },
             )
+
+    def supports_structured_messages(self) -> bool:
+        return False
 
     @log_guardrail_information
     async def apply_guardrail(
