@@ -5587,9 +5587,16 @@ def test_completion_rejects_allowed_tools_a_provider_cannot_take(model: str) -> 
     assert exc_info.value.status_code == 400
 
 
-@pytest.mark.parametrize("drop", ["per_call", "global"])
+@pytest.mark.parametrize(
+    ("drop", "drop_kwargs"),
+    [
+        ("per_call", {"drop_params": True}),
+        ("global", {}),
+        ("additional_drop_params", {"additional_drop_params": ["tool_choice"]}),
+    ],
+)
 def test_drop_params_sends_tools_without_an_allowed_tools_choice_a_provider_cannot_take(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, drop: str
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, drop: str, drop_kwargs: Mapping[str, object]
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", drop == "global")
     mock_route: Final = _mock_chat_completion(respx_mock)
@@ -5601,7 +5608,7 @@ def test_drop_params_sends_tools_without_an_allowed_tools_choice_a_provider_cann
         tool_choice=FLAT_ALLOWED_TOOLS,
         api_base="http://localhost:12346/v1",
         api_key="fake_api_key",
-        drop_params=drop == "per_call",
+        **drop_kwargs,
     )
 
     assert mock_route.called

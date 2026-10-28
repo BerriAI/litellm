@@ -19,7 +19,7 @@ from litellm.constants import (
     DEFAULT_MCP_SEMANTIC_FILTER_TOP_K,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.allowed_tools_tool_choice import pruned_allowed_tool_choice
+from litellm.litellm_core_utils.allowed_tools_tool_choice import allowed_tool_names
 from litellm.proxy.mcp_server.semantic_tool_filter import (
     SemanticToolFilterContextWindowError,
 )
@@ -176,6 +176,17 @@ class SemanticToolFilterHook(CustomLogger):
         names: Final = (self.filter.extract_tool_info(tool)[0] for tool in filtered_tools)
         return [name for name in names if name]
 
+    def _with_caller_allowed_tools(
+        self, request: object, available_tools: Sequence[object], filtered_tools: Sequence[object]
+    ) -> tuple[object, ...]:
+        dropped_allowed_names: Final = allowed_tool_names(request) - frozenset(
+            self._selected_tool_names(filtered_tools)
+        )
+        return (
+            *filtered_tools,
+            *(tool for tool in available_tools if self.filter.extract_tool_info(tool)[0] in dropped_allowed_names),
+        )
+
     @staticmethod
     async def _narrow_mcp_references(
         tools: Sequence[Mapping[str, object]],
@@ -331,17 +342,15 @@ class SemanticToolFilterHook(CustomLogger):
                     verbose_proxy_logger.warning("No tools expanded from MCP references")
                     return None
 
-                filtered_expanded_tools = await self._filter_expanded_tools(data=data, expanded_tools=expanded_tools)
+                filtered_expanded_tools: Final = self._with_caller_allowed_tools(
+                    _REQUEST_DATA.validate_python(data),
+                    expanded_tools,
+                    await self._filter_expanded_tools(data=data, expanded_tools=expanded_tools),
+                )
 
                 selected_tool_names: Final = self._selected_tool_names(filtered_expanded_tools)
                 narrowed_tools: Final = await self._narrow_mcp_references(tools, selected_tool_names)
                 data["tools"] = narrowed_tools
-                pruned_tool_choice: Final = pruned_allowed_tool_choice(
-                    _REQUEST_DATA.validate_python(data),
-                    frozenset(self._selected_tool_names(expanded_tools)) - frozenset(selected_tool_names),
-                )
-                if pruned_tool_choice is not None:
-                    data["tool_choice"] = pruned_tool_choice  # rebind-ok: in-place request rewrite
                 self._emit_filter_metadata_safe(
                     data=data,
                     mcp_tools=expanded_tools,
@@ -397,13 +406,11 @@ class SemanticToolFilterHook(CustomLogger):
                 user_query[:50],
             )
 
-            if mcp_tools:
-                filtered_mcp_tools: list[object] = await self.filter.filter_tools(
-                    query=user_query,
-                    available_tools=mcp_tools,
-                )
-            else:
-                filtered_mcp_tools = []
+            filtered_mcp_tools: Final = self._with_caller_allowed_tools(
+                _REQUEST_DATA.validate_python(data),
+                mcp_tools,
+                await self.filter.filter_tools(query=user_query, available_tools=mcp_tools) if mcp_tools else [],
+            )
 
             filtered_mcp_names: Final[set[str]] = set()
             for t in filtered_mcp_tools:
@@ -421,12 +428,6 @@ class SemanticToolFilterHook(CustomLogger):
                     filtered_tools.append(t)
 
             data["tools"] = filtered_tools
-            filtered_tool_choice: Final = pruned_allowed_tool_choice(
-                _REQUEST_DATA.validate_python(data),
-                frozenset(self._selected_tool_names(mcp_tools)) - filtered_mcp_names,
-            )
-            if filtered_tool_choice is not None:
-                data["tool_choice"] = filtered_tool_choice  # rebind-ok: in-place request rewrite
 
             self._emit_filter_metadata_safe(
                 data=data,

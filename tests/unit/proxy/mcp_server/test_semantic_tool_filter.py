@@ -592,10 +592,7 @@ async def test_semantic_filter_hook_preserves_native_tools():
     )
 
 
-@requires_semantic_router
-@pytest.mark.asyncio
-async def test_semantic_filter_hook_prunes_filtered_mcp_tools_from_allowed_tools():
-    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+def _uniform_embedding_filter(top_k: int):
     from litellm.proxy.mcp_server.semantic_tool_filter import SemanticMCPToolFilter
     from litellm.types.utils import Embedding, EmbeddingResponse
 
@@ -613,19 +610,33 @@ async def test_semantic_filter_hook_prunes_filtered_mcp_tools_from_allowed_tools
     mock_router = Mock()
     mock_router.embedding = mock_embedding_sync
     mock_router.aembedding = mock_embedding_async
-    filter_instance = SemanticMCPToolFilter(
+    return SemanticMCPToolFilter(
         embedding_model="text-embedding-3-small",
         litellm_router_instance=mock_router,
-        top_k=2,
+        top_k=top_k,
         similarity_threshold=0.3,
         enabled=True,
     )
+
+
+@requires_semantic_router
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_keeps_mcp_tools_the_allowed_tools_choice_names():
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    filter_instance = _uniform_embedding_filter(top_k=2)
     mcp_tools = [
         MCPTool(name=f"mcp_tool_{i}", description=f"MCP tool {i}", inputSchema={"type": "object"}) for i in range(5)
     ]
     filter_instance._build_router(mcp_tools)
+    picked = {tool.name for tool in await filter_instance.filter_tools(query="What is the weather?", available_tools=mcp_tools)}
+    unpicked = next(tool.name for tool in mcp_tools if tool.name not in picked)
     native_tool = {"type": "function", "function": {"name": "get_current_weather", "parameters": {"type": "object"}}}
-    allowed_names = [*(tool.name for tool in mcp_tools), "get_current_weather"]
+    tool_choice = {
+        "type": "allowed_tools",
+        "mode": "required",
+        "tools": [{"type": "function", "name": unpicked}, {"type": "function", "name": "get_current_weather"}],
+    }
 
     result = await SemanticToolFilterHook(filter_instance).async_pre_call_hook(
         user_api_key_dict=Mock(),
@@ -634,23 +645,56 @@ async def test_semantic_filter_hook_prunes_filtered_mcp_tools_from_allowed_tools
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "What is the weather?"}],
             "tools": [*mcp_tools, native_tool],
-            "tool_choice": {
-                "type": "allowed_tools",
-                "mode": "required",
-                "tools": [{"type": "function", "name": name} for name in allowed_names],
-            },
+            "tool_choice": tool_choice,
             "metadata": {},
         },
         call_type="completion",
     )
 
-    kept_mcp_names = [tool.name for tool in result["tools"] if isinstance(tool, MCPTool)]
-    assert len(kept_mcp_names) < len(mcp_tools)
-    assert result["tool_choice"] == {
-        "type": "allowed_tools",
-        "mode": "required",
-        "tools": [{"type": "function", "name": name} for name in [*kept_mcp_names, "get_current_weather"]],
-    }
+    assert {tool.name for tool in result["tools"] if isinstance(tool, MCPTool)} == {*picked, unpicked}
+    assert native_tool in result["tools"]
+    assert result["tool_choice"] == tool_choice
+
+
+@requires_semantic_router
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_keeps_expanded_tools_the_allowed_tools_choice_names():
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    filter_instance = _uniform_embedding_filter(top_k=2)
+    filter_instance._build_router(
+        [MCPTool(name=f"srv-tool_{i}", description=f"Registry tool {i}", inputSchema={"type": "object"}) for i in range(5)]
+    )
+    expanded_tools = [
+        {
+            "type": "function",
+            "name": f"srv-tool_{i}",
+            "description": f"Registry tool {i}",
+            "parameters": {"type": "object", "properties": {}},
+        }
+        for i in range(5)
+    ]
+    picked = {tool["name"] for tool in await filter_instance.filter_tools(query="Send an email", available_tools=expanded_tools)}
+    unpicked = next(tool["name"] for tool in expanded_tools if tool["name"] not in picked)
+    tool_choice = {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": unpicked}]}
+
+    with patch.object(SemanticToolFilterHook, "_expand_mcp_tools", AsyncMock(return_value=expanded_tools)):
+        result = await SemanticToolFilterHook(filter_instance).async_pre_call_hook(
+            user_api_key_dict=Mock(),
+            cache=Mock(),
+            data={
+                "model": "gpt-4",
+                "input": [{"role": "user", "content": "Send an email", "type": "message"}],
+                "tools": [{"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}],
+                "tool_choice": tool_choice,
+                "metadata": {},
+            },
+            call_type="aresponses",
+        )
+
+    assert set(result["tools"][0]["allowed_tools"]) == {*picked, unpicked}
+    assert result["tool_choice"] == tool_choice
+    assert result["metadata"]["litellm_semantic_filter_stats"] == f"5->{len(picked) + 1}"
 
 
 @requires_semantic_router

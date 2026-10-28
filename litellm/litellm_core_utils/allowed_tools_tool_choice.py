@@ -175,6 +175,15 @@ def _with_allowed_tools(choice: Mapping[str, JsonValue], tools: Sequence[JsonVal
             return {**choice, "tools": [*tools]}
 
 
+def allowed_tool_names(request: object) -> frozenset[str]:
+    try:
+        choice: Final = _json_choice(_AllowedToolChoiceRequest.model_validate(request).tool_choice)
+    except ValidationError:
+        return frozenset()
+    names: Final = (function_or_custom_tool_name(tool) for tool in _allowed_tools_list(choice))
+    return frozenset(name for name in names if name is not None)
+
+
 def pruned_allowed_tool_choice(request: object, removed_tool_names: Set[str]) -> JsonValue | None:
     try:
         choice: Final = _json_choice(_AllowedToolChoiceRequest.model_validate(request).tool_choice)
