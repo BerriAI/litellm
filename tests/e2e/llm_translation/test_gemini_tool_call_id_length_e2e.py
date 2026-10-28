@@ -25,7 +25,7 @@ from passthrough_client import PassthroughClient
 
 pytestmark = pytest.mark.e2e
 
-BACKEND_MODEL: Final = "gemini/gemini-3.5-flash"
+BACKEND_MODEL: Final = "gemini/gemini-3.8-flash"
 GEMINI_API_KEY: Final = "os.environ/GEMINI_API_KEY"
 # bedrock-agentcore HarnessToolUseId shape in botocore 1.43.6, read 2026-10-20
 AGENTCORE_TOOL_USE_ID: Final = re.compile(r"[a-zA-Z0-9_-]{1,64}")
@@ -117,7 +117,7 @@ class TestGeminiToolCallIdLength:
             messages=[_user_message()],
             tools=[WEATHER_TOOL],
             tool_choice="required",
-            max_tokens=128,
+            max_tokens=2048,
             extra_body=NO_PROXY_CACHE,
         )
 
@@ -138,7 +138,7 @@ class TestGeminiToolCallIdLength:
                 messages=[_user_message()],
                 tools=[WEATHER_TOOL],
                 tool_choice="required",
-                max_tokens=128,
+                max_tokens=2048,
                 stream=True,
                 extra_body=NO_PROXY_CACHE,
             )
@@ -164,7 +164,7 @@ class TestGeminiToolCallIdLength:
             messages=[question],
             tools=[WEATHER_TOOL],
             tool_choice="required",
-            max_tokens=128,
+            max_tokens=2048,
             extra_body=NO_PROXY_CACHE,
         )
         calls: Final = _tool_calls(first)
@@ -178,7 +178,7 @@ class TestGeminiToolCallIdLength:
             messages=[question, assistant, *(_tool_result(call) for call in calls)],
             tools=[WEATHER_TOOL],
             tool_choice="none",
-            max_tokens=128,
+            max_tokens=2048,
             extra_body=NO_PROXY_CACHE,
         )
 

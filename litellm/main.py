@@ -5480,11 +5480,6 @@ def completion(
     ### VALIDATE Request ###
     if model is None:
         raise ValueError("model param not passed in.")
-    supplemental_params: Final = _supplemental_provider_params(
-        _REQUEST_KWARGS_ADAPTER.validate_python({**kwargs, "extra_headers": extra_headers}), model
-    )
-    for dropped_key in supplemental_params.dropped_keys:
-        kwargs.pop(dropped_key)
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
@@ -5496,6 +5491,11 @@ def completion(
 
     ######### unpacking kwargs #####################
     args: Final = _locals_snapshot(locals())
+    supplemental_params: Final = _supplemental_provider_params(
+        _REQUEST_KWARGS_ADAPTER.validate_python({**kwargs, "extra_headers": extra_headers}), model
+    )
+    for dropped_key in supplemental_params.dropped_keys:
+        kwargs.pop(dropped_key)
 
     # Set by the responses->completion fallback so completion() does not bridge
     # back to the Responses API: that round-trip mutually recurses forever for a
