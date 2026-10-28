@@ -114,7 +114,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_param,
     openai_error_type,
 )
-from litellm.proxy.common_utils.semantic_cache_gate import gated_cache_controls
+from litellm.proxy.common_utils.semantic_cache_gate import gated_cache_overrides
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING_BYTES,
     SSE_STREAM_START_TAIL,
@@ -2511,16 +2511,15 @@ class ProxyBaseLLMRequestProcessing:
             call_type=route_type,
             skip_guardrails=skip_guardrails,
         )
-        if (
-            cache_controls := await gated_cache_controls(
-                data=self.data,
-                user_api_key_dict=user_api_key_dict,
-                call_type=route_type,
-                gates=ProxyLogging.callback_capabilities().semantic_cache_gates,
-                cache=litellm.cache,
-            )
-        ) is not None:
-            self.data["cache"] = cache_controls
+        cache_overrides: Final = await gated_cache_overrides(
+            data=self.data,
+            user_api_key_dict=user_api_key_dict,
+            call_type=route_type,
+            gates=ProxyLogging.callback_capabilities().semantic_cache_gates,
+            cache=litellm.cache,
+        )
+        for key, value in cache_overrides.items():
+            self.data[key] = value
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
             tags_before_guardrails=self._tags_before_guardrails,

@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from typing import Final
 
 import pytest
 
@@ -6,7 +7,8 @@ import litellm
 from litellm.caching.caching import Cache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.semantic_cache_gate import gated_cache_controls
+from litellm.proxy.common_utils.semantic_cache_gate import gated_cache_overrides
+from litellm.proxy.route_llm_request import _merge_router_settings_override
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.caching import (
     DEFAULT_CACHING_SUPPORTED_CALL_TYPES,
@@ -57,7 +59,7 @@ def _semantic_cache(
     )
 
 
-def _request(**cache_controls: object) -> dict[str, object]:
+def _request(**cache_controls: object) -> Mapping[str, object]:
     return {
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": "What color is the sky?"}],
@@ -70,23 +72,23 @@ def _key(team_id: str) -> UserAPIKeyAuth:
 
 
 @pytest.mark.asyncio
-async def test_a_team_the_gate_rejects_skips_semantic_lookup_and_store_even_when_the_client_opts_in():
-    gate = _TeamAllowlist(frozenset({ALLOWED_TEAM}))
-    data = _request(**{"use-cache": True, "ttl": 60})
+async def test_a_team_the_gate_rejects_skips_semantic_lookup_and_store_even_when_the_client_opts_in() -> None:
+    gate: Final = _TeamAllowlist(frozenset({ALLOWED_TEAM}))
+    data: Final = _request(**{"use-cache": True, "ttl": 60})
 
-    result = await gated_cache_controls(
+    result: Final = await gated_cache_overrides(
         data=data, user_api_key_dict=_key(OTHER_TEAM), call_type="acompletion", gates=(gate,), cache=_semantic_cache()
     )
 
-    assert result == {"use-cache": True, "ttl": 60, "no-cache": True, "no-store": True}
+    assert result == {"cache": {"use-cache": True, "ttl": 60, "no-cache": True, "no-store": True}}
     assert gate.seen == [(OTHER_TEAM, "gpt-4o-mini", "acompletion")]
 
 
 @pytest.mark.asyncio
-async def test_a_team_the_gate_allows_keeps_its_own_cache_controls():
-    data = _request(ttl=60)
+async def test_a_team_the_gate_allows_keeps_its_own_cache_controls() -> None:
+    data: Final = _request(ttl=60)
 
-    result = await gated_cache_controls(
+    result: Final = await gated_cache_overrides(
         data=data,
         user_api_key_dict=_key(ALLOWED_TEAM),
         call_type="acompletion",
@@ -94,33 +96,33 @@ async def test_a_team_the_gate_allows_keeps_its_own_cache_controls():
         cache=_semantic_cache(),
     )
 
-    assert result is None
+    assert result == {}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cache", [None, Cache(type=LiteLLMCacheType.LOCAL)], ids=["no-cache", "exact-match-cache"])
-async def test_the_gate_is_never_consulted_without_a_semantic_cache(cache: Cache | None):
-    gate = _TeamAllowlist(frozenset())
-    data = _request()
+async def test_the_gate_is_never_consulted_without_a_semantic_cache(cache: Cache | None) -> None:
+    gate: Final = _TeamAllowlist(frozenset())
+    data: Final = _request()
 
-    result = await gated_cache_controls(
+    result: Final = await gated_cache_overrides(
         data=data, user_api_key_dict=_key(OTHER_TEAM), call_type="acompletion", gates=(gate,), cache=cache
     )
 
-    assert result is None
+    assert result == {}
     assert gate.seen == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ["acreate_batch", "avector_store_search", "aspeech", "atranscription", "arerank"])
-async def test_the_gate_is_never_consulted_for_a_route_that_cannot_reach_the_cache(route: str):
-    gate = _TeamAllowlist(frozenset())
+async def test_the_gate_is_never_consulted_for_a_route_that_cannot_reach_the_cache(route: str) -> None:
+    gate: Final = _TeamAllowlist(frozenset())
 
-    result = await gated_cache_controls(
+    result: Final = await gated_cache_overrides(
         data=_request(), user_api_key_dict=_key(OTHER_TEAM), call_type=route, gates=(gate,), cache=_semantic_cache()
     )
 
-    assert result is None
+    assert result == {}
     assert gate.seen == []
 
 
@@ -140,10 +142,10 @@ async def test_the_gate_is_never_consulted_for_a_route_that_cannot_reach_the_cac
 )
 async def test_the_gate_covers_routes_that_reach_the_cache_through_a_bridge_whatever_call_types_it_serves(
     route: str, served_call_type: CachingSupportedCallTypes
-):
-    gate = _TeamAllowlist(frozenset())
+) -> None:
+    gate: Final = _TeamAllowlist(frozenset())
 
-    result = await gated_cache_controls(
+    result: Final = await gated_cache_overrides(
         data=_request(),
         user_api_key_dict=_key(OTHER_TEAM),
         call_type=route,
@@ -151,14 +153,14 @@ async def test_the_gate_covers_routes_that_reach_the_cache_through_a_bridge_what
         cache=_semantic_cache(supported_call_types=(served_call_type,)),
     )
 
-    assert result == {"no-cache": True, "no-store": True}
+    assert result == {"cache": {"no-cache": True, "no-store": True}}
     assert gate.seen == [(OTHER_TEAM, "gpt-4o-mini", route)]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("gate", [_RaisingGate(), _TruthyGate()], ids=["raises", "returns-non-bool"])
-async def test_a_gate_that_fails_or_answers_anything_but_true_skips_the_semantic_cache(gate: CustomLogger):
-    result = await gated_cache_controls(
+async def test_a_gate_that_fails_or_answers_anything_but_true_skips_the_semantic_cache(gate: CustomLogger) -> None:
+    result: Final = await gated_cache_overrides(
         data=_request(),
         user_api_key_dict=_key(ALLOWED_TEAM),
         call_type="aresponses",
@@ -166,16 +168,16 @@ async def test_a_gate_that_fails_or_answers_anything_but_true_skips_the_semantic
         cache=_semantic_cache(),
     )
 
-    assert result == {"no-cache": True, "no-store": True}
+    assert result == {"cache": {"no-cache": True, "no-store": True}}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("deny_first", [True, False])
-async def test_one_rejecting_gate_skips_the_semantic_cache_whatever_the_others_answer(deny_first: bool):
-    allow = _TeamAllowlist(frozenset({ALLOWED_TEAM}))
-    deny = _TeamAllowlist(frozenset())
+async def test_one_rejecting_gate_skips_the_semantic_cache_whatever_the_others_answer(deny_first: bool) -> None:
+    allow: Final = _TeamAllowlist(frozenset({ALLOWED_TEAM}))
+    deny: Final = _TeamAllowlist(frozenset())
 
-    result = await gated_cache_controls(
+    result: Final = await gated_cache_overrides(
         data=_request(),
         user_api_key_dict=_key(ALLOWED_TEAM),
         call_type="anthropic_messages",
@@ -183,16 +185,16 @@ async def test_one_rejecting_gate_skips_the_semantic_cache_whatever_the_others_a
         cache=_semantic_cache(),
     )
 
-    assert result == {"no-cache": True, "no-store": True}
+    assert result == {"cache": {"no-cache": True, "no-store": True}}
 
 
 @pytest.mark.asyncio
-async def test_only_callbacks_that_override_the_hook_act_as_gates(monkeypatch: pytest.MonkeyPatch):
-    gate = _TeamAllowlist(frozenset({ALLOWED_TEAM}))
+async def test_only_callbacks_that_override_the_hook_act_as_gates(monkeypatch: pytest.MonkeyPatch) -> None:
+    gate: Final = _TeamAllowlist(frozenset({ALLOWED_TEAM}))
     monkeypatch.setattr(litellm, "callbacks", [CustomLogger(), gate])
 
-    gates = ProxyLogging.callback_capabilities().semantic_cache_gates
-    result = await gated_cache_controls(
+    gates: Final = ProxyLogging.callback_capabilities().semantic_cache_gates
+    result: Final = await gated_cache_overrides(
         data=_request(),
         user_api_key_dict=_key(OTHER_TEAM),
         call_type="acompletion",
@@ -201,4 +203,54 @@ async def test_only_callbacks_that_override_the_hook_act_as_gates(monkeypatch: p
     )
 
     assert gates == (gate,)
-    assert result == {"no-cache": True, "no-store": True}
+    assert result == {"cache": {"no-cache": True, "no-store": True}}
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_team_cannot_reopen_the_semantic_cache_through_its_own_fallback_entries() -> None:
+    data: Final = {
+        **_request(ttl=60),
+        "fallbacks": [{"model": "gpt-4o", "cache": {"ttl": 5}}, "gpt-4.1-mini", {"model": "gpt-4.1"}],
+        "context_window_fallbacks": [{"gpt-4o-mini": ["gpt-4o"], "cache": {}}],
+        "content_policy_fallbacks": [{"model": "gpt-4o", "cache": None}],
+    }
+
+    result: Final = await gated_cache_overrides(
+        data=data,
+        user_api_key_dict=_key(OTHER_TEAM),
+        call_type="acompletion",
+        gates=(_TeamAllowlist(frozenset({ALLOWED_TEAM})),),
+        cache=_semantic_cache(),
+    )
+
+    assert result == {
+        "cache": {"ttl": 60, "no-cache": True, "no-store": True},
+        "fallbacks": [
+            {"model": "gpt-4o", "cache": {"ttl": 5, "no-cache": True, "no-store": True}},
+            "gpt-4.1-mini",
+            {"model": "gpt-4.1"},
+        ],
+        "context_window_fallbacks": [{"gpt-4o-mini": ["gpt-4o"], "cache": {"no-cache": True, "no-store": True}}],
+        "content_policy_fallbacks": [{"model": "gpt-4o", "cache": {"no-cache": True, "no-store": True}}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_team_cannot_reopen_the_semantic_cache_through_router_settings_fallbacks() -> None:
+    data: Final = {
+        **_request(),
+        "router_settings_override": {"fallbacks": [{"model": "gpt-4o", "cache": {}}], "num_retries": 2},
+    }
+
+    overrides: Final = await gated_cache_overrides(
+        data=data,
+        user_api_key_dict=_key(OTHER_TEAM),
+        call_type="acompletion",
+        gates=(_TeamAllowlist(frozenset({ALLOWED_TEAM})),),
+        cache=_semantic_cache(),
+    )
+    routed: Final = {**data, **overrides}
+    _ = _merge_router_settings_override(routed)
+
+    assert routed["fallbacks"] == [{"model": "gpt-4o", "cache": {"no-cache": True, "no-store": True}}]
+    assert routed["num_retries"] == 2

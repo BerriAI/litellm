@@ -383,8 +383,8 @@ def make_runner(
     heartbeat_seconds: float = 30.0,
     completion_window_seconds: float = 24 * 60 * 60,
     user: UserAPIKeyAuth | None = None,
-    semantic_cache_gates: Sequence[CustomLogger] = (),
-    semantic_cache: Cache | None = None,
+    semantic_cache_gates: Callable[[], Sequence[CustomLogger]] = lambda: (),
+    semantic_cache: Callable[[], Cache | None] = lambda: None,
 ) -> Harness:
     store = store_factory({INPUT_FILE_ID: managed_input_file()} if files is None else files)
     router = FakeRouter()
@@ -722,6 +722,10 @@ class _TeamAllowlist(CustomLogger):
         return user_api_key_dict.team_id == self.team_id
 
 
+def _semantic_cache() -> Cache:
+    return Cache(type=LiteLLMCacheType.VALKEY_SEMANTIC, host="localhost", port="6379", similarity_threshold=0.8)
+
+
 @pytest.mark.parametrize(
     ("allowed_team", "row_cache_controls"),
     [("team-1", None), ("team-other", {"no-cache": True, "no-store": True})],
@@ -731,10 +735,8 @@ async def test_create_runs_the_semantic_cache_check_on_each_row(
     allowed_team: str, row_cache_controls: Mapping[str, object] | None
 ) -> None:
     gate = _TeamAllowlist(allowed_team)
-    semantic_cache = Cache(
-        type=LiteLLMCacheType.VALKEY_SEMANTIC, host="localhost", port="6379", similarity_threshold=0.8
-    )
-    harness = make_runner(semantic_cache_gates=(gate,), semantic_cache=semantic_cache)
+    semantic_cache: Final = _semantic_cache()
+    harness: Final = make_runner(semantic_cache_gates=lambda: (gate,), semantic_cache=lambda: semantic_cache)
     await harness.create_and_finish()
 
     calls = harness.router.acompletion.await_args_list
@@ -743,6 +745,20 @@ async def test_create_runs_the_semantic_cache_check_on_each_row(
         ("team-1", [{"role": "user", "content": "hi 1"}], "acompletion"),
         ("team-1", [{"role": "user", "content": "hi 2"}], "acompletion"),
     ]
+
+
+async def test_rows_follow_the_semantic_cache_and_check_in_place_when_they_run_not_when_the_batch_was_created() -> None:
+    live_gates: Final[list[Sequence[CustomLogger]]] = [()]  # mutable-ok: stands in for callbacks an admin adds later
+    live_cache: Final[list[Cache | None]] = [None]  # mutable-ok: stands in for a cache an admin turns on later
+    harness: Final = make_runner(semantic_cache_gates=lambda: live_gates[-1], semantic_cache=lambda: live_cache[-1])
+    await harness.create()
+
+    live_gates.append((_TeamAllowlist("team-other"),))
+    live_cache.append(_semantic_cache())
+    await asyncio.gather(*list(litellm_executed_batches._RUNNING_BATCHES))
+
+    calls: Final = harness.router.acompletion.await_args_list
+    assert [call.kwargs.get("cache") for call in calls] == [{"no-cache": True, "no-store": True}] * 2
 
 
 async def test_create_dispatches_each_row_with_the_key_team_and_project_tags_as_inherited_tags() -> None:

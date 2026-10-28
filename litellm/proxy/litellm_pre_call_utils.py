@@ -39,6 +39,7 @@ from litellm.constants import (
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     OTEL_SERVICE_NAME_METADATA_KEYS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    REQUEST_FALLBACK_KEYS,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
@@ -3076,7 +3077,6 @@ async def add_litellm_data_to_request(
     return data
 
 
-_REQUEST_FALLBACK_KEYS: Final = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks")
 _FALLBACK_DISCOVERY_LIMIT: Final = 256
 
 
@@ -3150,7 +3150,7 @@ def _fallback_lists(
     ):
         if isinstance(router_list, list):
             lists.append(cast("Sequence[object]", router_list))  # cast-ok: fallback lists hold mixed entry shapes
-    for key in _REQUEST_FALLBACK_KEYS:
+    for key in REQUEST_FALLBACK_KEYS:
         entries: object = data.get(key)
         if isinstance(entries, list):
             lists.append(cast("Sequence[object]", entries))  # cast-ok: request fallback lists hold mixed entry shapes
@@ -3403,7 +3403,7 @@ async def _resolve_user_provider_credentials_for_request(
             _fallback_entry_target_count(entry)
             for entry in cast("Sequence[object]", entries)  # cast-ok: request fallback lists hold mixed entry shapes
         )
-        for key in _REQUEST_FALLBACK_KEYS
+        for key in REQUEST_FALLBACK_KEYS
         if isinstance(entries := data.get(key), list)
     )
     if request_fallback_targets > _FALLBACK_DISCOVERY_LIMIT:

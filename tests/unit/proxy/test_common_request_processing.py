@@ -515,8 +515,11 @@ class TestProxyBaseLLMRequestProcessing:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("gate_allows", "expected_cache_controls"),
-        [(True, {"ttl": 60}), (False, {"ttl": 60, "no-cache": True, "no-store": True})],
+        ("gate_allows", "expected_cache_controls", "expected_fallback_cache_controls"),
+        [
+            (True, {"ttl": 60}, {}),
+            (False, {"ttl": 60, "no-cache": True, "no-store": True}, {"no-cache": True, "no-store": True}),
+        ],
         ids=["allowed", "rejected"],
     )
     async def test_common_processing_pre_call_logic_applies_the_semantic_cache_gate(
@@ -524,6 +527,7 @@ class TestProxyBaseLLMRequestProcessing:
         monkeypatch: pytest.MonkeyPatch,
         gate_allows: bool,
         expected_cache_controls: dict[str, object],
+        expected_fallback_cache_controls: dict[str, object],
     ) -> None:
         from litellm.caching.caching import Cache
         from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
@@ -552,7 +556,12 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         returned_data, _ = await ProxyBaseLLMRequestProcessing(
-            data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}], "cache": {"ttl": 60}}
+            data={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "cache": {"ttl": 60},
+                "fallbacks": [{"model": "gpt-4o", "cache": {}}],
+            }
         ).common_processing_pre_call_logic(
             request=request,
             general_settings={},
@@ -563,6 +572,7 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         assert returned_data["cache"] == expected_cache_controls
+        assert returned_data["fallbacks"] == [{"model": "gpt-4o", "cache": expected_fallback_cache_controls}]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("safe_memory_mode", [False, True])
