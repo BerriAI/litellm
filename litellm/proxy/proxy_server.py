@@ -15328,13 +15328,6 @@ async def count_request_tokens(
     sent_params: Final[Mapping[str, object]] = {**_router_default_litellm_params(llm_router), **request_litellm_params}
     count_deployment: Final = _deployment_with_request_drop_params(deployment, sent_params.get("drop_params"))
     conversation_empty: Final = not messages and not contents
-    if prompt and not conversation_empty and not deployment_drops_params(count_deployment):
-        raise ProxyException(
-            message="prompt cannot be sent with messages or contents. Set drop_params to count them without the prompt",
-            type="invalid_request_error",
-            param="prompt",
-            code=400,
-        )
     prompt_only: Final = bool(prompt) and conversation_empty
     request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
