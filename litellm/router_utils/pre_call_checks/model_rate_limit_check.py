@@ -5,15 +5,19 @@ When enabled via router_settings.optional_pre_call_checks: ["enforce_model_rate_
 
 - tpm/rpm: combined TPM + optional RPM (legacy)
 - itpm/otpm: separate input/output tokens per minute
+- tpd/rpd: tokens and requests per UTC calendar day
 
 When a deployment sets both itpm/otpm and tpm/rpm, both are enforced. A warning
 is logged the first time such a deployment is seen.
 """
 
 import contextlib
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Callable
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -47,6 +51,62 @@ else:
 
 class RoutingArgs:
     ttl: int = 60  # 1min (RPM/TPM expire key)
+    daily_ttl: int = 86400  # 1 day (RPD/TPD expire key)
+
+
+DAY_FORMAT: Final = "%Y-%m-%d"
+
+
+def seconds_until_utc_midnight(now: datetime) -> int:
+    next_midnight: Final = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(1, int((next_midnight - now).total_seconds()))
+
+
+def _first_set(*values: int | None) -> int | None:
+    return next((value for value in values if value is not None), None)
+
+
+class _DailyLimitFields(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+    tpd: int | None = None
+    rpd: int | None = None
+
+
+class _DailyLimitParams(_DailyLimitFields):
+    model: str | None = None
+
+
+class _DailyLimitModelInfo(_DailyLimitFields):
+    id: str | None = None
+
+
+class _DailyLimitDeployment(_DailyLimitFields):
+    model_name: str = ""
+    litellm_params: _DailyLimitParams = _DailyLimitParams()
+    model_info: _DailyLimitModelInfo = _DailyLimitModelInfo()
+
+    def limits(self) -> tuple[int | None, int | None]:
+        return (
+            _first_set(self.tpd, self.litellm_params.tpd, self.model_info.tpd),
+            _first_set(self.rpd, self.litellm_params.rpd, self.model_info.rpd),
+        )
+
+    def cache_keys(self, current_day: str) -> tuple[str, str]:
+        prefix: Final = f"{self.model_info.id}:{self.litellm_params.model}"
+        return f"{prefix}:tpd:{current_day}", f"{prefix}:rpd:{current_day}"
+
+    def limit_error(self, kind: Literal["tpd", "rpd"], limit: int, usage: int, now: datetime) -> litellm.RateLimitError:
+        return litellm.RateLimitError(
+            message=f"Model rate limit exceeded. {kind.upper()} limit={limit}, current usage={usage}",
+            llm_provider="",
+            model=self.litellm_params.model,
+            response=httpx.Response(
+                status_code=429,
+                content=f"{RouterErrors.user_defined_ratelimit_error.value} {kind} limit={limit}. current usage={usage}. id={self.model_info.id}, model_group={self.model_name}",
+                headers={"retry-after": str(seconds_until_utc_midnight(now))},
+                request=httpx.Request(method="model_rate_limit_check", url="https://github.com/BerriAI/litellm"),
+            ),
+        )
 
 
 class ModelRateLimitingCheck(CustomLogger):
@@ -60,8 +120,9 @@ class ModelRateLimitingCheck(CustomLogger):
     this check actively enforces those limits across ALL routing strategies.
     """
 
-    def __init__(self, dual_cache: DualCache):
+    def __init__(self, dual_cache: DualCache, clock: Callable[[], datetime] = get_utc_datetime):
         self.dual_cache = dual_cache
+        self.clock = clock
         # model_ids already warned about itpm/otpm + tpm/rpm on the same deployment,
         # so the warning is logged once per deployment rather than per request.
         self._io_token_conflict_warned_ids: set[str] = set()
@@ -129,6 +190,38 @@ class ModelRateLimitingCheck(CustomLogger):
 
         return tpm, rpm
 
+    def _check_daily_limits(self, deployment: _DailyLimitDeployment, now: datetime) -> None:
+        tpd_limit, rpd_limit = deployment.limits()
+        if tpd_limit is None and rpd_limit is None:
+            return
+        tpd_key, rpd_key = deployment.cache_keys(now.strftime(DAY_FORMAT))
+        if tpd_limit is not None:
+            current_tpd: Final = self._get_current_tpm(tpd_key, tpd_limit)
+            if current_tpd is not None and current_tpd >= tpd_limit:
+                raise deployment.limit_error("tpd", tpd_limit, current_tpd, now)
+        if rpd_limit is not None:
+            current_rpd: Final = self.dual_cache.increment_cache(key=rpd_key, value=1, ttl=RoutingArgs.daily_ttl)
+            if current_rpd > rpd_limit:
+                raise deployment.limit_error("rpd", rpd_limit, current_rpd, now)
+
+    async def _async_check_daily_limits(
+        self, deployment: _DailyLimitDeployment, now: datetime, parent_otel_span: Span | None
+    ) -> None:
+        tpd_limit, rpd_limit = deployment.limits()
+        if tpd_limit is None and rpd_limit is None:
+            return
+        tpd_key, rpd_key = deployment.cache_keys(now.strftime(DAY_FORMAT))
+        if tpd_limit is not None:
+            current_tpd: Final = await self._async_get_current_tpm(tpd_key, tpd_limit, parent_otel_span)
+            if current_tpd is not None and current_tpd >= tpd_limit:
+                raise deployment.limit_error("tpd", tpd_limit, current_tpd, now)
+        if rpd_limit is not None:
+            current_rpd: Final = await self.dual_cache.async_increment_cache(
+                key=rpd_key, value=1, ttl=RoutingArgs.daily_ttl, parent_otel_span=parent_otel_span
+            )
+            if current_rpd is not None and current_rpd > rpd_limit:
+                raise deployment.limit_error("rpd", rpd_limit, int(current_rpd), now)
+
     def _get_cache_keys(self, deployment: dict, current_minute: str) -> tuple[str, str]:
         """Get the cache keys for TPM and RPM tracking."""
         model_id: Final = deployment.get("model_info", {}).get("id")
@@ -178,13 +271,15 @@ class ModelRateLimitingCheck(CustomLogger):
                 )
                 io_reservation_made = True
 
+            dt: Final = self.clock()
+            self._check_daily_limits(_DailyLimitDeployment.model_validate(deployment), dt)
+
             tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
 
             # If no limits are set, allow the request
             if tpm_limit is None and rpm_limit is None:
                 return deployment
 
-            dt: Final = get_utc_datetime()
             current_minute: Final = dt.strftime("%H-%M")
             tpm_key, rpm_key = self._get_cache_keys(deployment, current_minute)
 
@@ -259,13 +354,15 @@ class ModelRateLimitingCheck(CustomLogger):
                 )
                 io_reservation_made = True
 
+            dt: Final = self.clock()
+            await self._async_check_daily_limits(_DailyLimitDeployment.model_validate(deployment), dt, parent_otel_span)
+
             tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
 
             # If no limits are set, allow the request
             if tpm_limit is None and rpm_limit is None:
                 return deployment
 
-            dt: Final = get_utc_datetime()
             current_minute: Final = dt.strftime("%H-%M")
             tpm_key, rpm_key = self._get_cache_keys(deployment, current_minute)
 
@@ -373,9 +470,10 @@ class ModelRateLimitingCheck(CustomLogger):
             if not model or not total_tokens:
                 return
 
-            dt: Final = get_utc_datetime()
+            dt: Final = self.clock()
             current_minute: Final = dt.strftime("%H-%M")
             tpm_key: Final = f"{model_id}:{model}:tpm:{current_minute}"
+            tpd_key: Final = f"{model_id}:{model}:tpd:{dt.strftime(DAY_FORMAT)}"
 
             verbose_router_logger.debug("[TPM TRACKING] Incrementing %s by %s", tpm_key, total_tokens)
 
@@ -384,6 +482,7 @@ class ModelRateLimitingCheck(CustomLogger):
                 value=total_tokens,
                 ttl=RoutingArgs.ttl,
             )
+            await self.dual_cache.async_increment_cache(key=tpd_key, value=total_tokens, ttl=RoutingArgs.daily_ttl)
 
         except Exception as e:
             verbose_router_logger.debug("Error in ModelRateLimitingCheck.async_log_success_event: %s", e)
@@ -434,15 +533,17 @@ class ModelRateLimitingCheck(CustomLogger):
             if not model or not total_tokens:
                 return
 
-            dt: Final = get_utc_datetime()
+            dt: Final = self.clock()
             current_minute: Final = dt.strftime("%H-%M")
             tpm_key: Final = f"{model_id}:{model}:tpm:{current_minute}"
+            tpd_key: Final = f"{model_id}:{model}:tpd:{dt.strftime(DAY_FORMAT)}"
 
             self.dual_cache.increment_cache(
                 key=tpm_key,
                 value=total_tokens,
                 ttl=RoutingArgs.ttl,
             )
+            self.dual_cache.increment_cache(key=tpd_key, value=total_tokens, ttl=RoutingArgs.daily_ttl)
 
         except Exception as e:
             verbose_router_logger.debug("Error in ModelRateLimitingCheck.log_success_event: %s", e)
