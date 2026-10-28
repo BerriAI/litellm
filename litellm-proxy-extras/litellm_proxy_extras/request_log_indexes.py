@@ -36,13 +36,17 @@ if TYPE_CHECKING:
 @dataclass(frozen=True, slots=True)
 class RequestLogIndex:
     """One index the migration job owns: the table, the exact Prisma index name, the
-    column list as it would be written after `ON <table>`, and the WHERE predicate of a
-    partial index."""
+    column list as it would be written after `ON <table>`, the WHERE predicate of a
+    partial index, and the most rows the build takes on by itself. An index whose build
+    has to read each row's metadata costs far more per row than a column index, so above
+    that estimate it is left for an operator to build off-peak instead of holding the
+    migration job past its deadline."""
 
     table: str
     name: str
     definition: str
     predicate: str | None = None
+    max_rows: int | None = None
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -72,7 +76,8 @@ REQUEST_LOG_INDEXES: Final = (
         "LiteLLM_SpendLogs",
         "LiteLLM_SpendLogs_error_code_startTime_idx",
         "((metadata->'error_information'->>'error_code'), \"startTime\")",
-        "jsonb_typeof(metadata->'error_information') = 'object'",
+        "(metadata->'error_information'->>'error_code') IS NOT NULL",
+        max_rows=5_000_000,
     ),
 )
 
@@ -88,6 +93,10 @@ _CREATE_INDEX_STATEMENT: Final = re.compile(
     re.IGNORECASE,
 )
 _TABLE_KIND_SQL: Final = "SELECT c.relkind = 'p' AS partitioned FROM pg_class c WHERE c.oid = to_regclass(%s)"
+_ESTIMATED_ROWS_SQL: Final = (
+    "SELECT COALESCE(SUM(GREATEST(c.reltuples, 0)), 0)::bigint AS rows FROM pg_class c WHERE c.relkind = 'r' "
+    "AND (c.oid = to_regclass(%(table)s) OR c.oid IN (SELECT relid FROM pg_partition_tree(to_regclass(%(table)s))))"
+)
 _CHILDREN_WITHOUT_THE_INDEX_SQL: Final = (
     "SELECT child.relname AS name, n.nspname AS schema, child.relkind = 'p' AS partitioned "
     "FROM pg_inherits i JOIN pg_class child ON child.oid = i.inhrelid "
@@ -143,6 +152,11 @@ class _TableKind:
     partitioned: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _EstimatedRows:
+    rows: int
+
+
 def filter_request_log_index_diff(diff_sql: str, indexes: tuple[RequestLogIndex, ...] = REQUEST_LOG_INDEXES) -> str:
     """The `prisma migrate diff` script without the statements that create a migration-job-owned
     index, which the schema declares and the migrations deliberately do not build."""
@@ -176,8 +190,9 @@ def ensure_request_log_indexes(
     """Build every listed index that is missing or invalid. Each build step runs under
     the migration coordinator lock, held per statement so a resolver booting on another
     replica gets in between partitions rather than waiting for the whole table. Any
-    failure is logged and left for the next index build; the result says whether
-    every index ended up valid. Never raises."""
+    failure is logged and left for the next index build, and an index over its
+    `max_rows` is logged and left for an operator; the result says whether every
+    other index ended up valid. Never raises."""
     import psycopg
 
     try:
@@ -238,9 +253,40 @@ def _ensure_index(connection: "psycopg.Connection[tuple[object, ...]]", schema: 
     if table is None:
         logger.info("Table %s does not exist yet, skipping index %s", index.table, index.name)
         return True
+    if _too_large_to_build(connection, schema, index):
+        return True
     if table.partitioned:
         return build_index_on_partitioned_table(connection, schema, index)
     return _build_leaf_index(connection, schema, index.table, index.name, index)
+
+
+def _too_large_to_build(
+    connection: "psycopg.Connection[tuple[object, ...]]", schema: str, index: RequestLogIndex
+) -> bool:
+    from psycopg.rows import class_row
+
+    if index.max_rows is None:
+        return False
+    existing: Final = _index_state(connection, schema, index.name)
+    if existing is not None and existing.valid:
+        return False
+    with connection.cursor(row_factory=class_row(_EstimatedRows)) as cursor:
+        rows: Final = sum(
+            estimate.rows
+            for estimate in cursor.execute(_ESTIMATED_ROWS_SQL, {"table": _regclass_name(connection, schema, index.table)})
+        )
+    if rows <= index.max_rows:
+        return False
+    logger.warning(
+        "Not building index %s on %s: it reads about %s rows, more than the %s it builds by itself. Build it off-peak "
+        "under that name as %s, and the next index build finds it in place",
+        index.name,
+        index.table,
+        rows,
+        index.max_rows,
+        index.body,
+    )
+    return True
 
 
 def _regclass_name(connection: "psycopg.Connection[tuple[object, ...]]", schema: str, name: str) -> str:

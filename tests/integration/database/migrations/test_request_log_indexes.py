@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -62,6 +62,7 @@ ORIGINAL_MIGRATION_SQL: Final = MappingProxyType(
     }
 )
 CALL_ID_INDEX_DEFINITION: Final = next(index for index in REQUEST_LOG_INDEXES if index.name == CALL_ID_INDEX)
+ERROR_INDEX_DEFINITION: Final = next(index for index in REQUEST_LOG_INDEXES if index.name == ERROR_INDEX)
 RELEASES: Final = pytest.mark.parametrize(
     "release", (API_KEY_INDEX_MIGRATION, CALL_ID_INDEX_MIGRATION), ids=("v1.102.1", "v1.103.0")
 )
@@ -73,6 +74,7 @@ PARTITIONS: Final = MappingProxyType(
 )
 DEFAULT_PARTITION: Final = "LiteLLM_SpendLogs_pdefault"
 ROWS_PER_PARTITION: Final = 200
+SEEDED_ROWS: Final = 50
 RESOLVERS: Final = pytest.mark.parametrize("use_v2_resolver", (True, False), ids=("v2", "v1"))
 
 
@@ -918,6 +920,51 @@ def test_the_partial_error_index_is_built_beside_the_plain_start_time_index_neve
     assert oids[ERROR_INDEX] != start_time_index
     assert _index_predicate(scratch_database, START_TIME_INDEX) is None
     assert _index_predicate(scratch_database, ERROR_INDEX) is not None
+
+
+def _seed_analyzed_spend_logs(database_url: str, partitioned: bool) -> int:
+    """Seed the spend logs, partitioned or not, ANALYZE them, and return how many rows they hold."""
+    if partitioned:
+        _partition_spend_logs(database_url)
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        for n in range(SEEDED_ROWS):
+            _insert_spend_log(conn, f"capped-{n}", "2026-10-01")
+        conn.execute('ANALYZE "LiteLLM_SpendLogs"')
+    return SEEDED_ROWS + (len(PARTITIONS) + 1) * ROWS_PER_PARTITION if partitioned else SEEDED_ROWS
+
+
+@requires_db
+@pytest.mark.parametrize("partitioned", (False, True), ids=("plain", "partitioned"))
+def test_an_index_over_its_row_cap_is_left_for_an_operator_without_failing_the_build(
+    scratch_database: str, partitioned: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A metadata index costs far more per row to build than a column index, so on a table over its cap the
+    migration job must finish without it instead of running past its deadline and failing the upgrade."""
+    rows: Final = _seed_analyzed_spend_logs(scratch_database, partitioned)
+    capped: Final = replace(ERROR_INDEX_DEFINITION, max_rows=rows - 1)
+
+    with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+        assert ensure_request_log_indexes(scratch_database, "public", (capped,)) is True
+    assert f"Not building index {ERROR_INDEX}" in caplog.text
+    assert _indexed_table(scratch_database, ERROR_INDEX) is None
+
+    assert ensure_request_log_indexes(scratch_database, "public", (replace(capped, max_rows=rows),)) is True
+    assert _index_validity(scratch_database, "error_code_startTime_idx")[ERROR_INDEX] is True
+
+
+@requires_db
+def test_an_index_an_operator_built_by_hand_on_a_table_over_the_cap_is_found_in_place(
+    scratch_database: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    _seed_analyzed_spend_logs(scratch_database, partitioned=False)
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute(f'CREATE INDEX CONCURRENTLY "{ERROR_INDEX}" ON "LiteLLM_SpendLogs" {ERROR_INDEX_DEFINITION.body}')
+    hand_built: Final = _index_oids(scratch_database)[ERROR_INDEX]
+
+    with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+        assert ensure_request_log_indexes(scratch_database, "public", (replace(ERROR_INDEX_DEFINITION, max_rows=1),))
+    assert "Not building index" not in caplog.text
+    assert _index_oids(scratch_database)[ERROR_INDEX] == hand_built
 
 
 @requires_db
