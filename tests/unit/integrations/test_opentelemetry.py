@@ -4185,6 +4185,38 @@ class TestResponseIdFallback(unittest.TestCase):
 
         mock_span.set_attribute.assert_any_call("litellm.call_id", call_id)
 
+    def test_litellm_call_id_set_when_response_obj_has_no_get(self):
+        """Responses without .get() (MCP CallToolResult, DecisionsResponse, list)
+        must not abort set_attributes before litellm.call_id is set."""
+        from pydantic import BaseModel
+
+        class NoGetResponse(BaseModel):
+            id: str = "dec-1"
+
+        call_id = "my-litellm-call-uuid-789"
+        for response_obj in (NoGetResponse(), ["tool output"]):
+            with self.subTest(response_type=type(response_obj).__name__):
+                otel = OpenTelemetry()
+                mock_span = MagicMock()
+                kwargs = {
+                    "model": "my-model",
+                    "optional_params": {},
+                    "litellm_params": {},
+                    "standard_logging_object": {
+                        "id": "litellm-call-id-1",
+                        "litellm_call_id": call_id,
+                        "call_type": "call_mcp_tool",
+                        "metadata": {},
+                    },
+                }
+
+                otel.set_attributes(mock_span, kwargs, response_obj)
+
+                mock_span.set_attribute.assert_any_call("litellm.call_id", call_id)
+                mock_span.set_attribute.assert_any_call(
+                    "gen_ai.response.id", "litellm-call-id-1"
+                )
+
 
 class TestOpenTelemetryResponsesAPI(unittest.TestCase):
     """
