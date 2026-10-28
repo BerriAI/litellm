@@ -269,7 +269,11 @@ class MistralConfig(OpenAIGPTConfig):
         Mistral API supports content as a list.
         """
         keeps_reasoning: Final = self._accepts_reasoning(model)
-        replayed_messages: Final = [MistralConfig._with_replayed_reasoning(m, keeps_reasoning) for m in messages]
+        final_position: Final = len(messages) - 1
+        replayed_messages: Final = [
+            MistralConfig._with_replayed_reasoning(m, keeps_reasoning, position == final_position)
+            for position, m in enumerate(messages)
+        ]
 
         ## 1. If 'image_url' or 'file' in content, then transform with base class and mistral-specific handling
         for m in replayed_messages:
@@ -470,7 +474,9 @@ class MistralConfig(OpenAIGPTConfig):
                 return None
 
     @staticmethod
-    def _sendable_think_chunk(chunk: object, items: Sequence[object]) -> MistralThinkingBlock | None:
+    def _sendable_think_chunk(
+        chunk: object, items: Sequence[object], may_stay_open: bool
+    ) -> MistralThinkingBlock | None:
         text_items: Final = [
             MistralTextBlock(type="text", text=text)
             for text in map(MistralConfig._text_item_text, items)
@@ -479,23 +485,30 @@ class MistralConfig(OpenAIGPTConfig):
         if not text_items:
             return None
         match chunk:
+            case {"closed": False} if not may_stay_open:
+                return MistralThinkingBlock(type="thinking", thinking=text_items)
             case {"closed": bool(closed)}:
                 return MistralThinkingBlock(type="thinking", thinking=text_items, closed=closed)
             case _:
                 return MistralThinkingBlock(type="thinking", thinking=text_items)
 
     @staticmethod
-    def _sendable_part(part: object) -> object | None:
+    def _sendable_part(part: object, may_stay_open: bool) -> object | None:
         match part:
             case {"type": "thinking", "thinking": object() as items} if _is_json_array(items):
-                return MistralConfig._sendable_think_chunk(part, items)
+                return MistralConfig._sendable_think_chunk(part, items, may_stay_open)
             case _:
                 return part
 
     @staticmethod
-    def _with_sendable_think_chunks(message: AllMessageValues, content_parts: tuple[object, ...]) -> AllMessageValues:
+    def _with_sendable_think_chunks(
+        message: AllMessageValues, content_parts: tuple[object, ...], may_end_open: bool
+    ) -> AllMessageValues:
+        last_position: Final = len(content_parts) - 1
         sendable_parts: Final = [
-            sendable for part in content_parts if (sendable := MistralConfig._sendable_part(part)) is not None
+            sendable
+            for position, part in enumerate(content_parts)
+            if (sendable := MistralConfig._sendable_part(part, may_end_open and position == last_position)) is not None
         ]
         return cast(  # cast-ok: Mistral's ThinkChunk is outside the OpenAI assistant content union
             AllMessageValues, {**message, "content": sendable_parts or None}
@@ -535,7 +548,17 @@ class MistralConfig(OpenAIGPTConfig):
                 return None
 
     @staticmethod
-    def _with_replayed_reasoning(message: AllMessageValues, keeps_reasoning: bool) -> AllMessageValues:
+    def _is_prefix_turn(message: object) -> bool:
+        match message:
+            case {"prefix": True}:
+                return True
+            case _:
+                return False
+
+    @staticmethod
+    def _with_replayed_reasoning(
+        message: AllMessageValues, keeps_reasoning: bool, is_final_turn: bool
+    ) -> AllMessageValues:
         if message["role"] != "assistant":
             return message
         stripped_message: Final = strip_litellm_internal_message_fields(message)
@@ -543,7 +566,9 @@ class MistralConfig(OpenAIGPTConfig):
         if not keeps_reasoning:
             return MistralConfig._without_think_chunks(stripped_message, content_parts)
         if content_parts is not None and any(map(MistralConfig._is_mistral_think_chunk, content_parts)):
-            return MistralConfig._with_sendable_think_chunks(stripped_message, content_parts)
+            return MistralConfig._with_sendable_think_chunks(
+                stripped_message, content_parts, is_final_turn and MistralConfig._is_prefix_turn(message)
+            )
         reasoning_text: Final = MistralConfig._replayed_reasoning_text(message)
         has_turn_output: Final = bool(content_parts) or bool(message.get("tool_calls"))
         if reasoning_text is None or content_parts is None or not has_turn_output:

@@ -1219,6 +1219,54 @@ def test_mistral_sends_only_the_text_items_of_a_native_thinking_chunk_beside_an_
     }
 
 
+_OPEN_THINK_CHUNK: Final = {
+    "type": "thinking",
+    "thinking": [{"type": "text", "text": "I pick 482913."}],
+    "closed": False,
+}
+_THINK_CHUNK_WITHOUT_CLOSED: Final = {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 482913."}]}
+_PICKED_TEXT: Final = {"type": "text", "text": "I have picked it."}
+
+
+@pytest.mark.parametrize(
+    ("assistant_turn", "later_messages", "expected_turn"),
+    [
+        pytest.param(
+            {"role": "assistant", "content": [_OPEN_THINK_CHUNK, _PICKED_TEXT]},
+            [{"role": "user", "content": "Which one?"}],
+            {"role": "assistant", "content": [_THINK_CHUNK_WITHOUT_CLOSED, _PICKED_TEXT]},
+            id="history_turn",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": [_OPEN_THINK_CHUNK], "prefix": True},
+            [],
+            {"role": "assistant", "content": [_OPEN_THINK_CHUNK], "prefix": True},
+            id="last_chunk_of_final_prefix_turn",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": [_OPEN_THINK_CHUNK, _PICKED_TEXT], "prefix": True},
+            [],
+            {"role": "assistant", "content": [_THINK_CHUNK_WITHOUT_CLOSED, _PICKED_TEXT], "prefix": True},
+            id="final_prefix_turn_with_text_after_the_chunk",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": [_OPEN_THINK_CHUNK]},
+            [],
+            {"role": "assistant", "content": [_THINK_CHUNK_WITHOUT_CLOSED]},
+            id="final_turn_without_prefix",
+        ),
+    ],
+)
+def test_mistral_keeps_an_open_thinking_chunk_only_as_the_last_chunk_of_a_final_prefix_turn(
+    assistant_turn: dict[str, object], later_messages: list[dict[str, object]], expected_turn: dict[str, object]
+):
+    result: Final = _mistral_request_messages(
+        [{"role": "user", "content": "Pick a number."}, assistant_turn, *later_messages]
+    )
+
+    assert result[1] == expected_turn
+
+
 @pytest.mark.parametrize(
     "reasoning_fields",
     [
