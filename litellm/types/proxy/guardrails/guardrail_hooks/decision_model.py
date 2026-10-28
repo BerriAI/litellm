@@ -2,7 +2,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from litellm.types.decisions import MAX_DECISION_QUESTIONS
 from litellm.types.llms.base import LiteLLMBaseModel
 
 from .base import GuardrailConfigModel
@@ -32,7 +31,6 @@ class DecisionModelGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
     )
     checks: tuple[DecisionModelCheck, ...] = Field(
         min_length=1,
-        max_length=MAX_DECISION_QUESTIONS,
         description=(
             "Predicates the decision model answers about each request or response. A check flagged at or "
             "above its threshold blocks (action 'block') or is recorded (action 'log')."

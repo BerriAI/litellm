@@ -15,7 +15,6 @@ from litellm.llms.base_llm.decisions.transformation import (
 )
 from litellm.llms.openai.decisions.transformation import openai_request_to_ir
 from litellm.types.decisions import (
-    MAX_DECISION_QUESTIONS,
     DecisionsIRRefusal,
     DecisionsIRRequest,
     DecisionsIRScoreAnswer,
@@ -134,19 +133,15 @@ def test_systemone_images_reach_a_systemone_provider_in_the_callers_form() -> No
     assert ir_to_systemone_request("clef", ir) == {"model": "clef", **_SYSTEMONE_REQUEST, "images": images}
 
 
-def test_the_largest_openai_request_accepted_translates_to_a_valid_systemone_request() -> None:
-    ir: Final = _openai_ir(
-        {
-            "input": "review",
-            "questions": [
-                {"type": "predicate", "instructions": f"Question {index}?"} for index in range(MAX_DECISION_QUESTIONS)
-            ],
-        }
+def test_an_openai_request_with_more_than_128_questions_translates_to_a_valid_systemone_request() -> None:
+    question_count: Final = 1000
+    questions: Final = [{"type": "predicate", "instructions": f"Question {index}?"} for index in range(question_count)]
+
+    translated: Final = _SYSTEMONE_BODY.validate_python(
+        ir_to_systemone_request("jev-latest", _openai_ir({"input": "review", "questions": questions}))
     )
 
-    translated: Final = _SYSTEMONE_BODY.validate_python(ir_to_systemone_request("jev-latest", ir))
-
-    assert len(translated.questions) == MAX_DECISION_QUESTIONS
+    assert tuple(translated.questions) == tuple(str(index) for index in range(question_count))
 
 
 def test_a_systemone_response_reaches_the_caller_unchanged_with_provider_extras() -> None:

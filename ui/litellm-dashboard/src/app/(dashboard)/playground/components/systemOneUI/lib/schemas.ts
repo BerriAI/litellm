@@ -35,10 +35,9 @@ export const decisionsRequestSchema = z.looseObject({
     .refine((value) => value.trim().length > 0, "Model must be a non-empty string.")
     .optional(),
   state: decisionsJson,
-  questions: z.record(z.string().min(1), decisionQuestionSchema).refine((value) => {
-    const count = Object.keys(value).length;
-    return count >= 1 && count <= 128;
-  }, "Questions must contain between 1 and 128 entries."),
+  questions: z
+    .record(z.string().min(1), decisionQuestionSchema)
+    .refine((value) => Object.keys(value).length >= 1, "Questions must contain at least one entry."),
 });
 
 export type DecisionRequest = z.infer<typeof decisionsRequestSchema>;

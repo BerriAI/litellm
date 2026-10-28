@@ -621,6 +621,39 @@ def test_openai_format_decisions_translate_through_systemone(
     assert float(response.headers["x-litellm-response-cost"]) > 0
 
 
+@pytest.mark.parametrize("endpoint", ("/v1/decisions", "/decisions"))
+@pytest.mark.parametrize("question_count", (129, 1000))
+def test_openai_format_decisions_preserve_large_question_batches(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    question_count: int,
+) -> None:
+    questions: Final = [
+        {"type": "predicate", "name": f"q{index}", "instructions": f"Question {index}?"}
+        for index in range(question_count)
+    ]
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(
+        json={
+            **_RESPONSE,
+            "answers": {
+                f"q{index}": {"type": "noul", "noul": index / question_count} for index in range(question_count)
+            },
+        }
+    )
+
+    response: Final = client.post(endpoint, json={"model": "decider", "input": "review", "questions": questions})
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content)["questions"] == {
+        f"q{index}": {"type": "noul", "instructions": f"Question {index}?"} for index in range(question_count)
+    }
+    assert response.json()["answers"] == [
+        {"type": "predicate", "name": f"q{index}", "probability": index / question_count}
+        for index in range(question_count)
+    ]
+
+
 @pytest.mark.parametrize(
     ("endpoint", "request_body", "upstream_response"),
     (

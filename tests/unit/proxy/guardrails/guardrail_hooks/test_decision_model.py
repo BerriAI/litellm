@@ -978,13 +978,33 @@ async def test_sdk_path_forwards_configured_timeout(mock_sdk_decisions):
     assert mock_sdk_decisions.await_args.kwargs["timeout"] == 3.25
 
 
-def test_more_than_max_questions_checks_rejected_at_init():
+@pytest.mark.asyncio
+async def test_a_guardrail_with_more_than_128_checks_asks_and_enforces_every_check():
+    check_count: Final = 1000
     checks: Final = tuple(
-        DecisionModelCheck(name=f"check_{index}", instructions="Is this true?") for index in range(129)
+        DecisionModelCheck(name=f"check_{index}", instructions=f"Is claim {index} true?")
+        for index in range(check_count)
     )
+    router: Final = _decision_router()
+    router.adecisions = AsyncMock(
+        return_value=OpenAIDecisionResponse(
+            model="jev-latest",
+            answers=tuple(
+                OpenAIPredicateAnswer(name=check.name, probability=0.9 if check is checks[-1] else 0.0)
+                for check in checks
+            ),
+            usage=OpenAIDecisionUsage(input_tokens=10, output_tokens=1, total_tokens=11),
+        )
+    )
+    guardrail: Final = _make_guardrail(checks=checks, router_provider=lambda: router)
 
-    with pytest.raises(ValueError, match="at most 128 checks"):
-        _make_guardrail(checks=checks)
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail({"texts": ["hi"]}, _request_data(), "request")
+
+    assert cast(dict[str, object], exc_info.value.detail)["flagged_checks"] == [checks[-1].name]
+    assert router.adecisions.await_args.kwargs["questions"] == [
+        {"type": "predicate", "name": check.name, "instructions": check.instructions} for check in checks
+    ]
 
 
 def _flaky_chunk_router(marker: str) -> MagicMock:

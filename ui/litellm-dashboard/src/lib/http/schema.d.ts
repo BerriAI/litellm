@@ -4734,7 +4734,7 @@ export interface paths {
         put?: never;
         /**
          * Ask questions about an input (OpenAI Decisions format)
-         * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
+         * @description Judge an `input` against one or more `questions` and get the answers back in the same order.
          *
          *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
          *     `probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the
@@ -19937,7 +19937,7 @@ export interface paths {
         put?: never;
         /**
          * Ask questions about an input (OpenAI Decisions format)
-         * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
+         * @description Judge an `input` against one or more `questions` and get the answers back in the same order.
          *
          *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
          *     `probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the

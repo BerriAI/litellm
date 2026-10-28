@@ -10685,7 +10685,7 @@
     "paths": {
       "/decisions": {
         "post": {
-          "description": "Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the\n`instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before\nany provider is called. `model` is any decision model in the proxy\nmodel list. System One decision models accept this format too, LiteLLM translates the request and the\nanswers. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge an `input` against one or more `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the\n`instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before\nany provider is called. `model` is any decision model in the proxy\nmodel list. System One decision models accept this format too, LiteLLM translates the request and the\nanswers. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "decisions_decisions_post",
           "requestBody": {
             "content": {
@@ -11095,7 +11095,6 @@
                           }
                         ]
                       },
-                      "maxItems": 128,
                       "minItems": 1,
                       "title": "Questions",
                       "type": "array"
@@ -12091,7 +12090,7 @@
       },
       "/v1/decisions": {
         "post": {
-          "description": "Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the\n`instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before\nany provider is called. `model` is any decision model in the proxy\nmodel list. System One decision models accept this format too, LiteLLM translates the request and the\nanswers. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge an `input` against one or more `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the\n`instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before\nany provider is called. `model` is any decision model in the proxy\nmodel list. System One decision models accept this format too, LiteLLM translates the request and the\nanswers. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "decisions_v1_decisions_post",
           "requestBody": {
             "content": {
@@ -12501,7 +12500,6 @@
                           }
                         ]
                       },
-                      "maxItems": 128,
                       "minItems": 1,
                       "title": "Questions",
                       "type": "array"

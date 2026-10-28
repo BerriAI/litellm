@@ -49,8 +49,7 @@ const requestFields = {
         }),
       ]),
     )
-    .min(1)
-    .max(128),
+    .min(1),
   safety_identifier: z.string().nullish(),
 };
 export const openAIDecisionsRequestSchema = z.looseObject(requestFields);
