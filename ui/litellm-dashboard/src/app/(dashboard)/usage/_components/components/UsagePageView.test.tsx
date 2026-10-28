@@ -1,5 +1,4 @@
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
-import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
@@ -244,10 +243,6 @@ vi.mock("@/components/liteadmin/LiteAdmin", () => ({
   AriaUsageComposer: () => <section aria-label="Ask Aria Agent">Shared Aria composer</section>,
 }));
 
-vi.mock("@/app/(dashboard)/hooks/customers/useCustomers", () => ({
-  useCustomers: vi.fn(),
-}));
-
 vi.mock("@/app/(dashboard)/hooks/agents/useAgents", () => ({
   useAgents: vi.fn(),
 }));
@@ -283,7 +278,6 @@ describe("UsagePage", () => {
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
   const mockRequestErrorActivityCall = vi.mocked(networking.requestErrorActivityCall);
-  const mockUseCustomers = vi.mocked(useCustomers);
   const mockUseAgents = vi.mocked(useAgents);
   const mockUseAuthorized = vi.mocked(useAuthorized);
   const mockUseCurrentUser = vi.mocked(useCurrentUser);
@@ -403,19 +397,6 @@ describe("UsagePage", () => {
       teams: null,
       users: null,
       members: null,
-    },
-  ];
-
-  const mockCustomers = [
-    {
-      user_id: "customer-123",
-      alias: "Test Customer",
-      spend: 0,
-      blocked: false,
-      allowed_model_region: null,
-      default_model: null,
-      budget_id: null,
-      litellm_budget_table: null,
     },
   ];
 
@@ -590,11 +571,6 @@ describe("UsagePage", () => {
       isLoading: false,
     } as any);
     mockTagListCall.mockResolvedValue({});
-    mockUseCustomers.mockReturnValue({
-      data: [],
-      isLoading: false,
-      error: null,
-    } as any);
     mockUseAgents.mockReturnValue({
       data: { agents: [] },
       isLoading: false,
@@ -1026,12 +1002,6 @@ describe("UsagePage", () => {
   });
 
   it("should show customer usage view for admins", async () => {
-    mockUseCustomers.mockReturnValue({
-      data: mockCustomers,
-      isLoading: false,
-      error: null,
-    } as any);
-
     renderWithProviders(<UsagePage {...defaultProps} />);
 
     await waitFor(() => {
@@ -1049,9 +1019,7 @@ describe("UsagePage", () => {
     });
   });
 
-  it("should withhold the customer list while it is still loading", async () => {
-    mockUseCustomers.mockReturnValue({ data: undefined, isLoading: true, error: null } as any);
-
+  it("leaves customer discovery to the customer filter", async () => {
     renderWithProviders(<UsagePage {...defaultProps} />);
 
     act(() => {
@@ -1556,12 +1524,6 @@ describe("UsagePage", () => {
 
   describe("customer usage banner", () => {
     it("should show and be dismissible in customer view", async () => {
-      mockUseCustomers.mockReturnValue({
-        data: mockCustomers,
-        isLoading: false,
-        error: null,
-      } as any);
-
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {

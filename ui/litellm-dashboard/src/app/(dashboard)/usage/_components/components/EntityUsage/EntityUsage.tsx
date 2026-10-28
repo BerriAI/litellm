@@ -22,6 +22,7 @@ import { cn } from "@/lib/cva.config";
 import React, { type ReactNode, useCallback, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import UserDropdown from "@/components/common_components/UserDropdown";
+import CustomerMultiSelect from "@/components/common_components/CustomerMultiSelect";
 import UserRecordLink from "../UserRecordLink";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import { UsageExportHeader } from "@/components/EntityUsageExport";
@@ -268,6 +269,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         return entityItem.label;
       }
     }
+    if (entityType === "customer" && metadata?.alias) {
+      return metadata.alias;
+    }
     // Fallback to team_alias for backward compatibility
     if (metadata?.team_alias) {
       return metadata.team_alias;
@@ -346,6 +350,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const entityFilterSlots: Partial<Record<EntityType, ReactNode>> = {
     team: <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />,
+    customer: <CustomerMultiSelect value={selectedTags} onChange={setSelectedTags} />,
     user: (
       <div className="flex items-center gap-3">
         <UserDropdown value={selectedTags[0] ?? null} onChange={(userId) => setSelectedTags(userId ? [userId] : [])} />
