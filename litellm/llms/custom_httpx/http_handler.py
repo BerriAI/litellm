@@ -20,6 +20,7 @@ from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import CertTypes, RequestFiles
 from httpx._utils import get_environment_proxies
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -566,6 +567,34 @@ async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> N
     raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
 
 
+_TIMEOUT_PHASES: Final[Mapping[type[httpx.TimeoutException], tuple[str, str]]] = MappingProxyType(
+    {
+        httpx.ConnectTimeout: ("Connection", "connect"),
+        httpx.ReadTimeout: ("Read", "read"),
+        httpx.WriteTimeout: ("Write", "write"),
+        httpx.PoolTimeout: ("Connection pool", "pool"),
+    }
+)
+_UNKNOWN_TIMEOUT_PHASE: Final = ("Request", "read")
+_TIMEOUT_EXTENSION: Final = TypeAdapter(dict[str, float | None])
+
+
+def _timeout_phase_seconds(error: httpx.TimeoutException, phase: str) -> float | None:
+    """The limit httpx enforced for ``phase`` on the request that raised ``error``, from the request itself."""
+    return _TIMEOUT_EXTENSION.validate_python(error.request.extensions["timeout"]).get(phase)
+
+
+def _raise_timeout(error: httpx.TimeoutException, started_at: float) -> NoReturn:
+    label, phase = _TIMEOUT_PHASES.get(type(error), _UNKNOWN_TIMEOUT_PHASE)
+    seconds: Final = _timeout_phase_seconds(error, phase)
+    time_taken: Final = round(time.time() - started_at, 3)
+    raise litellm.Timeout(
+        message=f"{label} timed out. Timeout passed={seconds}, time taken={time_taken} seconds",
+        model="default-model-name",
+        llm_provider="litellm-httpx-handler",
+    )
+
+
 class HTTPResponseLimitError(ValueError):
     pass
 
@@ -797,9 +826,11 @@ class AsyncHTTPHandler:
                 )
             if response.is_redirect or response.is_error:
                 return httpx.Response(response.status_code, headers=response.headers, request=response.request)
-            if response.headers.get("content-encoding", "identity").lower() != "identity":
+            content_encoding: Final = header_value(response.headers, "content-encoding")
+            if ("identity" if content_encoding is None else content_encoding).lower() != "identity":
                 raise HTTPResponseLimitError("Response size limits require an uncompressed response")
-            if int(response.headers.get("content-length", "0")) > max_bytes:
+            content_length: Final = header_value(response.headers, "content-length")
+            if int("0" if content_length is None else content_length) > max_bytes:
                 raise HTTPResponseLimitError("Response exceeds the configured size limit")
             with BytesIO() as body:
                 async for chunk in response.aiter_bytes(chunk_size=65536):
@@ -868,20 +899,7 @@ class AsyncHTTPHandler:
             finally:
                 await new_client.aclose()
         except httpx.TimeoutException as e:
-            end_time: Final = time.time()
-            time_delta: Final = round(end_time - start_time, 3)
-            headers = {}
-            error_response: Final[httpx.Response | None] = getattr(e, "response", None)
-            if error_response is not None:
-                for key, value in error_response.headers.items():
-                    headers[f"response_headers-{key}"] = value
-
-            raise litellm.Timeout(
-                message=f"Connection timed out. Timeout passed={timeout}, time taken={time_delta} seconds",
-                model="default-model-name",
-                llm_provider="litellm-httpx-handler",
-                headers=headers,
-            )
+            _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
             await _raise_masked_async_error(e, stream)
         except Exception as e:
@@ -900,6 +918,7 @@ class AsyncHTTPHandler:
         follow_redirects: bool | None = None,
     ):
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
+        start_time: Final = time.time()
         try:
             if timeout is None:
                 timeout = self.timeout
@@ -944,18 +963,7 @@ class AsyncHTTPHandler:
             finally:
                 await new_client.aclose()
         except httpx.TimeoutException as e:
-            headers = {}
-            error_response: Final[httpx.Response | None] = getattr(e, "response", None)
-            if error_response is not None:
-                for key, value in error_response.headers.items():
-                    headers[f"response_headers-{key}"] = value
-
-            raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
-                model="default-model-name",
-                llm_provider="litellm-httpx-handler",
-                headers=headers,
-            )
+            _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
             await _raise_masked_async_error(e, stream)
         except Exception as e:
@@ -972,6 +980,7 @@ class AsyncHTTPHandler:
         stream: bool = False,
         content: _RequestContent | None = None,
     ):
+        start_time: Final = time.time()
         try:
             if timeout is None:
                 timeout = self.timeout
@@ -1010,18 +1019,7 @@ class AsyncHTTPHandler:
             finally:
                 await new_client.aclose()
         except httpx.TimeoutException as e:
-            headers = {}
-            error_response: Final[httpx.Response | None] = getattr(e, "response", None)
-            if error_response is not None:
-                for key, value in error_response.headers.items():
-                    headers[f"response_headers-{key}"] = value
-
-            raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
-                model="default-model-name",
-                llm_provider="litellm-httpx-handler",
-                headers=headers,
-            )
+            _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
             await _raise_masked_async_error(e, stream)
         except Exception as e:
@@ -1512,6 +1510,7 @@ class HTTPHandler:
         content: _RequestContent | None = None,
         logging_obj: LiteLLMLoggingObject | None = None,
     ):
+        start_time: Final = time.time()
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
@@ -1544,12 +1543,8 @@ class HTTPHandler:
                 _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
-        except httpx.TimeoutException:
-            raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
-                model="default-model-name",
-                llm_provider="litellm-httpx-handler",
-            )
+        except httpx.TimeoutException as e:
+            _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
             _raise_masked_sync_error(e, stream)
         except Exception as e:
@@ -1566,6 +1561,7 @@ class HTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         content: _RequestContent | None = None,
     ):
+        start_time: Final = time.time()
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
@@ -1596,12 +1592,8 @@ class HTTPHandler:
                 _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
-        except httpx.TimeoutException:
-            raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
-                model="default-model-name",
-                llm_provider="litellm-httpx-handler",
-            )
+        except httpx.TimeoutException as e:
+            _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
             _raise_masked_sync_error(e, stream)
         except Exception as e:
@@ -1618,6 +1610,7 @@ class HTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         content: _RequestContent | None = None,
     ):
+        start_time: Final = time.time()
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
@@ -1647,12 +1640,8 @@ class HTTPHandler:
             if stream:
                 _anchor_handler_to(response, self)
             return response
-        except httpx.TimeoutException:
-            raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
-                model="default-model-name",
-                llm_provider="litellm-httpx-handler",
-            )
+        except httpx.TimeoutException as e:
+            _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
             _raise_masked_sync_error(e, stream)
         except Exception as e:
@@ -1669,6 +1658,7 @@ class HTTPHandler:
         stream: bool = False,
         content: _RequestContent | None = None,
     ):
+        start_time: Final = time.time()
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
@@ -1699,12 +1689,8 @@ class HTTPHandler:
                 _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
-        except httpx.TimeoutException:
-            raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
-                model="default-model-name",
-                llm_provider="litellm-httpx-handler",
-            )
+        except httpx.TimeoutException as e:
+            _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
             _raise_masked_sync_error(e, stream)
         except Exception as e:

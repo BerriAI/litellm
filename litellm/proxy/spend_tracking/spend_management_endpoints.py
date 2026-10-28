@@ -16,7 +16,6 @@ from typing import (
     NamedTuple,
     Protocol,
     TypeAlias,
-    TypedDict,
     TypeVar,
     cast,  # noqa: TID251  # custom-logger and cold-storage payloads are untyped JSON
 )
@@ -24,7 +23,7 @@ from typing import (
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, assert_never
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -35,6 +34,7 @@ from litellm.constants import (
     SPEND_CAPTURE_RATE_MAX_RANGE_DAYS,
 )
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, classifier_input_snapshot
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.authorization import (
@@ -84,6 +84,7 @@ else:
 router: Final = APIRouter()
 
 SPEND_LOGS_PAGINATION_COUNT_CAP: Final = 10000
+_DECODED_JSON: Final = TypeAdapter(object)
 
 _SESSION_KEY_EXPR: Final = "COALESCE(NULLIF(session_id, ''), request_id)"
 _SESSION_GROUP_KEY_SQL: Final = f"{_SESSION_KEY_EXPR}, api_key"
@@ -2494,7 +2495,7 @@ def _build_spend_log_search_condition(
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
-        200: {"model": dict[str, Any]},
+        200: {"model": dict[str, object]},
     },
 )
 @router.get(
@@ -2719,7 +2720,7 @@ async def ui_view_spend_logs(
             end_date_obj = parse_date(end_date)
 
         # Build where conditions
-        where_conditions: Final[dict[str, Any]] = {}
+        where_conditions: Final[dict[str, object]] = {}
         if start_date_obj is not None and end_date_obj is not None:
             where_conditions["startTime"] = {
                 "gte": start_date_obj.isoformat(),  # Already in UTC, no need to add Z
@@ -2781,18 +2782,14 @@ async def ui_view_spend_logs(
             if len(metadata_filters) == 1:
                 where_conditions["metadata"] = metadata_filters[0]
             else:
-                where_conditions["AND"] = where_conditions.get("AND", []) + [
-                    {"metadata": filter_cond} for filter_cond in metadata_filters
-                ]
+                where_conditions["AND"] = [{"metadata": filter_cond} for filter_cond in metadata_filters]
         if end_user is not None:
             where_conditions["end_user"] = end_user
 
         if min_spend is not None or max_spend is not None:
-            where_conditions["spend"] = {}
-            if min_spend is not None:
-                where_conditions["spend"]["gte"] = min_spend
-            if max_spend is not None:
-                where_conditions["spend"]["lte"] = max_spend
+            where_conditions["spend"] = {
+                key: value for key, value in (("gte", min_spend), ("lte", max_spend)) if value is not None
+            }
         # A request_id lookup drops the date window, so a non-admin could otherwise
         # reach any single row by id; require they own one of the matches, mirroring
         # the detail endpoint, and keep the general scoping below so a colliding
@@ -3048,7 +3045,7 @@ async def ui_view_spend_logs(
         )
         sql_params.extend([page_size, skip])
 
-        data: Final = await prisma_client.db.query_raw(sql_query, *sql_params)
+        data: Final[Sequence[Mapping[str, object]]] = await _query_raw(prisma_client, sql_query, *sql_params)
 
         if request_id is not None and not is_v2 and not is_admin_view:
             await _assert_user_owns_fetched_spend_rows(
@@ -3067,7 +3064,7 @@ async def ui_view_spend_logs(
 
         return await _build_ui_spend_logs_response(
             prisma_client,
-            data,
+            list(data),
             total_records,
             page,
             page_size,
@@ -3310,14 +3307,17 @@ def _hydrate_spend_log_metadata(rows: Sequence[Mapping[str, object]]) -> None:
 def _cold_storage_object_key_from_metadata(
     metadata: str | Mapping[str, object] | None,
 ) -> str | None:
-    if isinstance(metadata, str):
-        try:
-            metadata = json.loads(metadata)
-        except (json.JSONDecodeError, TypeError):
-            return None
-    if not isinstance(metadata, dict):
+    if not isinstance(metadata, str):
+        return _cold_storage_object_key(metadata if isinstance(metadata, dict) else None)
+    try:
+        decoded: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(metadata)))
+    except (json.JSONDecodeError, TypeError):
         return None
-    object_key: Final = metadata.get("cold_storage_object_key")
+    return _cold_storage_object_key(decoded)
+
+
+def _cold_storage_object_key(metadata: Mapping[str, object] | None) -> str | None:
+    object_key: Final = metadata.get("cold_storage_object_key") if metadata is not None else None
     return object_key if isinstance(object_key, str) and object_key else None
 
 

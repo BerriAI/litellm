@@ -19,6 +19,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import redis
 import redis.asyncio as async_redis
+from pydantic import TypeAdapter
 from redis.credentials import CredentialProvider
 
 from litellm import get_secret, get_secret_str
@@ -40,6 +41,7 @@ from ._logging import verbose_logger
 _generate_gcp_iam_access_token = generate_gcp_iam_access_token
 
 AZURE_REDIS_SCOPE: Final = "https://redis.azure.com/.default"
+_UNWRAPPED_INIT: Final = TypeAdapter(object)
 
 _AWS_IAM_KWARG_NAMES: Final = (
     "aws_iam_auth",
@@ -64,7 +66,7 @@ def _unwrapped_init_args(cls: type) -> frozenset[str]:
     ``@deprecated_args`` too, which the same class of bug as ``_init_arg_names``
     would otherwise silently empty this allowlist through (see its docstring).
     """
-    spec: Final = inspect.getfullargspec(inspect.unwrap(cls.__init__))
+    spec: Final = inspect.getfullargspec(_UNWRAPPED_INIT.validate_python(inspect.unwrap(cls.__init__)))
     return frozenset(spec.args + spec.kwonlyargs)
 
 
@@ -112,7 +114,7 @@ def _init_arg_names(cls: type) -> frozenset[str]:
         name
         for klass in inspect.getmro(cls)
         if klass is not object
-        for spec in (inspect.getfullargspec(inspect.unwrap(klass.__init__)),)
+        for spec in (inspect.getfullargspec(_UNWRAPPED_INIT.validate_python(inspect.unwrap(klass.__init__))),)
         for name in spec.args + spec.kwonlyargs
     )
 
@@ -935,6 +937,10 @@ def get_redis_connection_pool(
     return async_redis.BlockingConnectionPool(timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs)
 
 
+def _mask_for_display(masker: SensitiveDataMasker, redis_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    return masker.mask_dict(redis_kwargs)
+
+
 def _redis_kwargs_for_logging(redis_kwargs: Mapping[str, object]) -> Mapping[str, object]:
     return {
         key: "<credential provider>"
@@ -966,7 +972,7 @@ def _pretty_print_redis_config(redis_kwargs: dict) -> None:
         masker = SensitiveDataMasker()
 
         # Mask sensitive data in redis_kwargs
-        masked_redis_kwargs = masker.mask_dict(redis_kwargs_for_logging)
+        masked_redis_kwargs = _mask_for_display(masker, redis_kwargs_for_logging)
 
         # Create main panel title
         title: Final = Text("Redis Configuration", style="bold blue")
@@ -1029,7 +1035,7 @@ def _pretty_print_redis_config(redis_kwargs: dict) -> None:
     except ImportError:
         # Fallback to simple logging if rich is not available
         masker = SensitiveDataMasker()
-        masked_redis_kwargs = masker.mask_dict(redis_kwargs_for_logging)
+        masked_redis_kwargs = _mask_for_display(masker, redis_kwargs_for_logging)
         verbose_logger.info("Redis configuration: %s", masked_redis_kwargs)
     except Exception as e:
         verbose_logger.error("Error pretty printing Redis configuration: %s", e)

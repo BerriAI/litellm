@@ -511,6 +511,54 @@ class TestDeepSeekVisionMultimodalContent:
         assert any(block.get("type") == "image_url" for block in content)
 
 
+@pytest.mark.usefixtures("_deepseek_httpx_transport")
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("model", ("deepseek-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"))
+@pytest.mark.parametrize("effort", ("minimal", "low", "medium", "high", "xhigh", "max", "ultra"))
+@pytest.mark.parametrize("thinking", (None, "enabled"))
+@pytest.mark.respx(assert_all_called=True)
+async def test_deepseek_forwards_native_effort(
+    respx_mock: respx.MockRouter, model: str, effort: str, thinking: str | None, stream: bool
+) -> None:
+    route: Final = respx_mock.post(DEEPSEEK_CHAT_COMPLETIONS_URL).mock(return_value=_deepseek_response(stream))
+    response: Final = await litellm.acompletion(
+        model=f"deepseek/{model}",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_key=DEEPSEEK_API_KEY,
+        reasoning_effort=effort,
+        stream=stream,
+        **({"thinking": {"type": thinking}} if thinking is not None else {}),
+    )
+    if stream:
+        async for _ in response:
+            pass
+    body: Final = json.loads(route.calls[0].request.content)
+    assert body["reasoning_effort"] == effort
+    assert body["thinking"] == {"type": "enabled"}
+
+
+@pytest.mark.parametrize(
+    "thinking,effort,expected_thinking",
+    (
+        (None, None, None),
+        (None, "none", "disabled"),
+        ("enabled", "none", "enabled"),
+        ("disabled", "max", "disabled"),
+        ("enabled", None, "enabled"),
+        (None, "default", "enabled"),
+        (None, "bogus", "enabled"),
+        (None, {"effort": "high"}, "enabled"),
+    ),
+)
+def test_deepseek_preserves_toggle_without_forwarding_unsupported_effort(
+    thinking: str | None, effort: str | dict[str, str] | None, expected_thinking: str | None
+) -> None:
+    params: Final = {"reasoning_effort": effort, **({"thinking": {"type": thinking}} if thinking is not None else {})}
+    result: Final = DeepSeekChatConfig().map_openai_params(params, {}, "deepseek-flash", False)
+    assert "reasoning_effort" not in result
+    assert result.get("thinking") == ({"type": expected_thinking} if expected_thinking else None)
+
+
 class TestDeepSeekThinkingParams:
     """Test thinking and reasoning_effort parameter handling for DeepSeek."""
 
@@ -735,9 +783,7 @@ async def test_deepseek_provider_async_completion(stream):
     messages = [{"role": "user", "content": "Hello, world!"}]
 
     # Mock AsyncHTTPHandler.post method for async test
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post") as mock_post:
         mock_response_data = litellm.ModelResponse(
             choices=[
                 litellm.Choices(
@@ -775,9 +821,7 @@ async def test_deepseek_provider_async_completion(stream):
     # Check request body
     request_body = json.loads(call_args.kwargs["data"])
     assert call_args.kwargs["url"] == "https://api.deepseek.com/beta/chat/completions"
-    assert (
-        request_body["model"] == "deepseek-reasoner"
-    )  # Model name should be stripped of provider prefix
+    assert request_body["model"] == "deepseek-reasoner"  # Model name should be stripped of provider prefix
     assert request_body["messages"] == messages
     assert request_body["stream"] == stream
 

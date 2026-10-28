@@ -119,6 +119,10 @@ def managed_write_fields(
         return AgentIdentityFailure(message=f"Invalid agent identity configuration: {exc}")
 
 
+def _identity_fields(identity: EntraIdentityConfig) -> Mapping[str, object]:
+    return identity.model_dump()
+
+
 def _identity_write(identity: EntraIdentityConfig | None, existing: AgentResponse | None) -> ManagedWriteFields:
     if identity is None:
         unbind: Final[ManagedWriteFields] = {
@@ -134,7 +138,7 @@ def _identity_write(identity: EntraIdentityConfig | None, existing: AgentRespons
         existing
         and existing.identity
         and existing.identity.active
-        and all(getattr(existing.identity, name) == value for name, value in identity.model_dump().items())
+        and all(getattr(existing.identity, name) == value for name, value in _identity_fields(identity).items())
     ):
         unchanged: Final[ManagedWriteFields] = {}
         return unchanged

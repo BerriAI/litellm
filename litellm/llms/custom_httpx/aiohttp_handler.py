@@ -440,7 +440,7 @@ class BaseLLMAIOHTTPHandler:
         timeout: float | httpx.Timeout,
         fake_stream: bool = False,
         client: HTTPHandler | None = None,
-    ) -> tuple[Any, dict]:
+    ) -> tuple[object, dict]:
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = get_httpx_client()
         else:
