@@ -8569,9 +8569,8 @@ async def test_execute_mcp_tool_hands_hooks_nothing_for_a_never_listed_operation
 
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hooks_no_description():
-    """The listing tools/call runs on its own when this worker does not yet expose the tool is never served
-    to the caller, so it leaves the caller's listed slot empty and the pre-call hooks still get name and
-    arguments only, as on main."""
+    """Without catalog guardrails, an implicit routing lookup leaves the caller's listed slot empty,
+    so pre-call hooks get only the name and arguments."""
     manager = mcp_operations.global_mcp_server_manager
     server = _never_listed_passthrough_server()
     manager.registry[server.server_id] = server
@@ -8579,8 +8578,10 @@ async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hoo
     upstream = AsyncMock()
     upstream.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
     proxy_logging = _mock_mcp_proxy_logging()
+    proxy_logging.has_pre_call_guardrails.return_value = False
     proxy_logging.create_mcp_request_object_from_kwargs = MagicMock(return_value={})
     proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+    proxy_logging.convert_mcp_to_llm_format = MagicMock(return_value={})
     proxy_logging.pre_call_hook = AsyncMock(return_value={})
     proxy_logging.during_call_hook = AsyncMock(return_value=None)
     fetch_tools = AsyncMock(
@@ -9206,6 +9207,119 @@ class TestMCPMetaTraceCarrier:
             {"name": "t", "_meta": {"progressToken": "p1"}}, by_name=False
         ).meta
         assert _mcp_meta_trace_carrier(SimpleNamespace(meta=only_progress)) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initialized_excluded", [False, True])
+async def test_stateful_mcp_tracing_follows_each_message_exclusion(
+    monkeypatch: pytest.MonkeyPatch, initialized_excluded: bool
+) -> None:
+    import httpx2
+    from fastapi import FastAPI
+    from mcp.server.context import HandlerResult
+    from mcp.server.lowlevel import Server
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from mcp.shared import _otel
+    from mcp.types import CallToolRequestParams, NotificationParams
+    from mcp_types import CLIENT_CAPABILITIES_META_KEY, PROTOCOL_VERSION_META_KEY
+    from opentelemetry.instrumentation.propagators import get_global_response_propagator, set_global_response_propagator
+
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.mount import instrument_fastapi_app
+    from litellm.integrations.otel.plumbing.providers import in_memory_provider
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server import server as gateway
+
+    original_propagator: Final = get_global_response_propagator()
+    provider, exporter = in_memory_provider()
+    tracer: Final = provider.get_tracer("mcp-exclusion-test")
+    monkeypatch.setattr(_otel, "_tracer", tracer)
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS", "excluded.example")
+    monkeypatch.setitem(proxy_server.general_settings, "mcp_advertised_versions", ["2025-11-25", "2026-07-28"])
+    is_otel_v2_enabled.cache_clear()
+    notified: Final = asyncio.Event()
+
+    async def call_tool(
+        ctx: ServerRequestContext[object, object], params: CallToolRequestParams
+    ) -> CallToolResult:
+        with tracer.start_as_current_span("tool-handler"):
+            return CallToolResult(content=[TextContent(type="text", text="done")])
+
+    async def notification(
+        ctx: ServerRequestContext[object, object], params: NotificationParams
+    ) -> HandlerResult:
+        with tracer.start_as_current_span("notification-handler"):
+            notified.set()
+        return None
+
+    protocol: Final = Server[object]("trace-exclusion", on_call_tool=call_tool)
+    protocol.middleware[:] = gateway.server.middleware
+    protocol.add_notification_handler("notifications/exclusion-probe", NotificationParams, notification)
+    manager: Final = StreamableHTTPSessionManager(protocol, stateless=False)
+    app: Final = FastAPI()
+    app.mount("/mcp", manager.handle_request)
+    instrument_fastapi_app(app, tracer_provider=provider)
+    initial_url: Final = f"http://{'excluded' if initialized_excluded else 'included'}.example/mcp/"
+    current_url: Final = f"http://{'included' if initialized_excluded else 'excluded'}.example/mcp/"
+    headers: Final = {"Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25"}
+    try:
+        async with manager.run():
+            async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app)) as client:
+                initialized: Final = await client.post(initial_url, headers=headers, json={
+                    "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
+                        "protocolVersion": "2025-11-25", "capabilities": {},
+                        "clientInfo": {"name": "trace-exclusion", "version": "1"},
+                    },
+                })
+                assert initialized.status_code == 200, initialized.text
+                assert any(
+                    span.name == "initialize" for span in exporter.get_finished_spans()
+                ) is not initialized_excluded
+                exporter.clear()
+                session_headers: Final = {**headers, "MCP-Session-Id": initialized.headers["mcp-session-id"]}
+                ready: Final = await client.post(initial_url, headers=session_headers,
+                    json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+                assert ready.status_code == 202, ready.text
+                response: Final = await client.post(current_url, headers=session_headers, json={
+                    "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+                        "name": "probe", "arguments": {}, "_meta": {
+                            "traceparent": "00-11111111111111111111111111111111-2222222222222222-01",
+                        },
+                    },
+                })
+                assert response.status_code == 200 and '"text":"done"' in response.text, response.text
+                names: Final = {span.name for span in exporter.get_finished_spans()}
+                assert ("tools/call probe" in names) is initialized_excluded
+                assert ("tool-handler" in names) is initialized_excluded
+                exporter.clear()
+                notification_response: Final = await client.post(current_url, headers=session_headers,
+                    json={"jsonrpc": "2.0", "method": "notifications/exclusion-probe"})
+                assert notification_response.status_code == 202, notification_response.text
+                await notified.wait()
+                assert any(
+                    span.name == "notification-handler" for span in exporter.get_finished_spans()
+                ) is initialized_excluded
+                exporter.clear()
+                modern_response: Final = await client.post(current_url, headers={
+                    "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2026-07-28",
+                    "MCP-Method": "tools/call", "MCP-Name": "probe",
+                }, json={
+                    "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                        "name": "probe", "arguments": {}, "_meta": {
+                            PROTOCOL_VERSION_META_KEY: "2026-07-28", CLIENT_CAPABILITIES_META_KEY: {},
+                        },
+                    },
+                })
+                assert modern_response.status_code == 200, modern_response.text
+                assert '"text":"done"' in modern_response.text, modern_response.text
+                modern_names: Final = {span.name for span in exporter.get_finished_spans()}
+                assert ("tools/call probe" in modern_names) is initialized_excluded
+                assert ("tool-handler" in modern_names) is initialized_excluded
+    finally:
+        provider.shutdown()
+        set_global_response_propagator(original_propagator)
+        is_otel_v2_enabled.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -10941,7 +11055,7 @@ class TestListFiltersHonorThePrefixBoundary:
 
         assert _tool_name_matches("eiG-read_wiki_contents", ["deepwiki_cfg-read_wiki_contents"], server)
 
-    def test_discovery_hides_exactly_what_dispatch_refuses(self, monkeypatch):
+    def test_discovery_hides_exactly_what_dispatch_refuses(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Both halves of one decision, driven through both production paths.
 
         A spelling the blocklist enforces but the filter misses leaves a blocked
@@ -10963,7 +11077,10 @@ class TestListFiltersHonorThePrefixBoundary:
 
         monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
 
-        def _server(**overrides):
+        def _server(
+            allowed_tools: list[str] | None = None,
+            disallowed_tools: list[str] | None = None,
+        ) -> MCPServer:
             return MCPServer(
                 server_id=self.SERVER_ID,
                 name="deepwiki_prod",
@@ -10972,27 +11089,35 @@ class TestListFiltersHonorThePrefixBoundary:
                 short_prefix="eiG",
                 url="http://127.0.0.1:5115/mcp",
                 transport=MCPTransport.http,
-                **overrides,
+                allowed_tools=allowed_tools,
+                disallowed_tools=disallowed_tools,
             )
 
-        manager = MCPServerManager()
+        manager: Final = MCPServerManager()
         manager._create_prefixed_tools(
             [MCPTool(name="read_wiki_contents", description="", inputSchema={"type": "object"})],
             _server(),
         )
-        registered = sorted(manager.tool_name_to_mcp_server_name_mapping)
+        registered: Final = sorted(manager.tool_name_to_mcp_server_name_mapping)
         assert len(registered) > 1
 
-        published = MCPTool(name="eiG-read_wiki_contents", description="", inputSchema={"type": "object"})
+        published: Final = MCPTool(name="eiG-read_wiki_contents", description="", inputSchema={"type": "object"})
         for spelling in registered:
-            for entry, expected in ((spelling, True), (spelling.upper(), False)):
-                server = _server(disallowed_tools=[entry])
+            policies: Final[tuple[tuple[list[str] | None, list[str], bool], ...]] = (
+                (None, [spelling], True),
+                (None, [spelling.upper()], False),
+                (["read_wiki_contents"], [spelling], True),
+                ([spelling], ["read_wiki_contents"], True),
+                ([spelling], [spelling.upper()], False),
+            )
+            for allowed_tools, disallowed_tools, expected in policies:
+                server: Final = _server(allowed_tools, disallowed_tools)
 
-                refused = not manager.check_allowed_or_banned_tools("read_wiki_contents", server)
-                hidden = filter_tools_by_allowed_tools([published], server) == []
+                refused: Final = not manager.check_allowed_or_banned_tools("read_wiki_contents", server)
+                hidden: Final = filter_tools_by_allowed_tools([published], server) == []
 
-                assert refused == hidden, entry
-                assert refused is expected, entry
+                assert refused == hidden, (allowed_tools, disallowed_tools)
+                assert refused is expected, (allowed_tools, disallowed_tools)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

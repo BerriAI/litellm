@@ -167,6 +167,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     handle_exception_on_proxy,
     hash_token_if_needed,
     is_valid_api_key,
+    require_enterprise_license,
 )
 from litellm.repositories.base_repository import BaseRepository, record_to_dict
 from litellm.repositories.budget_repository import BudgetRepository
@@ -5259,10 +5260,13 @@ async def generate_key_helper_fn(
         if isinstance(saved_token["metadata"], str):
             saved_token["metadata"] = json.loads(saved_token["metadata"])
         if isinstance(saved_token["permissions"], str):
-            if "get_spend_routes" in saved_token["permissions"] and premium_user is not True:
-                raise ValueError("get_spend_routes permission is only available for LiteLLM Enterprise users")
-
             saved_token["permissions"] = json.loads(saved_token["permissions"])
+        if (
+            isinstance(saved_token["permissions"], dict)
+            and "get_spend_routes" in saved_token["permissions"]
+            and premium_user is not True
+        ):
+            require_enterprise_license("get_spend_routes")
         if isinstance(saved_token["model_max_budget"], str):
             saved_token["model_max_budget"] = json.loads(saved_token["model_max_budget"])
         router_settings = cast(dict | None, saved_token.get("router_settings"))

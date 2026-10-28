@@ -237,8 +237,9 @@ class TestLiteLLMCompletionResponsesConfig:
         expected = {"type": "image_url", "image_url": {"url": "", "detail": "auto"}}
         assert result == expected
         assert result["type"] == "image_url"
-        assert result["image_url"]["url"] == ""
-        assert result["image_url"]["detail"] == "auto"
+        assert LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            [input_item, {"type": "input_file"}]
+        ) == [expected, {"type": "file", "file": {}}]
 
     def test_transform_input_image_item_to_image_item_ignores_other_fields(self):
         """Test transformation of input_image item with other fields"""
