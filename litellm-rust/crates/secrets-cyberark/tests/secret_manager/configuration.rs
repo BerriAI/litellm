@@ -77,7 +77,7 @@ async fn authentication_encodes_login(#[case] username: &str, #[case] expected_p
         .mount(&server)
         .await;
     let manager = CyberArkSecretManager::with_client(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         server.uri().parse().unwrap(),
         "acct".into(),
         username.into(),
@@ -433,7 +433,7 @@ async fn trailing_slash_endpoint_preserves_base_path() {
         .await;
     let endpoint = format!("{}/prefix/", server.uri()).parse().unwrap();
     let manager = CyberArkSecretManager::with_client(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         endpoint,
         "acct".into(),
         "admin".into(),

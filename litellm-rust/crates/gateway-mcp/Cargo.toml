@@ -19,7 +19,7 @@ url.workspace = true
 moka.workspace = true
 sha2.workspace = true
 tower = { version = "0.5", features = ["util"] }
-rmcp = { version = "=3.4.1", default-features = false, features = ["server", "client", "elicitation", "transport-streamable-http-server", "transport-streamable-http-client", "transport-child-process"] }
+rmcp = { version = "=3.4.1", default-features = false, features = ["server", "client", "elicitation", "transport-streamable-http-server", "transport-streamable-http-client-reqwest", "transport-child-process"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

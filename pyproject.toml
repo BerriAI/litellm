@@ -296,7 +296,7 @@ ci = [
     "anthropic==0.84.0",
     "blockbuster==1.5.26",
     "beautifulsoup4==4.14.3",
-    "pylint==4.0.5",
+    "pylint==4.0.9",
     "langchain-openai==1.1.14",
     "langgraph>=1.2.4,<1.3.0",
     "langgraph-prebuilt>=1.1.0,<1.3.0",

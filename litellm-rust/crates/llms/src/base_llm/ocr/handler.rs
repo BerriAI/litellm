@@ -86,18 +86,24 @@ impl OcrClient {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn for_test(provider_http: Client, no_redirect_http: Client) -> Self {
+    pub fn for_test() -> Self {
         Self {
             secrets: Arc::new(
-                litellm_secrets::source::EnvironmentSecrets::python_compatible(
-                    provider_http.clone(),
-                ),
+                litellm_secrets::source::EnvironmentSecrets::python_compatible(Client::for_test()),
             ),
-            provider_http,
-            polling_http: no_redirect_http.clone(),
-            document_fetcher: MediaFetcher::for_test(no_redirect_http),
+            provider_http: Client::for_test(),
+            polling_http: Client::for_test(),
+            document_fetcher: MediaFetcher::for_test(Client::for_test()),
             auth: Arc::new(AuthServices::default()),
             settings: OcrSettings::default(),
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_provider_http(self, provider_http: Client) -> Self {
+        Self {
+            provider_http,
+            ..self
         }
     }
 
@@ -322,7 +328,7 @@ mod tests {
             let _connection = listener.accept().await.unwrap();
             tokio::time::sleep(Duration::from_secs(1)).await;
         });
-        let error = litellm_http::Client::plain_for_test()
+        let error = litellm_http::Client::for_test()
             .get(format!("http://{address}"))
             .timeout(Duration::from_millis(10))
             .send()
@@ -347,7 +353,7 @@ mod tests {
             socket.write_all(response.as_bytes()).await.unwrap();
             std::future::pending::<()>().await;
         });
-        let response = litellm_http::Client::plain_for_test()
+        let response = litellm_http::Client::for_test()
             .get(format!("http://{address}"))
             .send()
             .await

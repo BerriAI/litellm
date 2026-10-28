@@ -190,16 +190,14 @@ mod tests {
             clippy::disallowed_types,
             reason = "the pool has no default-header setting to stand in for provider credentials"
         )]
-        let provider_http = litellm_http::Client::for_test(
+        let provider_http = litellm_http::Client::wrap_for_test(
             reqwest::Client::builder()
                 .default_headers(provider_headers)
                 .build()
                 .unwrap(),
         );
-        let client = crate::base_llm::ocr::handler::OcrClient::for_test(
-            provider_http,
-            litellm_http::Client::no_redirect_for_test(),
-        );
+        let client =
+            crate::base_llm::ocr::handler::OcrClient::for_test().with_provider_http(provider_http);
         let converted = inline_remote_document(
             client.document_fetcher(),
             OcrDocument::ImageUrl {

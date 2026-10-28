@@ -7,8 +7,6 @@
 mod client;
 mod config;
 mod error;
-#[cfg(feature = "mcp")]
-mod mcp;
 pub mod media;
 pub mod outbound;
 mod pool;

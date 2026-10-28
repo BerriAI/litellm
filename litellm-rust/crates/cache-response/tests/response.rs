@@ -768,7 +768,7 @@ async fn gcs() -> (wiremock::MockServer, Gcs) {
             path_service_account: None,
             endpoint: server.uri(),
         },
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         litellm_cache_response::ResponseCacheCodec,
         Arc::new(litellm_cache_gcs::StaticTokenSource("token".into())),
     )));
