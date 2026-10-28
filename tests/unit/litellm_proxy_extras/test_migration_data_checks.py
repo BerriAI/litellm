@@ -7,7 +7,9 @@ from litellm_proxy_extras.migration_data_checks import (
     MIGRATION_DATA_CHECK_TIMEOUT_ENV_VAR,
     BlockedChange,
     Check,
+    ColumnType,
     CouldNotVerify,
+    _count_query,
     btree_max_entry_bytes,
     checks_for_index,
     checks_for_migration,
@@ -111,6 +113,19 @@ def test_a_request_log_index_gets_one_entry_size_check_over_all_its_columns() ->
 def test_the_btree_entry_limit_on_the_default_page_is_the_number_in_postgres_error() -> None:
     # "index row size 2976 exceeds btree version 4 maximum 2704", Postgres 14, 8 KB page (BTMaxItemSize, nbtree.h)
     assert btree_max_entry_bytes(8192) == 2704
+
+
+def test_the_entry_size_query_sizes_a_text_column_by_its_stored_bytes_when_postgres_compressed_it() -> None:
+    """Postgres compresses a long value before it checks the entry size, so a repetitive
+    3000-byte key indexes fine. The query has to size it as stored, never by its length alone."""
+    (check,) = checks_for_index(
+        "LiteLLM_SpendLogs", "LiteLLM_SpendLogs_api_key_startTime_idx", ("api_key", "startTime")
+    )
+    types: Final = (ColumnType("text", -1, "i", -1), ColumnType("timestamp", 8, "d", 3))
+    query: Final = _count_query(check, "public", types, 2704).as_string(None)
+    stored: Final = 'least(octet_length("api_key"), pg_column_size("api_key"))'
+    assert stored in query
+    assert 'octet_length("api_key")' not in query.replace(stored, ""), query
 
 
 def test_the_report_names_the_rows_the_statement_and_the_fix_and_says_nothing_was_applied() -> None:

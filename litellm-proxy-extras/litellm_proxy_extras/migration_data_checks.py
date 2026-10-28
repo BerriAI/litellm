@@ -343,11 +343,16 @@ def btree_max_entry_bytes(block_size: int) -> int:
 
 
 def _value_bytes(column: ColumnType, identifier: "sql.Identifier") -> "sql.Composed":
+    """The bytes a value takes in the index entry: its length, or its stored size when
+    Postgres compressed it, since `index_form_tuple` keeps the compressed bytes."""
     from psycopg import sql
 
-    if column.type_name in _OCTET_LENGTH_TYPES:
-        return sql.SQL("octet_length({})").format(identifier)
-    return sql.SQL("octet_length({}::text)").format(identifier)
+    length: Final = (
+        sql.SQL("octet_length({})").format(identifier)
+        if column.type_name in _OCTET_LENGTH_TYPES
+        else sql.SQL("octet_length({}::text)").format(identifier)
+    )
+    return sql.SQL("least({}, pg_column_size({}))").format(length, identifier)
 
 
 def _aligned(offset: "sql.Composable", align: str) -> "sql.Composed":
