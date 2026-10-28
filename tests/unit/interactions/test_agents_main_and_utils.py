@@ -472,6 +472,11 @@ class TestCreateRequestBody:
                 id="names-the-alias-the-caller-sent",
             ),
             pytest.param(
+                {"name": 7, "base_agent": "antigravity-preview-09-2026"},
+                "Invalid agent create request: 'name' must be a string.",
+                id="names-the-id-alias-the-caller-sent",
+            ),
+            pytest.param(
                 {"id": 7, "agent_config": "antigravity", "drop_params": True},
                 "Invalid agent create request: 'agent_config' must be an object; 'id' must be a string.",
                 id="invalid-id-is-never-dropped",

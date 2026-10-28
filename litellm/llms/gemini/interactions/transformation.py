@@ -9,6 +9,7 @@ Per OpenAPI spec (https://ai.google.dev/static/api/interactions.openapi.json):
 Requests use Api-Revision 2026-05-20 (`steps` schema).
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias
 
 import httpx
@@ -201,7 +202,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         ]
         dropped_keys: Final = (
             frozenset({"agent_config"})
-            if model and drops_unsupported_params(litellm_params.get("drop_params"))
+            if drops_unsupported_params(litellm_params.get("drop_params"))
+            and (model or not isinstance(optional_params.get("agent_config"), Mapping))
             else frozenset()
         )
         for key in optional_keys:

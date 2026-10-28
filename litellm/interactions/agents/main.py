@@ -18,13 +18,13 @@ Usage:
     response = litellm.interactions.agents.list(api_key="...", custom_llm_provider="gemini")
 
     # Get
-    response = litellm.interactions.agents.get(name="waverunner", api_key="...")
+    response = litellm.interactions.agents.get(id="waverunner", api_key="...")
 
     # Delete
-    result = litellm.interactions.agents.delete(name="waverunner", api_key="...")
+    result = litellm.interactions.agents.delete(id="waverunner", api_key="...")
 
     # List versions
-    result = litellm.interactions.agents.list_versions(name="waverunner", api_key="...")
+    result = litellm.interactions.agents.list_versions(id="waverunner", api_key="...")
 
     # Async versions: acreate, alist, aget, adelete, alist_versions
 """
@@ -141,8 +141,7 @@ _CREATE_FIELD_SHAPES: Final = MappingProxyType(
 )
 
 
-def _invalid_create_fields_message(invalid_fields: frozenset[str], instruction_field: str) -> str:
-    caller_names: Final = MappingProxyType({"system_instruction": instruction_field})
+def _invalid_create_fields_message(invalid_fields: frozenset[str], caller_names: Mapping[str, str]) -> str:
     problems: Final = "; ".join(
         f"'{caller_names.get(field, field)}' must be {_CREATE_FIELD_SHAPES[field]}" for field in sorted(invalid_fields)
     )
@@ -151,7 +150,7 @@ def _invalid_create_fields_message(invalid_fields: frozenset[str], instruction_f
 
 
 def _validated_create_request(
-    fields: Mapping[str, object], drop_invalid_fields: bool, instruction_field: str
+    fields: Mapping[str, object], drop_invalid_fields: bool, caller_names: Mapping[str, str]
 ) -> AgentCreateRequest | _InvalidAgentRequest:
     try:
         return AgentCreateRequest.model_validate(fields)
@@ -161,7 +160,7 @@ def _validated_create_request(
             return AgentCreateRequest.model_validate(
                 {field: value for field, value in fields.items() if field not in invalid_fields}
             )
-        return _InvalidAgentRequest(_invalid_create_fields_message(invalid_fields, instruction_field))
+        return _InvalidAgentRequest(_invalid_create_fields_message(invalid_fields, caller_names))
 
 
 def _create_request_or_error(
@@ -198,7 +197,12 @@ def _create_request_or_error(
             }
         ),
         drop_invalid_fields,
-        "instructions" if sent_only_instructions else "system_instruction",
+        MappingProxyType(
+            {
+                "id": "name" if id is None else "id",
+                "system_instruction": "instructions" if sent_only_instructions else "system_instruction",
+            }
+        ),
     )
 
 

@@ -288,22 +288,38 @@ class TestGoogleInteractionsCreate:
         }
 
     @pytest.mark.parametrize(
-        ("target", "expected_target"),
+        ("target", "agent_config", "expected_target"),
         [
-            pytest.param({"model": "gemini/gemini-2.5-flash"}, {"model": "gemini-2.5-flash"}, id="model-drops-it"),
+            pytest.param(
+                {"model": "gemini/gemini-2.5-flash"},
+                {"type": "antigravity", "model": "gemini-3.8-flash"},
+                {"model": "gemini-2.5-flash"},
+                id="model-drops-it",
+            ),
             pytest.param(
                 {"agent": "antigravity-preview-09-2026"},
+                {"type": "antigravity", "model": "gemini-3.8-flash"},
                 {
                     "agent": "antigravity-preview-09-2026",
                     "agent_config": {"type": "antigravity", "model": "gemini-3.8-flash"},
                 },
-                id="agent-keeps-it",
+                id="agent-keeps-an-object",
+            ),
+            pytest.param(
+                {"agent": "antigravity-preview-09-2026"},
+                "antigravity",
+                {"agent": "antigravity-preview-09-2026"},
+                id="agent-drops-a-non-object",
             ),
         ],
     )
     @pytest.mark.usefixtures("fake_provider_credentials")
-    def test_create_with_drop_params_drops_agent_config_only_for_model_interactions(
-        self, respx_mock: MockRouter, target: Mapping[str, str], expected_target: Mapping[str, object]
+    def test_create_with_drop_params_drops_agent_config_gemini_cannot_take(
+        self,
+        respx_mock: MockRouter,
+        target: Mapping[str, str],
+        agent_config: object,
+        expected_target: Mapping[str, object],
     ) -> None:
         route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
             return_value=httpx.Response(200, json={"id": "interaction-drop", "status": "completed"})
@@ -311,7 +327,7 @@ class TestGoogleInteractionsCreate:
 
         interactions.create(
             **target,
-            agent_config={"type": "antigravity", "model": "gemini-3.8-flash"},
+            agent_config=agent_config,
             input="Say hi in one word.",
             drop_params=True,
             api_key="gemini-offline",
