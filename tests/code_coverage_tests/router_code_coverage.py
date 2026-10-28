@@ -171,6 +171,9 @@ ignored_function_names = [
     "_deployment_field",  # Read by is_batch_capable, tested through the mixed-group tests in test_router.py
     "_deployment_provider",  # Read by without_deployments_that_cannot_batch, tested through the mixed-group tests in test_router.py
     "_cannot_run_batches",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
+    "_responses_continuation",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
+    "_responses_continuation_ceilings",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
+    "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py
 ]
 
 

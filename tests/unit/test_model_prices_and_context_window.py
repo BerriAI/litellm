@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.fallback_generalizations import match_capability_generalizations
-from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
+from litellm.llms.openai.chat.gpt_reasoning_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.types.utils import SearchFreeRequests
@@ -27,13 +27,29 @@ def prices() -> dict:
     return json.loads(PRICES_PATH.read_text())
 
 
+@pytest.mark.parametrize("model", ("azure/gpt-audio-1.5-2026-02-23", "azure/gpt-audio-mini-2025-10-06"))
+def test_azure_audio_snapshot_capabilities_match_declared_modalities(model: str, local_model_cost_map: None) -> None:
+    catalog: Final = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
+    backup: Final = TypeAdapter(dict[str, JsonValue]).validate_json(BACKUP_PRICES_PATH.read_bytes())
+    entry: Final = catalog[model]
+    assert isinstance(entry, dict)
+    assert entry == backup[model]
+    input_modalities: Final = entry["supported_modalities"]
+    output_modalities: Final = entry["supported_output_modalities"]
+    assert isinstance(input_modalities, list)
+    assert isinstance(output_modalities, list)
+    expected: Final = ("audio" in input_modalities, "audio" in output_modalities)
+    info: Final = litellm.get_model_info(model)
+    assert (info["supports_audio_input"], info["supports_audio_output"]) == expected
+    assert (litellm.supports_audio_input(model), litellm.supports_audio_output(model)) == expected
+
+
 class _CopilotEndpointRow(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     mode: str
     max_input_tokens: int
     max_output_tokens: int
-    max_tokens: int
     supported_endpoints: tuple[str, ...]
 
 
@@ -79,16 +95,20 @@ def _anthropic_counterpart(key: str) -> str:
 
 
 @pytest.mark.parametrize(("path",), [(PRICES_PATH,), (BACKUP_PRICES_PATH,)], ids=("main", "backup"))
-def test_github_copilot_rows_derive_mode_and_max_tokens_from_their_endpoints(path: Path) -> None:
+def test_github_copilot_rows_derive_mode_from_their_endpoints(path: Path) -> None:
     rows: Final[Mapping[str, _CopilotEndpointRow]] = _copilot_endpoint_rows(path)
     assert rows, f"No GitHub Copilot endpoint rows found in {path}"
-    assert {key: (row.mode, row.max_tokens) for key, row in rows.items()} == {
-        key: (
-            "chat" if "/v1/chat/completions" in row.supported_endpoints else "responses",
-            row.max_output_tokens,
-        )
-        for key, row in rows.items()
+    assert {key: row.mode for key, row in rows.items()} == {
+        key: "chat" if "/v1/chat/completions" in row.supported_endpoints else "responses" for key, row in rows.items()
     }
+
+
+def _rows_carrying_legacy_max_tokens(prices: Mapping[str, Mapping[str, object]]) -> tuple[str, ...]:
+    return tuple(key for key, row in prices.items() if "max_tokens" in row)
+
+
+def test_no_row_carries_the_retired_max_tokens_field(prices: dict) -> None:
+    assert _rows_carrying_legacy_max_tokens(prices) == ()
 
 
 def test_github_copilot_backup_rows_match_the_main_catalog() -> None:
@@ -201,6 +221,85 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
         "dated model variants are missing flex/priority pricing their base alias has; "
         "sync the tier keys so service-tier requests against pinned snapshots are not "
         "billed at standard rates:\n" + "\n".join(drifted)
+    )
+
+
+# Azure OpenAI web_search runs on Grounding with Bing and bills each Bing request reported in
+# tool_usage.web_search.num_requests: https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/web-search
+# Grounding with Bing lists $14 per 1,000 transactions: https://www.microsoft.com/en-us/bing/apis/grounding-pricing
+AZURE_WEB_SEARCH_COST_PER_REQUEST: Final = 0.014
+_AZURE_DEPLOYMENT_PREFIX: Final = re.compile(r"^azure/(us/|eu/|global/|global-standard/)?")
+
+
+def _azure_rows(prices: Mapping[str, object]) -> Mapping[str, dict]:
+    return MappingProxyType(
+        {key: row for key, row in prices.items() if key.startswith("azure/") and isinstance(row, dict)}
+    )
+
+
+def test_azure_web_search_rows_charge_the_grounding_with_bing_price(prices: dict):
+    wrong = {
+        key: row["search_context_cost_per_query"]
+        for key, row in _azure_rows(prices).items()
+        if row.get("search_context_cost_per_query")
+        and set(row["search_context_cost_per_query"].values()) != {AZURE_WEB_SEARCH_COST_PER_REQUEST}
+    }
+    assert wrong == {}
+
+
+def test_azure_rows_price_web_search_when_their_openai_model_does(prices: dict):
+    missing = sorted(
+        key
+        for key, row in _azure_rows(prices).items()
+        if not row.get("search_context_cost_per_query")
+        and row.get("mode") in ("chat", "responses", None)
+        and isinstance(twin := prices.get(_AZURE_DEPLOYMENT_PREFIX.sub("", key)), dict)
+        and twin.get("search_context_cost_per_query")
+    )
+    assert missing == []
+
+
+PRIORITY_SUFFIX: Final = "_priority"
+MIN_PRIORITY_MARKUP: Final = 1.0
+MAX_PRIORITY_MARKUP: Final = 5.0
+
+
+def _rate(value: JsonValue | None) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _priority_markup(entry: Mapping[str, JsonValue], key: str) -> float | None:
+    if not key.endswith(PRIORITY_SUFFIX):
+        return None
+    priority: Final = _rate(entry[key])
+    standard: Final = _rate(entry.get(key.removesuffix(PRIORITY_SUFFIX)))
+    if priority is None or standard is None or standard <= 0:
+        return None
+    return priority / standard
+
+
+def priority_markups(prices: Mapping[str, JsonValue]) -> Iterator[tuple[str, str, float]]:
+    for name, entry in prices.items():
+        if not isinstance(entry, dict):
+            continue
+        for key in entry:
+            if (markup := _priority_markup(entry, key)) is not None:
+                yield name, key, markup
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_priority_rates_stay_within_a_premium_of_their_standard_rate(path: Path) -> None:
+    prices: Final = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    markups: Final = tuple(priority_markups(prices))
+    assert markups
+    overpriced: Final = tuple(
+        f"{name}.{key} is {markup:.1f}x its standard rate"
+        for name, key, markup in markups
+        if not MIN_PRIORITY_MARKUP <= markup <= MAX_PRIORITY_MARKUP
+    )
+    assert overpriced == (), (
+        "a priority rate is a premium on the standard rate, so one below it or far above it was likely copied from "
+        "another model; drop the key when the provider sells no priority tier for the model:\n" + "\n".join(overpriced)
     )
 
 
@@ -584,7 +683,6 @@ def test_tencent_tokenhub_glm_rows_match_published_metadata(path: Path):
         or entry.get("litellm_provider") != "tencent"
         or entry.get("max_input_tokens") != 1000000
         or entry.get("max_output_tokens") != 128000
-        or entry.get("max_tokens") != 128000
         or entry.get("input_cost_per_token_cache_hit") != entry.get("cache_read_input_token_cost")
     )
     assert actual == TENCENT_TOKENHUB_GLM_ROWS
@@ -602,7 +700,7 @@ def test_tencent_tokenhub_kimi_rows_match_published_metadata(path: Path):
                 entry.get("input_cost_per_token"),
                 entry.get("output_cost_per_token"),
                 entry.get("cache_read_input_token_cost"),
-                entry.get("max_tokens"),
+                entry.get("max_output_tokens"),
                 entry.get("supports_vision", False),
                 entry.get("supports_video_input", False),
             )
@@ -776,14 +874,16 @@ def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata(pa
     assert entry["mode"] == "chat"
     assert entry["max_input_tokens"] == 1024000
     assert entry["max_output_tokens"] == 256000
-    assert entry["max_tokens"] == 256000
     # Volcengine Ark pricing https://www.volcengine.com/docs/82379/1544106 checked 2026-10-20
     assert entry["input_cost_per_token"] == pytest.approx(6.0 / 6.9565 / 1_000_000, rel=1e-4)
     assert entry["output_cost_per_token"] == pytest.approx(30.0 / 6.9565 / 1_000_000, rel=1e-4)
     assert entry["cache_read_input_token_cost"] == pytest.approx(1.2 / 6.9565 / 1_000_000, rel=1e-4)
     sibling = rows["volcengine/doubao-seed-2-1-pro-260628"]
     assert isinstance(sibling, dict)
-    assert all(entry[key] == sibling[key] for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"))
+    assert all(
+        entry[key] == sibling[key]
+        for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+    )
 
 
 def _bedrock_gpt_oss_rows(prices: Mapping[str, JsonValue]) -> tuple[str, ...]:

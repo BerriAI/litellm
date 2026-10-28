@@ -20,7 +20,7 @@ from litellm.cost_calculator import batch_cost_calculator
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token, parse_prompt_tokens_details
-from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
+from litellm.llms.anthropic.messages.native import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, VertexAIError
@@ -7544,7 +7544,7 @@ def test_gemini_candidate_with_finish_reason_no_content_chat_completion():
 
 
 def test_gemini_candidate_with_finish_reason_no_content_anthropic_messages():
-    from litellm.llms.anthropic.pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
 
@@ -7617,7 +7617,7 @@ def test_gemini_candidate_with_finish_reason_no_content_responses_api():
 
 
 def test_gemini_candidate_other_finish_reasons_no_content():
-    from litellm.llms.anthropic.pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
     from litellm.responses.litellm_completion_transformation.transformation import (
@@ -8289,11 +8289,12 @@ def test_gemini_image_generation_ignores_non_dict_image_config():
 def test_gemini_image_generation_openai_size_maps_to_google_table(
     size: str, expected_aspect_ratio: str, expected_image_size: str
 ):
+    """Flash table as of 2026-10-26, https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size."""
     from litellm.llms.gemini.common_utils import (
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") == {
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3.1-flash-image") == {
         "aspectRatio": expected_aspect_ratio,
         "imageSize": expected_image_size,
     }
@@ -8317,7 +8318,7 @@ def test_gemini_image_generation_openai_size_snaps_to_nearest_option(
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") == {
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3.1-flash-image") == {
         "aspectRatio": expected_aspect_ratio,
         "imageSize": expected_image_size,
     }

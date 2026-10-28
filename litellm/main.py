@@ -123,6 +123,7 @@ from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     NativeOutputFallback,
     bedrock_route_for_request,
+    bedrock_strict_tools_fallback,
     deployment_model_info,
     without_bedrock_native_output_opt_in,
     without_bedrock_route_prefix,
@@ -130,7 +131,7 @@ from litellm.llms.bedrock.common_utils import (
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
@@ -206,7 +207,12 @@ from litellm.utils import (
 
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
-from .litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params, safe_deep_copy
+from .litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    drops_unsupported_params,
+    normalize_drop_params,
+    safe_deep_copy,
+)
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
@@ -237,7 +243,7 @@ from .llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM
 from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import AmazonAnthropicClaudeConfig
+from .llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import AmazonAnthropicClaudeConfig
 from .llms.bedrock.chat.native_output_fallback import NativeOutputAttemptResult, call_with_native_output_fallback
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image_edit.handler import BedrockImageEdit
@@ -677,7 +683,11 @@ async def acompletion(
     }
     if custom_llm_provider is None:
         _supplemental: Final = cast(  # cast-ok: kwargs values are request-scoped objects
-            "dict[str, object]", {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs}
+            "dict[str, object]",
+            {
+                **{k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs},
+                "extra_headers": extra_headers,
+            },
         )
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
@@ -4219,6 +4229,7 @@ def _complete_sagemaker(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 
 _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_OLLAMA_EMBEDDING_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
@@ -4374,6 +4385,11 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
                 else None
             ),
             converse_model,
+            strict_tools_fallback=(
+                partial(bedrock_strict_tools_fallback, converse_model, converse_params, dict(litellm_params))
+                if drops_unsupported_params(litellm_params.get("drop_params"))
+                else None
+            ),
         )
     elif bedrock_route == "converse_like":
         model = model.replace("converse_like/", "")
@@ -5678,7 +5694,10 @@ def completion(
         if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
-        _supplemental_provider_params: Final = {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs}
+        _supplemental_provider_params: Final = {
+            **{k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs},
+            "extra_headers": extra_headers,
+        }
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -5998,6 +6017,7 @@ def completion(
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
+            chatgpt_auth_file=routing_kwargs.get("chatgpt_auth_file"),
             gigachat_scope=kwargs.get("gigachat_scope"),
             gigachat_auth_url=kwargs.get("gigachat_auth_url"),
             gigachat_access_token=kwargs.get("gigachat_access_token"),
@@ -6054,7 +6074,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             model_id=optional_params.get("model_id"),
         )
-        if mock_response or mock_tool_calls or mock_timeout:
+        if mock_response is not None or mock_tool_calls or mock_timeout:
             kwargs.pop("mock_timeout", None)  # remove for any fallbacks triggered
             return mock_completion(
                 model,
@@ -6318,7 +6338,7 @@ def completion(
             response = _complete_vercel_ai_gateway(_dispatch_ctx)
         elif custom_llm_provider == "palm":
             raise ValueError(
-                "Palm was decommisioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
+                "Palm was decommissioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
             )
         elif custom_llm_provider == "vertex_ai_beta" or custom_llm_provider == "gemini":
             response = _complete_vertex_ai_beta(_dispatch_ctx)
@@ -7169,6 +7189,7 @@ def embedding(
                 custom_llm_provider="gemini",
                 api_key=gemini_api_key,
                 api_base=api_base,
+                timeout=timeout,
                 client=client,
                 extra_headers=headers,
                 drop_params=drop_unsupported_params,
@@ -7222,6 +7243,7 @@ def embedding(
                     custom_llm_provider="vertex_ai",
                     api_key=None,
                     api_base=api_base,
+                    timeout=timeout,
                     client=client,
                     extra_headers=headers,
                     drop_params=drop_unsupported_params,
@@ -7299,6 +7321,9 @@ def embedding(
                 logging_obj=logging,
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
+                api_key=api_key,
+                headers=_OLLAMA_EMBEDDING_HEADERS_ADAPTER.validate_python(headers),
+                timeout=timeout,
             )
         elif custom_llm_provider == "sagemaker":
             response = sagemaker_llm.embedding(
@@ -9140,6 +9165,7 @@ async def ahealth_check(
             custom_llm_provider=custom_llm_provider_from_params,
             api_base=api_base_from_params,
             api_key=api_key_from_params,
+            litellm_params=GenericLiteLLMParams(**model_params),
         )
 
         model_params["cache"] = {"no-cache": True}  # don't used cached responses for making health check calls

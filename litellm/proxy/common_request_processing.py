@@ -6,6 +6,7 @@ import math
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
+from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -38,6 +39,7 @@ from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthr
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
+    LITELLM_CLIENT_DISCONNECT_DETAIL,
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -69,7 +71,11 @@ from litellm.litellm_core_utils.get_supported_openai_params import (
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
+    guardrail_entries,
+    guardrail_information_cost,
+    object_mapping,
+)
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
@@ -119,6 +125,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
+from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
     route_request,
@@ -303,6 +310,23 @@ async def close_guarded_stream(stream: object) -> None:
             verbose_proxy_logger.warning(
                 "Closing the guarded stream after a client disconnect raised %s", type(e).__name__
             )
+
+
+def _guardrail_entries_for_headers(
+    request_metadata_bucket: object, logging_obj: LiteLLMLoggingObj
+) -> tuple[object, ...]:
+    """Guardrail entries the proxy hooks wrote on the request plus the ones the call recorded on its own logging
+    object (a Bedrock deployment's native guardrail trace), each once: the hooks copy theirs into the logging object."""
+    litellm_params: Final = object_mapping(logging_obj.model_call_details.get("litellm_params")) or {}
+    buckets: Final = (object_mapping(request_metadata_bucket), object_mapping(litellm_params.get("metadata")))
+    entries: Final = tuple(
+        chain.from_iterable(
+            guardrail_entries(metadata.get("standard_logging_guardrail_information"))
+            for metadata in buckets
+            if metadata is not None
+        )
+    )
+    return tuple(entry for index, entry in enumerate(entries) if entry not in entries[:index])
 
 
 def resolve_litellm_call_id(client_call_id: str | None) -> str:
@@ -1416,6 +1440,8 @@ async def open_sse_before_first_byte(
     if interval is None:
         return await produce_response
 
+    # Share admission state with stream cleanup before the producer copies this context.
+    get_or_create_request_stash()
     produce_task: Final = asyncio.ensure_future(produce_response)
     await asyncio.wait((produce_task,), timeout=interval)
     if produce_task.done():
@@ -1822,7 +1848,7 @@ def _has_attribute_error_in_chain(exc: Exception) -> bool:
     return False
 
 
-_CLIENT_DISCONNECT_DETAIL: Final = "Client disconnected the request"
+_CLIENT_DISCONNECT_DETAIL: Final = LITELLM_CLIENT_DISCONNECT_DETAIL
 
 
 @runtime_checkable
@@ -3235,9 +3261,9 @@ class ProxyBaseLLMRequestProcessing:
             if is_unbilled_non_inference_call_from_params(logging_obj.call_type, logging_obj.litellm_params, response)
             else computed_cost_for_headers
         )
-        _, request_metadata_bucket = get_or_create_metadata_bucket(self.data)
+        request_metadata_bucket: Final[object] = get_or_create_metadata_bucket(self.data)[1]  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # self.data is an untyped dict
         guardrail_cost_for_headers: Final = guardrail_information_cost(
-            request_metadata_bucket.get("standard_logging_guardrail_information")
+            _guardrail_entries_for_headers(request_metadata_bucket, logging_obj)  # pyright: ignore[reportUnknownArgumentType]  # bucket comes from the untyped request dict
         )
         response_cost_for_headers: Final = (
             (llm_cost_for_headers if isinstance(llm_cost_for_headers, (int, float)) else 0.0)
@@ -4330,6 +4356,8 @@ class ProxyBaseLLMRequestProcessing:
         proxy_logging_obj: ProxyLogging | None = None,
     ) -> None:
         with anyio.CancelScope(shield=True):
+            if stream_completed and proxy_logging_obj is not None and user_api_key_dict is not None:
+                await proxy_logging_obj.arelease_max_parallel_requests(user_api_key_dict)
             should_record_client_disconnect: Final = client_disconnected or (not stream_completed)
             recorded_client_disconnect = False
             if should_record_client_disconnect:
@@ -4344,10 +4372,7 @@ class ProxyBaseLLMRequestProcessing:
                 # A disconnect-time success event (the deferred-guardrail flush
                 # above, or the partial-spend billing below) releases the
                 # request's max_parallel_requests slot through the limiter's
-                # own success callback. Release the slot explicitly only when
-                # no such event fires, so exactly one release happens; two
-                # concurrent releases would race and double-decrement under the
-                # limiter's in-memory fallback.
+                # own success callback. Release explicitly when no event fires.
                 success_event_owns_slot_release = deferred_stream_logging_armed
                 if not deferred_stream_logging_armed:
                     success_event_owns_slot_release = await _bill_partial_streamed_spend_on_disconnect(
@@ -4684,6 +4709,7 @@ class ProxyBaseLLMRequestProcessing:
             total_tokens=total_tokens,
             completion_tokens_details=usage.get("completion_tokens_details"),
             prompt_tokens_details=usage.get("prompt_tokens_details"),
+            server_tool_use=usage.get("server_tool_use"),
         )
 
     @staticmethod
