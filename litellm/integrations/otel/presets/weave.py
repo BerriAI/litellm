@@ -10,6 +10,7 @@ from litellm.integrations.otel.model.config import (
 from litellm.integrations.otel.presets.utils import (
     credential_gated_exporters,
     ensure_mappers,
+    operator_exporters,
 )
 from litellm.integrations.weave.weave_otel import (
     get_weave_authorization_header,
@@ -39,7 +40,7 @@ def weave_preset(
     return base.model_copy(
         update={
             "exporters": [
-                *base.exporters,
+                *operator_exporters(base.exporters),
                 ExporterSpec(
                     kind=weave_cfg.protocol or "otlp_http",
                     endpoint=weave_cfg.endpoint,

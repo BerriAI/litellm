@@ -4,14 +4,17 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from io import StringIO
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+import opentelemetry.sdk.trace.export as trace_export
 from openai.types.responses import ResponseFunctionToolCall
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider
+from opentelemetry.sdk.trace.export import ConsoleSpanExporter
 from opentelemetry.trace import Span
 
 import litellm
@@ -627,8 +630,6 @@ class TestLangfuseOtelKeyDynamicConfig:
 
         with self._clean_env():
             logger = LangfuseOtelLogger()
-            assert logger.OTEL_EXPORTER == "console"
-
             tracer = logger.get_tracer_to_use_for_request(
                 {"standard_callback_dynamic_params": self._dynamic_params()}
             )
@@ -1472,6 +1473,41 @@ def test_langfuse_otel_env_config_headers_carry_v4_ingestion_and_basic_auth() ->
     headers: Final = OpenTelemetry._get_headers_dictionary(logger.config.headers)
     assert headers["x-langfuse-ingestion-version"] == "4"
     assert _decoded_basic_auth(headers["Authorization"]) == "pk-lf-123:sk-lf-123"
+
+
+def _capture_console_output(monkeypatch: pytest.MonkeyPatch) -> StringIO:
+    output: Final = StringIO()
+
+    class _CapturingConsoleSpanExporter(ConsoleSpanExporter):
+        def __init__(self) -> None:
+            super().__init__(out=output)
+
+    monkeypatch.setattr(trace_export, "ConsoleSpanExporter", _CapturingConsoleSpanExporter)
+    return output
+
+
+def test_langfuse_otel_without_keys_or_exporter_does_not_print(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with patch.dict(os.environ, LANGFUSE_ENV_ONLY, clear=True):
+        console_output: Final = _capture_console_output(monkeypatch)
+        logger: Final = LangfuseOtelLogger(callback_name="langfuse_otel")
+        with logger.tracer.start_as_current_span("langfuse-default"):
+            pass
+        assert logger._tracer_provider.force_flush()
+    assert console_output.getvalue() == ""
+
+
+def test_langfuse_otel_without_keys_keeps_explicit_console_exporter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with patch.dict(os.environ, {**LANGFUSE_ENV_ONLY, "OTEL_EXPORTER": "console"}, clear=True):
+        console_output: Final = _capture_console_output(monkeypatch)
+        logger: Final = LangfuseOtelLogger(callback_name="langfuse_otel")
+        with logger.tracer.start_as_current_span("langfuse-explicit-console"):
+            pass
+        assert logger._tracer_provider.force_flush()
+    assert "langfuse-explicit-console" in console_output.getvalue()
 
 
 def test_langfuse_otel_dynamic_headers_carry_v4_ingestion_and_basic_auth() -> None:

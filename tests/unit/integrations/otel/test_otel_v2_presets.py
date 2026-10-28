@@ -3,15 +3,19 @@ event loop: the preset does no network I/O, and a custom exporter mints the JWT
 lazily on its first export (in the BatchSpanProcessor worker thread)."""
 
 import json
+from collections.abc import Callable, Mapping
+from io import StringIO
+from typing import Final
 
 import httpx
 import pytest
 import requests_mock
 import respx
-from opentelemetry.sdk.trace.export import SpanExportResult
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SpanExportResult
 
+from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.plumbing import providers
-from litellm.integrations.otel.model.config import ExporterSpec
 from litellm.integrations.otel.presets import agentops as agentops_mod
 from litellm.integrations.otel.presets.agentops import (
     _AGENTOPS_AUTH_ENDPOINT,
@@ -21,6 +25,132 @@ from litellm.integrations.otel.presets.agentops import (
     _fetch_agentops_jwt,
     agentops_preset,
 )
+from litellm.integrations.otel.presets.arize import arize_preset
+from litellm.integrations.otel.presets.langfuse import langfuse_preset
+from litellm.integrations.otel.presets.levo import levo_preset
+from litellm.integrations.otel.presets.newrelic import newrelic_preset
+from litellm.integrations.otel.presets.phoenix import phoenix_preset
+from litellm.integrations.otel.presets.signoz import signoz_preset
+from litellm.integrations.otel.presets.weave import weave_preset
+
+_PRESET_ENV_VARS: Final = (
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "LANGFUSE_HOST",
+    "LANGFUSE_OTEL_HOST",
+    "ARIZE_SPACE_ID",
+    "ARIZE_SPACE_KEY",
+    "ARIZE_API_KEY",
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+    "WANDB_API_KEY",
+    "WANDB_PROJECT_ID",
+    "LEVOAI_API_KEY",
+    "LEVOAI_ORG_ID",
+    "LEVOAI_WORKSPACE_ID",
+    "LEVOAI_COLLECTOR_URL",
+    "PHOENIX_API_KEY",
+    "PHOENIX_COLLECTOR_ENDPOINT",
+    "PHOENIX_COLLECTOR_PROJECT_NAME",
+    "SIGNOZ_INGESTION_ENDPOINT",
+    "SIGNOZ_INGESTION_KEY",
+    "NEW_RELIC_LICENSE_KEY",
+    "NEW_RELIC_REGION",
+    "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED",
+    "AGENTOPS_API_KEY",
+    "AGENTOPS_SERVICE_NAME",
+    "AGENTOPS_ENVIRONMENT",
+    "OTEL_EXPORTER",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
+    "OTEL_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_HEADERS",
+    "OTEL_EXPORTER_OTLP_HEADERS",
+)
+
+_PRESET_CASES: Final = (
+    pytest.param(
+        langfuse_preset,
+        {"LANGFUSE_PUBLIC_KEY": "pk", "LANGFUSE_SECRET_KEY": "sk"},
+        id="langfuse",
+    ),
+    pytest.param(arize_preset, {"ARIZE_SPACE_ID": "space", "ARIZE_API_KEY": "key"}, id="arize"),
+    pytest.param(weave_preset, {"WANDB_API_KEY": "key", "WANDB_PROJECT_ID": "entity/project"}, id="weave"),
+    pytest.param(
+        levo_preset,
+        {
+            "LEVOAI_API_KEY": "key",
+            "LEVOAI_ORG_ID": "org",
+            "LEVOAI_WORKSPACE_ID": "workspace",
+            "LEVOAI_COLLECTOR_URL": "http://levo.test/v1/traces",
+        },
+        id="levo",
+    ),
+    pytest.param(phoenix_preset, {"PHOENIX_API_KEY": "key"}, id="phoenix"),
+    pytest.param(
+        signoz_preset,
+        {"SIGNOZ_INGESTION_ENDPOINT": "http://signoz.test/v1/traces", "SIGNOZ_INGESTION_KEY": "key"},
+        id="signoz",
+    ),
+    pytest.param(newrelic_preset, {"NEW_RELIC_LICENSE_KEY": "key"}, id="newrelic"),
+    pytest.param(agentops_preset, {"AGENTOPS_API_KEY": "key"}, id="agentops"),
+)
+
+
+def _clear_preset_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _PRESET_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
+def _capture_console_output(monkeypatch: pytest.MonkeyPatch) -> StringIO:
+    output: Final = StringIO()
+
+    class _CapturingConsoleSpanExporter(ConsoleSpanExporter):
+        def __init__(self) -> None:
+            super().__init__(out=output)
+
+    monkeypatch.setattr(providers, "ConsoleSpanExporter", _CapturingConsoleSpanExporter)
+    return output
+
+
+def _provider_for_console_behavior(preset: Callable[[], OpenTelemetryV2Config]) -> TracerProvider:
+    config: Final = preset()
+    exporters: Final = tuple(
+        spec if spec.kind.lower() == "console" else ExporterSpec(kind="in_memory") for spec in config.exporters
+    )
+    safe_config: Final = config.model_copy(update={"exporters": exporters})
+    return providers.build_tracer_provider(safe_config)
+
+
+@pytest.mark.parametrize(("preset", "credentials"), _PRESET_CASES)
+def test_credentialed_presets_do_not_export_to_default_console(
+    preset: Callable[[], OpenTelemetryV2Config],
+    credentials: Mapping[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_preset_env(monkeypatch)
+    console_output: Final = _capture_console_output(monkeypatch)
+    for name, value in credentials.items():
+        monkeypatch.setenv(name, value)
+    provider: Final = _provider_for_console_behavior(preset)
+    with provider.get_tracer("litellm").start_as_current_span("preset") as span:
+        span.set_attribute("preset", "credentialed")
+    assert console_output.getvalue() == ""
+
+
+def test_credentialed_preset_keeps_explicit_console_exporter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_preset_env(monkeypatch)
+    console_output: Final = _capture_console_output(monkeypatch)
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    monkeypatch.setenv("OTEL_EXPORTER", "console")
+    provider: Final = _provider_for_console_behavior(langfuse_preset)
+    with provider.get_tracer("litellm").start_as_current_span("explicit-console") as span:
+        span.set_attribute("preset", "console")
+    assert "explicit-console" in console_output.getvalue()
 
 
 def test_agentops_preset_does_no_network_io(monkeypatch):

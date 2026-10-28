@@ -14,6 +14,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from io import StringIO
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -24,6 +25,7 @@ import pytest
 pytest.importorskip("opentelemetry")
 
 from opentelemetry import trace  # noqa: E402
+from opentelemetry.sdk.trace.export import ConsoleSpanExporter  # noqa: E402
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
 )
@@ -2697,6 +2699,70 @@ def test_select_global_otel_v2_logger_builds_one_when_none_registered():
 
     chosen = select_global_otel_v2_logger([])
     assert isinstance(chosen, OpenTelemetryV2)
+
+
+def _unset_otel_exporter_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "OTEL_EXPORTER",
+        "OTEL_EXPORTER_OTLP_PROTOCOL",
+        "OTEL_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_HEADERS",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _capture_console_output(monkeypatch: pytest.MonkeyPatch) -> StringIO:
+    output: Final = StringIO()
+
+    class _CapturingConsoleSpanExporter(ConsoleSpanExporter):
+        def __init__(self) -> None:
+            super().__init__(out=output)
+
+    monkeypatch.setattr(providers, "ConsoleSpanExporter", _CapturingConsoleSpanExporter)
+    return output
+
+
+def test_select_global_otel_v2_logger_without_exporter_does_not_print(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+    _unset_otel_exporter_env(monkeypatch)
+    console_output: Final = _capture_console_output(monkeypatch)
+    logger: Final = select_global_otel_v2_logger([])
+    with logger.tracer.start_as_current_span("fallback"):
+        pass
+    assert console_output.getvalue() == ""
+
+
+def test_select_global_otel_v2_logger_keeps_explicit_console_exporter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+    _unset_otel_exporter_env(monkeypatch)
+    console_output: Final = _capture_console_output(monkeypatch)
+    monkeypatch.setenv("OTEL_EXPORTER", "console")
+    logger: Final = select_global_otel_v2_logger([])
+    with logger.tracer.start_as_current_span("explicit-console"):
+        pass
+    assert "explicit-console" in console_output.getvalue()
+
+
+def test_select_global_otel_v2_logger_fallback_allows_tenant_fan_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+    _unset_otel_exporter_env(monkeypatch)
+    logger: Final = select_global_otel_v2_logger([])
+    providers.attach_tenant_fan_out(logger._tracer_provider, logger.config)
+    assert any(
+        isinstance(processor, providers.TenantFanOutSpanProcessor)
+        for processor in logger._tracer_provider._active_span_processor._span_processors
+    )
 
 
 def test_publish_global_otel_v2_provider_sets_selected_logger_provider(monkeypatch):

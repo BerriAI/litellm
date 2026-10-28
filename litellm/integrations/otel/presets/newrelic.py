@@ -14,7 +14,7 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.presets.utils import ensure_mappers
+from litellm.integrations.otel.presets.utils import ensure_mappers, operator_exporters
 from litellm.types.utils import StandardCallbackDynamicParams
 
 #: Region -> OTLP base endpoint. A fixed table by design: team config picks a
@@ -55,7 +55,7 @@ def newrelic_preset(
     return base.model_copy(
         update={
             "exporters": [
-                *base.exporters,
+                *operator_exporters(base.exporters),
                 ExporterSpec(
                     kind="otlp_http",
                     endpoint=endpoint,

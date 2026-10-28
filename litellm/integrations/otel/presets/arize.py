@@ -11,7 +11,7 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.presets.utils import credential_gated_exporters, ensure_mappers
+from litellm.integrations.otel.presets.utils import credential_gated_exporters, ensure_mappers, operator_exporters
 from litellm.types.utils import StandardCallbackDynamicParams
 
 #: Arize routes an export to a project by the ``model_id`` resource attribute and
@@ -52,7 +52,7 @@ def arize_preset(
     return base.model_copy(
         update={
             "exporters": [
-                *base.exporters,
+                *operator_exporters(base.exporters),
                 ExporterSpec(
                     kind=arize_cfg.protocol or "otlp_grpc",
                     endpoint=arize_cfg.endpoint or "https://otlp.arize.com/v1",

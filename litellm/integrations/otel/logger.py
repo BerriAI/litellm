@@ -31,7 +31,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.emitter import SpanEmitter, stamp_error
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.model.baggage import promoted_baggage
-from litellm.integrations.otel.model.config import OpenTelemetryV2Config, excluded_db_systems_from
+from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config, excluded_db_systems_from
 from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
     RequestIdentity,
@@ -83,6 +83,7 @@ from litellm.integrations.otel.plumbing.providers import (
     resolve_meter_provider,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
+from litellm.integrations.otel.presets.utils import is_unconfigured_placeholder
 from litellm.types.utils import captures_span_content
 
 if TYPE_CHECKING:
@@ -933,7 +934,15 @@ def select_global_otel_v2_logger(
     if registered is not None:
         return registered
     existing: Final = next((cb for cb in in_memory_loggers if isinstance(cb, OpenTelemetryV2)), None)
-    return existing if existing is not None else OpenTelemetryV2()
+    if existing is not None:
+        return existing
+    fallback_config: Final = OpenTelemetryV2Config()
+    config: Final = (
+        fallback_config.model_copy(update={"exporters": (ExporterSpec(requires_headers=True),)})
+        if all(is_unconfigured_placeholder(spec) for spec in fallback_config.exporters)
+        else fallback_config
+    )
+    return build_otel_v2_logger(config=config)
 
 
 def publish_global_otel_v2_provider(
