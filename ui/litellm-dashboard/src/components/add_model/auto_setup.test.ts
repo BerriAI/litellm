@@ -7,6 +7,7 @@ import {
   solverPairConfig,
   nextRouterName,
   simpleSetupError,
+  routingModelGroups,
 } from "./auto_setup";
 
 const deployment = (name: string, model: string, extra: Partial<AutoRouterDeployment> = {}): AutoRouterDeployment => ({
@@ -76,7 +77,7 @@ describe("deployedRouterModels", () => {
     ]);
   });
 
-  it("uses only caller-visible chat models and excludes blocked and recursive targets", () => {
+  it("matches Advanced choices while keeping blocked and recursive targets out of suggestions", () => {
     const rows = [
       deployment("hidden", "anthropic/claude-opus-6"),
       deployment("blocked", "anthropic/claude-opus-5", { model_info: { blocked: true } }),
@@ -94,8 +95,39 @@ describe("deployedRouterModels", () => {
         ],
         rows,
       ).map((model) => model.name),
-    ).toEqual(["ready"]);
+    ).toEqual(["blocked", "ready", "recursive"]);
+    expect(
+      recommendSolverPair(
+        deployedRouterModels(
+          rows
+            .filter((row) => row.model_name !== "hidden" && row.model_name !== "embedding")
+            .map((row) => ({ model_group: row.model_name! })),
+          rows,
+        ),
+        "balanced",
+        "auto",
+      ),
+    ).toBeNull();
   });
+
+  it.each(["chat", "responses", "completion", "unknown", undefined])(
+    "offers the same routing choices as Advanced for mode %s",
+    (mode) => {
+      const groups = [
+        { model_group: "everyday", mode },
+        { model_group: "hard", mode },
+        { model_group: "embedding", mode: "embedding" },
+      ];
+      const rows = [
+        deployment("everyday", "chatgpt/gpt-6-luna", { model_info: { mode } }),
+        deployment("hard", "chatgpt/gpt-6-astra", { model_info: { mode } }),
+      ];
+      const models = deployedRouterModels(groups, rows);
+      expect(models.map((model) => model.name)).toEqual(routingModelGroups(groups).map((group) => group.model_group));
+      expect(models.map((model) => model.name)).toEqual(["everyday", "hard"]);
+      expect(names(recommendSolverPair(models, "balanced", "openai"))).toEqual(["everyday", "hard"]);
+    },
+  );
 
   it("does not claim a mixed-version or unknown model group is a known version", () => {
     const rows = [
@@ -112,7 +144,7 @@ describe("deployedRouterModels", () => {
       ],
       rows,
     );
-    expect(models.map((model) => model.name)).toEqual(["claude-sonnet-5", "mixed"]);
+    expect(models.map((model) => model.name)).toEqual(["claude-sonnet-5", "mixed", "wildcard"]);
     expect(models.every((model) => model.family === undefined)).toBe(true);
     expect(recommendSolverPair(models, "balanced", "auto")).toBeNull();
   });
