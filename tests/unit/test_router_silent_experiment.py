@@ -968,6 +968,32 @@ async def test_generic_primary_attempt_rejects_missing_provider_response(call_ty
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["aresponses", "anthropic_messages"])
+async def test_generic_mirroring_fans_out_to_each_configured_target(call_type):
+    provider: Final = AsyncMock(return_value="provider-result")
+    provider.__name__ = call_type
+    router: Final = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
+    endpoint: Final = router.factory_function(provider, call_type=call_type)
+
+    result: Final = await endpoint(model="primary-model", input="hi", metadata={"trace": "original"})
+    mirrors: Final = tuple(
+        task for task in asyncio.all_tasks() if task.get_coro().__qualname__.endswith("._silent_experiment_ageneric")
+    )
+    await asyncio.gather(*mirrors)
+
+    assert result == "provider-result"
+    assert provider.await_count == 3
+    assert {call.kwargs["litellm_metadata"]["model_group"] for call in provider.await_args_list} == {
+        "primary-model",
+        "shadow-a",
+        "shadow-b",
+    }
+    for call in provider.await_args_list:
+        assert call.kwargs["metadata"] == {"trace": "original"}
+        assert "silent_model" not in call.kwargs
+
+
+@pytest.mark.asyncio
 async def test_generic_mirror_does_not_reuse_primary_attempt_callback():
     primary_attempt: Final = AsyncMock(return_value="primary-only")
     provider: Final = AsyncMock(return_value="mirror-result")

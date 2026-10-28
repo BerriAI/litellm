@@ -6321,23 +6321,24 @@ class Router:
                 return None
             silent_model: Final[object] = deployment["litellm_params"].get("silent_model")
             if (
-                isinstance(silent_model, str)
+                silent_model is not None
                 and handler_name in SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES
                 and not deployment_has_mcp
             ):
                 # Snapshot now: `_update_kwargs_with_deployment` below mutates kwargs in place,
                 # and the task only starts running once this coroutine yields.
-                silent_kwargs: Final = self._silent_experiment_generic_kwargs(**kwargs)
-                if silent_kwargs is not None:
-                    asyncio.create_task(
-                        self._silent_experiment_ageneric(
-                            silent_model=silent_model,
-                            original_function=cast(  # cast-ok: generic handlers are async callables; the bare Callable annotation predates this
-                                Callable[..., Awaitable[object]], original_generic_function
-                            ),
-                            silent_kwargs=silent_kwargs,
+                for silent_target in _silent_experiment_targets(silent_model):
+                    silent_kwargs: Final = self._silent_experiment_generic_kwargs(**kwargs)
+                    if silent_kwargs is not None:
+                        asyncio.create_task(
+                            self._silent_experiment_ageneric(
+                                silent_model=silent_target,
+                                original_function=cast(  # cast-ok: generic handlers are async callables; the bare Callable annotation predates this
+                                    Callable[..., Awaitable[object]], original_generic_function
+                                ),
+                                silent_kwargs=silent_kwargs,
+                            )
                         )
-                    )
 
             self._update_kwargs_with_deployment(
                 deployment=deployment,
