@@ -66,7 +66,27 @@ _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE,
 _PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING: Final = _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS
 _ROLES_READING_PROMPT_CACHE_BREAKPOINTS: Final = frozenset({"system", "developer", "user"})
 _PART_TYPES_READING_PROMPT_CACHE_BREAKPOINTS: Final = frozenset({"input_text", "input_image", "input_file"})
-_COMPACT_UNSUPPORTED_PARAMS: Final = frozenset({"metadata"})
+_COMPACT_TRACKING_PARAMS: Final = frozenset({"metadata", "user"})
+_COMPACT_REJECTED_PARAMS: Final = frozenset(
+    {
+        "background",
+        "context_management",
+        "max_output_tokens",
+        "max_tool_calls",
+        "moderation",
+        "partial_images",
+        "prompt",
+        "safety_identifier",
+        "store",
+        "stream",
+        "stream_options",
+        "temperature",
+        "tool_choice",
+        "top_logprobs",
+        "top_p",
+        "truncation",
+    }
+)
 _INPUT_ITEM: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _CONTENT_PARTS: Final[TypeAdapter[Sequence[Mapping[str, object]]]] = TypeAdapter(Sequence[Mapping[str, object]])
 
@@ -1183,6 +1203,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     #########################################################
     ########## COMPACT RESPONSE API TRANSFORMATION ##########
     #########################################################
+    def compact_url(self, api_base: str) -> str:
+        parsed_url: Final = httpx.URL(api_base)
+        return str(parsed_url.copy_with(path=parsed_url.path.rstrip("/") + "/compact"))
+
+    def compact_dropped_params(self, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
+        if _drops_params(litellm_params):
+            return _COMPACT_TRACKING_PARAMS | _COMPACT_REJECTED_PARAMS
+        return _COMPACT_TRACKING_PARAMS
+
     def transform_compact_response_api_request(
         self,
         model: str,
@@ -1198,10 +1227,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         OpenAI API expects the following request
         - POST /v1/responses/compact
         """
-        # Preserve query params (e.g., api-version) while appending /compact.
-        parsed_url: Final = httpx.URL(api_base)
-        compact_path: Final = parsed_url.path.rstrip("/") + "/compact"
-        url: Final = str(parsed_url.copy_with(path=compact_path))
+        url: Final = self.compact_url(api_base)
+        dropped_params: Final = self.compact_dropped_params(litellm_params)
 
         request_params: Final = cast(  # cast-ok: the base signature leaves the params bag untyped
             "Mapping[str, object]", response_api_optional_request_params
@@ -1218,7 +1245,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         data: Final = {
             "model": model,
             "input": replay_safe_input,
-            **{key: value for key, value in request_params.items() if key not in _COMPACT_UNSUPPORTED_PARAMS},
+            **{key: value for key, value in request_params.items() if key not in dropped_params},
         }
 
         return url, data
