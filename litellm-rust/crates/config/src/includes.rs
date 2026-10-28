@@ -15,11 +15,31 @@ struct Includes {
 }
 
 fn read(path: &Path) -> Result<Mapping, Error> {
-    Ok(serde_yaml_ng::from_str(&std::fs::read_to_string(path)?)?)
+    let text = std::fs::read_to_string(path).map_err(|source| Error::Read {
+        path: path.to_owned(),
+        source,
+    })?;
+    serde_yaml_ng::from_str(&text).map_err(|source| Error::ParseFile {
+        path: path.to_owned(),
+        source,
+    })
+}
+
+fn canonical(path: &Path) -> Result<PathBuf, Error> {
+    path.canonicalize().map_err(|source| Error::Read {
+        path: path.to_owned(),
+        source,
+    })
 }
 
 fn entries(config: &Mapping, path: &Path) -> Result<Vec<(String, PathBuf)>, Error> {
-    let includes: Includes = serde_yaml_ng::from_value(Value::Mapping(config.clone()))?;
+    let includes: Includes =
+        serde_yaml_ng::from_value(Value::Mapping(config.clone())).map_err(|source| {
+            Error::ParseFile {
+                path: path.to_owned(),
+                source,
+            }
+        })?;
     Ok(includes
         .include
         .into_iter()
@@ -28,7 +48,7 @@ fn entries(config: &Mapping, path: &Path) -> Result<Vec<(String, PathBuf)>, Erro
 }
 
 pub(super) fn load(path: &Path) -> Result<Value, Error> {
-    let root = path.canonicalize()?;
+    let root = canonical(path)?;
     let mut merged = read(&root)?;
     let mut pending: VecDeque<_> = entries(&merged, &root)?.into();
     let mut loaded = BTreeSet::from([root.clone()]);
@@ -36,12 +56,11 @@ pub(super) fn load(path: &Path) -> Result<Value, Error> {
     while let Some((entry, declaring)) = pending.pop_front() {
         let declared = declaring.parent().unwrap_or(Path::new(".")).join(&entry);
         let fallback = root.parent().unwrap_or(Path::new(".")).join(&entry);
-        let location = if declared.exists() {
-            declared
+        let location = canonical(if declared.exists() {
+            &declared
         } else {
-            fallback
-        }
-        .canonicalize()?;
+            &fallback
+        })?;
         if !loaded.insert(location.clone()) {
             continue;
         }

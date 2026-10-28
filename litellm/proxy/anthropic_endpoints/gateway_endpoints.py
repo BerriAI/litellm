@@ -37,7 +37,16 @@ from litellm.constants import (
     CLI_SSO_SESSION_TTL_SECONDS,
     LITELLM_CLI_SOURCE_IDENTIFIER,
 )
-from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+from litellm.proxy.anthropic_endpoints.endpoints import anthropic_response, count_tokens
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    safe_set_request_parsed_body,
+)
+from litellm.proxy.management_endpoints.sso_helper_utils import CLI_SSO_SESSIONS_TARGET
+from litellm.proxy.management_endpoints.ui_sso import CliSsoTeamDetail
+from litellm.proxy.mcp_server.gateway_dcr_flow import (
     PROXY_API_AUDIENCE,
     MintedProxyCredential,
     MintProxyCredential,
@@ -47,14 +56,9 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     resolve_session_signing,
     revoke_session_refresh_token,
 )
-from litellm.proxy._experimental.mcp_server.oauth_utils import TOKEN_NO_CACHE_HEADERS
-from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import SessionPrincipal
-from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
-from litellm.proxy.anthropic_endpoints.endpoints import anthropic_response, count_tokens
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.http_parsing_utils import _safe_set_request_parsed_body
-from litellm.proxy.management_endpoints.sso_helper_utils import CLI_SSO_SESSIONS_TARGET
-from litellm.proxy.management_endpoints.ui_sso import CliSsoTeamDetail
+from litellm.proxy.mcp_server.oauth_utils import TOKEN_NO_CACHE_HEADERS
+from litellm.proxy.mcp_server.outbound_credentials.session_token import SessionPrincipal
+from litellm.proxy.proxy_server import model_list
 from litellm.types.llms.base import LiteLLMBaseModel
 
 GATEWAY_PREFIX: Final = "/claude_code_gateway"
@@ -155,6 +159,13 @@ router: Final = APIRouter(
 _GATEWAY_ENABLED: Final = (Depends(ensure_gateway_enabled),)
 _AUTHENTICATED: Final = (Depends(user_api_key_auth),)
 
+router.add_api_route(
+    "/v1/models",
+    model_list,
+    methods=["GET"],
+    dependencies=_GATEWAY_ENABLED,
+    include_in_schema=False,
+)
 router.add_api_route(
     "/v1/messages",
     anthropic_response,
@@ -329,7 +340,7 @@ async def _claim_device_code(login_id: str, cache: DualCache) -> bool:
 
 
 def _proxy_credential_minter() -> MintProxyCredential:
-    from litellm.proxy._experimental.mcp_server.proxy_api_credentials import mint_proxy_credential
+    from litellm.proxy.mcp_server.proxy_api_credentials import mint_proxy_credential
 
     return mint_proxy_credential
 
@@ -449,7 +460,7 @@ async def managed_settings(request: Request) -> Response:
 
 
 async def _skip_otlp_body_parsing(request: Request) -> None:
-    _safe_set_request_parsed_body(request=request, parsed_body={})
+    safe_set_request_parsed_body(request=request, parsed_body={})
 
 
 _OTLP_AUTHENTICATED: Final = (Depends(_skip_otlp_body_parsing), *_AUTHENTICATED)

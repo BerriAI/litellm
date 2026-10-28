@@ -53,7 +53,7 @@ AIOHTTP_EXC_MAP: Final[dict[type[BaseException], type[Exception]]] = {
     aiohttp.ServerFingerprintMismatch: httpx.ProtocolError,
     # Network related exceptions
     aiohttp.ClientConnectorError: httpx.ConnectError,
-    aiohttp.ClientOSError: httpx.ConnectError,
+    aiohttp.ClientOSError: httpx.ReadError,
     aiohttp.ClientPayloadError: httpx.ReadError,
     # Connection disconnection exceptions
     aiohttp.ServerDisconnectedError: httpx.ReadError,
@@ -289,7 +289,14 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         cls._background_close_tasks.add(task)
         task.add_done_callback(cls._on_close_task_done)
 
-    def _get_valid_client_session(self) -> ClientSession:
+    def __del__(self) -> None:
+        session: Final = getattr(self, "client", None)
+        if not getattr(self, "_owns_session", False) or not isinstance(session, ClientSession):
+            return
+        with contextlib.suppress(Exception):
+            self._close_recycled_session(session)
+
+    def get_valid_client_session(self) -> ClientSession:
         """
         Helper to get a valid ClientSession for the current event loop.
 
@@ -339,6 +346,8 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             verbose_logger.debug("Error checking session loop, created new session: %s", e)
 
         return self.client
+
+    _get_valid_client_session = get_valid_client_session
 
     async def _make_aiohttp_request(
         self,
@@ -407,7 +416,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         sni_hostname: Final[str | None] = request.extensions.get("sni_hostname")
 
         # Use helper to ensure we have a valid session for the current event loop
-        client_session = self._get_valid_client_session()
+        client_session = self.get_valid_client_session()
 
         # Resolve proxy settings from environment variables
         proxy: Final = await self._get_proxy_settings(request)

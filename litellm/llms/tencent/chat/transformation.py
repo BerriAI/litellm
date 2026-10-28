@@ -9,6 +9,7 @@ from typing import Final, TypedDict
 from typing_extensions import ReadOnly
 
 import litellm
+from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import supports_reasoning
 
@@ -137,7 +138,4 @@ class TencentChatConfig(OpenAIGPTConfig):
         if api_base.endswith("/chat/completions"):
             return api_base
 
-        if not api_base.endswith("/v1"):
-            api_base = f"{api_base}/v1"
-
-        return f"{api_base}/chat/completions"
+        return join_api_base(ensure_api_route(api_base, "v1"), "chat/completions")

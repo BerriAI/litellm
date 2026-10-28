@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from litellm.proxy.utils import (
-    _check_and_merge_model_level_guardrails,
+    check_and_merge_model_level_guardrails,
     _merge_guardrails_with_existing,
 )
 
@@ -55,7 +55,7 @@ def test_check_and_merge_model_level_guardrails_happy_path_merges_lists():
             "guardrails": ["user-policy"],
         },
     }
-    result = _check_and_merge_model_level_guardrails(data, router)
+    result = check_and_merge_model_level_guardrails(data, router)
     snapshot = {
         "model": result["model"],
         "model_info_id": result["metadata"]["model_info"]["id"],
@@ -70,7 +70,7 @@ def test_check_and_merge_model_level_guardrails_happy_path_merges_lists():
 
 def test_check_and_merge_model_level_guardrails_returns_data_when_router_none():
     data = {"metadata": {"model_info": {"id": "x"}}, "model": "m", "other": 1}
-    result = _check_and_merge_model_level_guardrails(data, None)
+    result = check_and_merge_model_level_guardrails(data, None)
     assert result is data
     assert normalize(result) == {
         "metadata": {"model_info": {"id": "x"}},
@@ -84,7 +84,7 @@ def test_check_and_merge_model_level_guardrails_returns_data_when_model_id_missi
     deployment (router returns None for both lookups), data is unchanged."""
     router = _router_with_deployment(["pii"])  # by_alias=False by default
     data = {"metadata": {"model_info": {}}, "model": "m", "extra": "v"}
-    result = _check_and_merge_model_level_guardrails(data, router)
+    result = check_and_merge_model_level_guardrails(data, router)
     snapshot = {
         "is_same_object": result is data,
         "metadata": result["metadata"],
@@ -108,7 +108,7 @@ def test_check_and_merge_model_level_guardrails_falls_back_to_model_alias_when_m
     model alias (#29652) so DB/UI-assigned guardrails still fire."""
     router = _router_with_deployment(["pii"], by_alias=True)
     data = {"metadata": {"model_info": {}}, "model": "m", "extra": "v"}
-    result = _check_and_merge_model_level_guardrails(data, router)
+    result = check_and_merge_model_level_guardrails(data, router)
     # Merge happened via the alias fallback.
     assert "pii" in result["metadata"]["guardrails"]
     router.get_model_list.assert_called_once()
@@ -121,7 +121,7 @@ def test_check_and_merge_model_level_guardrails_unions_guardrails_across_group_d
     The fix is to union the guardrails from all deployments in the group."""
     router = _router_with_deployments([["pii"], ["secret-scan"], None])
     data = {"metadata": {"model_info": {}}, "model": "m"}
-    result = _check_and_merge_model_level_guardrails(data, router)
+    result = check_and_merge_model_level_guardrails(data, router)
     assert sorted(result["metadata"]["guardrails"]) == ["pii", "secret-scan"]
 
 
@@ -130,7 +130,7 @@ def test_check_and_merge_model_level_guardrails_dedups_guardrails_across_group_d
     entries in the merged guardrails list."""
     router = _router_with_deployments([["pii"], ["pii", "secret-scan"]])
     data = {"metadata": {"model_info": {}}, "model": "m"}
-    result = _check_and_merge_model_level_guardrails(data, router)
+    result = check_and_merge_model_level_guardrails(data, router)
     assert sorted(result["metadata"]["guardrails"]) == ["pii", "secret-scan"]
 
 
@@ -139,7 +139,7 @@ def test_check_and_merge_model_level_guardrails_group_with_no_guardrails_returns
     the helper returns the data unchanged."""
     router = _router_with_deployments([None, None, []])
     data = {"metadata": {"model_info": {}}, "model": "m"}
-    result = _check_and_merge_model_level_guardrails(data, router)
+    result = check_and_merge_model_level_guardrails(data, router)
     assert result is data
     assert "guardrails" not in result["metadata"]
 
@@ -163,7 +163,7 @@ def test_check_and_merge_model_level_guardrails_ignores_client_model_info_id_whe
         "model": "guarded-alias",
         "metadata": {"model_info": {"id": "spoofed-unguarded-deployment"}},
     }
-    result = _check_and_merge_model_level_guardrails(data, router, trust_client_model_info=False)
+    result = check_and_merge_model_level_guardrails(data, router, trust_client_model_info=False)
     assert "alias-secret-scan" in result["metadata"]["guardrails"]
     # The model_id lookup must NOT have been used.
     router.get_deployment.assert_not_called()
@@ -179,7 +179,7 @@ def test_check_and_merge_model_level_guardrails_trusts_client_model_info_id_by_d
         "model": "any",
         "metadata": {"model_info": {"id": "deployment-123"}},
     }
-    result = _check_and_merge_model_level_guardrails(data, router)
+    result = check_and_merge_model_level_guardrails(data, router)
     assert "post-call-guardrail" in result["metadata"]["guardrails"]
     router.get_deployment.assert_called_once_with(model_id="deployment-123")
 
@@ -193,7 +193,7 @@ def test_check_and_merge_model_level_guardrails_post_call_accepts_bare_string_gu
     router = MagicMock()
     router.get_deployment.return_value = deployment
     data = {"model": "any", "metadata": {"model_info": {"id": "deployment-x"}}}
-    result = _check_and_merge_model_level_guardrails(data, router)
+    result = check_and_merge_model_level_guardrails(data, router)
     assert "scalar-guardrail" in result["metadata"]["guardrails"]
 
 
@@ -203,7 +203,7 @@ def test_check_and_merge_model_level_guardrails_alias_union_accepts_bare_string_
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [{"litellm_params": {"guardrails": "scalar-alias-guardrail"}}]
     data = {"model": "alias-m", "metadata": {"model_info": {}}}
-    result = _check_and_merge_model_level_guardrails(data, router)
+    result = check_and_merge_model_level_guardrails(data, router)
     assert "scalar-alias-guardrail" in result["metadata"]["guardrails"]
 
 
@@ -222,7 +222,7 @@ def test_check_and_merge_model_level_guardrails_alias_fallback_passes_team_id():
             "user_api_key_team_id": "team-abc",
         },
     }
-    result = _check_and_merge_model_level_guardrails(data, router, trust_client_model_info=False)
+    result = check_and_merge_model_level_guardrails(data, router, trust_client_model_info=False)
     assert "team-guardrail" in result["metadata"]["guardrails"]
     router.get_model_list.assert_called_once_with(model_name="team-scoped-alias", team_id="team-abc")
 
@@ -238,21 +238,21 @@ def test_check_and_merge_model_level_guardrails_alias_fallback_reads_team_id_fro
         "metadata": {"model_info": {}},
         "litellm_metadata": {"user_api_key_team_id": "team-xyz"},
     }
-    _check_and_merge_model_level_guardrails(data, router, trust_client_model_info=False)
+    check_and_merge_model_level_guardrails(data, router, trust_client_model_info=False)
     router.get_model_list.assert_called_once_with(model_name="alias-m", team_id="team-xyz")
 
 
 def test_check_and_merge_model_level_guardrails_returns_data_when_deployment_none():
     router = _router_without_deployment()
     data = {"metadata": {"model_info": {"id": "x"}}, "model": "m"}
-    result = _check_and_merge_model_level_guardrails(data, router)
+    result = check_and_merge_model_level_guardrails(data, router)
     assert result is data
 
 
 def test_check_and_merge_model_level_guardrails_returns_data_when_guardrails_none():
     router = _router_with_deployment(None)
     data = {"metadata": {"model_info": {"id": "x"}}, "model": "m"}
-    result = _check_and_merge_model_level_guardrails(data, router)
+    result = check_and_merge_model_level_guardrails(data, router)
     assert result is data
 
 
@@ -260,7 +260,7 @@ def test_check_and_merge_model_level_guardrails_handles_missing_metadata():
     """No metadata at all + alias unknown to the router → data unchanged."""
     router = _router_with_deployment(["pii"])  # by_alias=False
     data = {"model": "m"}
-    result = _check_and_merge_model_level_guardrails(data, router)
+    result = check_and_merge_model_level_guardrails(data, router)
     snapshot = {
         "is_same_object": result is data,
         "model": result["model"],
@@ -277,7 +277,7 @@ def test_check_and_merge_model_level_guardrails_raises_when_metadata_is_not_dict
     router = _router_with_deployment(["pii"])
     data = {"metadata": "not-a-dict", "model": "m"}
     with pytest.raises(AttributeError):
-        _check_and_merge_model_level_guardrails(data, router)
+        check_and_merge_model_level_guardrails(data, router)
 
 
 def test_merge_guardrails_with_existing_happy_path_combines_lists():

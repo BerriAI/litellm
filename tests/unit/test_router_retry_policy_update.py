@@ -300,6 +300,21 @@ def test_update_settings_persists_retry_policy_dict():
     assert router.retry_policy.TimeoutErrorRetries == 3
 
 
+def test_update_settings_fallback_on_unsupported_params_round_trips_through_get_settings():
+    router = _build_router()
+    assert router.get_settings()["fallback_on_unsupported_params"] is True
+
+    router.update_settings(fallback_on_unsupported_params=False)
+
+    assert router.fallback_on_unsupported_params is False
+    assert router.get_settings()["fallback_on_unsupported_params"] is False
+
+
+def test_update_router_config_keeps_fallback_on_unsupported_params_payload():
+    payload = UpdateRouterConfig(fallback_on_unsupported_params=False).model_dump(exclude_none=True)
+    assert payload["fallback_on_unsupported_params"] is False
+
+
 def test_update_settings_accepts_retry_policy_object_unchanged():
     """A pre-built ``RetryPolicy`` instance must pass through verbatim so
     callers that already constructed one (e.g. tests or programmatic
@@ -415,6 +430,7 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
     fake_table = _FakeConfigTable()
     prisma_client = MagicMock()
     prisma_client.db.litellm_config = fake_table
+    prisma_client.writer_db = prisma_client.db
 
     async def _apply_router_settings(*args, **kwargs):
         await proxy_server.proxy_config._add_router_settings_from_db_config(

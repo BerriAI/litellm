@@ -25,10 +25,11 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -197,7 +198,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             optional_params=optional_params,
         )
 
-        sync_client: Final = _get_httpx_client(
+        sync_client: Final = get_httpx_client(
             params={"timeout": timeout},
         )
 
@@ -627,11 +628,10 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         request_data: dict | None = None,
     ) -> tuple[str, "HTTPHeaders", bytes]:
         """Prepare the AWS Secrets Manager request"""
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+
         optional_params = optional_params or {}
 
         # Build optional_params from instance settings if not provided

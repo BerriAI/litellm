@@ -5,8 +5,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
-from pydantic import ConfigDict, Field, ValidationError
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.project import LiteLLM_ProjectTable
@@ -19,12 +19,13 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import (
-    _check_team_member_model_access,  # pyright: ignore[reportPrivateUsage]  # shared membership authorization owner
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _check_team_member_model_access,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_key_call_model,
     can_org_access_model,
     can_project_access_model,
     can_team_access_model,
+    check_team_member_model_access,  # pyright: ignore[reportPrivateUsage]  # shared membership authorization owner
 )
 from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
@@ -35,15 +36,46 @@ from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.router import Router
 from litellm.router_strategy.complexity_router.config import (
     ComplexityRouterConfigWrite,
+    normalize_classifier_config_aliases,
     resolve_complexity_router_config_write,
 )
+from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
 from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model, strategy_router_dependencies
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
 from litellm.types.router import Deployment, updateDeployment
 
 if TYPE_CHECKING:
     from prisma import types as prisma_types
+
+
+def auto_router_environment_reference_error(
+    config: Mapping[str, object] | None, user_api_key_dict: UserAPIKeyAuth
+) -> Literal["environment_reference_denied"] | None:
+    if config is None or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return None
+    classifier: Final = normalize_classifier_config_aliases(config).get("opensource_classifier_config")
+    if not isinstance(classifier, Mapping):
+        return None
+    fields: Final = TypeAdapter(Mapping[str, object]).validate_python(classifier)
+    if any(
+        isinstance(value, str) and value.startswith("os.environ/")
+        for value in (fields.get("api_key"), fields.get("api_base"))
+    ):
+        return "environment_reference_denied"
+    return None
+
+
+def raise_auto_router_environment_reference_error(error: Literal["environment_reference_denied"] | None) -> None:
+    match error:
+        case None:
+            return
+        case "environment_reference_denied":
+            raise HTTPException(
+                status_code=403,
+                detail="Only proxy admins can submit classifier connection environment references",
+            )
+        case _:
+            assert_never(error)
 
 
 class _MemberRouterThinking(LiteLLMBaseModel):
@@ -75,7 +107,8 @@ class _MemberOpenSourceClassifierConfig(LiteLLMBaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["jev", "laya", "bespoke"] = "jev"
+    deployment_name: str | None = None
+    provider: Literal["jev", "laya", "bespoke", "databricks"] = "jev"
     model: str
     api_key: None = None
     api_base: None = None
@@ -222,7 +255,7 @@ async def authorize_member_auto_router_dependencies(
             llm_router=llm_router,
             prisma_client=prisma_client,
         )
-        await _check_team_member_model_access(
+        await check_team_member_model_access(
             model=model,
             team_object=team,
             valid_token=scoped_actor,

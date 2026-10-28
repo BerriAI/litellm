@@ -214,14 +214,14 @@ def _coordination_redis_source(settings: Mapping[str, object] | None) -> Coordin
     an explicit block wins, else a plain-Redis response-cache backend is
     borrowed, else the REDIS_* environment fallback applies.
     """
-    from litellm.proxy.proxy_server import _environment_has_redis_connection_target
+    from litellm.proxy.proxy_server import environment_has_redis_connection_target
 
     if settings:
         return "coordination_redis"
     cache_backend: Final = litellm.cache.cache if litellm.cache is not None else None
     if isinstance(cache_backend, (RedisCache, RedisClusterCache)):
         return "cache_backend"
-    if _environment_has_redis_connection_target():
+    if environment_has_redis_connection_target():
         return "environment"
     return None
 
@@ -416,7 +416,7 @@ async def check_coordination_redis_connection(
 
     Builds a throwaway client (never touching global state) and pings it.
     """
-    from litellm.proxy.proxy_server import _build_redis_usage_cache
+    from litellm.proxy.proxy_server import build_redis_usage_cache
 
     _enforce_proxy_admin(user_api_key_dict)
 
@@ -426,7 +426,9 @@ async def check_coordination_redis_connection(
 
     redis_cache: RedisCache | None = None
     try:
-        redis_cache = _build_redis_usage_cache(params.model_dump(exclude_none=True))
+        redis_cache = build_redis_usage_cache(  # rebind-ok: pre-existing rebinding on a rename-only line
+            params.model_dump(exclude_none=True)
+        )
         await asyncio.wait_for(redis_cache.ping(), timeout=_PING_TIMEOUT_SECONDS)
         return CoordinationRedisTestResponse(status="healthy")
     except asyncio.TimeoutError:

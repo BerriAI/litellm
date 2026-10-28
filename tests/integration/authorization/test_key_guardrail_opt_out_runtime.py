@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import pytest
 from anthropic import Anthropic
 from openai import AsyncOpenAI, OpenAI
 
@@ -19,6 +20,8 @@ from integration.authorization._guardrail_opt_out import (
     stored_metadata,
     upstream_hits,
 )
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 
 def _wire_hits(wire: Wire, marker: str) -> int:

@@ -1,12 +1,18 @@
+import re
+from collections.abc import Mapping
 from copy import deepcopy
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
+from urllib.parse import urlsplit
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
-from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import *
@@ -21,6 +27,36 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+_DATED_GA_API_VERSION: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _str_param(litellm_params: Mapping[str, object], key: str) -> str | None:
+    value: Final = litellm_params.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _resolve_responses_api_version(api_base: str | None, litellm_params: Mapping[str, object]) -> str | None:
+    """
+    Dated GA api_versions (e.g. 2024-10-21) predate the Responses API on Azure and 404 there, so a deployment
+    pinned to one for chat gets the default Responses version unless it sets responses_api_version.
+    """
+    api_version: Final = _str_param(litellm_params, "api_version")
+    if api_base is not None and "api-version" in httpx.URL(api_base).params:
+        return api_version
+    responses_api_version: Final = _str_param(litellm_params, "responses_api_version")
+    if responses_api_version is not None:
+        return responses_api_version
+    if api_version is not None and _DATED_GA_API_VERSION.fullmatch(api_version):
+        return AZURE_DEFAULT_RESPONSES_API_VERSION
+    return api_version
+
+
+def _with_responses_api_version(api_base: str | None, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({**litellm_params, "api_version": _resolve_responses_api_version(api_base, litellm_params)})
+
 
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     # Parameters not supported by Azure Responses API
@@ -31,8 +67,16 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return LlmProviders.AZURE
 
     @staticmethod
+    def _is_gpt_5_model(model: str) -> bool:
+        return AzureOpenAIGPT5Config.is_model_gpt_5_model(model)
+
+    @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:
-        return AzureOpenAIGPT5Config._supports_reasoning_effort_level(model, "none")
+        return AzureOpenAIGPT5Config.supports_reasoning_effort_level(model, "none")
+
+    @staticmethod
+    def _effort_level_is_disabled(model: str, level: str) -> bool:
+        return AzureOpenAIGPT5Config.row_disables_reasoning_effort_level(model, level)
 
     @staticmethod
     def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
@@ -46,12 +90,12 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return [param for param in base_supported_params if param not in self.AZURE_UNSUPPORTED_PARAMS]
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
-        return BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
+        return BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
 
     def get_stripped_model_name(self, model: str) -> str:
         return model.replace("responses/", "").replace("o_series/", "").replace("azure_ai/", "")
 
-    def _handle_reasoning_item(self, item: dict[str, Any]) -> dict[str, Any]:
+    def _handle_reasoning_item(self, item: dict[str, Any]) -> Mapping[str, object]:
         """
         Handle reasoning items to filter out the status field.
         Issue: https://github.com/BerriAI/litellm/issues/13484
@@ -167,11 +211,22 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - A complete URL string, e.g.,
         "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
         """
-        from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
+        resolved_api_base: Final = BaseAzureLLM.resolve_azure_api_base(api_base)
+        responses_params: Final = _with_responses_api_version(resolved_api_base, litellm_params)
+        parsed_base: Final = urlsplit(resolved_api_base or "")
+        path: Final = parsed_base.path.rstrip("/")
+        if path.endswith(("/openai/v1", "/openai/v1/responses")):
+            responses_path: Final = f"{path}/responses" if path.endswith("/openai/v1") else path
+            return BaseAzureLLM.get_base_azure_url(
+                api_base=parsed_base._replace(path=responses_path).geturl(),
+                litellm_params=responses_params,
+                route="/openai/v1/responses",
+                default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
+            )
 
-        return BaseAzureLLM._get_base_azure_url(
-            api_base=api_base,
-            litellm_params=litellm_params,
+        return BaseAzureLLM.get_base_azure_url(
+            api_base=resolved_api_base,
+            litellm_params=responses_params,
             route="/openai/responses",
             default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
         )
@@ -345,7 +400,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Transform the cancel response API response into a ResponsesAPIResponse
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIError
 

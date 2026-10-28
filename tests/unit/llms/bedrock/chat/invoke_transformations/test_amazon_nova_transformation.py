@@ -115,3 +115,22 @@ def test_tool_config_injection_point_is_neither_placed_nor_credited(local_model_
     assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["f"]
     assert "cachePoint" not in json.dumps(request)
     assert GATEWAY_INJECTED_CACHE_METADATA_KEY not in metadata
+
+
+@pytest.mark.parametrize("value", ["b c", "bad!"], ids=["nbsp", "outside-bedrock-charset"])
+def test_caller_request_metadata_is_ignored_because_invoke_model_has_no_field_for_it(local_model_cost_map, value):
+    caller_metadata = {"ticket": value}
+    optional_params = AmazonInvokeNovaConfig().map_openai_params(
+        non_default_params={"max_tokens": 8, "requestMetadata": caller_metadata},
+        optional_params={},
+        model=MODEL,
+        drop_params=False,
+    )
+
+    request = _transform_request(
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={**optional_params, "requestMetadata": caller_metadata},
+    )
+
+    assert "requestMetadata" not in request
+    assert request["inferenceConfig"] == {"maxTokens": 8}

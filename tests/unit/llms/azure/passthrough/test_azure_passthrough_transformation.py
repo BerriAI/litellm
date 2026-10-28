@@ -230,10 +230,11 @@ def test_azure_passthrough_streaming_chat_chunks_build_the_complete_response():
     assert response.usage.completion_tokens == 8
 
 
-def test_azure_passthrough_streaming_chunks_without_usage_count_prompt_tokens_from_the_relayed_request():
+@pytest.mark.parametrize("stray_fields", [{}, {"prompt": 5}])
+def test_azure_passthrough_streaming_chunks_without_usage_count_prompt_tokens_from_the_relayed_request(stray_fields):
     messages = [{"role": "user", "content": "Say hi in three words"}]
     logging_obj = MagicMock()
-    logging_obj.model_call_details = {"request_data": {"messages": messages, "stream": True}}
+    logging_obj.model_call_details = {"request_data": {"messages": messages, "stream": True, **stray_fields}}
 
     response = AzurePassthroughConfig().handle_logging_collected_chunks(
         all_chunks=[chunk for chunk in _azure_chat_completion_chunks() if '"usage"' not in chunk],
