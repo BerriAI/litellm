@@ -1,11 +1,22 @@
-from collections.abc import Generator, Mapping
+import datetime
+import ipaddress
+import json
+import ssl
+import threading
+from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Final
 from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 
 def test_get_team_models_for_all_models_and_team_only_models():
@@ -527,6 +538,136 @@ def test_hosted_vllm_wildcard_listing_does_not_wait_the_completion_timeout_on_a_
     read_timeout: Final = models_route.calls.last.request.extensions["timeout"]["read"]
     assert read_timeout is not None
     assert read_timeout <= NON_LLM_CONNECTION_TIMEOUT
+
+
+@respx.mock
+def test_hosted_vllm_wildcard_listing_sends_the_deployment_extra_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    respx.get(
+        "http://vllm-behind-gateway.test:8000/v1/models",
+        headers={"X-Tenant": "team-a", "Authorization": "Bearer vllm-test-key"},
+    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
+
+    listed: Final = get_known_models_from_wildcard(
+        "hosted_vllm/*",
+        LiteLLM_Params(
+            model="hosted_vllm/*",
+            api_base="http://vllm-behind-gateway.test:8000/v1",
+            api_key="vllm-test-key",
+            extra_headers={"X-Tenant": "team-a"},
+        ),
+    )
+
+    assert listed == ["hosted_vllm/qwen2.5"]
+
+
+def _self_signed_cert(directory: Path) -> tuple[Path, Path]:
+    key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    now: Final = datetime.datetime.now(datetime.UTC)
+    cert: Final = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.IPv4Address("127.0.0.1"))]), critical=False
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_path: Final = directory / "cert.pem"
+    key_path: Final = directory / "key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    )
+    return cert_path, key_path
+
+
+@pytest.fixture
+def self_signed_vllm_api_base(tmp_path: Path) -> Iterator[str]:
+    cert_path, key_path = _self_signed_cert(tmp_path)
+
+    class Handler(BaseHTTPRequestHandler):
+        timeout = 5
+
+        def do_GET(self) -> None:
+            body: Final = json.dumps({"data": [{"id": "qwen2.5"}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:  # matches BaseHTTPRequestHandler
+            pass
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert_path, key_path)
+    server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"https://127.0.0.1:{server.server_address[1]}/v1"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_hosted_vllm_wildcard_lists_a_self_signed_server_only_when_the_deployment_turns_off_ssl_verify(
+    monkeypatch: pytest.MonkeyPatch, self_signed_vllm_api_base: str
+) -> None:
+    import litellm
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.llms.custom_httpx import http_handler
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.setattr(litellm, "ssl_verify", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setattr(http_handler, "_ssl_context_cache", {})
+    monkeypatch.delenv("SSL_VERIFY", raising=False)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+
+    verified: Final = get_known_models_from_wildcard(
+        "hosted_vllm/*", LiteLLM_Params(model="hosted_vllm/*", api_base=self_signed_vllm_api_base)
+    )
+    unverified: Final = get_known_models_from_wildcard(
+        "hosted_vllm/*",
+        LiteLLM_Params(model="hosted_vllm/*", api_base=self_signed_vllm_api_base, ssl_verify=False),
+    )
+
+    assert verified == []
+    assert unverified == ["hosted_vllm/qwen2.5"]
+
+
+@respx.mock
+def test_custom_prefix_over_a_litellm_proxy_wildcard_lists_upstream_models_under_the_prefix_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    respx.get("http://upstream-proxy.test:4000/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "claude-sonnet"}]})
+    )
+
+    listed: Final = get_known_models_from_wildcard(
+        "team-proxy/*",
+        LiteLLM_Params(model="litellm_proxy/*", api_base="http://upstream-proxy.test:4000", api_key="sk-upstream"),
+    )
+
+    assert listed == ["team-proxy/gpt-4o", "team-proxy/claude-sonnet"]
 
 
 def test_wildcard_custom_prefix_does_not_stack_provider_prefix(monkeypatch):

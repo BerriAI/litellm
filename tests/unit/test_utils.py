@@ -10581,6 +10581,35 @@ def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
     assert _model_cache.get_cached_model_info("openai") is None
 
 
+@respx.mock
+def test_a_failed_provider_model_listing_is_retried_only_after_its_failure_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    from litellm.constants import PROVIDER_MODEL_DISCOVERY_FAILURE_CACHE_TTL_SECONDS
+    from litellm.types.router import LiteLLM_Params
+
+    models_route: Final = respx.get("http://vllm-hung.test:8000/v1/models").mock(
+        side_effect=httpx.ReadTimeout("vLLM did not answer")
+    )
+    litellm_params: Final = LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-hung.test:8000/v1")
+    failed_at: Final = time.time()
+
+    def list_models() -> list[str]:
+        return get_valid_models(
+            check_provider_endpoint=True, custom_llm_provider="hosted_vllm", litellm_params=litellm_params
+        )
+
+    assert list_models() == []
+    assert list_models() == []
+    assert models_route.call_count == 1
+
+    models_route.mock(side_effect=None, return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
+    monkeypatch.setattr(time, "time", lambda: failed_at + PROVIDER_MODEL_DISCOVERY_FAILURE_CACHE_TTL_SECONDS + 1)
+
+    assert list_models() == ["qwen2.5"]
+    assert models_route.call_count == 2
+
+
 def test_delta_tool_calls_sequential_indices():
     """
     Test that multiple tool calls without explicit indices receive sequential indices.

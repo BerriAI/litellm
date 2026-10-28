@@ -28,7 +28,7 @@ import textwrap
 import threading
 import time
 import traceback
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from dataclasses import dataclass, field
 from functools import lru_cache, wraps
 from importlib import resources
@@ -79,6 +79,7 @@ from litellm.constants import (
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE,
     NON_INFERENCE_CALL_TYPES,
     OPENAI_EMBEDDING_PARAMS,
+    PROVIDER_MODEL_DISCOVERY_FAILURE_CACHE_TTL_SECONDS,
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
@@ -8386,10 +8387,11 @@ class AvailableModelsCache(InMemoryCache):
         custom_llm_provider: str,
         litellm_params: LiteLLM_Params | None,
         available_models: list[str],
+        ttl: int | None = None,
     ):
         """Set cached model info"""
         cache_key: Final = self._get_cache_key(custom_llm_provider, litellm_params)
-        self.set_cache(cache_key, copy.deepcopy(available_models))
+        self.set_cache(cache_key, copy.deepcopy(available_models), ttl=ttl)
 
 
 # Global cache instance
@@ -8455,6 +8457,10 @@ def _get_valid_models_from_provider_api(
         return models
     except Exception as e:
         verbose_logger.warning("Error getting valid models: %s", e)
+        with suppress(ValueError):
+            _model_cache.set_cached_model_info(
+                custom_llm_provider, litellm_params, [], ttl=PROVIDER_MODEL_DISCOVERY_FAILURE_CACHE_TTL_SECONDS
+            )
         return []
 
 

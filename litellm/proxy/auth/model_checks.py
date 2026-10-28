@@ -284,12 +284,14 @@ _KNOWN_PROVIDERS: Final = frozenset(provider.value for provider in LlmProviders)
 def _prefix_wildcard_model(model: str, wildcard_provider_prefix: str, provider: str) -> str:
     if model.startswith(f"{wildcard_provider_prefix}/"):
         return model
-    # `get_provider_models` returns provider-prefixed ids (e.g. "ollama/gemma3:1b").
+    # `get_provider_models` can return provider-prefixed ids (e.g. "ollama/gemma3:1b").
     # When the wildcard uses a custom prefix (e.g. "ollama_server1/*" to distinguish
     # multiple instances), replace that existing provider prefix instead of stacking
     # both, which would otherwise yield an uncallable "ollama_server1/ollama/gemma3:1b".
-    # Only strip the leading segment when it is a known provider, so ids whose first
-    # segment is an org rather than a provider (e.g. "meta-llama/Llama-3-8B") keep it.
+    # Only strip the leading segment when it is a known provider that prefixes this
+    # provider's ids: either the provider's own name or, for a provider with a static
+    # catalog, any provider. Ids a server reports with an org or another provider's
+    # name first (e.g. "meta-llama/Llama-3-8B" or "openai/gpt-oss-20b" on vLLM) keep it.
     leading, sep, model_suffix = model.partition("/")
     if sep and leading in _KNOWN_PROVIDERS and (_has_static_catalog(provider) or leading == provider):
         return f"{wildcard_provider_prefix}/{model_suffix}"
@@ -548,30 +550,27 @@ def _get_wildcard_models(
     llm_router: Router | None = None,
     team_id: str | None = None,
 ) -> list[str]:
-    models_to_remove: Final = set()
+    wildcard_routes: Final = tuple(model for model in unique_models if _check_wildcard_routing(model=model))
     routes_to_model: Final = _routes_to_model(_cached_wildcard_routing(llm_router), team_id)
     all_wildcard_models: Final = []
-    for model in unique_models:
-        if _check_wildcard_routing(model=model):
-            if return_wildcard_routes:
-                all_wildcard_models.append(model)
+    for model in wildcard_routes:
+        if return_wildcard_routes:
+            all_wildcard_models.append(model)
 
-            models_to_remove.add(model)
-
-            model_list = llm_router.get_model_list(model_name=model, team_id=team_id) if llm_router else None
-            if model_list:
-                for router_model in model_list:
-                    all_wildcard_models.extend(
-                        get_known_models_from_wildcard(
-                            wildcard_model=model,
-                            litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
-                            routes_to_model=routes_to_model,
-                        )
+        model_list = llm_router.get_model_list(model_name=model, team_id=team_id) if llm_router else None
+        if model_list:
+            for router_model in model_list:
+                all_wildcard_models.extend(
+                    get_known_models_from_wildcard(
+                        wildcard_model=model,
+                        litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
+                        routes_to_model=routes_to_model,
                     )
-            else:
-                all_wildcard_models.extend(get_known_models_from_wildcard(wildcard_model=model, litellm_params=None))
+                )
+        else:
+            all_wildcard_models.extend(get_known_models_from_wildcard(wildcard_model=model, litellm_params=None))
 
-    for model in models_to_remove:
+    for model in frozenset(wildcard_routes):
         unique_models.remove(model)
 
     return all_wildcard_models

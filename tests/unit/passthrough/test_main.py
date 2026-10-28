@@ -72,3 +72,33 @@ async def test_allm_passthrough_route_hosted_vllm_sends_the_deployment_api_key(r
     assert sent_headers["authorization"] == "Bearer deployment-key"
     assert sent_headers["x-api-key"] == "deployment-key"
 
+
+
+@pytest.mark.asyncio
+async def test_router_passthrough_to_a_hosted_vllm_deployment_without_an_api_key_sends_no_auth_headers(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    route: Final = respx_mock.post(f"{_API_BASE}/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vllm-without-key",
+                "litellm_params": {"model": "hosted_vllm/my-deployment", "api_base": _API_BASE},
+            }
+        ]
+    )
+
+    response: Final = await router.allm_passthrough_route(
+        model="vllm-without-key",
+        method="POST",
+        endpoint="v1/chat/completions",
+        json={"model": "anything", "messages": [{"role": "user", "content": "Hello"}]},
+    )
+
+    assert response.status_code == 200
+    sent_headers: Final = route.calls[0].request.headers
+    assert "authorization" not in sent_headers
+    assert "x-api-key" not in sent_headers
