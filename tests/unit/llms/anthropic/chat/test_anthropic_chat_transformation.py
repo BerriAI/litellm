@@ -26,7 +26,7 @@ from litellm.llms.anthropic.chat import ModelResponseIterator
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.base_llm.base_utils import ResponseFormatSchema, response_format_schema
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
@@ -6152,7 +6152,7 @@ def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
     [
         ("litellm.llms.anthropic.chat.transformation", "AnthropicConfig", False),
         (
-            "litellm.llms.anthropic.pass_through.messages.transformation",
+            "litellm.llms.anthropic.messages.native.transformation",
             "AnthropicMessagesConfig",
             False,
         ),
@@ -6194,7 +6194,7 @@ def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
             True,
         ),
         (
-            "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation",
+            "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation",
             "VertexAIPartnerModelsAnthropicMessagesConfig",
             True,
         ),
