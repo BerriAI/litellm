@@ -9,6 +9,7 @@ ARN unified_object_id) batches with no managed unified id.
 import asyncio
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import copy
@@ -2897,7 +2898,7 @@ class TestPollPageStarvation:
         prisma.db.litellm_managedobjecttable.update.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_a_new_batch_is_polled_every_cycle_while_an_older_batch_stays_unbilled(self):
+    async def test_a_new_batch_is_polled_every_cycle_while_an_older_batch_stays_unbilled(self) -> None:
         """An unbilled batch older than the arrival window used to take every other cycle away from the arrival
         lane, so a new batch waited two poll intervals to be billed."""
         now: Final = datetime.now(timezone.utc)
@@ -2939,7 +2940,9 @@ class TestPollPageStarvation:
             for name, age in ages.items()
         )
 
-    async def _poll_cycles(self, monkeypatch, ages: dict[str, timedelta], cycles: int, page_size: int = 2):
+    async def _poll_cycles(
+        self, monkeypatch: pytest.MonkeyPatch, ages: dict[str, timedelta], cycles: int, page_size: int = 2
+    ) -> list[frozenset[str]]:
         from litellm_enterprise.proxy.common_utils import check_batch_cost
 
         monkeypatch.setattr(check_batch_cost, "MAX_OBJECTS_PER_POLL_CYCLE", page_size)
@@ -2957,7 +2960,9 @@ class TestPollPageStarvation:
         return [await _batches_polled_in_one_cycle() for _ in range(cycles)]
 
     @pytest.mark.asyncio
-    async def test_an_old_batch_is_polled_every_cycle_while_new_batches_fill_the_page(self, monkeypatch):
+    async def test_an_old_batch_is_polled_every_cycle_while_new_batches_fill_the_page(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         new_batches: Final = {f"new{n}": timedelta(hours=5 - n) for n in range(1, 5)}
         polled: Final = await self._poll_cycles(
             monkeypatch, {"old": timedelta(days=3), **new_batches}, cycles=8
@@ -2967,7 +2972,9 @@ class TestPollPageStarvation:
         assert all(f"batch_{name}" in frozenset().union(*polled[:4]) for name in new_batches)
 
     @pytest.mark.asyncio
-    async def test_old_batches_that_fill_the_page_never_push_a_new_batch_out(self, monkeypatch):
+    async def test_old_batches_that_fill_the_page_never_push_a_new_batch_out(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         polled: Final = await self._poll_cycles(
             monkeypatch,
             {"old1": timedelta(days=3, hours=1), "old2": timedelta(days=3), "new": timedelta(hours=1)},
@@ -2978,7 +2985,9 @@ class TestPollPageStarvation:
         assert frozenset({"batch_old1", "batch_old2"}) <= frozenset().union(*polled[:2])
 
     @pytest.mark.asyncio
-    async def test_old_and_new_batches_each_get_half_the_page_when_both_overflow_it(self, monkeypatch):
+    async def test_old_and_new_batches_each_get_half_the_page_when_both_overflow_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         ages: Final = {
             **{f"old{n}": timedelta(days=3, hours=n) for n in range(3)},
             **{f"new{n}": timedelta(hours=n + 1) for n in range(3)},
@@ -2989,7 +2998,7 @@ class TestPollPageStarvation:
         assert frozenset().union(*polled) == frozenset(f"batch_{name}" for name in ages)
 
     @pytest.mark.asyncio
-    async def test_old_and_new_batches_take_turns_on_a_one_row_page(self, monkeypatch):
+    async def test_old_and_new_batches_take_turns_on_a_one_row_page(self, monkeypatch: pytest.MonkeyPatch) -> None:
         polled: Final = await self._poll_cycles(
             monkeypatch, {"old": timedelta(days=3), "new": timedelta(hours=1)}, cycles=4, page_size=1
         )
@@ -2997,7 +3006,9 @@ class TestPollPageStarvation:
         assert polled == [frozenset({"batch_old"}), frozenset({"batch_new"})] * 2
 
     @pytest.mark.asyncio
-    async def test_new_batches_fill_the_page_when_no_old_batch_needs_polling(self, monkeypatch):
+    async def test_new_batches_fill_the_page_when_no_old_batch_needs_polling(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         polled: Final = await self._poll_cycles(
             monkeypatch, {f"new{n}": timedelta(hours=n + 1) for n in range(3)}, cycles=4
         )
@@ -3005,7 +3016,7 @@ class TestPollPageStarvation:
         assert [len(cycle) for cycle in polled] == [2] * 4
 
     @pytest.mark.asyncio
-    async def test_a_failed_expiry_write_leaves_the_rest_of_the_page_polled(self):
+    async def test_a_failed_expiry_write_leaves_the_rest_of_the_page_polled(self) -> None:
         rows: Final = self._unbilled_rows(
             {"old": timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS, hours=1), "new": timedelta(hours=1)}
         )
@@ -3033,7 +3044,7 @@ class _FakeManagedObjectPages:
     """A LiteLLM_ManagedObjectTable double over several unbilled rows that pages them the way Postgres would:
     inside the lane's created_at window, after the keyset cursor, in created_at then id order, take at most."""
 
-    def __init__(self, rows):
+    def __init__(self, rows: tuple[SimpleNamespace, ...]) -> None:
         self.rows = rows
         self.find_many = AsyncMock(side_effect=self._find_many)
         self.find_first = AsyncMock(return_value=None)
@@ -3041,7 +3052,7 @@ class _FakeManagedObjectPages:
         self.update = AsyncMock()
 
     @staticmethod
-    def _selected(row, where: dict) -> bool:
+    def _selected(row: SimpleNamespace, where: dict) -> bool:
         window: Final = where["created_at"]
         cursor: Final = where.get("OR")
         return (
@@ -4272,7 +4283,7 @@ class TestBatchLineItemsFromThePoller:
 
         find_jobs: Final = instance._find_jobs
 
-        async def _an_earlier_batch_waits_to_store_its_lines(where):
+        async def _an_earlier_batch_waits_to_store_its_lines(where: Mapping[str, object]) -> Sequence[object]:
             instance._store_batch_line_items_in_background(
                 MagicMock(), MagicMock(), "model-123", "batch-earlier", billed=True
             )
@@ -4770,6 +4781,58 @@ async def test_a_batch_past_the_staleness_cutoff_whose_output_id_lags_is_billed_
     with TestMultiPodBatchCostClaim._billing_patches(journal):
         for _ in range(UNSETTLED_POLLS_BEFORE_EXPIRY):
             await poller.check_batch_cost()
+
+    assert journal == ["fetch", "claim", "bill"]
+    assert row.batch_processed is True
+
+
+@pytest.mark.asyncio
+async def test_refused_retrieves_and_a_lagging_output_id_never_add_up_to_an_expiry() -> None:
+    row: Final = _FakeManagedObjectRow()
+    row.created_at = datetime.now(timezone.utc) - _PAST_THE_STALENESS_CUTOFF
+    journal: Final = []
+    router: Final = TestMultiPodBatchCostClaim._router()
+    router.aretrieve_batch.side_effect = [
+        *([_A_REJECTED_KEY] * (UNSETTLED_POLLS_BEFORE_EXPIRY - 1)),
+        *([_provider_batch("completed")] * (UNSETTLED_POLLS_BEFORE_EXPIRY - 1)),
+        router.aretrieve_batch.return_value,
+    ]
+    poller: Final = TestMultiPodBatchCostClaim._instance(TestMultiPodBatchCostClaim._prisma(row, journal), router)
+
+    with TestMultiPodBatchCostClaim._billing_patches(journal):
+        for _ in range(2 * UNSETTLED_POLLS_BEFORE_EXPIRY - 1):
+            await poller.check_batch_cost()
+
+    assert journal == ["fetch", "claim", "bill"]
+    assert row.batch_processed is True
+
+
+@pytest.mark.asyncio
+async def test_a_client_saving_the_output_id_during_the_last_lagging_poll_keeps_the_batch_billable() -> None:
+    row: Final = _FakeManagedObjectRow()
+    row.created_at = datetime.now(timezone.utc) - _PAST_THE_STALENESS_CUTOFF
+    row.status = "completed"
+    journal: Final = []
+    router: Final = TestMultiPodBatchCostClaim._router()
+    finished_with_output: Final = router.aretrieve_batch.return_value
+
+    async def _a_client_saves_the_output_id_while_the_poller_still_sees_none(
+        *, model: str, batch_id: str, litellm_metadata: object
+    ) -> LiteLLMBatch:
+        if router.aretrieve_batch.call_count == UNSETTLED_POLLS_BEFORE_EXPIRY:
+            row.updated_at = row.updated_at + timedelta(seconds=1)
+        return _provider_batch("completed")
+
+    router.aretrieve_batch.side_effect = _a_client_saves_the_output_id_while_the_poller_still_sees_none
+    poller: Final = TestMultiPodBatchCostClaim._instance(TestMultiPodBatchCostClaim._prisma(row, journal), router)
+
+    with TestMultiPodBatchCostClaim._billing_patches(journal):
+        for _ in range(UNSETTLED_POLLS_BEFORE_EXPIRY):
+            await poller.check_batch_cost()
+        assert (row.status, row.batch_processed) == ("completed", False)
+        router.aretrieve_batch.side_effect = None
+        router.aretrieve_batch.return_value = finished_with_output
+        await poller.check_batch_cost()
 
     assert journal == ["fetch", "claim", "bill"]
     assert row.batch_processed is True

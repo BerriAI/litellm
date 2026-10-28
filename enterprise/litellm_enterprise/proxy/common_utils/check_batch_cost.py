@@ -8,6 +8,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Protocol, Tuple, cast
 
@@ -49,6 +50,12 @@ def _error_names_resource(error: Exception, resource_id: str) -> bool:
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
 RECENT_BATCH_POLL_WINDOW: Final = timedelta(hours=48)
 UNSETTLED_POLLS_BEFORE_EXPIRY: Final = 3
+
+
+class UnsettledPoll(Enum):
+    REFUSED_RETRIEVE = "refused retrieve"
+    OUTPUT_ID_PENDING = "output id pending"
+
 
 PROVIDER_TERMINAL_BATCH_STATUSES: Final[Tuple[str, ...]] = (
     "completed",
@@ -122,7 +129,7 @@ class CheckBatchCost:
         self._arrival_cursor: tuple[datetime, str] | None = None
         self._arrival_before: datetime = self._poll_before
         self._poll_arrivals: bool = False
-        self._unsettled_polls: Mapping[str, int] = MappingProxyType({})
+        self._unsettled_polls: Mapping[str, tuple[UnsettledPoll, int]] = MappingProxyType({})
         self._line_item_stores: Final[set[asyncio.Task[None]]] = set()
         self._line_item_store_turn: Final = asyncio.Lock()
         self._poll_idle: Final = asyncio.Event()
@@ -248,26 +255,36 @@ class CheckBatchCost:
     def _is_past_staleness_cutoff(job: ManagedObjectRow) -> bool:
         return job.created_at < datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
 
-    async def _expire_if_stale(self, job: ManagedObjectRow) -> None:
+    def _unchanged_snapshot(self, job: ManagedObjectRow) -> Mapping[str, object]:
+        return {**self._unprocessed_snapshot(job), "updated_at": job.updated_at}
+
+    async def _expire_if_stale(self, job: ManagedObjectRow, snapshot: Mapping[str, object]) -> None:
         if not self._is_past_staleness_cutoff(job):
             return
         if job.status in TERMINAL_MANAGED_OBJECT_STATUSES:
-            await self._retire_job(job, f"unbilled {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days after it was created")
+            await self._retire_job(
+                job, f"unbilled {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days after it was created", snapshot
+            )
             return
-        await self._expire_unfinished(job)
+        await self._expire_unfinished(job, snapshot)
 
-    async def _expire_after_repeated_unsettled_polls(self, job: ManagedObjectRow) -> None:
-        unsettled: Final = self._unsettled_polls.get(job.id, 0) + 1
+    async def _expire_after_repeated_unsettled_polls(self, job: ManagedObjectRow, kind: UnsettledPoll) -> None:
+        streak: Final = self._unsettled_polls.get(job.id)
+        unsettled: Final = streak[1] + 1 if streak is not None and streak[0] is kind else 1
         if unsettled < UNSETTLED_POLLS_BEFORE_EXPIRY:
-            self._unsettled_polls = MappingProxyType({**self._unsettled_polls, job.id: unsettled})
+            self._unsettled_polls = MappingProxyType({**self._unsettled_polls, job.id: (kind, unsettled)})
             return
         self._forget_unsettled_polls(job)
-        await self._expire_if_stale(job)
+        match kind:
+            case UnsettledPoll.REFUSED_RETRIEVE:
+                await self._expire_if_stale(job, self._unprocessed_snapshot(job))
+            case UnsettledPoll.OUTPUT_ID_PENDING:
+                await self._expire_if_stale(job, self._unchanged_snapshot(job))
 
     def _forget_unsettled_polls(self, job: ManagedObjectRow) -> None:
         if job.id in self._unsettled_polls:
             self._unsettled_polls = MappingProxyType(
-                {job_id: count for job_id, count in self._unsettled_polls.items() if job_id != job.id}
+                {job_id: streak for job_id, streak in self._unsettled_polls.items() if job_id != job.id}
             )
 
     @staticmethod
@@ -282,11 +299,11 @@ class CheckBatchCost:
             and not _completed_batch_safe_to_retire(response)
         )
 
-    async def _expire_unfinished(self, job: ManagedObjectRow) -> None:
+    async def _expire_unfinished(self, job: ManagedObjectRow, snapshot: Mapping[str, object]) -> None:
         try:
             expired: Final = await _managed_object_table(self.prisma_client).update_many(
                 where={
-                    **self._unprocessed_snapshot(job),
+                    **snapshot,
                     "status": {"not_in": list(TERMINAL_MANAGED_OBJECT_STATUSES)},
                 },
                 data={"status": "stale_expired"},
@@ -300,7 +317,9 @@ class CheckBatchCost:
                 "and still not finished, so it is marked stale_expired and no longer polled"
             )
 
-    async def _retire_job(self, job: "ManagedObjectRow", reason: str) -> None:
+    async def _retire_job(
+        self, job: "ManagedObjectRow", reason: str, snapshot: Mapping[str, object] | None = None
+    ) -> None:
         """
         Take a row that can never be costed out of the poll page. Leaving it selectable
         would burn one of the MAX_OBJECTS_PER_POLL_CYCLE slots on every future cycle, and
@@ -310,7 +329,7 @@ class CheckBatchCost:
         data: Final = {"batch_processed": True} if self._has_batch_processed_column else {"status": "stale_expired"}
         try:
             retired: Final = await _managed_object_table(self.prisma_client).update_many(
-                where=self._unprocessed_snapshot(job),
+                where=snapshot if snapshot is not None else self._unprocessed_snapshot(job),
                 data=data,
             )
         except Exception as db_err:
@@ -1215,7 +1234,7 @@ class CheckBatchCost:
                 if self._has_unified_id_without_model(job):
                     await self._retire_job(job, "unified object id has no model id")
                 else:
-                    await self._expire_if_stale(job)
+                    await self._expire_if_stale(job, self._unprocessed_snapshot(job))
                 continue
             model_id, batch_id = routing
 
@@ -1245,7 +1264,7 @@ class CheckBatchCost:
                     and job.status not in TERMINAL_MANAGED_OBJECT_STATUSES
                     and self._is_lasting_provider_failure(e)
                 ):
-                    await self._expire_after_repeated_unsettled_polls(job)
+                    await self._expire_after_repeated_unsettled_polls(job, UnsettledPoll.REFUSED_RETRIEVE)
                 continue
             if self._is_completed_with_output_id_pending(response):
                 verbose_proxy_logger.info(
@@ -1253,7 +1272,7 @@ class CheckBatchCost:
                     f"has not appeared yet; leaving job {job.id} for the next poll cycle"
                 )
                 if self._is_past_staleness_cutoff(job):
-                    await self._expire_after_repeated_unsettled_polls(job)
+                    await self._expire_after_repeated_unsettled_polls(job, UnsettledPoll.OUTPUT_ID_PENDING)
                 continue
             self._forget_unsettled_polls(job)
 
