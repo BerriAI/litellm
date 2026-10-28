@@ -2738,3 +2738,55 @@ def test_claude_json_schema_stream_split_across_json_tools_keeps_the_non_stream_
     choices: Final = _json_schema_stream_choices(respx_mock, call, split_stream)
 
     assert [choice.finish_reason for choice in choices if choice.finish_reason] == [answer.finish_reason]
+
+
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_FUNCTION_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+def test_databricks_claude_answers_400_for_a_hosted_mcp_tool_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        DatabricksConfig().map_openai_params(
+            non_default_params={"tools": [_WEATHER_FUNCTION_TOOL, _HOSTED_MCP_TOOL]},
+            optional_params={},
+            model="databricks-claude-opus-5-5",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert "databricks-claude-opus-5-5 on databricks " in str(raised.value)
+    assert "`deepwiki`" in str(raised.value)
+
+
+def test_databricks_claude_drops_a_hosted_mcp_tool_under_drop_params_and_keeps_the_function_tool(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with caplog.at_level("WARNING"):
+        mapped: Final = DatabricksConfig().map_openai_params(
+            non_default_params={"tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL]},
+            optional_params={},
+            model="databricks-claude-opus-5-5",
+            drop_params=True,
+        )
+    assert [tool["function"]["name"] for tool in mapped["tools"]] == ["get_weather"]
+    assert any(
+        "`deepwiki`" in record.getMessage() and " on databricks (" in record.getMessage() for record in caplog.records
+    )
+
+
+def test_databricks_claude_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"tools": [_HOSTED_MCP_TOOL]},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=True,
+    )
+    assert "tools" not in mapped

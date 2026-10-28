@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     message_field,
     parts_of,
 )
+from litellm.litellm_core_utils.tool_fields import tools_without_hosted_mcp
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING,
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
@@ -1113,7 +1114,12 @@ class AmazonConverseConfig(BaseConfig):
                         list[OpenAIChatCompletionToolParam],
                         list(
                             tools_without_unsupported_tool_search(
-                                tools=_TOOLS_AS_RECEIVED.validate_python(value),
+                                tools=tools_without_hosted_mcp(
+                                    tools=_TOOLS_AS_RECEIVED.validate_python(value),
+                                    model=model,
+                                    route="bedrock",
+                                    drop_params=drop_params,
+                                ),
                                 model=model,
                                 route="bedrock",
                                 drop_params=drop_params,
@@ -2056,8 +2062,8 @@ class AmazonConverseConfig(BaseConfig):
                     break
 
         bedrock_tool_config: ToolConfigBlock | None = None
+        tool_choice_values: Final[ToolChoiceValuesBlock | None] = inference_params.pop("tool_choice", None)
         if len(bedrock_tools) > 0:
-            tool_choice_values: Final[ToolChoiceValuesBlock] = inference_params.pop("tool_choice", None)
             bedrock_tool_config = ToolConfigBlock(
                 tools=bedrock_tools,
             )

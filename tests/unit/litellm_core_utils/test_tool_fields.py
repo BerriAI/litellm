@@ -7,6 +7,7 @@ import pytest
 import litellm
 from litellm import Router
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.tool_fields import tools_without_hosted_mcp
 from litellm.utils import async_pre_call_deployment_hook
 
 _GOOD_TOOL: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
@@ -185,3 +186,18 @@ async def test_tools_core_accepts_reach_the_deployment(tools: object) -> None:
     sent: Final = await async_pre_call_deployment_hook(dict(_proxy_request("keeps", tools=tools)), "acompletion")
 
     assert sent["tools"] is tools
+
+
+def test_a_hosted_mcp_error_names_every_server_and_marks_an_unlabeled_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        tools_without_hosted_mcp(
+            tools=[
+                {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"},
+                {"type": "mcp", "server_url": "https://mcp.example.com/mcp"},
+            ],
+            model="gemini-3.8-flash",
+            route="gemini",
+            drop_params=False,
+        )
+    assert "the hosted MCP tool `deepwiki`, `unlabeled` " in str(raised.value)

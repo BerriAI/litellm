@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, Union, cast, get_args
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAcc
 from litellm.litellm_core_utils.prompt_templates.factory import (
     encode_tool_call_id_with_signature,
 )
+from litellm.litellm_core_utils.tool_fields import tools_without_hosted_mcp
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -251,6 +252,7 @@ _GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
 
 
 _SPEECH_CONFIG_ITEMS: Final = TypeAdapter(list[object])
+_TOOLS_AS_SENT: Final = TypeAdapter(list[object])
 
 
 def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> Mapping[str, object]:
@@ -578,6 +580,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     Note: Please make sure to modify the default parameters as required for your use case.
     """
+
+    _route: ClassVar[str] = "vertex_ai"
 
     temperature: float | None = None
     max_output_tokens: int | None = None
@@ -1023,7 +1027,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
-    def _map_function(self, value: list[dict], optional_params: dict, send_integer_enums: bool = False) -> list[Tools]:
+    def _map_function(
+        self, value: Sequence[object], optional_params: dict, send_integer_enums: bool = False
+    ) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
 
@@ -1667,9 +1673,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "top_logprobs":
                 optional_params["logprobs"] = value
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
+                gemini_tools = list(
+                    tools_without_hosted_mcp(
+                        tools=_TOOLS_AS_SENT.validate_python(value),
+                        model=model,
+                        route=self._route,
+                        drop_params=drop_params,
+                    )
+                )
+                if not gemini_tools:
+                    continue
                 # Pass optional_params so _map_function can add toolConfig if needed
                 mapped_tools = with_integer_enums_that_fit(
-                    partial(self._map_function, value, optional_params),
+                    partial(self._map_function, gemini_tools, optional_params),
                     allow_integer_enums and self._is_gemini_3_or_newer(model),
                 )
                 optional_params = self._add_tools_to_optional_params(optional_params, mapped_tools)

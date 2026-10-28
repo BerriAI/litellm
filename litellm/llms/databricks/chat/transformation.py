@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_name_from_message,
     strip_prefill_prefix_field,
 )
+from litellm.litellm_core_utils.tool_fields import tools_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import (
@@ -397,14 +398,19 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         anthropic_tools, _ = self._map_tools(
             tools=list(
                 tools_without_unsupported_tool_search(
-                    tools=_TOOLS_ADAPTER.validate_python(tools),
+                    tools=tools_without_hosted_mcp(
+                        tools=_TOOLS_ADAPTER.validate_python(tools),
+                        model=model,
+                        route="databricks",
+                        drop_params=drop_params,
+                    ),
                     model=model,
                     route="databricks",
                     drop_params=drop_params,
                     remedy="",
                 )
             )
-        )  # unclear how mcp tool calling on databricks works
+        )
         databricks_tools: Final = [
             cast(DatabricksTool, self.convert_anthropic_tool_to_databricks_tool(tool)) for tool in anthropic_tools
         ]
@@ -455,9 +461,13 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 model=model, optional_params=mapped_params, custom_llm_provider="databricks", drop_params=drop_params
             )
         if "tools" in mapped_params:
-            mapped_params["tools"] = self._map_openai_to_dbrx_tool(
+            dbrx_tools: Final = self._map_openai_to_dbrx_tool(
                 model=model, tools=mapped_params["tools"], drop_params=drop_params
             )
+            if mapped_params["tools"] and not dbrx_tools:
+                del mapped_params["tools"]
+            else:
+                mapped_params["tools"] = dbrx_tools
         if "max_completion_tokens" in non_default_params and replace_max_completion_tokens_with_max_tokens:
             mapped_params["max_tokens"] = non_default_params[
                 "max_completion_tokens"

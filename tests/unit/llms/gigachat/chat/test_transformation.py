@@ -7,10 +7,12 @@ Run with: pytest tests/unit/llms/gigachat/chat/test_transformation.py -v
 
 import asyncio
 import importlib
+from typing import Final
 
 import pytest
 
 import litellm
+from litellm.llms.gigachat.chat.transformation import GigaChatConfig
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -575,3 +577,56 @@ _SCALAR_DEFAULTS = {
     "api_key": getattr(litellm, "api_key", None),
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
+
+
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_FUNCTION_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+def test_a_hosted_mcp_tool_answers_400_on_gigachat_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        GigaChatConfig().map_openai_params(
+            non_default_params={"tools": [_WEATHER_FUNCTION_TOOL, _HOSTED_MCP_TOOL]},
+            optional_params={},
+            model="GigaChat-2-Max",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert "GigaChat-2-Max on gigachat " in str(raised.value)
+    assert "`deepwiki`" in str(raised.value)
+
+
+def test_gigachat_drops_a_hosted_mcp_tool_under_drop_params_and_keeps_the_function_tool(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with caplog.at_level("WARNING"):
+        mapped: Final = GigaChatConfig().map_openai_params(
+            non_default_params={"tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL]},
+            optional_params={},
+            model="GigaChat-2-Max",
+            drop_params=True,
+        )
+    assert [function["name"] for function in mapped["functions"]] == ["get_weather"]
+    assert any(
+        "`deepwiki`" in record.getMessage() and " on gigachat (" in record.getMessage() for record in caplog.records
+    )
+
+
+def test_gigachat_sends_no_functions_when_drop_params_drops_every_hosted_mcp_tool(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = GigaChatConfig().map_openai_params(
+        non_default_params={"tools": [_HOSTED_MCP_TOOL]},
+        optional_params={},
+        model="GigaChat-2-Max",
+        drop_params=True,
+    )
+    assert "functions" not in mapped
+    assert "tools" not in mapped

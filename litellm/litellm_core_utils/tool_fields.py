@@ -1,13 +1,15 @@
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import reduce
-from typing import Annotated, Final, TypeAlias
+from typing import Annotated, Final, TypeAlias, TypeVar
 
 from pydantic import BeforeValidator, ConfigDict, Json, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
 
 ROUTES_WITH_TOOLS: Final = frozenset(
     {
@@ -162,3 +164,42 @@ def resolve_deployment_tool_fields(
     if "proxy_server_request" not in kwargs or route not in ROUTES_WITH_TOOLS:
         return kwargs
     return resolve_tool_fields(kwargs, lambda: (drop_policy(kwargs),))
+
+
+_ToolT: Final = TypeVar("_ToolT")
+
+HOSTED_MCP_DROP_WARNING: Final = (
+    "Dropping the hosted MCP tool(s) %s for model=%s on %s (drop_params=True) because this route cannot run a "
+    "hosted MCP tool."
+)
+
+
+def _hosted_mcp_server_label(tool: object) -> str | None:
+    match tool:
+        case {"type": "mcp", "server_label": str() as server_label}:
+            return server_label
+        case {"type": "mcp"}:
+            return "unlabeled"
+        case _:
+            return None
+
+
+def tools_without_hosted_mcp(tools: Sequence[_ToolT], model: str, route: str, drop_params: bool) -> Sequence[_ToolT]:
+    server_labels: Final = tuple(label for label in map(_hosted_mcp_server_label, tools) if label is not None)
+    if not server_labels:
+        return tools
+    named_servers: Final = ", ".join(f"`{label}`" for label in server_labels)
+    if not drops_unsupported_params(drop_params):
+        raise UnsupportedParamsError(
+            message=(
+                f'{model} on {route} cannot run the hosted MCP tool {named_servers} (`type: "mcp"`). To have LiteLLM '
+                "run the MCP server for this model, register it on the LiteLLM MCP gateway and send "
+                '`server_url: "litellm_proxy/mcp/<server name>"`. To drop hosted MCP tools instead, set '
+                "`litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+            ),
+            model=model,
+            llm_provider=route,
+            status_code=400,
+        )
+    verbose_logger.warning(HOSTED_MCP_DROP_WARNING, named_servers, model, route)
+    return [tool for tool in tools if _hosted_mcp_server_label(tool) is None]

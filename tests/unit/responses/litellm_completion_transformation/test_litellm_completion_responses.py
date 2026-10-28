@@ -7052,3 +7052,26 @@ async def test_bridge_partial_response_on_disconnect_bills_only_the_input_since_
     assert await _input_tokens_billed_on_disconnect(
         cast(ResponseInputParam, [*history_it_replaces, *since_compaction])
     ) == await _input_tokens_billed_on_disconnect(since_compaction)
+
+
+def test_a_hosted_mcp_tool_sent_to_responses_on_bedrock_converse_answers_400(monkeypatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        litellm.responses(
+            model="bedrock/converse/us.openai.gpt-oss-120b-1:0",
+            input="What does the deepwiki MCP server say about litellm?",
+            tools=[
+                {
+                    "type": "mcp",
+                    "server_label": "deepwiki",
+                    "server_url": "https://mcp.deepwiki.com/mcp",
+                    "require_approval": "never",
+                }
+            ],
+            aws_access_key_id="AKIAHOSTEDMCP",
+            aws_secret_access_key="hosted-mcp-secret",
+            aws_region_name="us-east-1",
+        )
+    assert raised.value.status_code == 400
+    assert "`deepwiki`" in str(raised.value)
+    assert "litellm_proxy/mcp/" in str(raised.value)

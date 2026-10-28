@@ -5,11 +5,14 @@ Translates from OpenAI's `/v1/chat/completions` to DeepSeek's `/v1/chat/completi
 from collections.abc import Coroutine, Mapping, Sequence
 from typing import Final, Literal, cast, overload
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     extract_search_results_text,
 )
+from litellm.litellm_core_utils.tool_fields import tools_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -17,6 +20,8 @@ from litellm.utils import supports_reasoning, supports_vision
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
+_TOOLS_AS_SENT: Final = TypeAdapter(list[object])
+_TOOL_SELECTION_PARAMS: Final = frozenset({"tools", "tool_choice", "parallel_tool_calls"})
 SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 
 
@@ -47,7 +52,11 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         Reference: https://api-docs.deepseek.com/guides/thinking_mode
         """
         # Let parent handle standard params first
-        optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        optional_params = {
+            **self._without_hosted_mcp_tools(
+                super().map_openai_params(non_default_params, optional_params, model, drop_params), model, drop_params
+            )
+        }
 
         # Pop thinking/reasoning_effort from optional_params first (parent may have added them)
         # Then re-add only if valid for DeepSeek
@@ -233,6 +242,20 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             and isinstance(thinking, dict)
             and thinking.get("type") == "enabled"
         )
+
+    @staticmethod
+    def _without_hosted_mcp_tools(
+        optional_params: Mapping[str, object], model: str, drop_params: bool
+    ) -> Mapping[str, object]:
+        tools: Final = optional_params.get("tools")
+        if not isinstance(tools, list) or not tools:
+            return optional_params
+        kept_tools: Final = tools_without_hosted_mcp(
+            tools=_TOOLS_AS_SENT.validate_python(tools), model=model, route="deepseek", drop_params=drop_params
+        )
+        if kept_tools:
+            return {**optional_params, "tools": list(kept_tools)}
+        return {k: v for k, v in optional_params.items() if k not in _TOOL_SELECTION_PARAMS}
 
     @staticmethod
     def _drop_unsupported_tools(optional_params: dict) -> dict:

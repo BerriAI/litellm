@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm.anthropic_beta_headers_manager import get_unsupported_headers
 from litellm.constants import (
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
     ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES,
@@ -47,6 +48,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     place_mid_conversation_system,
     split_leading_system_run,
 )
+from litellm.litellm_core_utils.tool_fields import tools_without_hosted_mcp
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
     as_json_object,
@@ -1232,6 +1234,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             *(tool for tool in tools[first_search_tool_index + 1 :] if not _is_openai_tool_search_tool(tool)),
         ]
 
+    def runs_hosted_mcp(self) -> bool:
+        return ANTHROPIC_BETA_HEADER_VALUES.MCP_CLIENT_2025_04_04.value not in get_unsupported_headers(
+            self._resolved_provider
+        )
+
+    def _tools_with_hosted_mcp_checked(
+        self, tools: Sequence[object], model: str, drop_params: bool
+    ) -> Sequence[object]:
+        if self.runs_hosted_mcp():
+            return tools
+        return tools_without_hosted_mcp(
+            tools=tools, model=model, route=self._resolved_provider, drop_params=drop_params
+        )
+
     def _tools_param_with_openai_tool_search_mapped(
         self, non_default_params: Mapping[str, object], model: str, drop_params: bool
     ) -> Mapping[str, object]:
@@ -1837,8 +1853,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value if isinstance(value, int) else max(1, int(round(value)))
             elif param == "tools":
+                checked_tools = self._tools_with_hosted_mcp_checked(
+                    tools=_TOOLS_ADAPTER.validate_python(value), model=model, drop_params=drop_params
+                )
+                if value and not checked_tools:
+                    continue
                 anthropic_tools, mcp_servers = self._map_tools(
-                    list(self._tools_with_openai_tool_search_mapped(tools=value, model=model, drop_params=drop_params))
+                    list(
+                        self._tools_with_openai_tool_search_mapped(
+                            tools=checked_tools, model=model, drop_params=drop_params
+                        )
+                    )
                 )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=anthropic_tools
