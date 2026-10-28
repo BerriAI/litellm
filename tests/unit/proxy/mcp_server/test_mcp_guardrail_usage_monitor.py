@@ -67,6 +67,7 @@ def _fake_proxy_logging(capture: dict, *, guardrail_effect=None):
     way a blocking guardrail does).
     """
     plo = mock.MagicMock()
+    plo.has_pre_call_guardrails.return_value = False
     plo.enforce_mcp_server_rate_limits = mock.AsyncMock()
     plo.create_mcp_request_object_from_kwargs.return_value = mock.MagicMock()
     # Mirror the real conversion's metadata bucket so a test can prove it survives.

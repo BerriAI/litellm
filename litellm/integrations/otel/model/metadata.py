@@ -59,6 +59,15 @@ if TYPE_CHECKING:
 
 _INTERNAL_CALL_ORIGINS: Final[frozenset[str]] = frozenset(get_args(InternalCallOrigin))
 _AUTH_ATTRIBUTE: Final = TypeAdapter(object)
+_EXPORTED_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
+IDENTITY_METADATA_FIELDS: Final = (
+    "user_api_key_alias",
+    "user_api_key_user_id",
+    "user_api_key_end_user_id",
+    "user_api_key_team_id",
+    "user_api_key_team_alias",
+    "user_api_key_org_id",
+)
 
 REQUESTER_METADATA_KEY: Final = "requester_metadata"
 REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
@@ -469,6 +478,23 @@ def _model_info_id(model_info: object) -> str | None:
     if isinstance(model_info, Mapping):
         return as_str(model_info.get("id"))
     return None
+
+
+def exported_request_metadata(metadata: Mapping[str, object]) -> Mapping[str, str]:
+    """The non-empty string ``IDENTITY_METADATA_FIELDS`` of ``metadata``, with ``user_api_key_*`` dropped when
+    ``litellm.redact_user_api_key_info`` is on, as the ``langfuse`` callback does."""
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_user_api_key_info as _redact_user_api_key_info,  # pyright: ignore[reportUnknownVariableType]  # helper uses bare dict
+    )
+
+    redact_metadata: Final = cast(  # cast-ok: adapter validates the helper's output below
+        Callable[[dict[str, str]], object],
+        _redact_user_api_key_info,
+    )
+    present: Final = {
+        field: value for field in IDENTITY_METADATA_FIELDS if isinstance(value := metadata.get(field), str) and value
+    }
+    return MappingProxyType(dict(_EXPORTED_METADATA_ADAPTER.validate_python(redact_metadata(present))))
 
 
 def _team_metadata_dict(value: object) -> Mapping[str, object] | None:
