@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import time
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final
 
@@ -15,6 +16,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.litellm_core_utils.cloud_storage_security import (
     sanitize_cloud_object_component,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.gcs_bucket import *
 from litellm.types.utils import StandardBatchLineItemsPayload, StandardLoggingPayload
@@ -134,7 +136,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         """
         return f"{date_str}/batch-{batch_id}.ndjson"
 
-    def _get_config_key(self, kwargs: dict[str, Any]) -> str:
+    def _get_config_key(self, kwargs: Mapping[str, object]) -> str:
         """
         Extract a synchronous grouping key from kwargs to group items by GCS config.
         This allows us to batch items with the same bucket/credentials together.
@@ -143,7 +145,9 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         This key may contain sensitive information (bucket names, paths) - use _sanitize_config_key()
         for logging purposes.
         """
-        standard_callback_dynamic_params: Final = kwargs.get("standard_callback_dynamic_params", None) or {}
+        standard_callback_dynamic_params: Final = (
+            as_str_mapping(kwargs.get("standard_callback_dynamic_params", None)) or {}
+        )
 
         bucket_name = standard_callback_dynamic_params.get("gcs_bucket_name", None) or self.BUCKET_NAME or "default"
         path_service_account: Final = (

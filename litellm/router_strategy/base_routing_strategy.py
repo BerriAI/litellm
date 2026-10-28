@@ -24,6 +24,8 @@ class BaseRoutingStrategy(ABC):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: list[RedisPipelineIncrementOperation] = []
         self._sync_task: asyncio.Task[None] | None = None
+        self._retired = False
+        self._flush_after_retire: asyncio.Task[None] | None = None
         if should_batch_redis_writes:
             self.setup_sync_task(default_sync_interval)
 
@@ -47,13 +49,25 @@ class BaseRoutingStrategy(ABC):
 
     def retire(self) -> None:
         self.cancel_sync_task()
-        if not self.redis_increment_operation_queue:
+        self._retired = True
+        self._schedule_flush_after_retire()
+
+    def _schedule_flush_after_retire(self) -> None:
+        if self._flush_after_retire is not None and not self._flush_after_retire.done():
+            return
+        if not self.redis_increment_operation_queue or self.dual_cache.redis_cache is None:
             return
         try:
             loop: Final = asyncio.get_running_loop()
         except RuntimeError:
             return
-        loop.create_task(self._push_in_memory_increments_to_redis())
+        self._flush_after_retire = loop.create_task(self._drain_increments_after_retire())
+
+    async def _drain_increments_after_retire(self) -> None:
+        if not self.redis_increment_operation_queue:
+            return
+        await self._push_in_memory_increments_to_redis()
+        await self._drain_increments_after_retire()
 
     async def cleanup(self):
         """Cleanup method to be called when shutting down"""
@@ -98,6 +112,8 @@ class BaseRoutingStrategy(ABC):
 
         self.redis_increment_operation_queue.append(increment_op)
         self.add_to_in_memory_keys_to_update(key=key)
+        if self._retired:
+            self._schedule_flush_after_retire()
         return result
 
     @with_service_target("router_usage")
