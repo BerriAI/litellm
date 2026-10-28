@@ -31,7 +31,7 @@ def initialize_guardrail(
     """Initialize the Sensitive Data Routing guardrail from config."""
     import litellm
 
-    guardrail_name: Final = guardrail.get("guardrail_name")
+    guardrail_name: Final = guardrail["guardrail_name"]
     if not guardrail_name:
         raise ValueError("sensitive_data_routing guardrail requires a guardrail_name")
 

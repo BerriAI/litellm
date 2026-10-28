@@ -173,9 +173,9 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],  # mutable-ok: proxy request body, rewritten in place
         call_type: str,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:  # mutable-ok: base hook contract
         """
         Before each LLM call, check if this session has a routing override.
         If so, modify the request's model field.
@@ -202,7 +202,10 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
 
         data["model"] = routed_model
 
-        metadata: Final = data.get("metadata") or {}
+        existing_metadata: Final = data.get("metadata")
+        metadata: Final[dict[str, object]] = (  # mutable-ok: request metadata, written back to data
+            existing_metadata if isinstance(existing_metadata, dict) and existing_metadata else {}
+        )
         metadata["sensitive_data_routing_applied"] = True
         metadata["sensitive_data_routing_original_model"] = original_model
         data["metadata"] = metadata

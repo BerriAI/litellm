@@ -3,14 +3,14 @@
 from collections.abc import Sequence
 from typing import Final
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from .base import GuardrailConfigModel
 
 DEFAULT_SESSION_TTL_SECONDS: Final = 14400
 
 
-class SensitiveDataRoutingGuardrailConfigModel(GuardrailConfigModel):
+class SensitiveDataRoutingGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
     """Configuration for the built-in Sensitive Data Routing guardrail."""
 
     on_premise_model: str | None = Field(

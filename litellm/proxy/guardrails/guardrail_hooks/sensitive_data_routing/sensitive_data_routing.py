@@ -5,12 +5,13 @@ Detects sensitive data with prebuilt regex patterns, custom regex and keyword ma
 then reroutes the request to an on-premise model instead of blocking or redacting it.
 """
 
-import json
 import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from re import Pattern
 from typing import TYPE_CHECKING, Final, Literal, Optional, TypeAlias
+
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm.exceptions import SensitiveDataRouteException
 from litellm.integrations.custom_guardrail import (
@@ -21,13 +22,14 @@ from litellm.integrations.custom_guardrail import (
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
     get_compiled_pattern,
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.proxy.guardrails.guardrail_hooks.sensitive_data_routing import (
     DEFAULT_SESSION_TTL_SECONDS,
     SensitiveDataRoutingGuardrailConfigModel,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -63,31 +65,45 @@ def build_detectors(
     )
 
 
-def _string_leaves(value: object) -> Iterator[str]:
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+def _string_leaves(value: JsonValue) -> Iterator[str]:
     if isinstance(value, str):
         yield value
     elif isinstance(value, dict):
         for key, item in value.items():
-            yield from _string_leaves(key)
+            yield key
             yield from _string_leaves(item)
     elif isinstance(value, list):
         for item in value:
             yield from _string_leaves(item)
 
 
-def tool_call_argument_texts(tool_calls: Sequence[object] | None) -> Iterator[str]:
+def _tool_call_arguments(tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall) -> object:
+    if isinstance(tool_call, dict):
+        return (tool_call.get("function") or {}).get("arguments")
+    return tool_call.function.arguments
+
+
+def _argument_texts(tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall) -> Iterator[str]:
+    arguments: Final = _tool_call_arguments(tool_call)
+    if not isinstance(arguments, str) or not arguments:
+        return
+    yield arguments
+    try:
+        parsed: Final = _JSON_VALUE.validate_json(arguments)
+    except ValidationError:
+        return
+    yield from _string_leaves(parsed)
+
+
+def tool_call_argument_texts(
+    tool_calls: Sequence[ChatCompletionToolCallChunk | ChatCompletionMessageToolCall] | None,
+) -> Iterator[str]:
     """Yield tool-call argument strings, plus their decoded JSON string values so escapes cannot hide a match."""
     for tool_call in tool_calls or ():
-        function = tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
-        arguments = function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
-        if not isinstance(arguments, str) or not arguments:
-            continue
-        yield arguments
-        try:
-            parsed = json.loads(arguments)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            continue
-        yield from _string_leaves(parsed)
+        yield from _argument_texts(tool_call)
 
 
 class SensitiveDataRoutingGuardrail(CustomGuardrail):
@@ -108,7 +124,7 @@ class SensitiveDataRoutingGuardrail(CustomGuardrail):
         keywords: Sequence[str] | None = None,
         sticky_session: bool = True,
         session_ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS,
-        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | None = None,  # mutable-ok: base type
+        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,  # mutable-ok: base type
         default_on: bool = False,
     ) -> None:
         if not on_premise_model:
@@ -137,7 +153,7 @@ class SensitiveDataRoutingGuardrail(CustomGuardrail):
         return [GuardrailEventHooks.pre_call]
 
     @staticmethod
-    def get_config_model() -> type[GuardrailConfigModel] | None:
+    def get_config_model() -> type[GuardrailConfigModel[BaseModel]] | None:
         return SensitiveDataRoutingGuardrailConfigModel
 
     def detect(self, texts: Sequence[str]) -> SensitiveDataDetector | None:
@@ -150,7 +166,7 @@ class SensitiveDataRoutingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: proxy request body, owned by the caller
+        request_data: dict[str, object],  # mutable-ok: proxy request body, owned by the caller
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
