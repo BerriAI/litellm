@@ -123,7 +123,6 @@ function KeyEditSession({
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
       : [],
   );
-  const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(keyData.organization_id || null);
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(keyData.auto_rotate || false);
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
   const [neverExpire, setNeverExpire] = useState<boolean>(!keyData.expires);
@@ -147,9 +146,11 @@ function KeyEditSession({
   const { data: uiSettingsData } = useUISettings();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const hasProject = Boolean(keyData.project_id);
+  const canChangeOrganization = userRole === "Admin" && !hasProject;
   const detachProject = hasProject && form.watch("project_id") === null;
   const canDetachProject = canDetachKeyProject(team, organizations, userID, userRole);
 
+  const selectedOrganizationId = form.watch("organization_id") ?? null;
   const allowedRoutesValue = form.watch("allowed_routes");
   const selectedModels = (form.watch("models") as string[] | undefined) ?? [];
   const allowedRoutes = parseAllowedRoutes(allowedRoutesValue);
@@ -327,7 +328,6 @@ function KeyEditSession({
 
   const handleOrganizationChange = (setField: (value: string | null) => void, orgId: string | null) => {
     setField(orgId);
-    setSelectedOrganizationId(orgId);
     form.setValue("team_id", null, { shouldDirty: true });
   };
 
@@ -336,7 +336,6 @@ function KeyEditSession({
     clearMcpGrants(form.setValue);
     const organizationId = teams?.find((t) => t.team_id === teamId)?.organization_id;
     if (!organizationId) return;
-    setSelectedOrganizationId(organizationId);
     form.setValue("organization_id", organizationId, { shouldDirty: true });
   };
 
@@ -354,9 +353,10 @@ function KeyEditSession({
     })),
   ];
 
-  const visibleTeams = selectedOrganizationId
-    ? teams?.filter((t) => t.organization_id === selectedOrganizationId)
-    : teams;
+  const visibleTeams =
+    canChangeOrganization && selectedOrganizationId
+      ? teams?.filter((t) => t.organization_id === selectedOrganizationId)
+      : teams;
 
   const teamOptionsFor = (selectedTeamId: string | null): SearchSelectOption[] => {
     const selectedTeamOutsideFilter = teams?.find((t) => t.team_id === selectedTeamId && !visibleTeams?.includes(t));
@@ -797,7 +797,7 @@ function KeyEditSession({
                 value={value}
                 organizations={organizations}
                 loading={isOrganizationsLoading}
-                disabled={userRole !== "Admin" || hasProject}
+                disabled={!canChangeOrganization}
                 onChange={(orgId) => handleOrganizationChange(onChange, orgId)}
               />
             )}
