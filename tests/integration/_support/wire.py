@@ -19,6 +19,7 @@ class Request:
     target: str
     headers: Mapping[str, str]
     body: bytes
+    header_lines: tuple[tuple[str, str], ...] = ()
 
 
 class AbortedBody(Exception):
@@ -136,7 +137,7 @@ def wire_server(
                 self.close_connection = True
                 disconnected.put(self.path)
                 return
-            request: Final = Request(self.command, self.path, headers, body)
+            request: Final = Request(self.command, self.path, headers, body, tuple(self.headers.items()))
             received.put(request)
             try:
                 reply = respond(request)
