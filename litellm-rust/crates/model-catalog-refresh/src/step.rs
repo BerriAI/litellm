@@ -38,6 +38,8 @@ pub enum Step {
     /// 304, a final status, or retries exhausted
     Done {
         reason: String,
+        /// The wait before the next attempt when the last failure was retryable, so a caller can retry later
+        retry_after: Option<Duration>,
     },
 }
 

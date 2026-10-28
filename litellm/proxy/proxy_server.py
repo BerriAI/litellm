@@ -211,7 +211,6 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
     from prisma import models as prisma_models
 
-    from litellm._catalog import Fetched
     from litellm.integrations.opentelemetry import OpenTelemetry
     from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
 
@@ -5386,12 +5385,6 @@ def resolve_classifier_plugin(
     return resolved
 
 
-def _swap_in_model_cost_map(fetched: "Fetched") -> int:
-    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
-
-    return adopt_model_cost_map(fetched)
-
-
 def _websearch_handler_params(stored: Mapping[str, object]) -> dict[str, object]:
     """
     Translate stored web search interception settings into handler kwargs.
@@ -9091,13 +9084,11 @@ class ProxyConfig:
             if not is_due:
                 return
 
-            from litellm.litellm_core_utils.get_model_cost_map import (
-                ModelCostMapReloadUnavailable,
-                refetch_model_cost_map,
-            )
+            from litellm._catalog import Unavailable, default_source
+            from litellm.litellm_core_utils.get_model_cost_map import reload_model_cost_map
 
-            reload_result = await refetch_model_cost_map(url=litellm.model_cost_map_url)
-            if isinstance(reload_result, ModelCostMapReloadUnavailable):
+            reload_result = await asyncio.to_thread(reload_model_cost_map, default_source())
+            if isinstance(reload_result, Unavailable):
                 verbose_proxy_logger.warning(
                     "Model cost map reload failed (%s); keeping current pricing data. The revision stays "
                     "unapplied so this pod retries on its next poll",
@@ -9105,7 +9096,7 @@ class ProxyConfig:
                 )
                 return
 
-            models_count = _swap_in_model_cost_map(reload_result.fetched)
+            models_count = reload_result.count
             self.model_cost_map_loaded_at = current_time
             await record_reload_run(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME, current_time)
             # Adopted last, so neither a failed fetch nor a failed status write is recorded
@@ -20999,20 +20990,20 @@ async def reload_model_cost_map(
             raise HTTPException(status_code=500, detail="Database connection not available")
 
         # Immediately reload the model cost map in the current pod
+        from litellm._catalog import Unavailable, default_source
         from litellm.litellm_core_utils.get_model_cost_map import (
-            ModelCostMapReloadUnavailable,
             get_model_cost_map_provenance,
-            refetch_model_cost_map,
+            reload_model_cost_map,
         )
 
-        reload_result = await refetch_model_cost_map(url=litellm.model_cost_map_url)
-        if isinstance(reload_result, ModelCostMapReloadUnavailable):
+        reload_result = await asyncio.to_thread(reload_model_cost_map, default_source())
+        if isinstance(reload_result, Unavailable):
             raise HTTPException(
                 status_code=502,
                 detail=f"Failed to reload model cost map: {reload_result.reason}. Current pricing data was kept.",
             )
 
-        models_count = _swap_in_model_cost_map(reload_result.fetched)
+        models_count = reload_result.count
         current_time = utc_now()
         proxy_config.model_cost_map_loaded_at = current_time
         provenance: Final = get_model_cost_map_provenance()

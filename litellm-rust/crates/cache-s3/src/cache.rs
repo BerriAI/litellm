@@ -4,11 +4,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use aws_sdk_s3::{
-    config::{BehaviorVersion, Region, RequestChecksumCalculation, ResponseChecksumValidation},
-    error::SdkError,
-    primitives::ByteStream,
-};
+use aws_sdk_s3::{error::SdkError, primitives::ByteStream};
 use aws_smithy_types::{DateTime, date_time::Format};
 use futures_util::future::try_join_all;
 use litellm_auth_aws::AwsAuthConfig;
@@ -17,7 +13,9 @@ use litellm_cache::{
 };
 use tokio::runtime::Handle;
 
-use crate::{auth::S3Credentials, transport::ReqwestHttpClient};
+use litellm_s3::S3ClientConfig;
+
+use crate::auth::S3Credentials;
 
 pub struct S3Endpoint {
     pub url: String,
@@ -49,19 +47,16 @@ impl<C: CacheCodec> S3Cache<C> {
         runtime: Handle,
     ) -> Self {
         let endpoint_url: Option<String> = config.endpoint.map(|endpoint| endpoint.url);
-        let base = aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .region(Region::new(config.region.clone()))
-            .http_client(ReqwestHttpClient(http))
-            .credentials_provider(S3Credentials::new(config.auth))
-            .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
-            .response_checksum_validation(ResponseChecksumValidation::WhenRequired);
-        let builder = match &endpoint_url {
-            Some(url) => base.endpoint_url(url).force_path_style(true),
-            None => base,
-        };
+        let client = litellm_s3::client(
+            S3ClientConfig {
+                region: config.region.clone(),
+                endpoint: endpoint_url.clone(),
+            },
+            http,
+            S3Credentials::new(config.auth),
+        );
         Self {
-            client: aws_sdk_s3::Client::from_conf(builder.build()),
+            client,
             codec,
             runtime,
             bucket: config.bucket.into(),

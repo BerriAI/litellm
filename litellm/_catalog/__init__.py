@@ -1,10 +1,47 @@
 """Internal catalog API backed by the Rust ``model-catalog`` crate. Not public, its shape may change in any release"""
 
+import os
 import sys
 from typing import Final
 
-from litellm.rust_bridge._native import Catalog, Fetched, Installed, RowError, Unavailable
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
+from litellm.rust_bridge._native import (
+    Bundled,
+    Catalog,
+    Fetched,
+    File,
+    Installed,
+    Provenance,
+    Remote,
+    RowError,
+    Unavailable,
+)
+
+Source = Remote | File | Bundled
 
 CATALOG: Final = Catalog.bound_to(sys.modules["litellm"], "model_cost")
 
-__all__ = ["CATALOG", "Catalog", "Fetched", "Installed", "RowError", "Unavailable"]
+
+def default_source() -> Source:
+    """Main's reload rule, the bundled map under offline mode or ``LITELLM_LOCAL_MODEL_COST_MAP``"""
+    import litellm
+
+    if is_offline_mode() or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
+        return Bundled()
+    return Remote(litellm.model_cost_map_url)
+
+
+__all__ = [
+    "CATALOG",
+    "Bundled",
+    "Catalog",
+    "Fetched",
+    "File",
+    "Installed",
+    "Provenance",
+    "Remote",
+    "RowError",
+    "Source",
+    "Unavailable",
+    "default_source",
+]

@@ -1,5 +1,7 @@
+import os
 from asyncio import Future
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from types import ModuleType
 from typing import Literal, Never, final
 
@@ -70,17 +72,50 @@ class Installed:
 @final
 class Unavailable:
     reason: str
+    retry_after: float | None
+    def __new__(cls, reason: str, retry_after: float | None = None) -> Unavailable: ...
+
+@final
+class Remote:
+    url: str
+    def __new__(cls, url: str) -> Remote: ...
+
+@final
+class File:
+    path: str
+    def __new__(cls, path: str | os.PathLike[str]) -> File: ...
+
+@final
+class Bundled:
+    def __new__(cls) -> Bundled: ...
+
+@final
+class Provenance:
+    source: str
+    url: str | None
+    is_env_forced: bool
+    fallback_reason: str | None
+    source_revision: str
+    etag: str | None
+    @property
+    def loaded_at(self) -> datetime: ...
 
 @final
 class Catalog:
     @staticmethod
     def bound_to(module: ModuleType, attr: str) -> Catalog: ...
     def bundled(self) -> Fetched: ...
-    @staticmethod
-    def parse(
-        body: bytes, *, etag: str | None, min_model_count: int, max_shrink_ratio: float
-    ) -> Fetched | Unavailable: ...
-    def install(self, fetched: Fetched) -> Installed: ...
+    def fetch(self, source: Remote | File | Bundled, *, timeout: float, attempts: int) -> Fetched | Unavailable: ...
+    def reload(self, source: Remote | File | Bundled) -> Installed | Unavailable: ...
+    def provenance(self) -> Provenance | None: ...
+    def install(
+        self,
+        fetched: Fetched,
+        *,
+        env_forced: bool = False,
+        fallback_reason: str | None = None,
+        url: str | None = None,
+    ) -> Installed: ...
 
 @final
 class NativeClickHouseSpendConfig:

@@ -54,8 +54,8 @@ _COPILOT_TOKEN_EXPIRES_AT: Final = 4_102_444_800
 def _simulate_price_data_reload(fetched_catalog):
     """Drive what a price data reload does to this process's litellm state.
 
-    Mirrors `litellm.proxy.proxy_server._swap_in_model_cost_map`, which is the
-    one place both reload paths adopt a freshly fetched catalog; that wiring is
+    Mirrors `litellm.litellm_core_utils.get_model_cost_map.reload_model_cost_map`, which is
+    the one place both reload paths install a freshly fetched catalog; that wiring is
     covered in the proxy's own tests, so these exercise the replay itself
     without dragging the proxy in. The provider model sets that helper also
     repopulates are left alone, since nothing here reads them and rebuilding
@@ -3858,7 +3858,7 @@ def test_every_declaring_deployment_is_named(caplog):
 
 def _simulate_price_data_reload_with_provider_sets(monkeypatch, fetched_catalog):
     """Like `_simulate_price_data_reload`, plus the provider model-set refresh the proxy's
-    `_swap_in_model_cost_map` does before replaying, so bare names in the new catalog resolve."""
+    `reload_model_cost_map` does before replaying, so bare names in the new catalog resolve."""
     monkeypatch.setattr(litellm, "model_cost", fetched_catalog)
     _invalidate_model_cost_lowercase_map()
     litellm.add_known_models(model_cost_map=fetched_catalog)
