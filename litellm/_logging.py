@@ -1016,7 +1016,9 @@ def print_startup_message(message: str) -> None:
     level, whole and unredacted as the print showed it; a blank spacer produces no record.
     """
     if not litellm.json_logs:
-        print(message)  # noqa: T201  # plain mode: this is the operator-terminal print it replaces
+        print(  # noqa: T201  # plain mode: this is the operator-terminal print it replaces
+            REDACTED_BY_LITELLM if diagnostic_message_logging_disabled() else message
+        )
         return
     text: Final = _ANSI_ESCAPE.sub("", message).strip("\n")
     if not text:

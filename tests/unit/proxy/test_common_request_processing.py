@@ -12249,3 +12249,56 @@ async def test_debug_message_privacy_preserves_stream_content(
         assert all("PRIVATE_STREAM_INPUT_42896" not in message for message in messages)
     else:
         assert any("PRIVATE_STREAM_INPUT_42896" in message for message in messages)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("privacy", [False, True])
+@pytest.mark.parametrize("http_error", [False, True])
+async def test_stream_failure_retains_error_status_without_debug_logging(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, privacy: bool, http_error: bool
+) -> None:
+    import logging
+
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", privacy)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
+    monkeypatch.setattr(verbose_proxy_logger, "level", logging.ERROR)
+    ProxyLogging._callback_capabilities_cache.clear()
+    failure: Final = (
+        HTTPException(status_code=429, detail="PRIVATE_STREAM_FAILURE_42896")
+        if http_error
+        else RuntimeError("PRIVATE_STREAM_FAILURE_42896")
+    )
+
+    async def upstream() -> AsyncGenerator[str, None]:
+        yield "data: started\n\n"
+        raise failure
+
+    stream: Final = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+        response=upstream(),
+        user_api_key_dict=ProxyUserAPIKeyAuth(),
+        request_data={"model": "example-model"},
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        serialize_chunk=str,
+        serialize_error=str,
+    )
+    assert await anext(stream) == "data: started\n\n"
+    if http_error:
+        with pytest.raises(HTTPException) as raised:
+            await anext(stream)
+        assert raised.value is failure
+    else:
+        remaining: Final = tuple([chunk async for chunk in stream])
+        assert len(remaining) == 1
+        assert "PRIVATE_STREAM_FAILURE_42896" in remaining[0]
+    messages: Final = tuple(record.getMessage() for record in caplog.records if record.name == verbose_proxy_logger.name)
+    if privacy:
+        assert any(f"event=request_failed status={429 if http_error else 500}" in message for message in messages)
+        assert all("PRIVATE_STREAM_FAILURE_42896" not in message for message in messages)
+    else:
+        assert any("PRIVATE_STREAM_FAILURE_42896" in message for message in messages)
+        assert all("event=request_failed" not in message for message in messages)

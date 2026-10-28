@@ -1827,6 +1827,20 @@ def test_print_verbose_formats_args_only_when_set_verbose_is_on(monkeypatch, cap
     assert capsys.readouterr().out == "key k1 value cached-vector\n"
 
 
+@pytest.mark.parametrize("privacy", [False, True])
+@pytest.mark.parametrize("json_logs", [False, True])
+def test_startup_message_respects_diagnostic_privacy(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], privacy: bool, json_logs: bool
+) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", privacy)
+    monkeypatch.setattr(litellm, "json_logs", json_logs)
+    print_startup_message("PRIVATE_CONFIGURED_MODEL_42896")
+    out, err = capfd.readouterr()
+    message: Final = json.loads(out)["message"] if json_logs else out.strip()
+    assert message == ("redacted-by-litellm" if privacy else "PRIVATE_CONFIGURED_MODEL_42896")
+    assert err == ""
+
+
 def test_print_startup_message_prints_plain_mode_text_unchanged(
     monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:

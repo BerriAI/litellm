@@ -4566,10 +4566,12 @@ class ProxyBaseLLMRequestProcessing:
                 e,
             )
 
+            stream_error_status: Final = error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
+            log_safe_diagnostic(
+                verbose_proxy_logger, "request_failed", status_code=stream_error_status, level=logging.ERROR
+            )
             if isinstance(e, HTTPException):
                 raise e
-            stream_error_status: Final = error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
-            log_safe_diagnostic(verbose_proxy_logger, "request_failed", status_code=stream_error_status)
             proxy_exception: Final = ProxyException(
                 message=redact_internal_details_from_client_message(getattr(e, "message", str(e))),
                 type=openai_error_type(e, stream_error_status),
