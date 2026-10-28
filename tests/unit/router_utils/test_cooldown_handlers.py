@@ -2987,6 +2987,24 @@ async def _complete_like_the_proxy(router: Router, model: str) -> str:
     return model_id
 
 
+_CHAT_COMPLETION_OK: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-4o",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def _openai_deployment(model_name: str, host: str, deployment_id: str) -> Mapping[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": f"https://{host}/v1"},
+        "model_info": {"id": deployment_id},
+    }
+
+
 @pytest.mark.asyncio
 async def test_fallback_deployment_stays_up_while_the_primary_is_in_cooldown(
     respx_mock: respx.MockRouter,
@@ -2997,30 +3015,12 @@ async def test_fallback_deployment_stays_up_while_the_primary_is_in_cooldown(
         return_value=httpx.Response(503, json={"error": {"message": "down", "type": "server_error"}})
     )
     backup_route: Final = respx_mock.post("https://backup.test/v1/chat/completions").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "id": "chatcmpl-1",
-                "object": "chat.completion",
-                "created": 1,
-                "model": "gpt-4o",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-            },
-        )
+        return_value=httpx.Response(200, json=_CHAT_COMPLETION_OK)
     )
     router: Final = litellm.Router(
         model_list=[
-            {
-                "model_name": "primary",
-                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "https://primary.test/v1"},
-                "model_info": {"id": "primary-dep"},
-            },
-            {
-                "model_name": "backup",
-                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "https://backup.test/v1"},
-                "model_info": {"id": "backup-dep"},
-            },
+            _openai_deployment("primary", "primary.test", "primary-dep"),
+            _openai_deployment("backup", "backup.test", "backup-dep"),
         ],
         fallbacks=[{"primary": ["backup"]}],
         allowed_fails=litellm.allowed_fails,
@@ -3035,6 +3035,38 @@ async def test_fallback_deployment_stays_up_while_the_primary_is_in_cooldown(
 
     assert served_by == ["backup-dep"] * 20
     assert len(backup_route.calls) == 20
+    assert tuple(cooldown_deployments) == ("primary-dep",)
+
+
+@pytest.mark.asyncio
+async def test_fallback_group_stays_up_after_a_bad_key_cools_the_primary_under_the_rate_based_default(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://primary.test/v1/chat/completions").mock(
+        return_value=httpx.Response(401, json={"error": {"message": "bad key", "type": "invalid_request_error"}})
+    )
+    respx_mock.post("https://backup.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_COMPLETION_OK)
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            _openai_deployment("primary", "primary.test", "primary-dep"),
+            _openai_deployment("backup", "backup.test", "backup-1"),
+            _openai_deployment("backup", "backup.test", "backup-2"),
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+
+    served_by: Final = [await _complete_like_the_proxy(router, "primary") for _ in range(12)]
+    cooldown_deployments: Final = await async_get_cooldown_deployments(
+        litellm_router_instance=router,
+        parent_otel_span=None,
+    )
+
+    assert set(served_by) <= {"backup-1", "backup-2"}
     assert tuple(cooldown_deployments) == ("primary-dep",)
 
 
