@@ -1,6 +1,8 @@
 import json
 import os
+import re
 import time
+from urllib.parse import unquote
 
 import pytest
 import requests
@@ -112,6 +114,22 @@ def test_recent_bodies_fetches_latest_turns_even_when_successful():
     assert result.exit_code == 0, result.output
     assert "msg_1" in result.output
     assert _called_paths() == ["/spend/logs/session/ui", "/spend/logs/ui/req-ok"]
+
+
+@pytest.mark.parametrize("request_id", ["req#a1", "req?a=1", "req%41b", "req a&b"])
+@responses.activate
+def test_bodies_are_fetched_for_request_ids_with_url_special_characters(request_id):
+    def payload_for_stored_id(request):
+        stored_id = unquote(request.path_url.split("?")[0].removeprefix("/spend/logs/ui/"))
+        found = stored_id == request_id
+        return 200, {}, json.dumps({"response": {"id": "msg_special"}} if found else None)
+
+    _mock_proxy([{**OK_ROW, "request_id": request_id}], {})
+    responses.add_callback(responses.GET, re.compile(f"{PROXY}/spend/logs/ui/.*"), callback=payload_for_stored_id)
+    result = CliRunner().invoke(cli, ["debug", "claude", "--session-id", SESSION, "--no-save"])
+
+    assert result.exit_code == 0, result.output
+    assert "msg_special" in result.output
 
 
 @responses.activate

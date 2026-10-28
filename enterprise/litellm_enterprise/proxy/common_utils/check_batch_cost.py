@@ -5,9 +5,9 @@ Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if t
 import asyncio
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace as dataclasses_replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Protocol, Tuple, cast
 
@@ -28,6 +28,7 @@ from litellm.constants import (
 from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
+from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -42,11 +43,14 @@ if TYPE_CHECKING:
 
 
 def _error_names_resource(error: Exception, resource_id: str) -> bool:
-    return resource_id in re.findall(r"""[^\s"'`]+""", str(error))
+    tokens: Final[list[str]] = re.findall(r"""[^\s"'`<>(]+""", str(error))
+    return any(token.rstrip(".,:;)") == resource_id for token in tokens)
 
 
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
 RECENT_BATCH_POLL_WINDOW: Final = timedelta(hours=48)
+GIVE_UP_POLLING_AFTER: Final = timedelta(days=2 * MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+
 
 PROVIDER_TERMINAL_BATCH_STATUSES: Final[Tuple[str, ...]] = (
     "completed",
@@ -91,6 +95,10 @@ def _team_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.Li
     return TeamRepository(prisma_client).table
 
 
+def _unique_jobs(jobs: Sequence[ManagedObjectRow]) -> tuple[ManagedObjectRow, ...]:
+    return tuple({job.id: job for job in jobs}.values())
+
+
 class CheckBatchCost:
     def __init__(
         self,
@@ -98,6 +106,7 @@ class CheckBatchCost:
         prisma_client: "PrismaClient",
         llm_router: "Router",
         track_unmanaged_batch_cost: bool = False,
+        clock: Callable[[], datetime] = get_utc_datetime,
     ):
         from litellm.proxy.utils import PrismaClient, ProxyLogging
         from litellm.router import Router
@@ -106,13 +115,14 @@ class CheckBatchCost:
         self.prisma_client: PrismaClient = prisma_client
         self.llm_router: Router = llm_router
         self._track_unmanaged_batch_cost = track_unmanaged_batch_cost
+        self._clock: Final = clock
         self._creator_attribution: Final = ManagedObjectCreatorAttribution(prisma_client, "CheckBatchCost")
         # Cached after the first poll cycle. Once we know the column is absent we skip
         # the guaranteed-failing primary query on every subsequent cycle.
         self._has_batch_processed_column: bool = True
         self.batch_processed_support_confirmed: bool = False
         self._poll_cursor: tuple[datetime, str] | None = None
-        self._poll_before: datetime = datetime.now(timezone.utc)
+        self._poll_before: datetime = clock()
         self._arrival_cursor: tuple[datetime, str] | None = None
         self._arrival_before: datetime = self._poll_before
         self._poll_arrivals: bool = False
@@ -147,27 +157,6 @@ class CheckBatchCost:
             return
         self.batch_processed_support_confirmed = True
 
-    async def _cleanup_stale_managed_objects(self) -> None:
-        """
-        Mark managed objects older than MANAGED_OBJECT_STALENESS_CUTOFF_DAYS days
-        in non-terminal states as 'stale_expired'. These will never complete and
-        should not be polled.
-        """
-        cutoff: Final = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
-        result: Final = await _managed_object_table(self.prisma_client).update_many(
-            where={
-                "file_purpose": "batch",
-                "status": {"not_in": list(TERMINAL_MANAGED_OBJECT_STATUSES)},
-                "created_at": {"lt": cutoff},
-            },
-            data={"status": "stale_expired"},
-        )
-        if result > 0:
-            verbose_proxy_logger.warning(
-                f"CheckBatchCost: marked {result} stale managed objects "
-                f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
-            )
-
     async def _fallback_find_jobs(self) -> "Sequence[ManagedObjectRow]":
         """Query batch jobs without the batch_processed filter (for older schemas)."""
         return await self._find_jobs(
@@ -187,20 +176,43 @@ class CheckBatchCost:
         )
 
     async def _find_jobs(self, where: Mapping[str, object]) -> Sequence[ManagedObjectRow]:
-        arrivals: Final = self._poll_arrivals
-        page: Final = await self._find_job_page(where, arrivals=arrivals)
-        self._poll_arrivals = not arrivals if page else arrivals
-        if page:
-            return page
-        return await self._find_job_page(where, arrivals=not arrivals)
+        lead_arrivals: Final = self._poll_arrivals
+        self._poll_arrivals = not lead_arrivals
+        lead_share: Final = MAX_OBJECTS_PER_POLL_CYCLE - MAX_OBJECTS_PER_POLL_CYCLE // 2
+        lead: Final = await self._find_job_page(where, arrivals=lead_arrivals, take=lead_share)
+        trail: Final = await self._find_job_page(
+            where, arrivals=not lead_arrivals, take=MAX_OBJECTS_PER_POLL_CYCLE - len(lead)
+        )
+        spill: Final = (
+            await self._find_job_page(
+                where, arrivals=lead_arrivals, take=MAX_OBJECTS_PER_POLL_CYCLE - len(lead) - len(trail)
+            )
+            if len(lead) == lead_share
+            else ()
+        )
+        return _unique_jobs((*lead, *trail, *spill))
 
-    async def _find_job_page(self, where: Mapping[str, object], *, arrivals: bool) -> Sequence[ManagedObjectRow]:
+    async def _find_job_page(
+        self, where: Mapping[str, object], *, arrivals: bool, take: int
+    ) -> Sequence[ManagedObjectRow]:
+        if take == 0:
+            return ()
+        resumed_mid_lane: Final = (self._arrival_cursor if arrivals else self._poll_cursor) is not None
+        page: Final = await self._find_job_page_from_cursor(where, arrivals=arrivals, take=take)
+        if len(page) == take or not resumed_mid_lane:
+            return page
+        wrapped: Final = await self._find_job_page_from_cursor(where, arrivals=arrivals, take=take - len(page))
+        return _unique_jobs((*page, *wrapped))
+
+    async def _find_job_page_from_cursor(
+        self, where: Mapping[str, object], *, arrivals: bool, take: int
+    ) -> Sequence[ManagedObjectRow]:
         cursor: Final = self._arrival_cursor if arrivals else self._poll_cursor
         if cursor is None:
             if arrivals:
-                self._arrival_before = datetime.now(timezone.utc)
+                self._arrival_before = self._clock()
             else:
-                self._poll_before = datetime.now(timezone.utc) - RECENT_BATCH_POLL_WINDOW
+                self._poll_before = self._clock() - RECENT_BATCH_POLL_WINDOW
         before: Final = self._arrival_before if arrivals else self._poll_before
         page: Final = await _managed_object_table(self.prisma_client).find_many(
             where={
@@ -220,10 +232,10 @@ class CheckBatchCost:
                     else {}
                 ),
             },
-            take=MAX_OBJECTS_PER_POLL_CYCLE,
+            take=take,
             order=[{"created_at": "asc"}, {"id": "asc"}],
         )
-        next_cursor: Final = (page[-1].created_at, page[-1].id) if len(page) == MAX_OBJECTS_PER_POLL_CYCLE else None
+        next_cursor: Final = (page[-1].created_at, page[-1].id) if len(page) == take else None
         if arrivals:
             self._arrival_cursor = next_cursor
         else:
@@ -231,11 +243,47 @@ class CheckBatchCost:
         return page
 
     def _unprocessed_snapshot(self, job: ManagedObjectRow) -> Mapping[str, object]:
-        return {
-            "id": job.id,
-            "updated_at": job.updated_at,
-            **({"batch_processed": False} if self._has_batch_processed_column else {}),
-        }
+        if self._has_batch_processed_column:
+            return {"id": job.id, "batch_processed": False}
+        return {"id": job.id, "updated_at": job.updated_at}
+
+    def _is_past_give_up_age(self, job: ManagedObjectRow) -> bool:
+        return job.created_at < self._clock() - GIVE_UP_POLLING_AFTER
+
+    async def _expire_if_old_and_unfinished(self, job: ManagedObjectRow) -> None:
+        if job.status in TERMINAL_MANAGED_OBJECT_STATUSES or not self._is_past_give_up_age(job):
+            return
+        await self._expire_unfinished(job)
+
+    @staticmethod
+    def _is_completed_with_output_id_pending(response: "LiteLLMBatch") -> bool:
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            _completed_batch_safe_to_retire,
+        )
+
+        return (
+            response.status in ("completed", "complete")
+            and response.output_file_id is None
+            and not _completed_batch_safe_to_retire(response)
+        )
+
+    async def _expire_unfinished(self, job: ManagedObjectRow) -> None:
+        try:
+            expired: Final = await _managed_object_table(self.prisma_client).update_many(
+                where={
+                    **self._unprocessed_snapshot(job),
+                    "status": {"not_in": list(TERMINAL_MANAGED_OBJECT_STATUSES)},
+                },
+                data={"status": "stale_expired"},
+            )
+        except Exception as db_err:
+            verbose_proxy_logger.error(f"CheckBatchCost: failed to mark stale job {job.id} as stale_expired: {db_err}")
+            return
+        if expired > 0:
+            verbose_proxy_logger.warning(
+                f"CheckBatchCost: job {job.id} is older than {GIVE_UP_POLLING_AFTER.days} days "
+                "and still not finished, so it is marked stale_expired and no longer polled"
+            )
 
     async def _retire_job(self, job: "ManagedObjectRow", reason: str) -> None:
         """
@@ -356,15 +404,21 @@ class CheckBatchCost:
     def _is_output_file_gone_at_provider(error: Exception, output_file_id: Optional[str]) -> bool:
         """A 404 naming the output file means there is nothing to fetch on this or any
         later poll: providers like Vertex AI advertise an output path for every batch,
-        including terminal ones that never wrote it. Any other failure may be
-        transient, so it keeps retrying until the staleness sweep bounds it."""
+        including terminal ones that never wrote it. GCS names a gs:// object without its scheme,
+        and S3 names an s3:// object by its key alone. Any other failure keeps retrying."""
         import openai
 
         from litellm.exceptions import NotFoundError
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
         if not output_file_id:
             return False
-        return isinstance(error, (NotFoundError, openai.NotFoundError)) and _error_names_resource(error, output_file_id)
+        is_not_found: Final = isinstance(error, (NotFoundError, openai.NotFoundError)) or (
+            isinstance(error, BaseLLMException) and error.status_code == 404
+        )
+        object_path: Final = output_file_id.split("://", 1)[-1]
+        names: Final = (output_file_id, object_path, object_path.split("/", 1)[-1])
+        return is_not_found and any(_error_names_resource(error, name) for name in names)
 
     async def _finalize_unbilled_terminal_job(
         self, job: "ManagedObjectRow", response: "LiteLLMBatch"
@@ -1040,8 +1094,8 @@ class CheckBatchCost:
         from litellm.proxy.proxy_server import proxy_config
         from litellm.secret_managers.main import str_to_bool
 
-        api_key: Final = getattr(job, "api_key", None)
-        team_id: Final = getattr(job, "team_id", None)
+        api_key: Final = job.api_key if hasattr(job, "api_key") else None
+        team_id: Final = job.team_id if hasattr(job, "team_id") else None
         has_key_row: Final = api_key is not None and is_valid_sha256_hash(api_key)
         try:
             key_row: Final = (
@@ -1094,13 +1148,6 @@ class CheckBatchCost:
 
         processed_models: List[Tuple[Optional[str], Optional[str]]] = []
 
-        try:
-            await self._cleanup_stale_managed_objects()
-        except Exception as cleanup_err:
-            verbose_proxy_logger.warning(
-                f"CheckBatchCost: stale cleanup failed (poll will continue): {cleanup_err}"
-            )
-
         # Look for all batches that have not yet been processed by CheckBatchCost.
         # self._has_batch_processed_column is cached after the first probe so that
         # older schemas don't pay a guaranteed-failing primary query + warning on
@@ -1142,6 +1189,8 @@ class CheckBatchCost:
             if routing is None:
                 if self._has_unified_id_without_model(job):
                     await self._retire_job(job, "unified object id has no model id")
+                else:
+                    await self._expire_if_old_and_unfinished(job)
                 continue
             model_id, batch_id = routing
 
@@ -1166,6 +1215,14 @@ class CheckBatchCost:
                     prom_logger.record_check_batch_cost_error("provider_retrieval_error")
                 if self._is_batch_gone_at_provider(e, batch_id) and self._batch_deployment_exists(model_id):
                     await self._retire_job(job, f"batch {batch_id} no longer exists at the provider")
+                else:
+                    await self._expire_if_old_and_unfinished(job)
+                continue
+            if self._is_completed_with_output_id_pending(response):
+                verbose_proxy_logger.info(
+                    f"CheckBatchCost: batch {batch_id} is completed but its output file id "
+                    f"has not appeared yet; leaving job {job.id} for the next poll cycle"
+                )
                 continue
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
@@ -1217,17 +1274,9 @@ class CheckBatchCost:
                 self._store_batch_line_items_in_background(job, response, model_id, batch_id, billed=True)
 
             elif response.status in PROVIDER_TERMINAL_BATCH_STATUSES:
-                from litellm.proxy.openai_files_endpoints.common_utils import (
-                    _completed_batch_safe_to_retire,
-                )
-
-                if response.status in ("completed", "complete") and not _completed_batch_safe_to_retire(response):
-                    verbose_proxy_logger.info(
-                        f"CheckBatchCost: batch {batch_id} is completed but its output file id "
-                        f"has not appeared yet; leaving job {job.id} for the next poll cycle"
-                    )
-                    continue
                 await self._retire_unbilled_terminal_job(job, response, model_id, batch_id)
+            else:
+                await self._expire_if_old_and_unfinished(job)
 
         # Record polling run metrics (always, even if nothing was processed)
         if prom_logger:

@@ -312,7 +312,7 @@ def _chat_caller_stream_usage_event(event: dict[str, JsonValue], model: str) -> 
         "object": event["object"],
         "created": 1,
         "model": model,
-        "choices": [{"index": 0, "delta": {}}],
+        "choices": [],
         "usage": {**_json_object_value(event["usage"]), "cost": 4.05e-6},
     }
 

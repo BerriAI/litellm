@@ -78,6 +78,7 @@ from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
+_JSON_ENTRIES: Final = TypeAdapter(list[object])
 GAP_WORD_TOKENIZER: Final = re.compile(r"\b\w+\b")
 SENTENCE_TERMINATORS: Final = re.compile(r"[.!?]+")
 
@@ -699,9 +700,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         Severity mapping: 4,3 -> high; 2 -> medium; 1 -> low.
         """
         with open(file_path, "r") as f:
-            entries = json.load(f)
-        if not isinstance(entries, list):
-            entries = [entries]
+            decoded: Final = _DECODED_ARGUMENTS.validate_python(json.load(f))
+        entries: Final = _JSON_ENTRIES.validate_python(decoded) if isinstance(decoded, list) else [decoded]
         # Derive category name from filename (e.g. harm_toxic_abuse.json -> harm_toxic_abuse)
         category_name: Final = os.path.splitext(os.path.basename(file_path))[0]
         severity_map: Final = {4: "high", 3: "high", 2: "medium", 1: "low"}
@@ -806,7 +806,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         try:
             with open(file_path, "r") as f:
-                data: Final = yaml.safe_load(f)
+                data: Final = _DECODED_ARGUMENTS.validate_python(yaml.safe_load(f))
 
             if not isinstance(data, dict) or "blocked_words" not in data:
                 raise ValueError("Invalid format: file must contain 'blocked_words' key with list of words")
