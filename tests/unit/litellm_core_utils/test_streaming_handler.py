@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import json
+import queue
 import sys
 import threading
 import time
@@ -13,8 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 from openai.types.chat import ChatCompletionChunk
-from pydantic import BaseModel
-
+from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm import verbose_logger
 from litellm._logging import session_id_var, trace_id_var
@@ -36,6 +36,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     StreamingChoices,
+    StandardLoggingPayload,
     Usage,
 )
 from litellm.utils import ModelResponseListIterator
@@ -2819,6 +2820,123 @@ def test_raise_on_model_repetition_tolerates_empty_choices(
         wrapper.raise_on_model_repetition()
 
 
+_STUCK_CHUNK: Final = "the model is stuck on this"
+_STUCK_PROVIDER_CHUNK_CAP: Final = 10 * litellm.REPEATED_STREAMING_CHUNK_LIMIT
+
+
+class _StuckProvider:
+    def __init__(self) -> None:
+        self.closed_early = threading.Event()
+        self.chunks_sent = 0
+
+    def _next_chunk(self) -> ModelResponseStream:
+        self.chunks_sent += 1
+        return _make_chunk(_STUCK_CHUNK)
+
+    def sync_stream(self) -> Iterator[ModelResponseStream]:
+        try:
+            yield from (self._next_chunk() for _ in range(_STUCK_PROVIDER_CHUNK_CAP))
+        except GeneratorExit:
+            self.closed_early.set()
+            raise
+
+    async def async_stream(self) -> AsyncIterator[ModelResponseStream]:
+        try:
+            for _ in range(_STUCK_PROVIDER_CHUNK_CAP):
+                yield self._next_chunk()
+        except GeneratorExit:
+            self.closed_early.set()
+            raise
+
+
+class _StuckStreamFailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: Final = queue.SimpleQueue[str]()
+
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.failures.put(str(cast(Mapping[str, object], kwargs)["exception"]))
+
+    async def async_log_failure_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.failures.put(str(cast(Mapping[str, object], kwargs)["exception"]))
+
+
+def _stuck_stream_wrapper(
+    provider_stream: Iterator[ModelResponseStream] | AsyncIterator[ModelResponseStream],
+    call_type: Literal["completion", "acompletion"],
+    recorder: _StuckStreamFailureRecorder,
+) -> CustomStreamWrapper:
+    logging_obj: Final = Logging(
+        model="test-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type=call_type,
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id=f"stuck-stream-{call_type}",
+        function_id=f"stuck-stream-{call_type}",
+        dynamic_failure_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="test-model",
+        optional_params={},
+        litellm_params=get_litellm_params(custom_llm_provider="openai", acompletion=call_type == "acompletion"),
+    )
+    return CustomStreamWrapper(
+        completion_stream=provider_stream,
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_stream_stuck_on_one_chunk_closes_the_provider_stream_and_logs_one_failure():
+    """https://github.com/BerriAI/litellm/issues/19428 and https://github.com/BerriAI/litellm/issues/13786"""
+    provider: Final = _StuckProvider()
+    recorder: Final = _StuckStreamFailureRecorder()
+    wrapper: Final = _stuck_stream_wrapper(provider.async_stream(), "acompletion", recorder)
+
+    with pytest.raises(Exception, match="repeating the same chunk"):
+        async for _ in wrapper:
+            pass
+    assert provider.closed_early.is_set()
+    assert provider.chunks_sent <= litellm.REPEATED_STREAMING_CHUNK_LIMIT + 1
+    chunks_sent_at_failure: Final = provider.chunks_sent
+
+    with pytest.raises(StopAsyncIteration):
+        await wrapper.__anext__()
+    await wrapper.wait_for_failure_logging(timeout=5)
+
+    assert provider.chunks_sent == chunks_sent_at_failure
+    assert "repeating the same chunk" in recorder.failures.get_nowait()
+    assert recorder.failures.empty()
+
+
+def test_sync_stream_stuck_on_one_chunk_closes_the_provider_stream_and_logs_one_failure():
+    """Sync counterpart of the async test above"""
+    provider: Final = _StuckProvider()
+    recorder: Final = _StuckStreamFailureRecorder()
+    wrapper: Final = _stuck_stream_wrapper(provider.sync_stream(), "completion", recorder)
+
+    with pytest.raises(Exception, match="repeating the same chunk"):
+        for _ in wrapper:
+            pass
+    assert provider.closed_early.is_set()
+    assert provider.chunks_sent <= litellm.REPEATED_STREAMING_CHUNK_LIMIT + 1
+    chunks_sent_at_failure: Final = provider.chunks_sent
+    assert "repeating the same chunk" in recorder.failures.get(timeout=5)
+
+    with pytest.raises(StopIteration):
+        next(wrapper)
+
+    assert provider.chunks_sent == chunks_sent_at_failure
+    with pytest.raises(queue.Empty):
+        recorder.failures.get(timeout=0.5)
+
+
 def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     """
     Test that provider-reported usage from a post-finish_reason chunk
@@ -4263,6 +4381,68 @@ def test_record_partial_usage_for_failure_stashes_usage_and_cost():
     assert stashed.completion_tokens == 1
     assert stashed.total_tokens == 31
     assert isinstance(logging_obj.model_call_details["response_cost"], float)
+
+
+class _FailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: tuple[tuple[int, int], ...] = ()
+        self.logged: asyncio.Event = asyncio.Event()
+
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"])
+        self.failures = (*self.failures, (payload["prompt_tokens"], payload["completion_tokens"]))
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+async def test_log_stream_failure_bills_the_dropped_attempt_even_after_the_router_discards_its_usage() -> None:
+    """The dropped attempt's failure log is queued, and the router discards the stashed usage as it opens the
+    fallback hop before that log runs. The log must still bill what the dropped attempt consumed, and the shared
+    logging object must not be marked as already failed, since the hop's own failure still has to reach the
+    integrations."""
+    recorder: Final = _FailureRecorder()
+    logging_obj: Final = Logging(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="partial-usage-copy",
+        function_id="1245",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-5.6",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-partial-copy",
+            created=1742056047,
+            model="gpt-5.6",
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="The", role="assistant"))],
+            usage=Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31),
+        )
+    ]
+
+    with pytest.raises(MidStreamFallbackError):
+        wrapper._log_stream_failure_and_raise(httpx.ReadError("connection dropped"))
+    logging_obj.carry_failed_attempt_usage()
+    await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+
+    assert recorder.failures == ((30, 1),)
+    assert logging_obj.model_call_details.get("has_logged_async_failure") is not True
 
 
 def test_record_partial_usage_for_failure_noop_without_chunks():
@@ -7664,3 +7844,102 @@ async def test_leaving_an_async_with_block_closes_the_provider_stream():
     async with _wrapper_over(stream):
         pass
     assert stream.close_calls == 1
+
+
+def _final_chunk_with_dict_usage(choices) -> ModelResponseStream:
+    """A stream chunk whose ``usage`` is a plain dict.
+
+    ``ModelResponseStream.__init__`` coerces a dict ``usage`` kwarg into
+    ``litellm.Usage``, so the dict is attached after construction — the same
+    shape a custom ``streaming_decoder`` (or any third-party iterator that
+    bypasses litellm chunk construction) delivers to ``chunk_creator``.
+    """
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-dict-usage-test",
+        created=1754900000,
+        model="gpt-4o",
+        object="chat.completion.chunk",
+        choices=choices,
+    )
+    chunk.usage = {  # mutable-ok: wire-shaped usage payload under test
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "total_tokens": 110,
+        "prompt_tokens_details": {"cached_tokens": 80},  # mutable-ok: wire payload
+        "completion_tokens_details": {"reasoning_tokens": 5},  # mutable-ok: wire payload
+        "cache_creation_input_tokens": 42,
+    }
+    return chunk
+
+
+def test_dispatch_provider_chunk_dict_usage_preserves_token_details(
+    logging_obj: Logging,
+):
+    """The openai else-branch of ``_dispatch_provider_chunk`` handles three
+    usage shapes: ``Usage`` (passed through), ``BaseModel``
+    (``Usage(**model_dump())``), and plain ``dict``. The dict arm used to
+    rebuild ``litellm.Usage`` from only prompt/completion/total tokens,
+    silently dropping ``prompt_tokens_details`` (cached_tokens),
+    ``completion_tokens_details`` (reasoning_tokens), and cache token counts
+    that both sibling arms preserve.
+    """
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4o",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        stream_options={"include_usage": True},  # mutable-ok: constructor payload
+    )
+    chunk: Final = _final_chunk_with_dict_usage(
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=None))
+        ]  # mutable-ok: chunk payload
+    )
+    model_response: Final = wrapper.model_response_creator()
+    wrapper._dispatch_provider_chunk(
+        chunk=chunk,
+        model_response=model_response,
+        completion_obj={"content": ""},  # mutable-ok: dispatch scratch dict
+    )
+
+    usage: Final = model_response.usage
+    assert isinstance(usage, Usage)
+    assert usage.prompt_tokens == 100
+    assert usage.completion_tokens == 10
+    assert usage.total_tokens == 110
+    assert usage.prompt_tokens_details is not None, (
+        "dict-usage arm dropped prompt_tokens_details (its Usage/BaseModel sibling arms preserve it)"
+    )
+    assert usage.prompt_tokens_details.cached_tokens == 80
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 5
+    assert getattr(usage, "cache_creation_input_tokens", None) == 42
+
+
+def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
+    logging_obj: Logging,
+):
+    """End-to-end through ``chunk_creator``: a usage-only final chunk (empty
+    ``choices``, ``stream_options.include_usage`` set) takes the early-return
+    path, so whatever the dict-usage arm wrote is exactly what the consumer
+    receives — there is no later aggregation to repair it.
+    """
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4o",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        stream_options={"include_usage": True},  # mutable-ok: constructor payload
+    )
+    chunk: Final = _final_chunk_with_dict_usage(choices=[])  # mutable-ok: empty choices list
+    result: Final = wrapper.chunk_creator(chunk=chunk)
+
+    assert result is not None
+    usage: Final = result.usage
+    assert isinstance(usage, Usage)
+    assert usage.prompt_tokens_details is not None, (
+        "usage-only early return delivered a Usage stripped of prompt_tokens_details to the stream consumer"
+    )
+    assert usage.prompt_tokens_details.cached_tokens == 80
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 5

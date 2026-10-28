@@ -3852,3 +3852,47 @@ async def test_get_config_callbacks_reports_an_unreadable_config_as_a_request_er
 
     assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
     assert exc_info.value.message == "config row is not valid YAML"
+
+
+@pytest.mark.parametrize("scope", [None, "expand"])
+@pytest.mark.parametrize(
+    "general_settings, wildcard_query, wildcard_listed",
+    [
+        ({}, None, False),
+        ({"return_wildcard_routes": False}, None, False),
+        ({"return_wildcard_routes": True}, None, True),
+        ({"return_wildcard_routes": "true"}, None, False),
+        ({"return_wildcard_routes": True}, False, False),
+        ({"return_wildcard_routes": False}, True, True),
+        ({}, True, True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_model_list_return_wildcard_routes_defaults_to_general_setting(
+    monkeypatch: pytest.MonkeyPatch,
+    general_settings: dict[str, object],
+    wildcard_query: bool | None,
+    wildcard_listed: bool,
+    scope: str | None,
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-6.1-sol", "litellm_params": {"model": "openai/gpt-6.1-sol", "api_key": "sk-fake"}},
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "sk-fake"}},
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_model", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
+
+    response: Final = await litellm.proxy.proxy_server.model_list(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN),
+        return_wildcard_routes=wildcard_query,
+        scope=scope,
+    )
+    listed: Final = [model["id"] for model in response["data"]]
+
+    assert "gpt-6.1-sol" in listed, listed
+    assert ("openai/*" in listed) is wildcard_listed, listed
