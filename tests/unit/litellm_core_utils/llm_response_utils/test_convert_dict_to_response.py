@@ -228,6 +228,30 @@ def test_convert_missing_choices_raises_api_error() -> None:
     assert "no 'choices'" in str(exc_info.value)
 
 
+@pytest.mark.parametrize("finish_reasons", [("abort",), ("stop", "abort"), ("abort", "stop")])
+def test_convert_aborted_choice_raises_api_error(finish_reasons: tuple[str, ...]) -> None:
+    from litellm.exceptions import APIError
+
+    resp: Final = {
+        "id": "x",
+        "created": 1,
+        "model": "Qwen/Qwen3-8B",
+        "object": "chat.completion",
+        "choices": [
+            {"index": index, "message": {"role": "assistant", "content": "Oslo is 4C and"}, "finish_reason": reason}
+            for index, reason in enumerate(finish_reasons)
+        ],
+    }
+    with pytest.raises(APIError, match="finish_reason=abort") as exc_info:
+        convert_to_model_response_object(
+            response_object=resp,
+            model_response_object=ModelResponse(),
+            response_type="completion",
+        )
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.model == "Qwen/Qwen3-8B"
+
+
 @pytest.mark.parametrize(("choices", "type_name"), [({}, "dict"), ("", "str"), (None, "NoneType"), (0, "int")])
 @pytest.mark.asyncio
 async def test_convert_non_list_choices_raises_api_error(choices: object, type_name: str) -> None:

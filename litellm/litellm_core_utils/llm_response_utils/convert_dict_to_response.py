@@ -422,6 +422,7 @@ class _PromptCacheTokenCounts(TypedDict, total=False):
 _CACHED_MESSAGE_PROVIDER_FIELDS: Final = TypeAdapter(_CachedMessageProviderFields)
 _CACHED_USAGE_DETAILS: Final = TypeAdapter(_CachedUsageDetails)
 _FIELD_MAP: Final = TypeAdapter(dict[str, object])
+_CHOICE_FIELD_MAPS: Final = TypeAdapter(list[dict[str, object]])
 _COMPLETION_TOKENS_DETAILS: Final = TypeAdapter(CompletionTokensDetailsWrapper)
 _PROMPT_TOKENS_DETAILS: Final = TypeAdapter(PromptTokensDetailsWrapper)
 _PROMPT_CACHE_TOKEN_COUNTS: Final = TypeAdapter(_PromptCacheTokenCounts)
@@ -755,6 +756,20 @@ def convert_to_model_response_object(
                     message=_invalid_choices_message(response_object),
                     llm_provider="",
                     model="",
+                )
+
+            response_fields: Final = _FIELD_MAP.validate_python(response_object)
+            if any(
+                choice.get("finish_reason") == "abort"
+                for choice in _CHOICE_FIELD_MAPS.validate_python(response_fields["choices"])
+            ):
+                from litellm.exceptions import APIError
+
+                raise APIError(
+                    status_code=500,
+                    message="Upstream generation aborted (finish_reason=abort)",
+                    llm_provider="",
+                    model=str(response_fields.get("model") or ""),
                 )
 
             for idx, choice in enumerate(response_object["choices"]):
