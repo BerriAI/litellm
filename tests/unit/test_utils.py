@@ -1426,6 +1426,33 @@ def test_cost_map_schema_accepts_12hr_cache_write_rates_for_batch_and_ultrafast_
     assert Draft7Validator(_COST_MAP_ROW_SCHEMA).is_valid({"synthetic-12hr-cache-write-model": row})
 
 
+def test_pricing_overrides_accept_every_row_the_cost_map_ships() -> None:
+    from litellm.utils import (
+        ModelInfoLookupMiss,
+        lookup_model_info_for_registration,
+        model_info_with_pricing_overrides,
+    )
+
+    shipped: Final = json.loads((Path(__file__).parents[2] / "model_prices_and_context_window.json").read_text())
+    rows: Final = {
+        model: row
+        for model, row in shipped.items()
+        if model not in ("sample_spec", "fallback_generalizations") and isinstance(row, dict) and "mode" in row
+    }
+    looked_up: Final = {
+        model: lookup_model_info_for_registration(model=model, custom_llm_provider=row.get("litellm_provider"))
+        for model, row in rows.items()
+    }
+    found: Final = {model: info for model, info in looked_up.items() if not isinstance(info, ModelInfoLookupMiss)}
+    priced: Final = {
+        model: model_info_with_pricing_overrides(info, {"input_cost_per_query": 0.5})["mode"]
+        for model, info in found.items()
+    }
+
+    assert priced == {model: info["mode"] for model, info in found.items()}
+    assert len(found) > len(rows) // 2, f"only {len(found)} of {len(rows)} cost map rows resolved"
+
+
 def test_max_tokens_consistency():
     """
     Test that max_tokens == max_output_tokens for all models.

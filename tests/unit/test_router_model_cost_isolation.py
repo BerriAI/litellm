@@ -948,6 +948,29 @@ def test_bedrock_deployment_inherits_invoked_profile_around_custom_prices(
     assert litellm.model_cost[profile] == profile_prices
 
 
+@pytest.mark.parametrize(
+    ("base_model", "custom_price"),
+    (("cohere.rerank-v3-5:0", "input_cost_per_query"), ("amazon.titan-embed-text-v2:0", "input_cost_per_token")),
+)
+def test_bedrock_profile_deployment_with_a_non_chat_base_model_is_registered(base_model: str, custom_price: str) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "profile-non-chat",
+                "litellm_params": {
+                    "model": f"bedrock/arn:aws:bedrock:eu-central-1::foundation-model/{base_model}",
+                    "model_id": "arn:aws:bedrock:eu-central-1:123456789012:application-inference-profile/abc123",
+                    "aws_region_name": "eu-central-1",
+                },
+                "model_info": {"id": "profile-non-chat-deployment", "base_model": base_model, custom_price: 0.00175},
+            }
+        ]
+    )
+
+    assert router.has_model_id("profile-non-chat-deployment")
+    assert litellm.model_cost["profile-non-chat-deployment"][custom_price] == 0.00175
+
+
 @pytest.mark.parametrize("catalog_entry", (None, {"litellm_provider": 1, "mode": "chat"}))
 @pytest.mark.parametrize("known_model", (False, True))
 @pytest.mark.parametrize("explicit_base", (False, True))

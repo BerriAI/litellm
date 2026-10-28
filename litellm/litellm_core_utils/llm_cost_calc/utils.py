@@ -1396,15 +1396,18 @@ def get_provider_specific_geo_multiplier(model_info: ModelInfo, usage: Usage) ->
     inference_geo: Final = getattr(usage, "inference_geo", None)
     if not isinstance(inference_geo, str) or inference_geo.lower() in ("global", "not_available"):
         return 1.0
-    provider_specific_entry: Final[dict[str, float]] = model_info.get("provider_specific_entry") or {}
-    return float(provider_specific_entry.get(inference_geo.lower(), 1.0))
+    return _provider_specific_multiplier(model_info, inference_geo.lower())
 
 
 def get_provider_specific_speed_multiplier(model_info: ModelInfo, usage: Usage) -> float:
-    provider_specific_entry: Final = model_info.get("provider_specific_entry")
-    if getattr(usage, "speed", None) != "fast" or not provider_specific_entry:
+    if getattr(usage, "speed", None) != "fast":
         return 1.0
-    return float(provider_specific_entry.get("fast", 1.0))
+    return _provider_specific_multiplier(model_info, "fast")
+
+
+def _provider_specific_multiplier(model_info: ModelInfo, name: str) -> float:
+    multiplier: Final = (model_info.get("provider_specific_entry") or {}).get(name)
+    return float(multiplier) if isinstance(multiplier, int | float) else 1.0
 
 
 def _resolve_reasoning_token_cost(

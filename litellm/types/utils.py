@@ -477,13 +477,21 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "extraction",
             "ocr",
             "realtime",
+            "rerank",
+            "moderation",
+            "image_edit",
+            "video_generation",
+            "search",
+            "vector_store",
+            "guardrail",
+            "container",
         ]
     ]
     supported_endpoints: list[str] | None
     use_openai_responses_path: bool | None
     tpm: int | None
     rpm: int | None
-    provider_specific_entry: dict[str, float] | None
+    provider_specific_entry: dict[str, object] | None
     uses_embed_content: bool | None
 
 
