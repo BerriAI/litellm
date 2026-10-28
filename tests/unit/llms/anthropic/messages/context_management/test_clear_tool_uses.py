@@ -266,6 +266,28 @@ def test_an_input_tokens_trigger_skips_blocks_no_adapter_sends(turn: dict[str, o
     assert cleared[1] == turn
 
 
+def _first_result_with(blocks: list[dict[str, object]]) -> dict[str, object]:
+    return {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_00", "content": blocks}]}
+
+
+def test_an_input_tokens_trigger_skips_blocks_no_adapter_sends_inside_a_tool_result() -> None:
+    history: Final = _make_history(n_pairs=3)
+    result_text: Final = {"type": "text", "text": "Result 0: " + "x" * 200}
+    search_result: Final = {"type": "web_search_result", "url": "https://example.com", "title": "rain " * 300}
+    sent_tokens: Final = litellm.token_counter(
+        model=MODEL, messages=[*history[:2], _first_result_with([result_text]), *history[3:]]
+    )
+    messages: Final = [*history[:2], _first_result_with([result_text, search_result]), *history[3:]]
+
+    untouched, not_applied = _clear_above(messages, sent_tokens + 100)
+    cleared, applied = _clear_above(messages, sent_tokens - 100)
+
+    assert not_applied is None
+    assert untouched == messages
+    assert applied is not None
+    assert _cleared_ids(cleared) == {"toolu_00", "toolu_01"}
+
+
 def _blocks_of(messages: list[dict[str, object]], block_type: str) -> tuple[dict[str, object], ...]:
     contents: Final = (message["content"] for message in messages)
     blocks: Final = chain.from_iterable(content for content in contents if isinstance(content, list))

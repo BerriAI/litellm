@@ -34,6 +34,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import CountContextManagement
 from litellm.utils import ProviderConfigManager
 
 from ..adapters.handler import context_management_explicitly_dropped, request_safeguards_evaluator
@@ -49,6 +50,7 @@ from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 AnthropicRequestMessages: TypeAlias = list[AllAnthropicMessageValues] | list[dict[str, object]]
 BlockRewrite: TypeAlias = Callable[[Mapping[str, object]], Mapping[str, object]]
 _BLOCK_LIST: Final = TypeAdapter(list[dict[str, object]])
+_SPEC: Final = TypeAdapter(dict[str, object])
 _SplitEdits: TypeAlias = tuple[dict[str, object] | None, Sequence[Mapping[str, object]]]
 AnthropicContextManagementSpec: TypeAlias = dict[str, object] | list[dict[str, object]] | None
 
@@ -107,6 +109,28 @@ async def _polyfilled(
         raise AnthropicContextManagementError(
             status_code=500, message=f"context_management polyfill failed: {e}"
         ) from e
+
+
+async def count_view_messages(
+    *,
+    model: str,
+    messages: Sequence[Mapping[str, object]],
+    tools: Sequence[Mapping[str, object]] | None,
+    context_management: CountContextManagement | None,
+) -> Sequence[Mapping[str, object]]:
+    """The messages /v1/messages sends the Responses API once the polyfill has run the edits it can't run natively."""
+    if context_management is None or not isinstance(context_management.spec, dict):
+        return messages
+    _, edits = _split_context_management(_SPEC.validate_python(context_management.spec), {})
+    result: Final = await _polyfilled(
+        model=model,
+        messages=_BLOCK_LIST.validate_python(messages),
+        tools=tools,
+        system=None,
+        edits=edits,
+        kwargs={"drop_params": context_management.drop_invalid_edits},
+    )
+    return messages if result is None else result.messages
 
 
 def _with_applied_edits(

@@ -213,11 +213,23 @@ def _select_in_batches(candidates: Sequence[str], tokens: Mapping[str, int], cle
     return tuple(candidates[:batch_end])
 
 
+def _without_uncountable_blocks(block: Mapping[str, object]) -> Mapping[str, object]:
+    nested: Final = _parse(_BLOCKS, block.get("content"))
+    if nested is None:
+        return block
+    return {**block, "content": [inner for inner in nested if inner.get("type") in _TOKEN_COUNTER_BLOCK_TYPES]}
+
+
 def _countable_message(message: Mapping[str, object]) -> Mapping[str, object]:
     blocks: Final = _parse(_BLOCKS, message.get("content"))
     if blocks is None:
         return message
-    return {**message, "content": [block for block in blocks if block.get("type") in _TOKEN_COUNTER_BLOCK_TYPES]}
+    return {
+        **message,
+        "content": [
+            _without_uncountable_blocks(block) for block in blocks if block.get("type") in _TOKEN_COUNTER_BLOCK_TYPES
+        ],
+    }
 
 
 def _count_tokens(
