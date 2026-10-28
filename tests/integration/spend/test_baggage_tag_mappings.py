@@ -2,8 +2,9 @@ import itertools
 import json
 import uuid
 from collections.abc import Generator, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
@@ -15,14 +16,15 @@ import yaml
 from integration._support.client import (
     JSON_OBJECT,
     Gateway,
+    Scenario,
     eventually,
     gateway_from_environment,
     list_value,
     object_value,
 )
-from integration._support.database import scratch_database
+from integration._support.database import read_rows, scratch_database, write_rows
 from integration._support.database_relay import dropped_connection_relay, plaintext_database_url
-from integration._support.process import graceful_stop_seconds, owned_proxy
+from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 from websockets.exceptions import InvalidStatus
@@ -33,6 +35,8 @@ pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 PROXY_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 PRICED: Final[dict[str, JsonValue]] = {"input_cost_per_token": 0.01, "output_cost_per_token": 0.01}
 WORKER_PROBES: Final = 6
+VLLM_UPSTREAM_MODEL: Final = "baggage-model"
+PINNED_CONNECTION: Final = httpx.Limits(max_connections=1)
 JSON_LIST: Final = TypeAdapter(list[JsonValue])
 GUARDRAIL_VERDICT: Final = b'{"action":"GUARDRAIL_INTERVENED","texts":["masked baggage prompt"]}'
 GUARDRAIL_PATH: Final = "/beta/litellm_basic_guardrail_api"
@@ -40,6 +44,7 @@ NO_FIELDS: Final[Mapping[str, JsonValue]] = MappingProxyType({})
 
 Route = Literal["chat", "chat_litellm_metadata", "messages", "responses"]
 CallerTag = Literal["none", "header", "metadata_json_with_header", "litellm_metadata"]
+PassThrough = Literal["custom", "anthropic", "vllm"]
 RejectedClientTag = Literal["none", "header", "body", "metadata_json", "litellm_metadata"]
 
 
@@ -120,11 +125,31 @@ def _responses_reply() -> Reply:
     )
 
 
+def _anthropic_reply() -> Reply:
+    marker: Final = uuid.uuid4().hex
+    return Reply(
+        body=json.dumps(
+            {
+                "id": f"msg_{marker}",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [{"type": "text", "text": marker}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 5, "output_tokens": 3},
+            }
+        ).encode()
+    )
+
+
 def _provider(request: Request) -> Reply:
     if request.target == GUARDRAIL_PATH:
         return Reply(body=b'{"action":"NONE"}')
     if request.target == "/v1/responses":
         return _responses_reply()
+    if request.target == "/v1/messages":
+        return _anthropic_reply()
     return _chat_reply()
 
 
@@ -183,7 +208,15 @@ def _mapped_models(marker: str, provider: Wire, upstream_url: str) -> list[JsonV
     }
     guarded: Final = _deployment(f"guarded-{marker}", provider, tags=[f"guarded-{marker}:on"])
     pre_guarded: Final = _deployment(f"guarded-pre-{marker}", provider, tags=[f"guarded-{marker}:pre"])
-    return [_deployment(f"chat-{marker}", provider), guarded, pre_guarded, *routed, realtime]
+    vllm: Final[dict[str, JsonValue]] = {
+        "model_name": f"vllm-{marker}",
+        "litellm_params": {
+            "model": f"hosted_vllm/{VLLM_UPSTREAM_MODEL}",
+            "api_base": provider.url,
+            "api_key": "synthetic-vllm",
+        },
+    }
+    return [_deployment(f"chat-{marker}", provider), guarded, pre_guarded, *routed, realtime, vllm]
 
 
 def _mapped_rules(marker: str, *, tenant_required: bool) -> list[JsonValue]:
@@ -239,9 +272,12 @@ def _rig(
             {"callbacks": ["generic_api"], "DEFAULT_FLUSH_INTERVAL_SECONDS": 1},
             [_deployment_tag_mode_guardrail(marker, provider)] if tag_mode_guardrail else (),
         )
-        with owned_proxy(
-            base, directory, {"GENERIC_LOGGER_ENDPOINT": callbacks.url}, config=config, workers=workers
-        ) as proxy:
+        environment: Final = {
+            "GENERIC_LOGGER_ENDPOINT": callbacks.url,
+            "ANTHROPIC_API_BASE": provider.url,
+            "ANTHROPIC_API_KEY": "synthetic-anthropic-key",
+        }
+        with owned_proxy(base, directory, environment, config=config, workers=workers) as proxy:
             yield Rig(proxy, provider, callbacks, marker)
 
 
@@ -674,6 +710,185 @@ def test_custom_passthrough_spend_row_carries_the_mapped_tags(mapped: Rig) -> No
         )
         assert response.status_code == 200, response.text
         assert {mapped.exact_tag, mapped.tenant_tag(tenant)} <= _spend_tags(mapped.proxy, key)
+
+
+def _passthrough_path(rig: Rig, scenario: Scenario, entrypoint: PassThrough) -> str:
+    match entrypoint:
+        case "custom":
+            path: Final = f"/baggage-passthrough-{uuid.uuid4().hex}"
+            created: Final = rig.proxy.post(
+                "/config/pass_through_endpoint", {"path": path, "target": f"{rig.provider.url}/echo", "auth": True}
+            )
+            endpoint_id: Final = str(object_value(list_value(created["endpoints"])[0])["id"])
+            scenario.cleanups.callback(
+                lambda: rig.proxy.request(
+                    "DELETE", "/config/pass_through_endpoint", params={"endpoint_id": endpoint_id}
+                )
+            )
+            return path
+        case "anthropic":
+            return "/anthropic/v1/messages"
+        case "vllm":
+            return "/vllm/v1/chat/completions"
+
+
+def _passthrough_body(rig: Rig, entrypoint: PassThrough, text: str) -> dict[str, JsonValue]:
+    model: Final = {"custom": rig.chat_model, "anthropic": "claude-sonnet-4-5", "vllm": f"vllm-{rig.marker}"}
+    body: Final[dict[str, JsonValue]] = {
+        "model": model[entrypoint],
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": text}],
+    }
+    match entrypoint:
+        case "vllm":
+            return {**body, "metadata": {"user_id": f"user-{text}"}}
+        case "custom" | "anthropic":
+            return body
+
+
+def _upstream_body(entrypoint: PassThrough, body: Mapping[str, JsonValue]) -> JsonValue:
+    match entrypoint:
+        case "vllm":
+            return {**body, "model": VLLM_UPSTREAM_MODEL}
+        case "custom" | "anthropic":
+            return dict(body)
+
+
+def _forwarded_bodies(rig: Rig) -> tuple[JsonValue, ...]:
+    return tuple(
+        JSON_OBJECT.validate_json(request.body) for request in rig.provider.drain() if request.target != GUARDRAIL_PATH
+    )
+
+
+@pytest.mark.parametrize("entrypoint", ["custom", "anthropic", "vllm"])
+def test_passthrough_forwards_the_client_body_unchanged_while_its_spend_row_carries_the_mapped_tags(
+    optional: Rig, entrypoint: PassThrough
+) -> None:
+    tenant: Final = uuid.uuid4().hex
+    with optional.proxy.scenario() as scenario:
+        path: Final = _passthrough_path(optional, scenario, entrypoint)
+        key_fields: Final[dict[str, JsonValue]] = (
+            {"allowed_passthrough_routes": [path]} if entrypoint == "custom" else {}
+        )
+        plain_key: Final = scenario.key(**key_fields)
+        key: Final = scenario.key(**key_fields)
+        body: Final = _passthrough_body(optional, entrypoint, tenant)
+        optional.provider.drain()
+        plain: Final = optional.proxy.request("POST", path, body, key=plain_key)
+        plain_forwarded: Final = _forwarded_bodies(optional)
+        response: Final = optional.proxy.request(
+            "POST", path, body, key=key, headers={"baggage": f"entrypoint=a,tenant={tenant}"}
+        )
+        assert (plain.status_code, response.status_code) == (200, 200), (plain.text, response.text)
+        assert plain_forwarded == (_upstream_body(entrypoint, body),)
+        assert _forwarded_bodies(optional) == plain_forwarded
+        mapped_tags: Final = {optional.exact_tag, optional.tenant_tag(tenant)}
+        assert _spend_tags(optional.proxy, key) == _spend_tags(optional.proxy, plain_key) | mapped_tags
+
+
+def _general_settings_mappings(database_url: str) -> JsonValue:
+    rows: Final = read_rows(
+        'SELECT param_value FROM "LiteLLM_Config" WHERE param_name = %s',
+        ("general_settings",),
+        database_url=database_url,
+    )
+    return object_value(rows[0]["param_value"]).get("request_tag_mappings") if rows else None
+
+
+def _serving_pid(proxy: Gateway) -> int:
+    response: Final = proxy.request("GET", "/health/integration-readiness")
+    return int(response.headers["x-integration-worker-pid"])
+
+
+def _status_on_one_worker(owned: OwnedProxy, rig: Rig, key: str) -> tuple[int, int] | None:
+    with httpx.Client(
+        base_url=str(owned.gateway.client.base_url), timeout=15, trust_env=False, limits=PINNED_CONNECTION
+    ) as client:
+        pinned: Final = replace(rig, proxy=replace(owned.gateway, client=client))
+        before: Final = _serving_pid(pinned.proxy)
+        status: Final = _chat(pinned, key, None).status_code
+        return (before, status) if _serving_pid(pinned.proxy) == before else None
+
+
+def _worker_statuses(owned: OwnedProxy, rig: Rig, key: str) -> frozenset[tuple[int, int]]:
+    def answers() -> frozenset[tuple[int, int]]:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            found: Final = tuple(pool.map(lambda _: _status_on_one_worker(owned, rig, key), range(8)))
+        return frozenset(answer for answer in found if answer is not None)
+
+    return eventually(answers, lambda found: frozenset(pid for pid, _ in found) >= owned.worker_pids(), seconds=30)
+
+
+def _mappings_on_a_worker(proxy: Gateway) -> tuple[int, JsonValue]:
+    response: Final = proxy.request(
+        "GET",
+        "/health/integration-general-setting",
+        params={"name": "request_tag_mappings"},
+        headers={"connection": "close"},
+    )
+    assert response.status_code == 200, response.text
+    return int(response.headers["x-integration-worker-pid"]), JSON_OBJECT.validate_json(response.content)["value"]
+
+
+def _mappings_settled_on_every_worker(owned: OwnedProxy, mappings: JsonValue) -> None:
+    def answers() -> tuple[tuple[int, JsonValue], ...]:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            return tuple(pool.map(lambda _: _mappings_on_a_worker(owned.gateway), range(16)))
+
+    eventually(
+        answers,
+        lambda found: (
+            frozenset(pid for pid, _ in found) >= owned.worker_pids() and all(value == mappings for _, value in found)
+        ),
+        seconds=70,
+    )
+
+
+def test_mappings_saved_through_the_settings_endpoint_apply_on_every_worker_and_an_invalid_stored_value_is_ignored(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = uuid.uuid4().hex[:12]
+    rule: Final[dict[str, JsonValue]] = {"key": "tenant", "tag_prefix": f"tenant-{marker}:", "required": True}
+    with ExitStack() as stack:
+        provider: Final = stack.enter_context(wire_server(_provider))
+        config: Final = _write_config(tmp_path, [_deployment(f"chat-{marker}", provider)], {}, {})
+        owned: Final = stack.enter_context(owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2))
+        proxy: Final = owned.gateway
+        database_url: Final = proxy.database_url
+        assert database_url is not None
+        scenario: Final = stack.enter_context(proxy.scenario())
+        rig: Final = Rig(proxy, provider, provider, marker)
+        key: Final = scenario.key()
+
+        def save(rules: list[JsonValue]) -> httpx.Response:
+            return proxy.request(
+                "POST",
+                "/config/field/update",
+                {"field_name": "request_tag_mappings", "field_value": rules, "config_type": "general_settings"},
+            )
+
+        duplicate: Final = save([rule, {**rule, "required": False}])
+        assert duplicate.status_code == 400, duplicate.text
+        assert _general_settings_mappings(database_url) is None
+        saved: Final = save([rule])
+        assert saved.status_code == 200, saved.text
+        _mappings_settled_on_every_worker(owned, [rule])
+        assert _worker_statuses(owned, rig, key) == frozenset((pid, 400) for pid in owned.worker_pids())
+        tagged_key: Final = scenario.key()
+        provider.drain()
+        admitted: Final = _chat(rig, tagged_key, f"tenant={marker}")
+        assert admitted.status_code == 200, admitted.text
+        assert len(provider.drain()) == 1
+        assert _spend_tags(proxy, tagged_key) == {f"tenant-{marker}:{marker}"}
+
+        write_rows(
+            'UPDATE "LiteLLM_Config" SET param_value = jsonb_set(param_value::jsonb, %s, %s::jsonb) '
+            "WHERE param_name = %s",
+            ("{request_tag_mappings}", json.dumps([{"key": "tenant", "required": True}]), "general_settings"),
+            database_url=database_url,
+        )
+        _mappings_settled_on_every_worker(owned, None)
+        assert _worker_statuses(owned, rig, key) == frozenset((pid, 200) for pid in owned.worker_pids())
 
 
 def _rejected_client_tag(client_tag: RejectedClientTag, tag: str) -> tuple[Mapping[str, JsonValue], Mapping[str, str]]:
