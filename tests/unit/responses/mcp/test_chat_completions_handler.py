@@ -1911,13 +1911,20 @@ async def test_stream_auto_execute_answered_without_a_tool_call_logs_its_one_rou
                 break
         await _settled_once(lambda: len(recorder.logged) > 0)
         logged_once_the_answer_finished: Final = recorder.logged
-        await _read_all(stream)
+        after_the_answer: Final = await _read_all(stream)
         await _settled()
 
     assert len(logged_once_the_answer_finished) == 1
     assert recorder.logged == logged_once_the_answer_finished
     assert recorder.logged[0]["id"] == _CHAT_ROUND_TWO["id"]
     assert (recorder.logged[0]["prompt_tokens"], recorder.logged[0]["completion_tokens"]) == (149, 5)
+    assert after_the_answer[-1:] and isinstance(after_the_answer[-1].usage, Usage)
+    usage: Final = _streamed_usage(after_the_answer)
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (
+        recorder.logged[0]["prompt_tokens"],
+        recorder.logged[0]["completion_tokens"],
+        recorder.logged[0]["total_tokens"],
+    )
     assert recorder.logged[0]["response_cost"] == pytest.approx(_chat_round_cost(_CHAT_ROUND_TWO))
     assert recorder.failed == ()
 

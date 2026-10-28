@@ -20,7 +20,7 @@ from litellm.responses.mcp.round_billing import (
     first_round_billed_on_failure,
     summed_cost_breakdown,
 )
-from litellm.types.utils import Message, ModelResponse
+from litellm.types.utils import Message, ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
@@ -260,6 +260,7 @@ async def acompletion_with_mcp(
                 self.follow_up_iterator = None
                 self.follow_up_exhausted = False
                 self._round_billing: ChatStreamRoundBilling | None = engaged_round_billing(initial_stream.logging_obj)
+                self._unsent_usage_chunk: ModelResponseStream | None = None
 
             def __aiter__(self):
                 return self
@@ -331,26 +332,31 @@ async def acompletion_with_mcp(
 
                 return chunk
 
-            async def _drain_inner_stream(self):
+            async def _drain_inner_stream(self) -> tuple[ModelResponseStream, ...]:
                 try:
-                    while True:
-                        await self._stream_iterator.__anext__()
-                except StopAsyncIteration:
-                    pass
+                    return tuple([chunk async for chunk in initial_stream])
                 except Exception:
                     logging.getLogger("LiteLLM").exception(
                         "Error draining inner MCP stream after final chunk; spend logging may be incomplete"
                     )
+                    return ()
 
-            async def _complete_first_round(self) -> None:
-                await self._drain_inner_stream()
+            async def _complete_first_round(self) -> ModelResponseStream | None:
+                drained: Final = await self._drain_inner_stream()
                 if self._round_billing is not None:
                     self._round_billing.complete_first_round()
+                usage_chunks: Final = tuple(
+                    chunk for chunk in drained if isinstance(getattr(chunk, "usage", None), Usage)
+                )
+                return usage_chunks[-1] if usage_chunks else None
 
-            async def _follow_up_or_release_first_round(self) -> None:
+            async def _follow_up_or_release_first_round(self, usage_chunk: ModelResponseStream | None) -> None:
                 if self.tool_results and self.complete_response:
                     await self._prepare_follow_up_call()
-                if self.follow_up_stream is None and self._round_billing is not None:
+                if self.follow_up_stream is not None:
+                    return
+                self._unsent_usage_chunk = usage_chunk
+                if self._round_billing is not None:
                     self._round_billing.finish()
 
             async def __anext__(self) -> ModelResponseStream:
@@ -397,22 +403,22 @@ async def acompletion_with_mcp(
 
                         if is_final:
                             self.stream_exhausted = True
-                            await self._complete_first_round()
+                            usage_chunk: Final = await self._complete_first_round()
                             await self._process_tool_calls()
                             chunk = self._add_mcp_tool_metadata_to_final_chunk(chunk)
-                            await self._follow_up_or_release_first_round()
+                            await self._follow_up_or_release_first_round(usage_chunk)
 
                         return chunk
                     except StopAsyncIteration:
                         self.stream_exhausted = True
-                        await self._complete_first_round()
+                        drained_usage_chunk: Final = await self._complete_first_round()
                         # Process tool calls after stream is exhausted
                         await self._process_tool_calls()
                         # If we have chunks, yield the final one with metadata
                         if self.collected_chunks:
                             final_chunk = self.collected_chunks[-1]
                             final_chunk = self._add_mcp_tool_metadata_to_final_chunk(final_chunk)
-                            await self._follow_up_or_release_first_round()
+                            await self._follow_up_or_release_first_round(drained_usage_chunk)
                             return final_chunk
 
                 # Phase 2: Yield follow-up stream chunks if available
@@ -448,7 +454,11 @@ async def acompletion_with_mcp(
 
                     verbose_logger.warning("Follow-up stream was not created despite having tool results")
 
-                raise StopAsyncIteration
+                unsent_usage_chunk: Final = self._unsent_usage_chunk
+                if unsent_usage_chunk is None:
+                    raise StopAsyncIteration
+                self._unsent_usage_chunk = None
+                return unsent_usage_chunk
 
             async def _process_tool_calls(self):
                 """Process tool calls after streaming completes."""

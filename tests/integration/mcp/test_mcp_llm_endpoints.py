@@ -1001,6 +1001,46 @@ def test_streaming_chat_auto_execute_whose_follow_up_fails_bills_round_one_once(
         assert [float(str(row["spend"])) for row in failed] == [0.0], failed
 
 
+@pytest.mark.parametrize("include_usage", (True, False), ids=("include-usage", "no-usage"))
+def test_streaming_chat_auto_execute_answered_in_one_round_ends_with_the_usage_it_billed(
+    gateway: Gateway, include_usage: bool
+) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND)
+    with _rig(gateway, "chat", billing=billing, prices=PRICES) as rig:
+        response: Final = rig.send(
+            _granted_key(rig),
+            [AUTO],
+            prompt=f"{DIRECT} {rig.alias}",
+            stream=True,
+            stream_options={"include_usage": include_usage},
+        )
+        assert response.status_code == 200, response.text
+        assert response.text.rstrip().endswith("data: [DONE]"), response.text
+        chunks: Final = _streamed_chunks(response)
+        text: Final = "".join(
+            str(chunk["choices"][0]["delta"].get("content") or "") for chunk in chunks if chunk.get("choices")
+        )
+        assert text == ANSWER, response.text
+        rows: Final = _spend_rows(response.headers["x-litellm-call-id"], "acompletion", "success")
+        assert len(rows) == 1 and (rows[0]["prompt_tokens"], rows[0]["completion_tokens"]) == FIRST_ROUND, rows
+        usage_at: Final = tuple(index for index, chunk in enumerate(chunks) if chunk.get("usage"))
+        if not include_usage:
+            assert usage_at == (), response.text
+            return
+        assert usage_at == (len(chunks) - 1,), response.text
+        finished_at: Final = tuple(
+            index
+            for index, chunk in enumerate(chunks)
+            if chunk.get("choices") and chunk["choices"][0].get("finish_reason") is not None
+        )
+        assert finished_at and finished_at[-1] < usage_at[0], response.text
+        usage: Final = chunks[-1]["usage"]
+        assert (usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]) == (
+            *FIRST_ROUND,
+            sum(FIRST_ROUND),
+        ), usage
+
+
 def _tool_rows(call_id: str, expected: int) -> list[dict[str, JsonValue]]:
     return eventually(
         lambda: read_rows(
