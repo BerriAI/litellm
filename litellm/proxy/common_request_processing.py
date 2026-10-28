@@ -51,7 +51,7 @@ from litellm.constants import (
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.bug_report import (
     allowlisted,
@@ -89,6 +89,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
@@ -1196,6 +1197,8 @@ def _openai_late_body_frames(produced: Response) -> tuple[bytes, ...]:
 
 
 def _responses_late_failure_frames(exc: Exception) -> tuple[str, ...]:
+    if isinstance(exc, ModifyResponseException):
+        return tuple(chunk.decode() for chunk in OpenAIResponsesHandler().build_block_sse_chunks(exc))
     _, error_obj = sse_error_payload(exc)
     return (ResponsesStreamErrorState().format_error(error_obj),)
 

@@ -34,6 +34,7 @@ from litellm.constants import (
     STREAM_SSE_KEEPALIVE_PING_BYTES,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -10428,18 +10429,23 @@ async def _slow_dict_detail_failure() -> Response:
 
 
 @pytest.mark.parametrize(
-    "produce,expected_error",
+    "produce,expected_code,expected_error",
     [
-        (_slow_rate_limit_failure, {"message": "rate limited", "code": "429"}),
-        (_slow_guardrail_block_body, {"message": "blocked", "type": "guardrail_error", "code": "400"}),
+        (_slow_rate_limit_failure, "rate_limit_exceeded", {"message": "rate limited", "code": "429"}),
+        (
+            _slow_guardrail_block_body,
+            "invalid_request_error",
+            {"message": "blocked", "type": "guardrail_error", "code": "400"},
+        ),
         (
             _slow_dict_detail_failure,
+            "invalid_request_error",
             {"message": "blocked by policy", "code": "400", "provider_specific_fields": dict(_POLICY_BLOCK_DETAIL)},
         ),
     ],
 )
 def test_ttft_keepalive_ends_a_late_responses_failure_with_an_error_event_and_no_done(
-    produce: Callable[[], Awaitable[Response]], expected_error: Mapping[str, object]
+    produce: Callable[[], Awaitable[Response]], expected_code: str, expected_error: Mapping[str, object]
 ) -> None:
     async def collect_and_check() -> None:
         response: Final = await open_sse_before_first_byte(
@@ -10453,7 +10459,36 @@ def test_ttft_keepalive_ends_a_late_responses_failure_with_an_error_event_and_no
         event: Final = json.loads(data_line.removeprefix("data: "))
         assert event_line == "event: error"
         assert event["type"] == "error"
+        assert (event["code"], event["message"]) == (expected_code, expected_error["message"])
         assert {key: event["error"].get(key) for key in expected_error} == expected_error
+
+    loop: Final = AutojumpClockLoop()
+    try:
+        loop.run_until_complete(collect_and_check())
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+
+
+async def _slow_passthrough_block() -> Response:
+    await asyncio.sleep(0.2)
+    raise ModifyResponseException(message="blocked by policy", model="gpt-4o", request_data={})
+
+
+def test_ttft_keepalive_ends_a_late_responses_passthrough_block_with_the_block_response() -> None:
+    async def collect_and_check() -> None:
+        response: Final = await open_sse_before_first_byte(
+            _slow_passthrough_block(), ping_interval_seconds=0.05, late_framing=RESPONSES_LATE_SSE_FRAMING
+        )
+        collected: Final = await _drain(response)
+        frames: Final = tuple(chunk.decode() for chunk in collected if chunk != TTFT_PING)
+        names: Final = tuple(frame.split("\n", 1)[0] for frame in frames)
+        completed: Final = json.loads(frames[-1].split("\n", 1)[1].removeprefix("data: "))
+
+        assert collected[0] == TTFT_PING
+        assert (names[0], names[-1]) == ("event: response.created", "event: response.completed")
+        assert "event: error" not in names
+        assert completed["response"]["output"][0]["content"][0]["text"] == "blocked by policy"
 
     loop: Final = AutojumpClockLoop()
     try:

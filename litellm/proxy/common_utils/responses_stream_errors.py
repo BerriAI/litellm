@@ -109,6 +109,12 @@ def _status_error_code(status_code: int | None) -> str:
     return _CLIENT_ERROR_CODES.get(status_code, "invalid_request_error")
 
 
+def _status_of(code: str | int | None) -> int | None:
+    if isinstance(code, int):
+        return code
+    return int(code) if code is not None and code.isdecimal() else None
+
+
 def _response_error_code(details: _FailureDetails) -> str:
     for value in (details.code, details.type):
         if value == "insufficient_quota":
@@ -151,9 +157,13 @@ class ResponsesStreamErrorState:
         return prefix.encode("utf-8") + frame if isinstance(frame, bytes) else prefix + frame
 
     def format_error(self, error: Mapping[str, object]) -> str:
+        details: Final = _FailureDetails.model_validate(error)
         payload: Final = json.dumps(
             {
                 "type": ResponsesAPIStreamEvents.ERROR.value,
+                "code": _response_error_code(details.model_copy(update={"status_code": _status_of(details.code)})),
+                "message": details.message,
+                "param": error.get("param"),
                 "sequence_number": self.sequence_number + 1,
                 "error": error,
             },

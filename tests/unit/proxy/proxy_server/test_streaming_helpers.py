@@ -172,6 +172,9 @@ async def test_a_guardrail_error_string_mid_responses_stream_ends_it_as_a_named_
     assert event_line == "event: error"
     assert json.loads(data_line.removeprefix("data: ")) == {
         "type": "error",
+        "code": "server_error",
+        "message": "response withheld",
+        "param": None,
         "sequence_number": 1,
         "error": guardrail_error,
     }

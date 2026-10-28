@@ -17,7 +17,7 @@ following the OpenAI Response API format.
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -1529,17 +1529,17 @@ class TestBackgroundStreamingTerminalEvents:
             background_streaming_task,
         )
 
-        late_frames = RESPONSES_LATE_SSE_FRAMING.failure(HTTPException(status_code=429, detail="rate limited"))
+        late_frames: Final = RESPONSES_LATE_SSE_FRAMING.failure(HTTPException(status_code=429, detail="rate limited"))
 
         async def _body_iterator():
             yield b": ping\n\n"
             for frame in late_frames:
                 yield frame.encode()
 
-        mock_response = Mock()
+        mock_response: Final = Mock()
         mock_response.body_iterator = _body_iterator()
-        handler = AsyncMock(spec=ResponsePollingHandler)
-        kwargs = _make_background_streaming_kwargs("poll_late_failure", handler)
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_late_failure", handler)
 
         with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
@@ -1549,10 +1549,9 @@ class TestBackgroundStreamingTerminalEvents:
             )
             await background_streaming_task(**kwargs)
 
-        final_call = handler.update_state.call_args_list[-1]
+        final_call: Final = handler.update_state.call_args_list[-1]
         assert final_call.kwargs["status"] == "failed"
-        assert final_call.kwargs["error"]["message"] == "rate limited"
-        assert final_call.kwargs["error"]["code"] == "429"
+        assert final_call.kwargs["error"] == {"code": "rate_limit_exceeded", "message": "rate limited"}
 
     @pytest.mark.asyncio
     async def test_response_incomplete_sets_incomplete_status_and_details(self):

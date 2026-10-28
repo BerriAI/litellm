@@ -329,7 +329,7 @@ async def background_streaming_task(
 
                         elif event_type == "error":
                             terminal_status = "failed"
-                            terminal_error = event.get("error")
+                            terminal_error = {"code": event.get("code"), "message": event.get("message")}
 
                         elif event_type in (
                             "response.completed",
