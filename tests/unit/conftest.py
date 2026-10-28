@@ -6,6 +6,7 @@ import sys
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
 from functools import partial
+from importlib.metadata import version
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
@@ -435,11 +436,12 @@ def fake_provider_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def openai_token_exchange_via_httpx(monkeypatch: pytest.MonkeyPatch) -> None:
-    workload_module: Final = sys.modules.get("openai.auth._workload")
-    native_client_factory: Final = getattr(workload_module, "DefaultHttpx2Client", None)
-    if native_client_factory is None:
+    if int(version("openai").split(".")[0]) < 3:
         return
     import httpx2
+    import openai.auth._workload as workload_module
+
+    native_client_factory: Final = workload_module.DefaultHttpx2Client
 
     def send_through_httpx(request: httpx2.Request) -> httpx2.Response:
         with httpx.Client(trust_env=False) as client:

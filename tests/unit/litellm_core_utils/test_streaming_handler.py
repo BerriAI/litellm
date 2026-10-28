@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import openai
 import pytest
+from openai.types import Completion, CompletionChoice
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, TypeAdapter
 import litellm
@@ -4980,6 +4981,49 @@ async def test_sdk3_dropped_connection_after_every_requested_choice_finished_end
 
     chunks: Final = await _collect(wrapper, sync_mode)
 
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "HiHel"
+
+
+def _text_completion_chunk(index: int, text: str = "", finish_reason: Optional[str] = None) -> Completion:
+    return Completion.model_construct(
+        id="cmpl-two-choices",
+        object="text_completion",
+        created=1,
+        model="gpt-3.5-turbo-instruct",
+        choices=[CompletionChoice.model_construct(index=index, text=text, finish_reason=finish_reason, logprobs=None)],
+    )
+
+
+@pytest.mark.asyncio
+@_SYNC_AND_ASYNC
+@pytest.mark.parametrize("provider", ("text-completion-openai", "azure_text"))
+@pytest.mark.parametrize(
+    ("finished_choices", "ends_cleanly"), (((0, 1), True), ((1,), False)), ids=("both_finished", "choice_0_open")
+)
+async def test_two_choice_text_completion_stream_dropped_before_done_ends_cleanly_only_once_both_finish(
+    logging_obj: Logging, sync_mode: bool, provider: str, finished_choices: Sequence[int], ends_cleanly: bool
+):
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={"n": 2})
+    stream: Final = _chunks_then_failure(
+        (
+            _text_completion_chunk(0, "Hi"),
+            _text_completion_chunk(1, "Hel"),
+            *(_text_completion_chunk(index, finish_reason="stop") for index in finished_choices),
+        ),
+        _httpx2_read_error(),
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=stream if sync_mode else _as_async(stream),
+        model="gpt-3.5-turbo-instruct",
+        custom_llm_provider=provider,
+        logging_obj=logging_obj,
+    )
+
+    if not ends_cleanly:
+        with pytest.raises(MidStreamFallbackError):
+            await _collect(wrapper, sync_mode)
+        return
+    chunks: Final = await _collect(wrapper, sync_mode)
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "HiHel"
 
 

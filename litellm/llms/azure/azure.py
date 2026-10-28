@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from typing import Final
 
 import httpx
@@ -13,7 +13,7 @@ from openai import (
     BadRequestError,
     OpenAI,
 )
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
@@ -138,6 +138,16 @@ def check_dynamic_azure_params(
 
 
 _check_dynamic_azure_params = check_dynamic_azure_params
+
+
+class _AzureDefaultQuery(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    default_query: Mapping[str, str] | None = None
+
+
+def _with_default_query(url: str, default_query: Mapping[str, str] | None) -> str:
+    return str(httpx.URL(url).copy_merge_params(default_query)) if default_query else url
 
 
 class AzureChatCompletion(BaseAzureLLM, BaseLLM):
@@ -1110,6 +1120,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             "/"
         )
         api_version: Final[str] = azure_client_params.get("api_version", "")
+        default_query: Final = _AzureDefaultQuery.model_validate(azure_client_params).default_query
         if model is None:
             model = ""
 
@@ -1134,17 +1145,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             route="/openai/images/generations",
         )
         if v1_url is not None:
-            return v1_url
+            return _with_default_query(v1_url, default_query)
 
-        if "/openai/deployments/" in api_base:
-            base_url_with_deployment = api_base
-        else:
-            base_url_with_deployment = api_base + "/openai/deployments/" + model
-
-        base_url_with_deployment += "/images/generations"
-        base_url_with_deployment += "?api-version=" + api_version
-
-        return base_url_with_deployment
+        deployment_url: Final = (
+            api_base if "/openai/deployments/" in api_base else f"{api_base}/openai/deployments/{model}"
+        )
+        return _with_default_query(f"{deployment_url}/images/generations?api-version={api_version}", default_query)
 
     async def aimage_generation(
         self,

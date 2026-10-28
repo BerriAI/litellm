@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeVar, cast
 
 import anyio
 import httpx
+from openai.types import Completion
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
@@ -93,11 +94,16 @@ def _next_sync_or_exhausted(it: Iterator[object]) -> object:
         return _SYNC_ITER_EXHAUSTED
 
 
-def _first_choice_index(chunk: ChatCompletionChunk | ModelResponseStream) -> int:
+_CHOICE_CHUNK_TYPES: Final = (ChatCompletionChunk, ModelResponseStream, Completion)
+
+
+def _first_choice_index(chunk: ChatCompletionChunk | ModelResponseStream | Completion | None) -> int:
     match chunk:
         case ChatCompletionChunk(choices=[first, *_]):
             return first.index
         case ModelResponseStream(choices=[first, *_]):
+            return first.index
+        case Completion(choices=[first, *_]):
             return first.index
         case _:
             return 0
@@ -343,7 +349,7 @@ class CustomStreamWrapper:
         self._provider_response_model: str | None = None
         self.received_finish_reason: str | None = None
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
-        self._finished_choice_indices: frozenset[int] = frozenset()
+        self._finished_choice_indices: frozenset[int] | None = None
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -1503,6 +1509,7 @@ class CustomStreamWrapper:
             print_verbose(f"completion obj content: {completion_obj['content']}")
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
+                self._record_finished_choice(chunk if isinstance(chunk, _CHOICE_CHUNK_TYPES) else None)
             if response_obj["usage"] is not None:
                 _text_completion_usage: Final[Usage] = response_obj["usage"]
                 setattr(
@@ -1542,6 +1549,7 @@ class CustomStreamWrapper:
             print_verbose(f"completion obj content: {completion_obj['content']}")
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
+                self._record_finished_choice(chunk if isinstance(chunk, _CHOICE_CHUNK_TYPES) else None)
         elif self.custom_llm_provider == "cached_response":
             cached_chunk: Final = cast(ModelResponseStream, chunk)
             cached_choice: Final = cached_chunk.choices[0] if cached_chunk.choices else None
@@ -1586,9 +1594,7 @@ class CustomStreamWrapper:
                         f"{self.custom_llm_provider} raised a streaming error - finish_reason: error, no content string given. Received Chunk={response_obj}"
                     )
                 self.received_finish_reason = response_obj["finish_reason"]
-                self._finished_choice_indices = self._finished_choice_indices | {
-                    _first_choice_index(chunk) if isinstance(chunk, (ChatCompletionChunk, ModelResponseStream)) else 0
-                }
+                self._record_finished_choice(chunk if isinstance(chunk, _CHOICE_CHUNK_TYPES) else None)
             if response_obj.get("original_chunk", None) is not None:
                 if hasattr(response_obj["original_chunk"], "id"):
                     model_response = self.set_model_id(response_obj["original_chunk"].id, model_response)
@@ -2225,11 +2231,18 @@ class CustomStreamWrapper:
                 raise
             raise StopIteration from e
 
+    def _record_finished_choice(self, chunk: ChatCompletionChunk | ModelResponseStream | Completion | None) -> None:
+        self._finished_choice_indices = (self._finished_choice_indices or frozenset()) | {_first_choice_index(chunk)}
+
     def _every_choice_finished(self) -> bool:
         if self.received_finish_reason is None:
             return False
         requested_choices: Final = self._requested_choice_count()
-        return requested_choices <= 1 or len(self._finished_choice_indices) >= requested_choices
+        match self._finished_choice_indices:
+            case None:
+                return True
+            case finished_choices:
+                return requested_choices <= 1 or len(finished_choices) >= requested_choices
 
     def _requested_choice_count(self) -> int:
         match getattr(self.logging_obj, "optional_params", None):
