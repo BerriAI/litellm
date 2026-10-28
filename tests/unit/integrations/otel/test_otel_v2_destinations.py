@@ -4556,47 +4556,96 @@ class TestCredentialGatedExporters:
 
 class TestConsolePlaceholder:
     """The console spec ``_normalize`` folds in for an empty exporter list prints spans
-    only while it is the provider's sole exporter."""
+    only for the ``otel`` callback; no other logger was asked to print."""
+
+    @pytest.fixture
+    def capture(self, monkeypatch: pytest.MonkeyPatch) -> "_ExporterCapture":
+        return TestArizeTenantOnly._capture_exporters(monkeypatch)
 
     @staticmethod
-    def _received(
-        monkeypatch: pytest.MonkeyPatch, config: OpenTelemetryV2Config
-    ) -> Mapping[str | None, tuple[str, ...]]:
-        capture: Final = TestArizeTenantOnly._capture_exporters(monkeypatch)
-        provider: Final = build_tracer_provider(config)
+    def _received(capture: "_ExporterCapture", provider: TracerProvider) -> Mapping[str | None, tuple[str, ...]]:
         emit(provider)
         provider.force_flush()
         return capture.received()
 
     @staticmethod
-    def _operator_langfuse(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _no_otel_env(monkeypatch: pytest.MonkeyPatch) -> None:
         for name in _OTEL_SHORTHAND_ENV:
             monkeypatch.delenv(name, raising=False)
+
+    @staticmethod
+    def _operator_langfuse(monkeypatch: pytest.MonkeyPatch) -> None:
+        TestConsolePlaceholder._no_otel_env(monkeypatch)
         monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-operator")
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-operator")
 
-    def test_a_credentialed_langfuse_exports_to_langfuse_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @staticmethod
+    def _isolated_proxy_registration(monkeypatch: pytest.MonkeyPatch) -> None:
+        for name in ("service_callback", "input_callback", "_async_success_callback", "_async_failure_callback"):
+            monkeypatch.setattr(litellm, name, [])
+        monkeypatch.setattr("litellm.proxy.proxy_server.open_telemetry_logger", None)
+
+    def test_a_credentialed_langfuse_exports_to_langfuse_alone(
+        self, monkeypatch: pytest.MonkeyPatch, capture: "_ExporterCapture"
+    ) -> None:
         self._operator_langfuse(monkeypatch)
         config: Final = langfuse_preset()
         langfuse_headers: Final = next(
             spec.headers for spec in config.exporters if spec.owner is ExporterOwner.LANGFUSE_OTEL
         )
 
-        assert self._received(monkeypatch, config) == {langfuse_headers: ("chat gpt-4",)}
+        assert self._received(capture, build_tracer_provider(config)) == {langfuse_headers: ("chat gpt-4",)}
 
-    def test_a_console_exporter_the_operator_named_still_prints(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_a_console_exporter_the_operator_named_still_prints(
+        self, monkeypatch: pytest.MonkeyPatch, capture: "_ExporterCapture"
+    ) -> None:
         self._operator_langfuse(monkeypatch)
         monkeypatch.setenv("OTEL_EXPORTER", "console")
 
-        assert self._received(monkeypatch, langfuse_preset())[None] == ("chat gpt-4",)
+        assert self._received(capture, build_tracer_provider(langfuse_preset()))[None] == ("chat gpt-4",)
 
-    def test_the_placeholder_still_prints_when_nothing_else_is_configured(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_the_otel_callback_prints_when_nothing_else_is_configured(
+        self, monkeypatch: pytest.MonkeyPatch, capture: "_ExporterCapture"
     ) -> None:
-        for name in _OTEL_SHORTHAND_ENV:
-            monkeypatch.delenv(name, raising=False)
+        from litellm.litellm_core_utils import litellm_logging as logging_module
 
-        assert self._received(monkeypatch, OpenTelemetryV2Config()) == {None: ("chat gpt-4",)}
+        self._no_otel_env(monkeypatch)
+        self._isolated_proxy_registration(monkeypatch)
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setattr(logging_module, "_in_memory_loggers", [])
+        is_otel_v2_enabled.cache_clear()
+        try:
+            otel_cb: Final = logging_module.build_custom_logger_compatible_class(
+                "otel", internal_usage_cache=None, llm_router=None
+            )
+
+            assert isinstance(otel_cb, OpenTelemetryV2)
+            assert self._received(capture, otel_cb.tracer_provider) == {None: ("chat gpt-4",)}
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    @pytest.mark.parametrize(
+        ("env", "expected"),
+        [({}, {}), ({"OTEL_EXPORTER": "console"}, {None: ("chat gpt-4",)})],
+        ids=["nothing-configured", "operator-asked-for-console"],
+    )
+    def test_the_background_global_logger_prints_only_when_asked(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capture: "_ExporterCapture",
+        env: Mapping[str, str],
+        expected: Mapping[str | None, tuple[str, ...]],
+    ) -> None:
+        """The proxy publishes a generic logger even when no callback built one, which is
+        what key-only and team-only destinations run under."""
+        from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+        self._no_otel_env(monkeypatch)
+        self._isolated_proxy_registration(monkeypatch)
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+
+        assert self._received(capture, select_global_otel_v2_logger([]).tracer_provider) == expected
 
 
 class TestTenantHostSsrfGuard:
