@@ -700,7 +700,7 @@ def test_responses_input_tokens_leaves_out_the_cache_marks_responses_inference_s
         assert counted == _without_cache_marks(inference), (counted, inference)
 
 
-_UNTRANSLATABLE_TOOLS: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyType(
+_UNCOUNTABLE_TOOLS: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyType(
     {
         "computer_use_preview": {
             "type": "computer_use_preview",
@@ -718,8 +718,8 @@ _UNTRANSLATABLE_TOOLS: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyT
 )
 
 
-@pytest.mark.parametrize("tool", _UNTRANSLATABLE_TOOLS.values(), ids=_UNTRANSLATABLE_TOOLS.keys())
-def test_responses_input_tokens_rejects_a_tool_inference_cannot_send_without_calling_the_peer(
+@pytest.mark.parametrize("tool", _UNCOUNTABLE_TOOLS.values(), ids=_UNCOUNTABLE_TOOLS.keys())
+def test_responses_input_tokens_rejects_a_tool_it_cannot_count_without_calling_the_peer(
     deployment: _Deployment, gateway: Gateway, tool: dict[str, JsonValue]
 ) -> None:
     with _listening(deployment) as peer:

@@ -264,6 +264,7 @@ async def test_claude_chat_tool_use_is_counted_in_the_shape_claude_inference_sen
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "sunny"}]},
     ]
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "tool",

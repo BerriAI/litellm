@@ -14,10 +14,12 @@ from typing import (
     Protocol,
     TypeAlias,
     cast,  # noqa: TID251  # caller chat messages go to chat inference translation as-is
+    get_args,
 )
 
+from openai.types.responses import ToolParam
 from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict, get_type_hints
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.litellm_core_utils.asyncify import asyncify
@@ -161,23 +163,18 @@ def _has_non_chat_user_block(message: Mapping[str, object]) -> bool:
     return any(isinstance(block, dict) and block.get("type") not in ValidUserMessageContentTypes for block in blocks)
 
 
+_TOOL_TYPES: Final = TypeAdapter(tuple[str, ...])
+_CHAT_TRANSLATED_RESPONSES_TOOL_TYPES: Final = frozenset(("custom", "function"))
+
+
+def _tool_param_types(tool_param: type) -> tuple[str, ...]:
+    return _TOOL_TYPES.validate_python(get_args(get_type_hints(tool_param)["type"]))
+
+
 _OPENAI_RESPONSES_BUILT_IN_TOOL_TYPES: Final = frozenset(
-    (
-        "apply_patch",
-        "code_interpreter",
-        "computer",
-        "computer_use_preview",
-        "file_search",
-        "image_generation",
-        "local_shell",
-        "mcp",
-        "shell",
-        "tool_search",
-        "web_search",
-        "web_search_2025_08_26",
-        "web_search_preview",
-        "web_search_preview_2025_03_11",
-    )
+    tool_type
+    for tool_type in chain.from_iterable(map(_tool_param_types, get_args(ToolParam)))
+    if tool_type not in _CHAT_TRANSLATED_RESPONSES_TOOL_TYPES
 )
 
 

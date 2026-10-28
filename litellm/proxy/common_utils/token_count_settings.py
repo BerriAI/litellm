@@ -67,6 +67,8 @@ class ProviderCountFailure:
         return not self.rejected_before_provider_call and self.status_code in CANNOT_COUNT_MODEL_STATUSES
 
     def with_hint(self, hint: str) -> "ProviderCountFailure":
+        if self.rejected_before_provider_call:
+            return self
         return replace(self, message=_with_hint(self.message, hint))
 
     def to_proxy_exception(self) -> ProxyException:

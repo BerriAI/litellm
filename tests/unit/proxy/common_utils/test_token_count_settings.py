@@ -220,3 +220,10 @@ def test_hint_lands_in_the_upstream_error_message_and_keeps_its_envelope(message
 
     assert (json.loads(hinted.message) if isinstance(expected, dict) else hinted.message) == expected
     assert hinted.status_code == 404
+
+
+def test_hint_stays_off_an_error_raised_before_any_provider_call() -> None:
+    message: Final = "Invalid request for token counting: LiteLLM cannot count a tool of type 'mcp' for this model"
+    failure: Final = ProviderCountFailure(status_code=400, message=message, rejected_before_provider_call=True)
+
+    assert failure.with_hint("Enable eu-west-1").message == message
