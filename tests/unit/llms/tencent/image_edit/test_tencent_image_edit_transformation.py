@@ -167,6 +167,35 @@ def test_edit_keeps_dropped_params_out_of_the_tokenhub_body(
     }
 
 
+@pytest.mark.parametrize(
+    ("params", "expected_body_params"),
+    [
+        ({"extra_body": {"response_format": "b64_json"}}, {"response_format": "b64_json"}),
+        ({"size": "1K", "extra_body": {"size": "2K"}}, {"size": "2K"}),
+    ],
+)
+def test_edit_sends_extra_body_fields_as_given(
+    params: dict[str, object], expected_body_params: dict[str, object]
+) -> None:
+    captured: Final[dict[str, object]] = {}
+
+    litellm.image_edit(
+        model="tencent/seedream-image-v5.0-flash",
+        image=PNG_BYTES,
+        prompt="turn the square into a paper lantern",
+        api_key="sk-tokenhub",
+        client=_client(captured),
+        **params,
+    )
+
+    assert captured["body"] == {
+        "model": "seedream-image-v5.0-flash",
+        "prompt": "turn the square into a paper lantern",
+        "images": [f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"],
+        **expected_body_params,
+    }
+
+
 def test_edit_forwards_tokenhub_only_params_and_extra_body() -> None:
     captured: Final[dict[str, object]] = {}
 

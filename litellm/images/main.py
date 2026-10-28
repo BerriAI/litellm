@@ -803,19 +803,18 @@ _DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
 _ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[list[str] | None](list[str] | None)
 
 
-def _provider_only_edit_params(
+def _tokenhub_passthrough_edit_params(
     non_default_params: Mapping[str, object],
     extra_body: Mapping[str, object] | None,
     mapped_params: Collection[str],
     additional_drop_params: Collection[str] | None,
 ) -> Mapping[str, object]:
-    excluded: Final = (
-        _DROP_PARAM_KWARGS
-        | _IMAGE_EDIT_OPENAI_PARAMS
-        | frozenset(mapped_params)
-        | frozenset(additional_drop_params or ())
-    )
-    return {key: value for key, value in {**non_default_params, **(extra_body or {})}.items() if key not in excluded}
+    dropped: Final = frozenset(additional_drop_params or ())
+    unmapped_excluded: Final = _DROP_PARAM_KWARGS | _IMAGE_EDIT_OPENAI_PARAMS | frozenset(mapped_params) | dropped
+    return {
+        **{key: value for key, value in non_default_params.items() if key not in unmapped_excluded},
+        **{key: value for key, value in (extra_body or {}).items() if key not in dropped},
+    }
 
 
 @client
@@ -1053,8 +1052,9 @@ def image_edit(
             prompt=prompt,
             image_edit_provider_config=image_edit_provider_config,
             image_edit_optional_request_params={
+                **image_edit_request_params,
                 **(
-                    _provider_only_edit_params(
+                    _tokenhub_passthrough_edit_params(
                         non_default_params,
                         extra_body,
                         provider_supported_params,
@@ -1063,7 +1063,6 @@ def image_edit(
                     if custom_llm_provider == litellm.LlmProviders.TENCENT.value
                     else {}
                 ),
-                **image_edit_request_params,
             },
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
