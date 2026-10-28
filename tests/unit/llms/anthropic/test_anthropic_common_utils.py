@@ -4086,6 +4086,24 @@ def test_create_anthropic_model_list_response_lists_ids_as_told():
     assert (response["first_id"], response["last_id"]) == ("claude-router-gpt-4o[1m]", "claude-haiku-4-5")
 
 
+def test_create_anthropic_model_list_response_includes_description_only_when_configured():
+    from litellm.llms.anthropic.common_utils import (
+        create_anthropic_model_list_response,
+    )
+
+    response = create_anthropic_model_list_response(
+        [
+            {"id": "gpt-4o", "object": "model", "created": 0, "owned_by": "openai"},
+            {"id": "claude-haiku-4-5", "object": "model", "created": 0, "owned_by": "openai"},
+        ],
+        descriptions={"gpt-4o": "Opus Level - Agentic coding"},
+    )
+
+    gpt, haiku = response["data"]
+    assert gpt["description"] == "Opus Level - Agentic coding"
+    assert "description" not in haiku
+
+
 class TestMalformedContentListItems:
     @pytest.mark.parametrize(
         "content",

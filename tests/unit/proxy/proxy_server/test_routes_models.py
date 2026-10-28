@@ -48,6 +48,7 @@ def patched_models(monkeypatch):
     router.get_deployment_by_model_group_name = MagicMock(return_value=deployment)
     router.get_routable_upstream_model = MagicMock(return_value="gpt-4")
     router.get_configured_display_name = MagicMock(return_value=None)
+    router.get_configured_description = MagicMock(return_value=None)
     router.get_configured_service_tiers = MagicMock(return_value=())
 
     monkeypatch.setattr(proxy_server, "llm_router", router)
@@ -192,6 +193,22 @@ def test_anthropic_format_carries_router_configured_token_limits(client, auth_as
     gpt_4, claude = response.json()["data"]
     assert (gpt_4["max_input_tokens"], gpt_4["max_tokens"]) == (300000, 32000)
     assert (claude["max_input_tokens"], claude["max_tokens"]) == (500000, 4096)
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_anthropic_format_includes_configured_description(client, auth_as, patched_models, path):
+    """A deployment's ``model_info.description`` becomes the Anthropic-native
+    ``description`` Claude Code's picker shows; models without one omit the key."""
+    patched_models.get_configured_description = MagicMock(
+        side_effect=lambda model_name: "Opus Level" if model_name == "gpt-4" else None
+    )
+
+    with auth_as():
+        response = client.get(path, headers={"anthropic-version": "2023-06-01"})
+
+    gpt_4, claude = response.json()["data"]
+    assert gpt_4["description"] == "Opus Level"
+    assert "description" not in claude
 
 
 @pytest.mark.parametrize("path", ["/v1/models", "/models"])

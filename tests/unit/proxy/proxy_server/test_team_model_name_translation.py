@@ -22,6 +22,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_utils.model_listing_utils import (
     TeamModelNameTranslator,
+    configured_descriptions,
     configured_display_names,
 )
 from litellm.proxy.proxy_server import (
@@ -1512,6 +1513,27 @@ def test_configured_display_names_keyed_by_response_id():
 
 def test_configured_display_names_empty_without_router():
     assert configured_display_names(entries=[("gpt-4o", "gpt-4o")], llm_router=None) == {}
+
+
+def test_configured_descriptions_keyed_by_response_id():
+    """The map is keyed by the public response id while the router lookup uses
+    the internal routing key, and entries without a description are omitted."""
+    router = MagicMock()
+    router.get_configured_description = MagicMock(
+        side_effect=lambda model_name: "Team Sonnet notes" if model_name == "model_name_team-abc-123_4a6b8" else None
+    )
+
+    assert configured_descriptions(
+        entries=[
+            ("team-claude-sonnet", "model_name_team-abc-123_4a6b8"),
+            ("gpt-4o", "gpt-4o"),
+        ],
+        llm_router=router,
+    ) == {"team-claude-sonnet": "Team Sonnet notes"}
+
+
+def test_configured_descriptions_empty_without_router():
+    assert configured_descriptions(entries=[("gpt-4o", "gpt-4o")], llm_router=None) == {}
 
 
 @pytest.mark.asyncio

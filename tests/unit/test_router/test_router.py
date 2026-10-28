@@ -12859,6 +12859,40 @@ def test_get_configured_display_name_returns_none_for_unset_or_unknown():
     assert router.get_configured_display_name("not-a-real-model") is None
 
 
+def test_get_configured_description_reads_deployment_model_info():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "Kimi K3-claude-compatible",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"description": "Open-weight agentic coding model"},
+            }
+        ]
+    )
+
+    assert router.get_configured_description("Kimi K3-claude-compatible") == "Open-weight agentic coding model"
+
+
+def test_get_configured_description_returns_none_for_unset_blank_or_unknown():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-description-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            },
+            {
+                "model_name": "blank-description-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"description": "   "},
+            },
+        ]
+    )
+
+    assert router.get_configured_description("no-description-model") is None
+    assert router.get_configured_description("blank-description-model") is None
+    assert router.get_configured_description("not-a-real-model") is None
+
+
 def test_get_configured_display_name_skips_wildcard_pattern_matching():
     router = litellm.Router(
         model_list=[

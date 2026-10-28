@@ -56,6 +56,22 @@ def configured_display_names(
     )
 
 
+def configured_descriptions(
+    entries: Sequence[tuple[str, str]],
+    llm_router: Router | None,
+) -> Mapping[str, str]:
+    """response_id -> configured `model_info.description` for the listing entries
+    that have one, keyed and looked up the same way as `configured_display_names`."""
+    if llm_router is None:
+        return MappingProxyType({})
+    resolved: Final = (
+        (response_id, llm_router.get_configured_description(lookup_id)) for response_id, lookup_id in entries
+    )
+    return MappingProxyType(
+        {response_id: description for response_id, description in resolved if description is not None}
+    )
+
+
 def _unmarked(name: str) -> str:
     return name[: -len(_ONE_MILLION_SUFFIX)] if name.lower().endswith(_ONE_MILLION_SUFFIX) else name
 

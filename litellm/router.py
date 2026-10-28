@@ -12021,6 +12021,21 @@ class Router:
             return display_name
         return None
 
+    def get_configured_description(self, model_name: str) -> "str | None":
+        """
+        Return the description explicitly configured in a concrete deployment's
+        model_info for model_name; same lookup and absent-value rules as
+        get_configured_display_name.
+        """
+        deployment: Final = self.get_deployment_by_model_group_name(model_group_name=model_name)
+        if deployment is None:
+            return None
+
+        description: Final = deployment.model_info.get("description")  # pyright: ignore[reportUnknownMemberType]  # model_info keeps user-set extras untyped, like display_name
+        if isinstance(description, str) and description.strip():
+            return description
+        return None
+
     def routable_model_group(self, model_name: str) -> str:
         """
         The model group a request to model_name routes to: its target when

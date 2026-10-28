@@ -2240,7 +2240,11 @@ def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
 
 
 def _anthropic_model_entry(
-    model: ModelInfoResponse, created_at: str, display_names: Mapping[str, str], listed_ids: Mapping[str, str]
+    model: ModelInfoResponse,
+    created_at: str,
+    display_names: Mapping[str, str],
+    listed_ids: Mapping[str, str],
+    descriptions: Mapping[str, str],
 ) -> Mapping[str, object]:
     listed_id: Final = listed_ids.get(model["id"])
     source: Final[Mapping[str, object]] = (
@@ -2254,6 +2258,7 @@ def _anthropic_model_entry(
         "created_at": created_at,
         "max_input_tokens": model.get("max_input_tokens"),
         "max_tokens": model.get("max_output_tokens"),
+        **({"description": descriptions[model["id"]]} if model["id"] in descriptions else {}),
     }
 
 
@@ -2261,6 +2266,7 @@ def create_anthropic_model_list_response(
     models: Sequence[ModelInfoResponse],
     display_names: Mapping[str, str] = MappingProxyType({}),
     listed_ids: Mapping[str, str] = MappingProxyType({}),
+    descriptions: Mapping[str, str] = MappingProxyType({}),
 ) -> Mapping[str, object]:
     """Build the Anthropic-native /v1/models envelope.
 
@@ -2272,12 +2278,16 @@ def create_anthropic_model_list_response(
     display_names maps a listed model id to a configured human-readable name; ids
     without an entry fall back to the id itself, matching the vendor behavior.
     listed_ids maps a model id to the id the caller should see it under (the Claude
-    Code view); ids without an entry are listed as they are
+    Code view); ids without an entry are listed as they are.
+    descriptions maps a listed model id to its configured description, which Claude
+    Code shows in its model picker; ids without an entry omit the key.
     """
     created_at: Final = (
         datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     )
-    data: Final = [_anthropic_model_entry(model, created_at, display_names, listed_ids) for model in models]
+    data: Final = [
+        _anthropic_model_entry(model, created_at, display_names, listed_ids, descriptions) for model in models
+    ]
     return {
         "data": data,
         "has_more": False,
