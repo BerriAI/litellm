@@ -1060,15 +1060,23 @@ def test_each_check_kind_counts_exactly_the_rows_postgres_would_reject(scratch_d
 
 @requires_db
 @pytest.mark.parametrize(
-    ("fill", "rows_still_null"),
-    (("COALESCE(\"d\", 'filled')", 0), ('"d"', 1)),
-    ids=("coalesce fills every row", "a nullable column leaves one row"),
+    ("prelude", "fill", "rows_counted", "set_not_null_error"),
+    (
+        ("", "COALESCE(\"d\", 'filled')", 0, None),
+        ("", '"d"', 1, "NotNullViolation"),
+        ('ALTER TABLE "preflight_backfill" ADD COLUMN "n" TEXT DEFAULT \'new\';\n', '"n"', 2, None),
+    ),
+    ids=(
+        "coalesce fills every row",
+        "a nullable column leaves one row",
+        "a column the migration adds falls back to the plain count",
+    ),
 )
 def test_a_nulls_check_after_a_backfill_counts_exactly_the_rows_postgres_rejects(
-    scratch_database: str, fill: str, rows_still_null: int
+    scratch_database: str, prelude: str, fill: str, rows_counted: int, set_not_null_error: str | None
 ) -> None:
     migration_sql: Final = (
-        f'UPDATE "preflight_backfill" SET "c" = {fill} WHERE "c" IS NULL; -- data-migration-ok: small table\n'
+        prelude + f'UPDATE "preflight_backfill" SET "c" = {fill} WHERE "c" IS NULL; -- data-migration-ok: small table\n'
         'ALTER TABLE "preflight_backfill" ALTER COLUMN "c" SET NOT NULL;\n'
     )
     with psycopg.connect(scratch_database, autocommit=True) as conn:
@@ -1083,9 +1091,9 @@ def test_a_nulls_check_after_a_backfill_counts_exactly_the_rows_postgres_rejects
         )
 
     assert tuple(finding.rows for finding in findings if isinstance(finding, migration_data_checks.BlockedChange)) == (
-        () if rows_still_null == 0 else (rows_still_null,)
+        () if rows_counted == 0 else (rows_counted,)
     )
-    assert outcomes == (None, None if rows_still_null == 0 else "NotNullViolation")
+    assert outcomes == (*(None,) * (len(outcomes) - 1), set_not_null_error)
 
 
 def _apply(conn: "psycopg.Connection[tuple[object, ...]]", statement: str) -> str | None:

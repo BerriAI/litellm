@@ -111,6 +111,11 @@ def _left_null(migration_sql: str) -> tuple[str | None, ...]:
         ('UPDATE "T" SET "c" = NULL; ' + SET_NOT_NULL, "(NULL) IS NULL"),
         ('UPDATE "T" SET "c" = \'x\'; UPDATE "T" SET "c" = NULL; ' + SET_NOT_NULL, "(NULL) IS NULL"),
         (
+            'UPDATE "T" SET "d" = \'x\'; UPDATE "T" SET "c" = \'y\' WHERE "c" IS NULL; ' + SET_NOT_NULL,
+            "\"c\" IS NULL AND ('y') IS NULL",
+        ),
+        ('UPDATE "T" SET "c" = \'x\' RETURNING "id"; ' + SET_NOT_NULL, "('x') IS NULL"),
+        (
             'UPDATE "T" SET "c" = \'a, b WHERE 1\', "d" = 2 WHERE "c" IS NULL; ' + SET_NOT_NULL,
             "\"c\" IS NULL AND ('a, b WHERE 1') IS NULL",
         ),
@@ -125,6 +130,8 @@ def _left_null(migration_sql: str) -> tuple[str | None, ...]:
         "coalesce no where",
         "set to null",
         "later write wins",
+        "earlier write to another column",
+        "returning",
         "quoted value",
         "subquery",
     ),
@@ -146,6 +153,11 @@ def test_a_nulls_check_after_a_backfill_counts_the_rows_the_update_leaves_null(
         'UPDATE "T" SET "c" = "O"."v" FROM "O" WHERE "O"."i" = "T"."i"; ' + SET_NOT_NULL,
         'UPDATE "T" SET "c" = \'x\'; UPDATE "T" SET "c" = "d" WHERE "e" = 1; ' + SET_NOT_NULL,
         'UPDATE "T" SET "c" = \'x\'; UPDATE "T" SET ("c", "d") = (1, 2); ' + SET_NOT_NULL,
+        'UPDATE "T" SET "d" = \'x\'; UPDATE "T" SET "c" = "d" WHERE "c" IS NULL; ' + SET_NOT_NULL,
+        'UPDATE "T" SET ("d", "e") = (1, 2); UPDATE "T" SET "c" = "d" WHERE "c" IS NULL; ' + SET_NOT_NULL,
+        'UPDATE "T" SET "c" = DEFAULT; ' + SET_NOT_NULL,
+        'UPDATE "T" SET "c" = DEFAULT WHERE "c" IS NULL; ' + SET_NOT_NULL,
+        'UPDATE "T" SET "c" = \'x\' WHERE "c" IS NULL RETURNING "id"; ' + SET_NOT_NULL,
     ),
     ids=(
         "update after",
@@ -156,6 +168,11 @@ def test_a_nulls_check_after_a_backfill_counts_the_rows_the_update_leaves_null(
         "update from",
         "later unreadable write",
         "later unreadable set list",
+        "fill reads a column written earlier",
+        "fill reads a table with an unreadable earlier write",
+        "default",
+        "default where is null",
+        "where is null then returning",
     ),
 )
 def test_an_update_that_may_leave_nulls_it_cannot_count_keeps_the_plain_nulls_check(migration_sql: str) -> None:
@@ -176,9 +193,10 @@ def test_an_update_that_may_leave_nulls_it_cannot_count_keeps_the_plain_nulls_ch
             {"c": "\"c\" IS NULL AND ('x') IS NULL", "d": None},
         ),
         ('UPDATE ONLY "T" SET "c" = 1 WHERE "d" > 1', "T", {"c": None}),
+        ('UPDATE "T" SET "c" = DEFAULT, "d" = 1 RETURNING "id"', "T", {"c": None, "d": "(1) IS NULL"}),
         ('UPDATE "T" SET ("c", "d") = (1, 2)', "T", None),
     ),
-    ids=("no where", "where is null", "other where", "unreadable set list"),
+    ids=("no where", "where is null", "other where", "default and returning", "unreadable set list"),
 )
 def test_an_update_names_what_it_leaves_null_per_column(
     statement: str, table: str, left_null: dict[str, str | None] | None

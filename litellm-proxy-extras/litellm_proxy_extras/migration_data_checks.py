@@ -127,10 +127,11 @@ _COMMENT: Final = re.compile(r"--[^\n]*")
 _NOT_NULL: Final = re.compile(r"\bNOT\s+NULL\b", re.IGNORECASE)
 _HAS_DEFAULT: Final = re.compile(r"\bDEFAULT\b|\bGENERATED\b", re.IGNORECASE)
 _UPDATE: Final = re.compile(rf"^\s*UPDATE\s+(?:ONLY\s+)?{_QUALIFIED}\s+SET\s+(.*)$", re.IGNORECASE | re.DOTALL)
-_CLAUSE: Final = re.compile(r"\s(FROM|WHERE)\s", re.IGNORECASE)
+_CLAUSE: Final = re.compile(r"\s(FROM|WHERE|RETURNING)\s", re.IGNORECASE)
 _ASSIGNMENT: Final = re.compile(rf"^{_IDENT}\s*=\s*(.*)$", re.DOTALL)
 _IS_NULL: Final = re.compile(rf"^{_IDENT}\s+IS\s+NULL$", re.IGNORECASE)
 _STRING_LITERAL: Final = re.compile(r"'[^']*'")
+_IDENTIFIER: Final = re.compile(r'"([^"]+)"|\b([A-Za-z_]\w*)\b')
 
 
 def migration_data_check_timeout_seconds() -> float:
@@ -269,21 +270,36 @@ def checks_for_statement(statement_text: str, source: str) -> tuple[Check, ...]:
 class Update:
     """One UPDATE as the derivation reads it. `left_null` maps each assigned column to the
     predicate selecting the rows still NULL once the UPDATE ran, or to None when the shape
-    (a FROM, a WHERE other than that column IS NULL) can leave NULLs it cannot count. It is
-    None itself when the SET list cannot be read, so nothing is known about the table."""
+    (a FROM, a WHERE other than that column IS NULL, a DEFAULT) can leave NULLs it cannot
+    count. It is None itself when the SET list cannot be read, so nothing is known about the table."""
 
     table: str
     left_null: MappingProxyType[str, str | None] | None
 
 
-Fills = MappingProxyType[tuple[str, str], str]
+@dataclass(frozen=True, slots=True)
+class Trail:
+    """What the UPDATEs read so far did: `fills` the predicate counting the rows still NULL per
+    (table, column), `written` every (table, column) one of them assigned, lower cased, with
+    (table, "*") standing for a SET list that could not be read."""
+
+    fills: MappingProxyType[tuple[str, str], str]
+    written: frozenset[tuple[str, str]]
 
 
 def _clause_start(text: str) -> int | None:
-    """Offset of the first FROM or WHERE outside parentheses and string literals, if any."""
+    """Offset of the first FROM, WHERE or RETURNING outside parentheses and string literals."""
     masked: Final = _mask_strings(text)
     depth: Final = _paren_depth(masked)
     return next((match.start() for match in _CLAUSE.finditer(masked) if depth[match.start()] == 0), None)
+
+
+def _left_null_everywhere(value: str) -> str | None:
+    return None if value.upper() == "DEFAULT" else f"({value}) IS NULL"
+
+
+def _left_null_where_null(column: str, value: str) -> str | None:
+    return None if value.upper() == "DEFAULT" else f'"{column}" IS NULL AND ({value}) IS NULL'
 
 
 def parse_update(statement_text: str) -> Update | None:
@@ -296,16 +312,16 @@ def parse_update(statement_text: str) -> Update | None:
     if any(match is None for match in matches):
         return Update(table, None)
     assigned: Final = MappingProxyType({m.group(1): m.group(2).strip() for m in matches if m is not None})
-    if cut is None:
-        return Update(table, MappingProxyType({column: f"({value}) IS NULL" for column, value in assigned.items()}))
-    clause: Final = rest[cut:].strip()
+    clause: Final = "" if cut is None else rest[cut:].strip()
+    if not clause or clause[:9].upper() == "RETURNING":
+        return Update(table, MappingProxyType({col: _left_null_everywhere(value) for col, value in assigned.items()}))
     is_null: Final = _IS_NULL.match(clause[5:].strip()) if clause[:5].upper() == "WHERE" else None
     filled: Final = is_null.group(1) if is_null is not None and is_null.group(1) in assigned else None
     return Update(
         table,
         MappingProxyType(
             {
-                column: f'"{column}" IS NULL AND ({value}) IS NULL' if column == filled else None
+                column: _left_null_where_null(column, value) if column == filled else None
                 for column, value in assigned.items()
             }
         ),
@@ -317,31 +333,47 @@ def _survives(key: tuple[str, str], update: Update) -> bool:
     return table != update.table or (update.left_null is not None and column not in update.left_null)
 
 
-def _after(fills: Fills, update: Update | None) -> Fills:
-    """The fills still standing once `update` ran: what it leaves replaces the earlier entries
-    of the columns it writes, and an unreadable SET list drops every entry of its table."""
+def _reads_a_written_column(table: str, predicate: str, written: frozenset[tuple[str, str]]) -> bool:
+    names: Final = frozenset((quoted or bare).lower() for quoted, bare in _IDENTIFIER.findall(_mask_strings(predicate)))
+    return (table, "*") in written or any((table, name) in written for name in names)
+
+
+def _after(trail: Trail, update: Update | None) -> Trail:
+    """The trail once `update` ran: what it leaves replaces the earlier fills of the columns it
+    writes, a fill that reads a column an earlier UPDATE wrote is not counted (the count would
+    read the old values), and an unreadable SET list drops every fill of its table."""
     if update is None:
-        return fills
-    kept: Final = {key: fill for key, fill in fills.items() if _survives(key, update)}
+        return trail
+    columns: Final = MappingProxyType({}) if update.left_null is None else update.left_null
+    kept: Final = {key: fill for key, fill in trail.fills.items() if _survives(key, update)}
     added: Final = {
-        (update.table, column): fill for column, fill in (update.left_null or {}).items() if fill is not None
+        (update.table, column): fill
+        for column, fill in columns.items()
+        if fill is not None and not _reads_a_written_column(update.table, fill, trail.written)
     }
-    return MappingProxyType({**kept, **added})
+    written: Final = (
+        frozenset({(update.table, "*")})
+        if update.left_null is None
+        else frozenset((update.table, column.lower()) for column in columns)
+    )
+    return Trail(MappingProxyType({**kept, **added}), trail.written | written)
 
 
-def _counting_what_is_left(check: Check, fills: Fills) -> Check:
-    if check.kind != "nulls" or (check.table, check.columns[0]) not in fills:
+def _counting_what_is_left(check: Check, trail: Trail) -> Check:
+    if check.kind != "nulls" or (check.table, check.columns[0]) not in trail.fills:
         return check
-    return replace(check, expression=fills[(check.table, check.columns[0])])
+    return replace(check, expression=trail.fills[(check.table, check.columns[0])])
 
 
 def checks_for_migration(name: str, migration_sql: str) -> tuple[Check, ...]:
     """The checks of every statement in order. A `nulls` check counts the rows an earlier UPDATE
     of the same migration still leaves NULL, since `prisma migrate deploy` runs that UPDATE first."""
     ordered: Final = statements(migration_sql)
-    fills: Final = tuple(accumulate((parse_update(text) for text in ordered), _after, initial=MappingProxyType({})))
+    trails: Final = tuple(
+        accumulate((parse_update(text) for text in ordered), _after, initial=Trail(MappingProxyType({}), frozenset()))
+    )
     return tuple(
-        _counting_what_is_left(check, fills[position])
+        _counting_what_is_left(check, trails[position])
         for position, statement_text in enumerate(ordered)
         for check in checks_for_statement(statement_text, f"migration {name}")
     )  # comprehension-ok: flattening the per-statement checks of one migration
@@ -600,7 +632,7 @@ def _run_check(
         row: Final = connection.execute(_count_query(check, schema, types, limit_bytes)).fetchone()
     except psycopg.errors.QueryCanceled:
         return CouldNotVerify(check, timeout_seconds)
-    except psycopg.errors.UndefinedColumn:
+    except psycopg.errors.ProgrammingError:
         if check.kind != "nulls" or check.expression is None:
             raise
         return _run_check(connection, schema, replace(check, expression=None), types, limit_bytes, timeout_seconds)
