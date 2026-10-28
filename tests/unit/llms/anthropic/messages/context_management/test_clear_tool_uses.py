@@ -709,10 +709,18 @@ def test_input_tokens_trigger_counts_the_system_prompt(system: str | list[dict[s
     _, with_system = apply_clear_tool_uses_20250919(
         model=MODEL, messages=deepcopy(messages), tools=None, system=system, edit_spec=edit_spec
     )
+    _, met_without_system = apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=deepcopy(messages),
+        tools=None,
+        system=None,
+        edit_spec={**edit_spec, "trigger": {"type": "input_tokens", "value": 0}},
+    )
     assert without_system is None
     assert with_system is not None
+    assert met_without_system is not None
     assert with_system["cleared_tool_uses"] == 2
-    assert with_system["cleared_input_tokens"] < history_tokens
+    assert with_system["cleared_input_tokens"] == met_without_system["cleared_input_tokens"] > 0
 
 
 @pytest.mark.parametrize(("clear_tool_inputs", "triggers"), [(False, False), (True, True)])

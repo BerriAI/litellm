@@ -31,7 +31,7 @@ from ..constants import (
 )
 from ..errors import AnthropicContextManagementError
 from ..placeholders import build_cleared_tool_result_content
-from .compact import system_to_text
+from .compact import count_system_tokens
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import ChatCompletionToolParam
@@ -199,14 +199,6 @@ def _select_in_batches(candidates: Sequence[str], tokens: Mapping[str, int], cle
     return tuple(candidates[:batch_end])
 
 
-def _with_system(
-    messages: Sequence[Mapping[str, object]], system: str | Sequence[Mapping[str, object]] | None
-) -> Sequence[Mapping[str, object]]:
-    """The messages to count: like the API, an ``input_tokens`` trigger counts the system prompt too."""
-    system_text: Final = system_to_text(system)
-    return ({"role": "system", "content": system_text}, *messages) if system_text else messages
-
-
 def _trigger_met(
     trigger: dict[str, object],
     model: str,
@@ -215,7 +207,7 @@ def _trigger_met(
     system: str | Sequence[Mapping[str, object]] | None,
     counted_tool_uses: int,
 ) -> tuple[bool, int | None]:
-    """Return (trigger_met, input_tokens if counted for reuse)."""
+    """Return (trigger_met, message and tool tokens for reuse); like the API, input_tokens adds the system prompt."""
     trigger_type: Final = trigger.get("type", "input_tokens")
     threshold = trigger.get("value")
 
@@ -226,14 +218,15 @@ def _trigger_met(
 
     if not isinstance(threshold, int):
         threshold = DEFAULT_INPUT_TOKENS_TRIGGER
-    current_tokens: Final = litellm.token_counter(
+    message_tokens: Final = litellm.token_counter(
         model=model,
         messages=messages,
         tools=cast("list[ChatCompletionToolParam] | None", tools),
     )
+    current_tokens: Final = message_tokens + count_system_tokens(model, system)
     verbose_logger.debug("context_management polyfill: current_tokens: %s", current_tokens)
     verbose_logger.debug("context_management polyfill: threshold: %s", threshold)
-    return current_tokens > threshold, current_tokens
+    return current_tokens > threshold, message_tokens
 
 
 def _resolve_keep_count(keep: dict[str, object]) -> int:
