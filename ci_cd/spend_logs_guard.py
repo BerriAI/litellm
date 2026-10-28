@@ -25,7 +25,8 @@ WATCHED: Final = (
     "litellm-proxy-extras/litellm_proxy_extras/schema.prisma",
 )
 MIGRATIONS_PREFIX: Final = "litellm-proxy-extras/litellm_proxy_extras/migrations/"
-TABLE: Final = re.compile(r"(?<![A-Za-z0-9])LiteLLM_SpendLogs", re.IGNORECASE)
+TABLE: Final = re.compile(r"(?<![A-Za-z0-9])LiteLLM_SpendLogs(?![A-Za-z0-9])", re.IGNORECASE)
+DECIDING_STATES: Final = frozenset({"APPROVED", "CHANGES_REQUESTED", "DISMISSED"})
 
 
 class Reviewer(BaseModel):
@@ -70,8 +71,12 @@ def _path_of(section: str) -> str:
 
 
 def approved_by(reviews: Sequence[Review], login: str) -> bool:
-    """True when `login`'s most recent review on the pull request is an approval."""
-    states: Final = tuple(review.state for review in reviews if review.user.login == login)
+    """True when `login`'s most recent review that changes GitHub's approval state is an approval.
+
+    COMMENTED and PENDING reviews leave an earlier approval in force on GitHub, so they are skipped here too.
+    """
+    own: Final = tuple(review.state for review in reviews if review.user.login == login)
+    states: Final = tuple(state for state in own if state in DECIDING_STATES)
     return bool(states) and states[-1] == "APPROVED"
 
 

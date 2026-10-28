@@ -3,6 +3,8 @@ import sys
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 _SCRIPT: Final = Path(__file__).resolve().parents[2] / "ci_cd" / "spend_logs_guard.py"
 _SPEC: Final = importlib.util.spec_from_file_location("spend_logs_guard", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -35,6 +37,13 @@ class TestSpendLogHits:
         elsewhere: Final = _diff("litellm/proxy/utils.py", 'table = "LiteLLM_SpendLogs"', 5)
         assert guard.spend_log_hits(removed + other + elsewhere) == ()
 
+    def test_a_table_whose_name_only_starts_with_the_watched_one_is_not_a_hit(self):
+        archive: Final = _diff("schema.prisma", "model LiteLLM_SpendLogsArchive {", 900)
+        index: Final = _diff("schema.prisma", "  @@index([team_id], map: \"LiteLLM_SpendLogs_team_id_idx\")", 760)
+        assert guard.spend_log_hits(archive + index) == (
+            'schema.prisma: @@index([team_id], map: "LiteLLM_SpendLogs_team_id_idx")',
+        )
+
     def test_two_files_in_one_diff_are_attributed_to_their_own_path(self):
         diff: Final = _diff("litellm/proxy/schema.prisma", "  a LiteLLM_SpendLogs", 1) + _diff(
             "schema.prisma", "  b String", 1
@@ -54,6 +63,20 @@ class TestApprovedBy:
         )
         assert guard.approved_by(reviews, "kerry-berri") is True
         assert guard.approved_by(reviews[::-1], "kerry-berri") is False
+
+    @pytest.mark.parametrize(
+        ("states", "approved"),
+        (
+            (("APPROVED", "COMMENTED"), True),
+            (("APPROVED", "PENDING"), True),
+            (("CHANGES_REQUESTED", "COMMENTED"), False),
+            (("APPROVED", "DISMISSED"), False),
+            (("COMMENTED",), False),
+        ),
+    )
+    def test_a_comment_or_pending_review_does_not_change_the_answer(self, states, approved):
+        reviews: Final = tuple(guard.Review(state=state, user=guard.Reviewer(login="kerry-berri")) for state in states)
+        assert guard.approved_by(reviews, "kerry-berri") is approved
 
     def test_no_review_from_the_approver_is_not_an_approval(self):
         other: Final = guard.Review(state="APPROVED", user=guard.Reviewer(login="someone-else"))
