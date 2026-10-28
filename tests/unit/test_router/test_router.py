@@ -7099,7 +7099,10 @@ def _background_output_then_completed(background: bool) -> tuple[dict[str, objec
 
 
 def _background_router(
-    model_name: str, litellm_params: dict[str, object], fallbacks: list[dict[str, list[str]]] | None
+    model_name: str,
+    litellm_params: dict[str, object],
+    fallbacks: list[dict[str, list[str]]] | None,
+    content_policy_fallbacks: list[dict[str, list[str]]] | None = None,
 ) -> Router:
     return litellm.Router(
         model_list=[
@@ -7114,6 +7117,7 @@ def _background_router(
             },
         ],
         fallbacks=fallbacks,
+        content_policy_fallbacks=content_policy_fallbacks,
         num_retries=0,
     )
 
@@ -7262,6 +7266,65 @@ async def test_aresponses_background_stream_surfaces_a_later_error_instead_of_a_
     assert primary_route.call_count == 1
     assert backup_route.call_count == 0
 
+
+
+@pytest.mark.parametrize(
+    ("fallbacks", "content_policy_fallbacks"),
+    [
+        pytest.param(None, None, id="no-fallback-configured"),
+        pytest.param([{"other-group": ["backup"]}], None, id="fallbacks-for-another-group"),
+        pytest.param(None, [{"other-group": ["backup"]}], id="content-policy-fallbacks-for-another-group"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_aresponses_background_stream_content_policy_error_reads_the_same_once_its_id_is_out(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    fallbacks: list[dict[str, list[str]]] | None,
+    content_policy_fallbacks: list[dict[str, list[str]]] | None,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    released_output_may_start: Final = asyncio.Event()
+    released_upstream_paused: Final = asyncio.Event()
+    held_output_may_start: Final = asyncio.Event()
+    held_output_may_start.set()
+    refusal: Final = {
+        "type": "error",
+        "sequence_number": 2,
+        "error": {
+            "type": "invalid_request_error",
+            "code": "content_policy_violation",
+            "message": "Your request was rejected as a result of our safety system.",
+            "param": None,
+        },
+    }
+    primary_route: Final = respx_mock.post(_BACKGROUND_PRIMARY_URL).mock(
+        side_effect=[
+            _paused_background_stream(released_output_may_start, released_upstream_paused, True, (refusal,)),
+            _paused_background_stream(held_output_may_start, asyncio.Event(), False, (refusal,)),
+        ]
+    )
+    backup_route: Final = respx_mock.post(_BACKGROUND_BACKUP_URL)
+    router: Final = _background_router(
+        "gpt-bg", {"model": "openai/gpt-6.1-terra", "api_key": "k"}, fallbacks, content_policy_fallbacks
+    )
+
+    released: Final = await router.aresponses(model="gpt-bg", input="hi", background=True, stream=True)
+    first: Final = asyncio.ensure_future(anext(released))
+    arrived_before_output: Final = await _reached_client_before_upstream_paused(first, released_upstream_paused)
+    released_output_may_start.set()
+    await first
+    released_error: Final = [item async for item in _events_until_error(released)][-1]
+    held: Final = await router.aresponses(model="gpt-bg", input="hi", stream=True)
+    held_error: Final = [item async for item in _events_until_error(held)][-1]
+
+    assert arrived_before_output is True
+    assert isinstance(released_error, litellm.ContentPolicyViolationError)
+    assert isinstance(held_error, litellm.ContentPolicyViolationError)
+    assert "LiteLLM: model group 'gpt-bg' failed with the error above" in held_error.message
+    assert released_error.message == held_error.message
+    assert primary_route.call_count == 2
+    assert backup_route.call_count == 0
 
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_partial_content_injects_continuation():

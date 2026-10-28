@@ -39,6 +39,9 @@ _DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] =
     tuple[Mapping[str, object], ...]
 )
 _DEPLOYMENT_IDS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_FALLBACK_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
+    tuple[Mapping[str, object], ...]
+)
 
 
 def with_admin_api_key_secret_reference(deployment: Deployment) -> Deployment:
@@ -254,6 +257,41 @@ def format_fallback_outcome_message(
 
     targets: Final = ", ".join(str(mask_sensitive_structure(target)) for target in fallback_model_group)
     return f"{lead} Fallback model group(s) configured: {targets}."
+
+
+def format_content_policy_fallback_hint(
+    model_group: str | None, content_policy_fallbacks: object, fallbacks: object
+) -> str:
+    return (
+        f"model={model_group}. content_policy_fallback={mask_sensitive_structure(content_policy_fallbacks)}. "
+        f"fallbacks={mask_sensitive_structure(fallbacks)}.\n\nSet 'content_policy_fallback' - "
+        "https://docs.litellm.ai/docs/routing#fallbacks"
+    )
+
+
+def _as_fallback_entries(fallbacks: object) -> tuple[Mapping[str, object], ...] | None:
+    try:
+        return _FALLBACK_ENTRIES_ADAPTER.validate_python(fallbacks)
+    except ValidationError:
+        return None
+
+
+def format_content_policy_no_fallback_note(
+    model_group: str,
+    lookup_groups: tuple[str, ...],
+    content_policy_fallbacks: object,
+    fallbacks: object,
+    nested_fallback_hop: bool,
+) -> str:
+    """The text the fallback dispatcher appends to a content-policy error it does not retry."""
+    outcome: Final = "" if nested_fallback_hop else format_fallback_outcome_message(model_group, None, "")
+    if content_policy_fallbacks is not None:
+        return outcome
+    hint: Final = f"\n{format_content_policy_fallback_hint(model_group, content_policy_fallbacks, fallbacks)}"
+    fallback_entries: Final = _as_fallback_entries(fallbacks) if fallbacks is not None else None
+    if fallback_entries is None or not lookup_groups or nested_fallback_hop:
+        return hint + outcome
+    return hint + format_no_fallback_group_message(lookup_groups, fallback_entries)
 
 
 def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:

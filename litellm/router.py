@@ -216,6 +216,8 @@ from litellm.router_utils.common_utils import (
     deployments_the_caller_may_use,
     filter_team_based_models,
     filter_web_search_deployments,
+    format_content_policy_fallback_hint,
+    format_content_policy_no_fallback_note,
     format_fallback_outcome_message,
     format_no_fallback_group_message,
     get_request_team_id,
@@ -4151,7 +4153,7 @@ class Router:
                     yield held_event
             except MidStreamFallbackError as e:
                 if response_id_exposed:
-                    Router._raise_original_mid_stream_error(e)
+                    self._raise_released_stream_error(e, initial_kwargs)
                 async with contextlib.aclosing(
                     self._aresponses_fallback_attempt(
                         e, source_iterator, initial_kwargs, wrapper.adopt_fallback_headers, held_lifecycle_events
@@ -4194,6 +4196,37 @@ class Router:
             return False
         model_group: Final = kwargs.get("model")
         return isinstance(model_group, str) and not self._stream_can_fall_back(model_group, kwargs)
+
+    def _raise_released_stream_error(
+        self, e: "MidStreamFallbackError", initial_kwargs: Mapping[str, object]
+    ) -> NoReturn:
+        """Raise the provider error of a stream whose id already reached the client, with the note the fallback
+        dispatcher would have added, since that dispatcher could start a second run."""
+        original: Final = e.original_exception
+        model_group: Final = initial_kwargs.get("model")
+        if (
+            litellm.expose_router_debug_in_errors
+            and isinstance(original, litellm.ContentPolicyViolationError)
+            and isinstance(model_group, str)
+            and not fallbacks_disabled_for_request(initial_kwargs)
+        ):
+            hop_depth: Final = initial_kwargs.get("fallback_depth")
+            original.message += format_content_policy_no_fallback_note(
+                model_group,
+                fallback_lookup_groups(initial_kwargs, model_group),
+                _request_fallback_list(
+                    initial_kwargs,
+                    "content_policy_fallbacks",
+                    cast("list[object] | None", self.content_policy_fallbacks),  # cast-ok: untyped router attribute
+                ),
+                _request_fallback_list(
+                    initial_kwargs,
+                    "fallbacks",
+                    cast("list[object] | None", self.fallbacks),  # cast-ok: untyped router attribute
+                ),
+                isinstance(hop_depth, int) and hop_depth > 0,
+            )
+        Router._raise_original_mid_stream_error(e)
 
     def _responses_continuation(
         self,
@@ -8754,7 +8787,9 @@ class Router:
                     )
                     return response
                 else:
-                    error_message = f"model={model_group}. content_policy_fallback={mask_sensitive_structure(content_policy_fallbacks)}. fallbacks={mask_sensitive_structure(fallbacks)}.\n\nSet 'content_policy_fallback' - https://docs.litellm.ai/docs/routing#fallbacks"
+                    error_message = format_content_policy_fallback_hint(
+                        model_group, content_policy_fallbacks, fallbacks
+                    )
                     verbose_router_logger.info(
                         msg=f"Got 'ContentPolicyViolationError'. No content_policy_fallback set. Defaulting \
                         to fallbacks, if available.{error_message}"
