@@ -2010,9 +2010,14 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
                 provider_specific_fields: Final = converted.get("provider_specific_fields")
 
+                # In OpenAI streaming format, the initial tool_calls chunk sets arguments=""
+                # (unless explicit chunk arguments are passed) so that subsequent argument deltas
+                # accumulate without duplicating the full arguments from output_item (fixes #48773).
+                raw_chunk_args: Final = parsed_chunk.get("arguments")
+                initial_arguments: Final = raw_chunk_args if isinstance(raw_chunk_args, str) else ""
                 function_chunk: Final = ChatCompletionToolCallFunctionChunk(
                     name=converted["function"]["name"] or None,
-                    arguments=converted["function"]["arguments"] or parsed_chunk.get("arguments") or "",
+                    arguments=initial_arguments,
                 )
                 if provider_specific_fields:
                     function_chunk["provider_specific_fields"] = provider_specific_fields

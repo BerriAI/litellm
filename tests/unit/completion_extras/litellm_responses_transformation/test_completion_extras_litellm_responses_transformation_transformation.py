@@ -6060,3 +6060,80 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
     assert content == expected_content
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+def test_responses_bridge_streaming_tool_call_arguments_no_duplication() -> None:
+    """Test that responses bridge does not duplicate tool-call arguments when
+    output_item.added carries full arguments and deltas follow (fixes #48773)."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=iter(()), sync_stream=True)
+    events: Final[tuple[dict[str, object], ...]] = (
+        {
+            "type": "response.created",
+            "response": {"id": "resp_001", "status": "in_progress"},
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "name": "write_file",
+                "call_id": "call_123",
+                "arguments": '{"path":"nonce.txt","content":"deadbeef"}',
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "delta": '{"path":"nonce.txt",',
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "delta": '"content":"deadbeef"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "name": "write_file",
+                "call_id": "call_123",
+                "arguments": '{"path":"nonce.txt","content":"deadbeef"}',
+            },
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "write_file",
+                        "call_id": "call_123",
+                        "arguments": '{"path":"nonce.txt","content":"deadbeef"}',
+                    }
+                ],
+            },
+        },
+    )
+
+    chunks: Final = [iterator.chunk_parser(event) for event in events]
+
+    tool_call_deltas = [
+        tc
+        for chunk in chunks
+        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.tool_calls
+        for tc in chunk.choices[0].delta.tool_calls
+    ]
+    assert len(tool_call_deltas) == 3
+    assert tool_call_deltas[0].function.name == "write_file"
+    assert tool_call_deltas[0].function.arguments == ""
+
+    assembled_arguments = "".join(tc.function.arguments or "" for tc in tool_call_deltas)
+    assert assembled_arguments == '{"path":"nonce.txt","content":"deadbeef"}'
+    assert chunks[-1].choices[0].finish_reason == "tool_calls"
+
