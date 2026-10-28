@@ -2,17 +2,34 @@
 Constants and helpers for ChatGPT subscription OAuth.
 """
 
+import base64
 import hashlib
+import json
 import os
 import platform
-from typing import Final
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, TypeAlias
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
+from pydantic import JsonValue, TypeAdapter
 
-from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
+from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+from litellm.litellm_core_utils.provider_affinity import get_stable_session_id
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import ProviderSpecificHeader
+
+if TYPE_CHECKING:
+    from litellm.types.router import GenericLiteLLMParams
+
+_SCOPED_HEADERS: Final[TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]] = TypeAdapter(
+    ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None
+)
+_STRING_HEADERS: Final = TypeAdapter(Mapping[str, str])
+_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 # OAuth + API constants (derived from openai/codex)
 CHATGPT_AUTH_BASE: Final = "https://auth.openai.com"
@@ -22,6 +39,12 @@ CHATGPT_OAUTH_TOKEN_URL: Final = f"{CHATGPT_AUTH_BASE}/oauth/token"
 CHATGPT_DEVICE_VERIFY_URL: Final = f"{CHATGPT_AUTH_BASE}/codex/device"
 CHATGPT_API_BASE: Final = "https://chatgpt.com/backend-api/codex"
 CHATGPT_CLIENT_ID: Final = "app_EMoamEEZ73f0CkXaXp7hrann"
+CHATGPT_ACCOUNT_ID_HEADER: Final = "ChatGPT-Account-Id"
+OPENAI_AUTH_CLAIM_KEY: Final = "https://api.openai.com/auth"
+
+JsonObject: TypeAlias = Mapping[str, JsonValue]
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(JsonObject)
+_EMPTY_CLAIMS: Final[JsonObject] = MappingProxyType({})
 
 DEFAULT_ORIGINATOR: Final = "codex_cli_rs"
 DEFAULT_USER_AGENT: Final = "codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown"
@@ -232,7 +255,7 @@ def get_chatgpt_default_headers(
     access_token: str,
     account_id: str | None,
     session_id: str | None = None,
-) -> dict:
+) -> dict[str, str]:
     originator: Final = get_chatgpt_originator()
     user_agent: Final = get_chatgpt_user_agent(originator)
     headers: Final = {
@@ -245,56 +268,157 @@ def get_chatgpt_default_headers(
     if session_id:
         headers["session_id"] = session_id
     if account_id:
-        headers["ChatGPT-Account-Id"] = account_id
+        headers[CHATGPT_ACCOUNT_ID_HEADER] = account_id
     return headers
+
+
+def decode_jwt_claims(token: str) -> JsonObject:
+    try:
+        parts: Final = token.split(".")
+        if len(parts) < 2:
+            return _EMPTY_CLAIMS
+        payload_b64: Final = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload_bytes: Final = base64.urlsafe_b64decode(payload_b64)
+        return _JSON_OBJECT_ADAPTER.validate_python(json.loads(payload_bytes.decode("utf-8")))
+    except Exception:
+        return _EMPTY_CLAIMS
+
+
+def extract_chatgpt_account_id(token: str | None) -> str | None:
+    if not token:
+        return None
+    auth_claims: Final = decode_jwt_claims(token).get(OPENAI_AUTH_CLAIM_KEY)
+    if not isinstance(auth_claims, dict):
+        return None
+    account_id: Final = auth_claims.get("chatgpt_account_id")
+    return account_id if isinstance(account_id, str) and account_id else None
+
+
+def _bearer_token(value: str) -> str:
+    scheme, separator, token = value.strip().partition(" ")
+    if not separator:
+        return scheme
+    return token.strip() if scheme.lower() == "bearer" else ""
+
+
+def is_chatgpt_oauth_key(value: str | None) -> bool:
+    if value is None:
+        return False
+    return OPENAI_AUTH_CLAIM_KEY in decode_jwt_claims(_bearer_token(value))
+
+
+@dataclass(frozen=True, slots=True)
+class ChatGPTClientCredential:
+    access_token: str
+    account_id: str | None
+
+
+def _header_value(headers: Mapping[str, str], name: str) -> str | None:
+    return next((value for key, value in headers.items() if key.lower() == name), None)
+
+
+def get_chatgpt_client_credential(headers: Mapping[str, str]) -> ChatGPTClientCredential | None:
+    auth_header: Final = _header_value(headers, "authorization")
+    if auth_header is None or not is_chatgpt_oauth_key(auth_header):
+        return None
+    access_token: Final = _bearer_token(auth_header)
+    account_id: Final = _header_value(headers, CHATGPT_ACCOUNT_ID_HEADER.lower()) or extract_chatgpt_account_id(
+        access_token
+    )
+    return ChatGPTClientCredential(access_token=access_token, account_id=account_id)
+
+
+def select_chatgpt_client_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    if get_chatgpt_client_credential(headers) is None:
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in headers.items()
+            if (key.lower() == "authorization" and is_chatgpt_oauth_key(value))
+            or key.lower() == CHATGPT_ACCOUNT_ID_HEADER.lower()
+        }
+    )
+
+
+def strip_chatgpt_client_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in headers.items()
+            if key.lower() not in ("authorization", CHATGPT_ACCOUNT_ID_HEADER.lower())
+        }
+    )
+
+
+def get_chatgpt_request_credential(
+    params: "Mapping[str, object] | GenericLiteLLMParams | None",
+) -> ChatGPTClientCredential | None:
+    normalized: Final = _normalize_litellm_params(params)
+    scoped: Final = normalized.get("provider_specific_header")
+    extra: Final = normalized.get("extra_headers")
+    headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_header=_SCOPED_HEADERS.validate_python(scoped), custom_llm_provider="chatgpt"
+    )
+    return get_chatgpt_client_credential(headers) or get_chatgpt_client_credential(
+        _STRING_HEADERS.validate_python(extra) if extra is not None else MappingProxyType({})
+    )
+
+
+def chatgpt_client_api_base(api_base: str | None) -> str:
+    base: Final = api_base or CHATGPT_API_BASE
+    parsed: Final = urlsplit(base)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "chatgpt.com"
+        or parsed.port not in (None, 443)
+        or parsed.username
+        or parsed.password
+    ):
+        raise ChatGPTAuthError(
+            status_code=400, message="Client ChatGPT credentials require the official HTTPS ChatGPT endpoint"
+        )
+    return base
 
 
 def get_chatgpt_default_instructions() -> str:
     return os.getenv("CHATGPT_DEFAULT_INSTRUCTIONS") or CHATGPT_DEFAULT_INSTRUCTIONS
 
 
-def _normalize_litellm_params(litellm_params: dict[str, object] | GenericLiteLLMParams | None) -> dict[str, object]:
-    if litellm_params is None:
-        return {}
-    if isinstance(litellm_params, dict):
-        return litellm_params
+def _normalize_litellm_params(litellm_params: object) -> Mapping[str, object]:
+    if isinstance(litellm_params, Mapping):
+        return _PARAMS.validate_python(litellm_params)
+    serializer: Final = getattr(litellm_params, "model_dump", None) or getattr(litellm_params, "dict", None)
+    if not callable(serializer):
+        return MappingProxyType({})
     try:
-        return litellm_params.model_dump()
+        return _PARAMS.validate_python(serializer())
     except Exception:
-        return {}
+        return MappingProxyType({})
 
 
-def get_chatgpt_session_id(litellm_params: dict[str, object] | GenericLiteLLMParams | None) -> str | None:
-    params: Final = _normalize_litellm_params(litellm_params)
-    metadata: Final = params.get("metadata")
-    generated: Final = any(
-        True
-        for session_metadata in (metadata, params.get("litellm_metadata"))
-        if isinstance(session_metadata, dict) and session_metadata.get(SESSION_ID_GENERATED_METADATA_KEY)
-    )
-    if not generated:
-        for key in ("litellm_session_id", "session_id"):
-            value = params.get(key)
-            if value:
-                return str(value)
-        if isinstance(metadata, dict):
-            value = metadata.get("session_id")
-            if value:
-                return str(value)
-    prompt_cache_key: Final[object] = params.get("prompt_cache_key")
-    if prompt_cache_key:
-        key = str(prompt_cache_key)
-        safe = _safe_header_value(key)
-        # hashing avoids collisions from _safe_header_value's replacement char
-        return safe if safe == key else hashlib.sha256(key.encode("utf-8", "surrogatepass")).hexdigest()
-    if generated:
+def _prompt_cache_session_id(prompt_cache_key: object) -> str | None:
+    if not prompt_cache_key:
         return None
-    for key in ("litellm_trace_id", "litellm_call_id"):
-        value = params.get(key)
-        if value:
-            return str(value)
-    return None
+    key: Final = str(prompt_cache_key)
+    return key if _safe_header_value(key) == key else hashlib.sha256(key.encode("utf-8", "surrogatepass")).hexdigest()
 
 
-def ensure_chatgpt_session_id(litellm_params: dict[str, object] | GenericLiteLLMParams | None) -> str:
+def get_chatgpt_session_id(litellm_params: object) -> str | None:
+    params: Final = _normalize_litellm_params(litellm_params)
+    return (
+        get_stable_session_id(params)
+        or _prompt_cache_session_id(params.get("prompt_cache_key"))
+        or next(
+            (
+                str(value)
+                for key in ("litellm_session_id", "litellm_trace_id", "litellm_call_id")
+                if (value := params.get(key))
+            ),
+            None,
+        )
+    )
+
+
+def ensure_chatgpt_session_id(litellm_params: object) -> str:
     return get_chatgpt_session_id(litellm_params) or str(uuid4())

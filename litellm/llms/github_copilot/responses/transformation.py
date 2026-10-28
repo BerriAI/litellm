@@ -9,12 +9,21 @@ https://github.com/caozhiyuan/copilot-api
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    cast,  # noqa: TID251  # narrows untyped request dicts at the session boundary
+)
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -23,14 +32,16 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
-from litellm.utils import _cached_get_model_info_helper
+from litellm.utils import cached_get_model_info_helper
 
 from ..authenticator import Authenticator
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
+    pin_session_authorization,
 )
+from ..per_user_auth import require_github_copilot_user_session
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -38,6 +49,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[object, object])
 
 
 def github_copilot_supports_responses_api(model: str) -> bool:
@@ -53,7 +67,7 @@ def github_copilot_supports_responses_api(model: str) -> bool:
     register_model, which also clears the cache used here).
     """
     try:
-        info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider="github_copilot")
+        info: Final = cached_get_model_info_helper(model=model, custom_llm_provider="github_copilot")
     except Exception as e:
         verbose_logger.debug(
             "github_copilot_supports_responses_api: get_model_info failed for %s: %s",
@@ -199,11 +213,14 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - copilot-vision-request if vision content detected
         - User-provided extra_headers (merged with priority)
         """
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
+        default_headers: Final = get_copilot_default_headers(user_session.token) if user_session is not None else None
         try:
             # Get GitHub Copilot API key via OAuth
-            api_key: Final = self.authenticator.get_api_key()
-
-            if not api_key:
+            api_key: Final = self.authenticator.get_api_key() if default_headers is None else ""
+            if default_headers is None and not api_key:
                 raise AuthenticationError(
                     model=model,
                     llm_provider="github_copilot",
@@ -211,10 +228,14 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 )
 
             # Get default headers (from copilot-api configuration)
-            default_headers: Final = get_copilot_default_headers(api_key)
+            copilot_headers: Final = default_headers or get_copilot_default_headers(api_key)
 
             # Merge with existing headers (user's extra_headers take priority)
-            merged_headers: Final = {**default_headers, **headers}
+            merged_headers: Final = cast(  # cast-ok: both spreads are str-valued header dicts
+                "dict[str, str]", {**copilot_headers, **headers}
+            )
+            if user_session is not None:
+                pin_session_authorization(merged_headers, user_session.token)
 
             # Analyze input to determine additional headers
             input_param: Final = self._get_input_from_params(litellm_params)
@@ -249,19 +270,18 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         Get the complete URL for GitHub Copilot Responses API endpoint.
         """
-        # Use provided api_base or fall back to authenticator's base or default
-        effective_api_base = (
-            api_base
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
+        effective_api_base: Final = (
+            (user_session.api_base if user_session is not None else None)
+            or api_base
             or self.authenticator.get_api_base()
             or os.getenv("GITHUB_COPILOT_API_BASE")
             or DEFAULT_GITHUB_COPILOT_API_BASE
         )
 
-        # Remove trailing slashes
-        effective_api_base = effective_api_base.rstrip("/")
-
-        # Return the responses endpoint
-        return f"{effective_api_base}/responses"
+        return join_api_base(effective_api_base, "responses")
 
     def _handle_reasoning_item(self, item: dict[str, object]) -> dict[str, object]:
         """
@@ -341,9 +361,9 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return "user"
 
         # If input is a list, analyze items
-        if isinstance(input_param, list):
+        if isinstance(input_param, list):  # pyright: ignore[reportUnnecessaryIsInstance]  # items arrive from untyped request params
             for item in input_param:
-                if not isinstance(item, dict):
+                if not isinstance(item, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # items arrive from untyped request params
                     continue
 
                 # Check if item has no role (agent-initiated)
@@ -352,7 +372,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
                 # Check if role is assistant (agent-initiated)
                 role = item.get("role")
-                if isinstance(role, str) and role.lower() == "assistant":
+                if isinstance(role, str) and role.lower() == "assistant":  # pyright: ignore[reportUnnecessaryIsInstance]  # role arrives from untyped request params
                     return "agent"
 
         # Default to user-initiated
@@ -373,7 +393,9 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         return self._contains_vision_content(input_param)
 
-    def _contains_vision_content(self, value: Any, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> bool:
+    def _contains_vision_content(
+        self, value: object, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH
+    ) -> bool:
         """
         Recursively check if a value contains vision content.
 
@@ -390,22 +412,28 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         # Check arrays
         if isinstance(value, list):
-            return any(self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in value)
+            items: Final = _OBJECT_LIST.validate_python(value)
+            return any(self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in items)
 
         # Only check dict/object types
         if not isinstance(value, dict):
             return False
 
+        fields: Final = _OBJECT_MAPPING.validate_python(value)
+
         # Check if this item is an input_image
-        item_type: Final = value.get("type")
+        item_type: Final = fields.get("type")
         if isinstance(item_type, str) and item_type.lower() == "input_image":
             return True
 
         # Check content field recursively
-        if "content" in value and isinstance(value["content"], list):
-            return any(
-                self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in value["content"]
-            )
+        if "content" in fields:
+            content: Final = fields["content"]
+            if isinstance(content, list):
+                content_items: Final = _OBJECT_LIST.validate_python(content)
+                return any(
+                    self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in content_items
+                )
 
         return False
 

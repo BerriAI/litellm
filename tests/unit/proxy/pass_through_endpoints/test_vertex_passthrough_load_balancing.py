@@ -1,8 +1,8 @@
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
-from starlette.datastructures import Headers, State
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -91,6 +91,7 @@ async def test_vertex_passthrough_load_balancing():
             request=mock_request,
             fastapi_response=mock_response,
             get_vertex_pass_through_handler=mock_handler,
+            general_settings={},
         )
 
         # Verify
@@ -404,6 +405,7 @@ async def test_vertex_passthrough_drops_anthropic_beta_only_on_count_tokens(
             request=MagicMock(),
             fastapi_response=MagicMock(),
             get_vertex_pass_through_handler=VertexAIPassThroughHandler(),
+            general_settings={},
         )
 
         upstream_headers = mock_create_route.call_args.kwargs["custom_headers"]
@@ -530,7 +532,7 @@ def test_forward_headers_from_request_x_pass_prefix():
         "x-pass-custom-header": "custom-value",
         "x-pass-another-header": "another-value",
         "authorization": "Bearer sk-litellm-key",
-        "x-litellm-api-key": "sk-1234",
+        "x-litellm-api-key": "sk-9876",
         "content-type": "application/json",
     }
 
@@ -747,6 +749,7 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
             request=mock_request,
             fastapi_response=mock_response,
             get_vertex_pass_through_handler=mock_handler,
+            general_settings={},
         )
 
         # Verify the router was called with the custom model name (extracted from URL)
@@ -771,12 +774,15 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
     """The router deployment that rewrote the upstream URL is the one the logging kwargs must name, so
     the Prometheus model_id label (and SpendLogs.model_id) on a Vertex passthrough success reads the
     deployment's id instead of "" (LIT-1761)."""
-    mock_request = MagicMock(spec=Request)
-    mock_request.method = "POST"
-    mock_request.url = "http://0.0.0.0:4000/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent"
-    mock_request.headers = Headers({})
-    mock_request.scope = {}
-    mock_request.state = State()
+    mock_request: Final = Request({
+        "type": "http",
+        "method": "POST",
+        "scheme": "http",
+        "server": ("0.0.0.0", 4000),
+        "path": "/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
+        "headers": [],
+        "query_string": b"",
+    })
     mock_handler = MagicMock()
     mock_handler.get_default_base_target_url.return_value = "https://aiplatform.googleapis.com"
 
@@ -833,6 +839,7 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
             request=mock_request,
             fastapi_response=MagicMock(),
             get_vertex_pass_through_handler=mock_handler,
+            general_settings={},
         )
 
     assert logging_kwargs["litellm_params"]["metadata"]["model_info"]["id"] == "vertex-gemini-38-flash-dep"

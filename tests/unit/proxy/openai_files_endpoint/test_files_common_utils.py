@@ -1,17 +1,25 @@
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
+from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
+from litellm import Router
+from litellm.caching.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    apply_team_provider_credentials,
     apply_unified_file_ids,
     get_credentials_for_model,
+    get_team_provider_credentials,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
-from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
 from litellm.types.utils import LiteLLMBatch
 
 _RAW_MODEL_WITH_PROMPT: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
@@ -459,9 +467,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 )
 
 
-def _completed_batch_for_retire(
-    output_file_id: str | None, counts: BatchRequestCounts | None = None
-) -> LiteLLMBatch:
+def _completed_batch_for_retire(output_file_id: str | None, counts: BatchRequestCounts | None = None) -> LiteLLMBatch:
     kwargs = dict(
         id="batch-1",
         completion_window="24h",
@@ -514,3 +520,334 @@ class TestCompletedBatchSafeToRetire:
 )
 def test_is_litellm_executed_batch_reads_the_llm_batch_id_prefix(decoded_unified_batch_id: str, executed: bool):
     assert is_litellm_executed_batch(decoded_unified_batch_id) is executed
+
+
+def _managed_files_hook(prisma_client: MagicMock) -> _PROXY_LiteLLMManagedFiles:
+    return _PROXY_LiteLLMManagedFiles(internal_usage_cache=InternalUsageCache(DualCache()), prisma_client=prisma_client)
+
+
+def _managed_object_prisma(db_batch_object: MagicMock | None) -> MagicMock:
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=db_batch_object)
+    prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+    return prisma_client
+
+
+@pytest.mark.asyncio
+async def test_batch_status_sync_from_provider_to_database(caplog: pytest.LogCaptureFixture):
+    import json
+    import logging
+
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        get_batch_from_database,
+        update_batch_in_database,
+    )
+
+    batch_id: Final = "batch_test123"
+    unified_batch_id: Final = "litellm_proxy:test_unified_batch"
+    stored_row: Final = MagicMock(
+        unified_object_id=batch_id,
+        status="validating",
+        file_object=json.dumps(
+            {
+                "id": batch_id,
+                "object": "batch",
+                "status": "validating",
+                "endpoint": "/v1/chat/completions",
+                "input_file_id": "file-test123",
+                "completion_window": "24h",
+                "created_at": 1234567890,
+            }
+        ),
+    )
+    prisma_client: Final = _managed_object_prisma(stored_row)
+    managed_files: Final = _managed_files_hook(prisma_client)
+    logger: Final = logging.getLogger("test_batch_status_sync")
+
+    db_batch_object, response_batch = await get_batch_from_database(
+        batch_id=batch_id,
+        unified_batch_id=unified_batch_id,
+        managed_files_obj=managed_files,
+        prisma_client=prisma_client,
+        verbose_proxy_logger=logger,
+    )
+
+    prisma_client.db.litellm_managedobjecttable.find_first.assert_awaited_once_with(
+        where={"unified_object_id": batch_id}
+    )
+    assert db_batch_object is stored_row
+    assert isinstance(response_batch, LiteLLMBatch)
+    assert response_batch.id == batch_id
+    assert response_batch.status == "validating"
+    assert response_batch.input_file_id == "file-test123"
+
+    completed: Final = LiteLLMBatch(
+        id=batch_id,
+        object="batch",
+        status="completed",
+        endpoint="/v1/chat/completions",
+        input_file_id="file-test123",
+        completion_window="24h",
+        created_at=1234567890,
+        output_file_id="file-output123",
+    )
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        await update_batch_in_database(
+            batch_id=batch_id,
+            unified_batch_id=unified_batch_id,
+            response=completed,
+            managed_files_obj=managed_files,
+            prisma_client=prisma_client,
+            verbose_proxy_logger=logger,
+            db_batch_object=db_batch_object,
+            operation="retrieve",
+            poller_owns_accounting=False,
+        )
+
+    update: Final = prisma_client.db.litellm_managedobjecttable.update
+    update.assert_awaited_once()
+    assert update.await_args.kwargs["where"] == {"unified_object_id": batch_id}
+    written: Final = update.await_args.kwargs["data"]
+    assert written["status"] == "complete"
+    assert written["batch_processed"] is True
+    assert written["updated_at"] is not None
+    assert json.loads(written["file_object"])["status"] == "completed"
+    assert json.loads(written["file_object"])["output_file_id"] == "file-output123"
+    assert f"Updating batch {batch_id} status from validating to completed" in caplog.messages
+
+
+@pytest.mark.asyncio
+async def test_batch_cancel_updates_database(caplog: pytest.LogCaptureFixture):
+    import json
+    import logging
+
+    from litellm.proxy.openai_files_endpoints.common_utils import update_batch_in_database
+
+    batch_id: Final = "batch_cancel_test"
+    cancelled: Final = LiteLLMBatch(
+        id=batch_id,
+        object="batch",
+        status="cancelled",
+        endpoint="/v1/chat/completions",
+        input_file_id="file-test123",
+        completion_window="24h",
+        created_at=1234567890,
+        cancelled_at=1234567999,
+    )
+    prisma_client: Final = _managed_object_prisma(None)
+    logger: Final = logging.getLogger("test_batch_cancel_updates_database")
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        await update_batch_in_database(
+            batch_id=batch_id,
+            unified_batch_id="litellm_proxy:cancel_test",
+            response=cancelled,
+            managed_files_obj=_managed_files_hook(prisma_client),
+            prisma_client=prisma_client,
+            verbose_proxy_logger=logger,
+            operation="cancel",
+        )
+
+    update: Final = prisma_client.db.litellm_managedobjecttable.update
+    update.assert_awaited_once()
+    assert update.await_args.kwargs["where"] == {"unified_object_id": batch_id}
+    written: Final = update.await_args.kwargs["data"]
+    assert written["status"] == "cancelled"
+    assert "batch_processed" not in written
+    assert json.loads(written["file_object"])["cancelled_at"] == 1234567999
+    assert f"Updating batch {batch_id} status to cancelled after cancel" in caplog.messages
+
+
+def _team_openai_router(team_public_model_name: str, deployment_model: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": team_public_model_name,
+                "litellm_params": {"model": deployment_model, "api_key": "team-openai-key"},
+                "model_info": {
+                    "id": "team-a-openai",
+                    "team_id": "team-a",
+                    "team_public_model_name": team_public_model_name,
+                },
+            },
+            {
+                "model_name": "claude-opus-4-6",
+                "litellm_params": {"model": "anthropic/claude-opus-4-6", "api_key": "anthropic-key"},
+            },
+        ]
+    )
+
+
+def _team_only_openai_credentials(
+    team_public_model_name: str, deployment_model: str, key_models: list[str]
+) -> dict | None:
+    return get_team_provider_credentials(
+        llm_router=_team_openai_router(team_public_model_name, deployment_model),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="team-a",
+            team_models=[team_public_model_name, "claude-opus-4-6"],
+            models=key_models,
+        ),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "team_public_model_name, deployment_model, key_models",
+    [
+        ("openai/*", "openai/*", ["gpt-4o"]),
+        ("openai/*", "openai/*", ["openai/gpt-4o"]),
+        ("gpt-4o", "openai/gpt-4o", ["openai/*"]),
+    ],
+)
+def test_a_restricted_key_resolves_the_team_deployment_its_wildcard_or_model_covers(
+    team_public_model_name: str, deployment_model: str, key_models: list[str]
+):
+    credentials = _team_only_openai_credentials(team_public_model_name, deployment_model, key_models)
+
+    assert credentials is not None
+    assert credentials["api_key"] == "team-openai-key"
+
+
+@pytest.mark.parametrize("key_models", [["claude-opus-4-6"], ["anthropic/*"]])
+def test_a_restricted_key_outside_the_team_wildcard_never_resolves_its_credentials(key_models: list[str]):
+    assert _team_only_openai_credentials("openai/*", "openai/*", key_models) is None
+
+
+@pytest.mark.parametrize(
+    "request_credentials, sent_api_key, sent_api_base",
+    [
+        ({}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": ""}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "   "}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "\n"}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "sk-forwarded"}, "sk-forwarded", "https://team.example/v1"),
+        ({"api_base": "https://caller.example/v1"}, "team-openai-key", "https://team.example/v1"),
+        (
+            {"api_key": "sk-forwarded", "api_base": "https://caller.example/v1"},
+            "sk-forwarded",
+            "https://caller.example/v1",
+        ),
+        ({"api_key": 123}, "team-openai-key", "https://team.example/v1"),
+        (
+            {"api_key": "sk-forwarded", "api_base": ["https://caller.example/v1"]},
+            "sk-forwarded",
+            "https://team.example/v1",
+        ),
+        ({"api_key": "sk-forwarded", "api_base": "  "}, "sk-forwarded", "https://team.example/v1"),
+        ({"litellm_credential_name": "no-such-credential"}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "sk-forwarded\n", "drop_params": True}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "sk-for warded"}, "sk-for warded", "https://team.example/v1"),
+    ],
+)
+def test_the_team_key_only_goes_to_the_team_host_unless_the_request_brings_its_own_key(
+    request_credentials: dict[str, object], sent_api_key: str, sent_api_base: str
+):
+    data: Final[dict[str, object]] = dict(request_credentials)
+
+    _apply_team_a_openai_credentials(data)
+
+    assert (data.get("api_key"), data.get("api_base")) == (sent_api_key, sent_api_base)
+
+
+@pytest.mark.parametrize("api_key", ["sk-forwarded\n", " sk-forwarded", "\u200b", "sk-forwarded\u00a0"])
+def test_a_request_key_that_cannot_be_an_http_header_is_a_bad_request(api_key: str):
+    data: Final[dict[str, object]] = {"api_key": api_key}
+
+    with pytest.raises(HTTPException) as refused:
+        _apply_team_a_openai_credentials(data)
+
+    assert refused.value.status_code == 400
+    assert api_key not in str(refused.value.detail)
+
+
+def _apply_team_a_openai_credentials(data: dict[str, object]) -> None:
+    apply_team_provider_credentials(
+        data=data,
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {
+                        "model": "openai/*",
+                        "api_key": "team-openai-key",
+                        "api_base": "https://team.example/v1",
+                    },
+                    "model_info": {"id": "team-a-openai", "team_id": "team-a"},
+                }
+            ]
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key", user_id="test-user", team_id="team-a", team_models=["openai/*"], models=["gpt-4o"]
+        ),
+        custom_llm_provider="openai",
+    )
+
+
+def _team_openai_deployment(
+    deployment_id: str, api_key: str, created_at: datetime | None = None, db_model: bool = True
+) -> dict[str, object]:
+    return {
+        "model_name": f"team-gpt-{deployment_id}",
+        "litellm_params": {"model": "openai/gpt-4o", "api_key": api_key},
+        "model_info": {"id": deployment_id, "team_id": "team-a", "db_model": db_model}
+        | ({} if created_at is None else {"created_at": created_at}),
+    }
+
+
+@pytest.mark.parametrize("deployment_ids", [("deployment-a", "deployment-b"), ("deployment-b", "deployment-a")])
+def test_a_team_with_two_openai_deployments_resolves_the_same_one_in_any_router_order(
+    deployment_ids: tuple[str, str],
+):
+    router: Final = Router(
+        model_list=[_team_openai_deployment(deployment_id, f"{deployment_id}-key") for deployment_id in deployment_ids]
+    )
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "deployment-a-key"
+
+
+@pytest.mark.parametrize("newer_first", [True, False])
+def test_a_team_keeps_its_older_openai_deployment_when_a_newer_one_has_a_lower_id(newer_first: bool):
+    older: Final = _team_openai_deployment("deployment-z", "older-key", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    newer: Final = _team_openai_deployment("deployment-a", "newer-key", datetime(2026, 6, 1, tzinfo=timezone.utc))
+    router: Final = Router(model_list=[newer, older] if newer_first else [older, newer])
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "older-key"
+
+
+def test_a_team_keeps_its_first_config_file_openai_deployment_over_older_db_ones():
+    db_deployment: Final = _team_openai_deployment("deployment-a", "db-key", datetime(2020, 1, 1, tzinfo=timezone.utc))
+    config_deployments: Final = tuple(
+        _team_openai_deployment(deployment_id, f"{deployment_id}-key", db_model=False)
+        for deployment_id in ("deployment-z", "deployment-b")
+    )
+    router: Final = Router(model_list=[db_deployment, *config_deployments])
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "deployment-z-key"

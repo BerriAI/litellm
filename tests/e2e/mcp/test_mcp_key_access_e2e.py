@@ -18,6 +18,7 @@ from typing import Final
 from datadog_mcp import SEARCH_LOGS_TOOL, register_datadog_mcp
 from e2e_config import DD_SEARCH_FROM, unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Domain, Route, Subject, meta
 from lifecycle import ResourceManager
 from mcp_client import McpClient
 from models import KeyGenerateBody, ObjectPermission
@@ -33,6 +34,12 @@ def _key(client: McpClient, resources: ResourceManager, *, mcp_servers: list[str
 
 
 class TestMcpKeyGrantByAlias:
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_alias_grant_persists_verbatim_and_lists_tools(
         self,
         client: McpClient,
@@ -62,6 +69,12 @@ class TestMcpKeyGrantByAlias:
 
 class TestMcpKeyWithoutAccessIsDenied:
     @pytest.mark.covers("mcp.list_tools.api_key.denied_without_permission")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_list_tools_denied_without_permission(
         self,
         client: McpClient,
@@ -82,6 +95,12 @@ class TestMcpKeyWithoutAccessIsDenied:
         )
 
     @pytest.mark.covers("mcp.call_tool.api_key.denied_without_permission")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_call_tool_denied_without_permission(
         self,
         client: McpClient,
@@ -113,6 +132,12 @@ class TestMcpKeyWithoutAccessIsDenied:
 
 
 class TestMcpHealthVisibility:
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_route_restricted_health_matches_server_grants(
         self,
         client: McpClient,

@@ -21,22 +21,13 @@ export type ModelInsightsResponse = {
   daily_totals: DailyTotal[];
   top_models: ModelMetric[];
 };
-export type TaskSummary = {
-  task_type: string;
-  label: string;
-  category: string;
-  value: number;
-  share: number;
-  leader: string;
-  provider: string;
-};
-export type ModelInsightTasksResponse = { start_date: string; end_date: string; tasks: TaskSummary[] };
 
 export type RankedModel = { model_group: string; provider: string; share: number; delta: number };
 export type Granularity = "day" | "week";
 
 const DAY_MS = 86_400_000;
 const BUCKET_DAYS: Record<Granularity, number> = { day: 1, week: 7 };
+const MIN_VISIBLE_BUCKETS: Record<Granularity, number> = { day: 30, week: 12 };
 
 export const metricValue = (row: Usage, metric: Metric) => {
   if (metric === "requests") return row.requests;
@@ -85,7 +76,12 @@ export const buildSeries = (rows: DailyMetric[], models: string[], metric: Metri
     const bucket = buckets[Math.floor((toDay(row.date) - origin) / bucketMs)];
     if (bucket) bucket[row.model_group] = Number(bucket[row.model_group] ?? 0) + metricValue(row, metric);
   }
-  return buckets;
+  const firstActive = buckets.findIndex((bucket) => models.some((model) => Number(bucket[model]) > 0));
+  const visibleFrom = Math.min(
+    firstActive === -1 ? buckets.length : firstActive,
+    buckets.length - MIN_VISIBLE_BUCKETS[window.granularity],
+  );
+  return buckets.slice(Math.max(0, visibleFrom));
 };
 
 export const buildBucketTotals = (totals: DailyTotal[], metric: Metric, window: SeriesWindow) => {

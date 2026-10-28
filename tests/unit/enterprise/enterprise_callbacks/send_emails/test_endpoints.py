@@ -1,11 +1,10 @@
+import asyncio
 import json
 import unittest.mock as mock
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-
-
 from litellm_enterprise.enterprise_callbacks.send_emails.endpoints import (
     _get_email_settings,
     _save_email_settings,
@@ -20,6 +19,9 @@ from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEventSettings,
     EmailEventSettingsUpdateRequest,
 )
+
+from litellm._service_logger import ServiceTypes
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
 # Mock user_api_key_auth dependency
@@ -347,3 +349,21 @@ async def test_reset_event_settings_surfaces_the_config_owned_refusal(mock_user_
     assert refused.value.status_code == 400
     assert refused.value.detail["keys"] == ["email_settings"]
     assert upserts == []
+
+
+@pytest.mark.asyncio
+async def test_save_email_settings_emits_a_postgres_upsert_event_for_litellm_config(mock_prisma_client):
+    mock_prisma_client.db.litellm_config.upsert = engine_call()
+    success = mock.AsyncMock()
+    service_logging = mock.MagicMock(async_service_success_hook=success, async_service_failure_hook=mock.AsyncMock())
+
+    with mock.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock.MagicMock(service_logging_obj=service_logging)):
+        await _save_email_settings(mock_prisma_client, {"send_key_created_email": True})
+        await asyncio.sleep(0)
+
+    event = success.await_args.kwargs
+    assert (event["service"], event["call_type"], event["event_metadata"]) == (
+        ServiceTypes.DB,
+        "save_email_settings",
+        {"table_name": "LiteLLM_Config"},
+    )

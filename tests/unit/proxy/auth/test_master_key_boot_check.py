@@ -5,6 +5,7 @@ import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -31,6 +32,8 @@ from litellm.proxy.auth.master_key_boot_check import (
     render_refusal,
     with_stored_secrets_counted,
 )
+
+PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
 
 
 def _verdict(
@@ -60,8 +63,8 @@ def _verdict(
         (None, UnsafeMasterKeyReason.NOT_SET),
         ("", UnsafeMasterKeyReason.EMPTY),
         (" \t\n", UnsafeMasterKeyReason.EMPTY),
-        ("sk-1234", UnsafeMasterKeyReason.PUBLICLY_KNOWN),
-        ("  sk-1234\n", UnsafeMasterKeyReason.PUBLICLY_KNOWN),
+        (PUBLICLY_KNOWN_KEY, UnsafeMasterKeyReason.PUBLICLY_KNOWN),
+        ("  " + PUBLICLY_KNOWN_KEY + "\n", UnsafeMasterKeyReason.PUBLICLY_KNOWN),
     ],
 )
 def test_unsafe_master_keys_are_refused_with_their_reason(master_key: str | None, reason: UnsafeMasterKeyReason):
@@ -71,12 +74,15 @@ def test_unsafe_master_keys_are_refused_with_their_reason(master_key: str | None
     assert verdict.reason is reason
 
 
-@pytest.mark.parametrize("master_key", ["sk-12345", "sk-1234567890", "1234", "sk-qa-9f2c1e7a44b0d3"])
+@pytest.mark.parametrize(
+    "master_key",
+    [PUBLICLY_KNOWN_KEY + "5", PUBLICLY_KNOWN_KEY + "567890", "1234", "sk-qa-9f2c1e7a44b0d3"],
+)
 def test_keys_that_only_resemble_the_known_default_are_safe(master_key: str):
     assert _verdict(master_key) == SafeMasterKey()
 
 
-@pytest.mark.parametrize("master_key", [None, "", "sk-1234"])
+@pytest.mark.parametrize("master_key", [None, "", PUBLICLY_KNOWN_KEY])
 def test_either_override_lets_an_unsafe_key_through(master_key: str | None):
     from_env = _verdict(master_key, override_env_is_on=True)
     from_yaml = _verdict(master_key, {WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_SETTING: True})
@@ -86,7 +92,9 @@ def test_either_override_lets_an_unsafe_key_through(master_key: str | None):
 
 
 def test_override_switched_off_in_yaml_still_refuses():
-    assert isinstance(_verdict("sk-1234", {WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_SETTING: False}), UnsafeMasterKeyRefused)
+    assert isinstance(
+        _verdict(PUBLICLY_KNOWN_KEY, {WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_SETTING: False}), UnsafeMasterKeyRefused
+    )
 
 
 def test_yaml_master_key_is_the_source_even_when_it_resolved_to_nothing():
@@ -98,8 +106,8 @@ def test_yaml_master_key_is_the_source_even_when_it_resolved_to_nothing():
 
 def test_yaml_master_key_is_the_source_when_it_differs_from_the_environment():
     verdict = _verdict(
-        "sk-1234",
-        {"master_key": "sk-1234"},
+        PUBLICLY_KNOWN_KEY,
+        {"master_key": PUBLICLY_KNOWN_KEY},
         environment_master_key="sk-qa-9f2c1e7a44b0d3",
         config_file_path="/app/config.yaml",
     )
@@ -108,7 +116,7 @@ def test_yaml_master_key_is_the_source_when_it_differs_from_the_environment():
     assert verdict.source == ConfigFileSource(config_file_path="/app/config.yaml")
 
 
-@pytest.mark.parametrize("unsafe_key", ["sk-1234", ""])
+@pytest.mark.parametrize("unsafe_key", [PUBLICLY_KNOWN_KEY, ""])
 def test_environment_is_the_source_when_yaml_only_relays_the_environment_variable(unsafe_key: str):
     verdict = _verdict(
         unsafe_key,
@@ -122,7 +130,9 @@ def test_environment_is_the_source_when_yaml_only_relays_the_environment_variabl
 
 
 def test_environment_is_the_source_when_yaml_does_not_set_a_master_key():
-    verdict = _verdict("sk-1234", {"database_url": "postgresql://db"}, config_file_path="/app/config.yaml")
+    verdict = _verdict(
+        PUBLICLY_KNOWN_KEY, {"database_url": "postgresql://db"}, config_file_path="/app/config.yaml"
+    )
 
     assert isinstance(verdict, UnsafeMasterKeyRefused)
     assert verdict.source == EnvironmentSource()
@@ -131,11 +141,21 @@ def test_environment_is_the_source_when_yaml_does_not_set_a_master_key():
 @pytest.mark.parametrize(
     ("master_key", "salt_key_is_set", "database_is_configured", "migration"),
     [
-        ("sk-1234", False, True, StoredSecretsMigration(from_master_key="sk-1234", encrypted_value_count=None)),
+        (
+            PUBLICLY_KNOWN_KEY,
+            False,
+            True,
+            StoredSecretsMigration(from_master_key=PUBLICLY_KNOWN_KEY, encrypted_value_count=None),
+        ),
         ("", False, True, StoredSecretsMigration(from_master_key="", encrypted_value_count=None)),
-        (" sk-1234\n", False, True, StoredSecretsMigration(from_master_key=" sk-1234\n", encrypted_value_count=None)),
-        ("sk-1234", True, True, None),
-        ("sk-1234", False, False, None),
+        (
+            " " + PUBLICLY_KNOWN_KEY + "\n",
+            False,
+            True,
+            StoredSecretsMigration(from_master_key=" " + PUBLICLY_KNOWN_KEY + "\n", encrypted_value_count=None),
+        ),
+        (PUBLICLY_KNOWN_KEY, True, True, None),
+        (PUBLICLY_KNOWN_KEY, False, False, None),
         (None, False, True, None),
     ],
 )
@@ -162,11 +182,11 @@ def _counted(verdict: MasterKeyBootVerdict, count: int | None) -> tuple[MasterKe
 
 
 def test_database_with_nothing_encrypted_needs_no_migration():
-    counted, asked_about = _counted(_verdict("sk-1234", database_is_configured=True), 0)
+    counted, asked_about = _counted(_verdict(PUBLICLY_KNOWN_KEY, database_is_configured=True), 0)
 
     assert isinstance(counted, UnsafeMasterKeyRefused)
     assert counted.migration is None
-    assert asked_about == ["sk-1234"]
+    assert asked_about == [PUBLICLY_KNOWN_KEY]
 
 
 @pytest.mark.parametrize("count", [4, None])
@@ -182,7 +202,7 @@ def test_database_with_encrypted_values_or_unreadable_keeps_the_migration(count:
     [
         SafeMasterKey(),
         UnsafeMasterKeyAllowed(reason=UnsafeMasterKeyReason.PUBLICLY_KNOWN),
-        _verdict("sk-1234", database_is_configured=False),
+        _verdict(PUBLICLY_KNOWN_KEY, database_is_configured=False),
     ],
 )
 def test_database_is_not_read_when_no_migration_is_on_the_table(verdict: MasterKeyBootVerdict):
@@ -206,7 +226,7 @@ def _refusal(
     )
 
 
-_MIGRATION = StoredSecretsMigration(from_master_key="sk-1234", encrypted_value_count=3)
+_MIGRATION = StoredSecretsMigration(from_master_key=PUBLICLY_KNOWN_KEY, encrypted_value_count=3)
 
 
 def test_config_refusal_names_the_file_and_tells_it_to_read_the_environment():
@@ -229,9 +249,9 @@ def test_environment_refusal_gives_the_command_without_a_config_step():
     ("master_key", "general_settings", "environment_master_key", "is_set"),
     [
         (None, {}, None, False),
-        ("sk-1234", {"master_key": "sk-1234"}, None, False),
-        ("sk-1234", {}, "sk-1234", True),
-        ("sk-1234", {"master_key": "sk-1234"}, "", True),
+        (PUBLICLY_KNOWN_KEY, {"master_key": PUBLICLY_KNOWN_KEY}, None, False),
+        (PUBLICLY_KNOWN_KEY, {}, PUBLICLY_KNOWN_KEY, True),
+        (PUBLICLY_KNOWN_KEY, {"master_key": PUBLICLY_KNOWN_KEY}, "", True),
     ],
 )
 def test_refusal_records_whether_the_environment_variable_is_already_set(
@@ -290,7 +310,7 @@ def test_migration_steps_appear_only_when_the_database_needs_them():
     with_migration = render_refusal(_refusal(migration=_MIGRATION))
     without_migration = render_refusal(_refusal(migration=None))
 
-    assert f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR}=sk-1234" in with_migration
+    assert f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR}={PUBLICLY_KNOWN_KEY}" in with_migration
     assert "holds 3 value(s) encrypted with this master key" in with_migration
     assert ROTATION_DOCS_URL in with_migration
     assert MIGRATE_FROM_MASTER_KEY_ENV_VAR not in without_migration
@@ -299,20 +319,20 @@ def test_migration_steps_appear_only_when_the_database_needs_them():
 
 def test_unreadable_database_is_reported_as_unchecked_rather_than_counted():
     text = render_refusal(
-        _refusal(migration=StoredSecretsMigration(from_master_key="sk-1234", encrypted_value_count=None))
+        _refusal(migration=StoredSecretsMigration(from_master_key=PUBLICLY_KNOWN_KEY, encrypted_value_count=None))
     )
 
     assert "could not be checked" in text
     assert "value(s)" not in text
-    assert f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR}=sk-1234" in text
+    assert f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR}={PUBLICLY_KNOWN_KEY}" in text
 
 
 @pytest.mark.parametrize(
     ("from_master_key", "assignment"),
     [
-        ("sk-1234", f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR}=sk-1234"),
+        (PUBLICLY_KNOWN_KEY, f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR}={PUBLICLY_KNOWN_KEY}"),
         ("", f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR}="),
-        (" sk-1234", f'{MIGRATE_FROM_MASTER_KEY_ENV_VAR}=" sk-1234"'),
+        (" " + PUBLICLY_KNOWN_KEY, f'{MIGRATE_FROM_MASTER_KEY_ENV_VAR}=" {PUBLICLY_KNOWN_KEY}"'),
     ],
 )
 def test_migrate_from_assignment_carries_the_exact_previous_key(from_master_key: str, assignment: str):
@@ -342,7 +362,7 @@ def test_migration_with_an_exported_key_replaces_it_in_place_and_numbers_every_s
 
 
 @pytest.mark.skipif(shutil.which("openssl") is None, reason="the printed command shells out to openssl")
-@pytest.mark.parametrize("from_master_key", ["sk-1234", "", " sk-1234"])
+@pytest.mark.parametrize("from_master_key", [PUBLICLY_KNOWN_KEY, "", " " + PUBLICLY_KNOWN_KEY])
 def test_printed_migration_commands_save_both_keys_to_the_env_file(tmp_path: Path, from_master_key: str):
     from dotenv import dotenv_values
 

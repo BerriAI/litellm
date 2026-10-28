@@ -32,7 +32,7 @@ from litellm.proxy._types import (
     user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import MemoryRepository
@@ -181,8 +181,8 @@ async def _assert_write_access(
     """
     if _is_admin(user_api_key_dict):
         return
-    row_user_id: Final = getattr(row, "user_id", None)
-    row_team_id: Final = getattr(row, "team_id", None)
+    row_user_id: Final = row.user_id
+    row_team_id: Final = row.team_id
 
     # Personal ownership.
     if row_user_id and row_user_id == user_api_key_dict.user_id:

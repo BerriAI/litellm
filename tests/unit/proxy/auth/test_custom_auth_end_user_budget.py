@@ -151,11 +151,11 @@ async def test_custom_auth_defers_end_user_budget_to_common_checks_when_enabled(
             return_value=end_user_obj,
         ),
         patch(
-            "litellm.proxy.auth.user_api_key_auth._check_end_user_budget",
+            "litellm.proxy.auth.user_api_key_auth.check_end_user_budget",
             new_callable=AsyncMock,
         ) as mock_check,
         patch(
-            "litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access",
+            "litellm.proxy.auth.user_api_key_auth.enforce_key_and_fallback_model_access",
             new_callable=AsyncMock,
         ),
         patch(

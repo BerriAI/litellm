@@ -1,3 +1,4 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -7,6 +8,12 @@ import { Logo } from "@/components/molecules/logo/Logo";
 import { GUARDRAIL_PRESETS } from "./guardrail_garden_configs";
 import { GuardrailCardInfo } from "./guardrail_garden_data";
 
+const CATEGORY_LABELS: Record<GuardrailCardInfo["category"], { provider: string; type: string }> = {
+  litellm: { provider: "LiteLLM Content Filter", type: "Content Filter" },
+  decision_model: { provider: "Decision Model", type: "Decision Model" },
+  partner: { provider: "Partner Guardrail", type: "Partner" },
+};
+
 interface GuardrailDetailViewProps {
   card: GuardrailCardInfo;
   onBack: () => void;
@@ -15,12 +22,16 @@ interface GuardrailDetailViewProps {
 }
 
 const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack, accessToken, onGuardrailCreated }) => {
+  const term = useTerminology();
   const [isAddFormVisible, setIsAddFormVisible] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
 
   const detailRows = [
-    { property: "Provider", value: card.category === "litellm" ? "LiteLLM Content Filter" : "Partner Guardrail" },
+    { property: "Provider", value: CATEGORY_LABELS[card.category].provider },
     ...(card.subcategory ? [{ property: "Subcategory", value: card.subcategory }] : []),
+    ...(card.category === "decision_model"
+      ? [{ property: "Cost", value: "Billed per call by the decision model provider" }]
+      : []),
     ...(card.category === "litellm" ? [{ property: "Cost", value: "$0 / request" }] : []),
     ...(card.category === "litellm" ? [{ property: "External Dependencies", value: "None" }] : []),
     ...(card.category === "litellm" ? [{ property: "Latency", value: card.eval?.latency || "<1ms" }] : []),
@@ -57,7 +68,7 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
         <h1 className="m-0 text-[28px] font-normal leading-tight text-foreground">{card.name}</h1>
       </div>
 
-      <p className="m-0 mb-5 text-sm leading-relaxed text-muted-foreground">{card.description}</p>
+      <p className="m-0 mb-5 text-sm leading-relaxed text-muted-foreground">{term(card.description)}</p>
 
       {/* Action buttons — outlined style like Vertex */}
       <div className="mb-8 flex gap-2.5">
@@ -92,7 +103,7 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
           {/* Left column — overview + details table */}
           <div className="min-w-0 flex-1">
             <h2 className="m-0 mb-3 text-lg font-normal text-foreground">Overview</h2>
-            <p className="m-0 mb-8 text-sm leading-[1.7] text-foreground">{card.description}</p>
+            <p className="m-0 mb-8 text-sm leading-[1.7] text-foreground">{term(card.description)}</p>
 
             <h2 className="m-0 mb-1 text-lg font-normal text-foreground">Guardrail Details</h2>
             <p className="m-0 mb-4 text-[13px] text-muted-foreground">Details are as follows</p>
@@ -126,9 +137,7 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
             {/* Type */}
             <div className="mb-7">
               <div className="mb-1 text-xs text-muted-foreground">Type</div>
-              <div className="text-[13px] text-foreground">
-                {card.category === "litellm" ? "Content Filter" : "Partner"}
-              </div>
+              <div className="text-[13px] text-foreground">{CATEGORY_LABELS[card.category].type}</div>
             </div>
 
             {/* Tags — pill style like Vertex */}

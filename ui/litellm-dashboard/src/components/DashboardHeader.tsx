@@ -1,5 +1,6 @@
 "use client";
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -14,6 +15,7 @@ import { DocsLink } from "@/components/Navbar/DocsLink/DocsLink";
 import { CommunityEngagementButtons } from "@/components/Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
 import { NotificationsBell } from "@/components/Navbar/NotificationsBell/NotificationsBell";
 import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
+import LiteAdmin from "@/components/liteadmin/LiteAdmin";
 import ThemeToggle from "@/components/ThemeToggle/ThemeToggle";
 import WorkerDropdown from "@/components/Navbar/WorkerDropdown/WorkerDropdown";
 import { useWorker } from "@/hooks/useWorker";
@@ -21,11 +23,29 @@ import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPro
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
 import { usePathname } from "next/navigation";
+import { useState, type ReactNode } from "react";
+import { useMediaQuery } from "usehooks-ts";
+import { Ellipsis } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { CommandPaletteTrigger } from "@/components/CommandPalette/CommandPaletteTrigger";
 
 // Top bar for the dashboard shell. Sits only over the content column (the brand
 // lives in the sidebar header); mirrors the design's breadcrumb-left / tools-right layout.
-export function DashboardHeader() {
+export function DashboardHeader({
+  accessToken,
+  navigationTrigger,
+  deploymentHealth,
+}: {
+  accessToken: string | null;
+  navigationTrigger?: ReactNode;
+  deploymentHealth?: ReactNode;
+}) {
+  const term = useTerminology();
   const { title } = getBreadcrumb(usePathname());
+  const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
+  if (isDesktop && mobileToolsOpen) setMobileToolsOpen(false);
   const { isControlPlane, selectedWorker } = useWorker();
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
   const hideCommunityLinks = useDisableShowPrompts();
@@ -39,32 +59,62 @@ export function DashboardHeader() {
   };
 
   return (
-    <header className="flex h-14 flex-none items-center justify-between gap-4 border-b border-border bg-background px-4">
-      <Breadcrumb className="min-w-0">
+    <header className="flex h-14 flex-none items-center justify-between gap-4 border-b border-border bg-background px-4 max-md:gap-2 max-md:px-2">
+      {navigationTrigger}
+      <Breadcrumb className="min-w-0 max-md:flex-1">
         <BreadcrumbList className="flex-nowrap">
-          <BreadcrumbItem className="flex-none">
+          <BreadcrumbItem className="flex-none max-md:hidden">
             <ViewSwitcher />
           </BreadcrumbItem>
-          <BreadcrumbSeparator />
+          <BreadcrumbSeparator className="max-md:hidden" />
           <BreadcrumbItem className="min-w-0">
-            <BreadcrumbPage className="truncate">{title}</BreadcrumbPage>
+            <BreadcrumbPage className="truncate">{term(title)}</BreadcrumbPage>
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
 
-      <div className="flex flex-none items-center gap-1">
-        {showWorkerSwitch && (
-          <>
-            <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
-            <ToolbarSeparator />
-          </>
-        )}
-        <DocsLink />
-        <BlogDropdown />
-        {!hideCommunityLinks && <CommunityEngagementButtons />}
-        <ToolbarSeparator />
-        <ThemeToggle />
-        <NotificationsBell />
+      <CommandPaletteTrigger />
+
+      <div className="flex shrink-0 items-center gap-1">
+        <LiteAdmin />
+        <div className="flex flex-none items-center gap-1 max-md:hidden">
+          {showWorkerSwitch && (
+            <>
+              <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
+              <ToolbarSeparator />
+            </>
+          )}
+          <DocsLink />
+          <BlogDropdown />
+          {!hideCommunityLinks && <CommunityEngagementButtons />}
+          <ToolbarSeparator />
+          <ThemeToggle />
+          {deploymentHealth}
+          <NotificationsBell accessToken={accessToken} />
+        </div>
+        <div className="flex shrink-0 items-center gap-1 md:hidden">
+          <CommandPaletteTrigger mobile />
+          {deploymentHealth}
+          <NotificationsBell accessToken={accessToken} />
+          <Popover open={!isDesktop && mobileToolsOpen} onOpenChange={setMobileToolsOpen}>
+            <PopoverTrigger
+              render={<Button variant="ghost" size="icon" className="size-11" aria-label="More options" />}
+            >
+              <Ellipsis />
+            </PopoverTrigger>
+            <PopoverContent align="end" className="max-w-[calc(100vw-2rem)]">
+              <PopoverTitle>Gateway tools</PopoverTitle>
+              <ViewSwitcher />
+              {showWorkerSwitch && <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />}
+              <div className="flex flex-wrap items-center gap-2">
+                <ThemeToggle />
+                <DocsLink />
+                <BlogDropdown />
+                {!hideCommunityLinks && <CommunityEngagementButtons />}
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
       </div>
     </header>
   );

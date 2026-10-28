@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Final, Union
 import httpx
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -177,7 +178,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         else:
             mapped_params["output_format"] = self.DEFAULT_OUTPUT_FORMAT
 
-        # Extract engine from model name (e.g., "aws_polly/neural" -> "neural")
+        # model arrives without the "aws_polly/" prefix, e.g. "standard"
         engine: Final = self._extract_engine_from_model(model)
         mapped_params["engine"] = engine
 
@@ -195,18 +196,17 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         """
         Extract engine from model name.
 
+        speech() strips the "aws_polly/" prefix before the config is called,
+        so the bare engine name is what normally arrives here.
+
         Examples:
-            - aws_polly/neural -> neural
-            - aws_polly/standard -> standard
+            - standard -> standard
             - aws_polly/long-form -> long-form
             - aws_polly -> neural (default)
         """
-        if "/" in model:
-            parts: Final = model.split("/")
-            if len(parts) >= 2:
-                engine: Final = parts[1].lower()
-                if engine in self.VALID_ENGINES:
-                    return engine
+        engine: Final = model.rsplit("/", 1)[-1].lower()
+        if engine in self.VALID_ENGINES:
+            return engine
         return self.DEFAULT_ENGINE
 
     def validate_environment(
@@ -262,11 +262,9 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         Returns:
             Tuple of (signed_headers, json_body_string)
         """
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call AWS Polly. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
 
         # Get AWS region
         aws_region_name: Final = litellm_params.get("aws_region_name", self.DEFAULT_REGION)
