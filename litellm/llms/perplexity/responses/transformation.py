@@ -19,7 +19,7 @@ from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -27,7 +27,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base config method returns list
         """Ref: https://docs.perplexity.ai/api-reference/responses-post"""
         return [
             "max_output_tokens",
@@ -39,6 +39,20 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             "instructions",
             "models",
         ]
+
+    def map_openai_params(
+        self,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+    ) -> dict[str, object]:  # mutable-ok: base config method returns dict
+        mapped_params: Final = TypeAdapter(dict[str, object]).validate_python(response_api_optional_params, strict=True)
+        if not drop_params:
+            return mapped_params
+        supported_params: Final = frozenset(
+            TypeAdapter(list[str]).validate_python(self.get_supported_openai_params(model), strict=True)
+        )
+        return {key: value for key, value in mapped_params.items() if key in supported_params}
 
     @property
     def custom_llm_provider(self) -> LlmProviders:

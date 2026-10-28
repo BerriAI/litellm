@@ -44163,6 +44163,11 @@ export interface components {
              */
             type: "tool_search_output";
         };
+        /** ResponsesAPIModeration */
+        ResponsesAPIModeration: {
+            /** Model */
+            model: string;
+        };
         /**
          * ResponsesAPIRequestParams
          * @description TypedDict for request parameters supported by the responses API.
@@ -44188,6 +44193,7 @@ export interface components {
             } | null;
             /** Model */
             model: string;
+            moderation?: components["schemas"]["ResponsesAPIModeration"] | null;
             /** Parallel Tool Calls */
             parallel_tool_calls?: boolean | null;
             /** Partial Images */
@@ -66943,6 +66949,7 @@ export interface operations {
                     } | null;
                     /** Model */
                     model: string;
+                    moderation?: components["schemas"]["ResponsesAPIModeration"] | null;
                     /** Parallel Tool Calls */
                     parallel_tool_calls?: boolean | null;
                     /** Partial Images */
@@ -70407,6 +70414,7 @@ export interface operations {
                     } | null;
                     /** Model */
                     model: string;
+                    moderation?: components["schemas"]["ResponsesAPIModeration"] | null;
                     /** Parallel Tool Calls */
                     parallel_tool_calls?: boolean | null;
                     /** Partial Images */
@@ -81205,6 +81213,7 @@ export interface operations {
                     } | null;
                     /** Model */
                     model: string;
+                    moderation?: components["schemas"]["ResponsesAPIModeration"] | null;
                     /** Parallel Tool Calls */
                     parallel_tool_calls?: boolean | null;
                     /** Partial Images */
