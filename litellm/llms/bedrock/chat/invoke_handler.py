@@ -13,6 +13,7 @@ from litellm.caching.caching import InMemoryCache
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.common_utils import native_redacted_thinking_data
@@ -22,6 +23,7 @@ from litellm.llms.anthropic.chat.handler import (
 from litellm.llms.anthropic.chat.transformation import JsonModeRequest
 from litellm.llms.base_llm import base_model_iterator
 from litellm.llms.base_llm.base_utils import ResponseFormatSchema
+from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -962,8 +964,19 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
             response_format_schema=response_format_schema,
         )
 
-    def _chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
-        return self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
+    def _chunk_parser(self, chunk_data: dict[str, object]) -> ModelResponseStream:
+        parsed: Final = self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
+        trace: Final = object_mapping(chunk_data.get(BEDROCK_INVOKE_TRACE_FIELD))
+        if trace is None:
+            return parsed
+        return parsed.model_copy(
+            update={
+                "provider_specific_fields": {
+                    **(parsed.provider_specific_fields or {}),
+                    BEDROCK_INVOKE_TRACE_FIELD: trace,
+                }
+            }
+        )
 
     def _stream_end_chunk(self) -> ModelResponseStream | None:
         return self.anthropic_model_response_iterator.cut_stream_chunk()

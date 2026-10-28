@@ -8,8 +8,9 @@ startup information those lines used to carry is still present as JSON records. 
 on through the environment and through the config, at one and two uvicorn workers, at the INFO, the
 default and the WARNING log level, under a concurrent burst that lands on both workers, under an operator
 --log_config that names the proxy logger or gives it a handler of its own, and with a policy list longer
-than the stdout cap. The deprecated --enforce_prisma_migration_check notice is one JSON record under a
-config-only json_logs, and a boot whose config cannot be loaded still prints it before failing.
+than the stdout cap. The model list keeps a model name the secret patterns would match. The deprecated
+--enforce_prisma_migration_check notice is one JSON record under a config-only json_logs, and a boot whose
+config cannot be loaded still prints it before failing.
 """
 
 from __future__ import annotations
@@ -30,15 +31,10 @@ from tests.integration._support.process import owned_proxy_process, refused_boot
 
 JSON_RECORD: Final = TypeAdapter(dict[str, JsonValue])
 PLAIN_LOG_LINE: Final = re.compile(r"^\d\d:\d\d:\d\d - LiteLLM")
-# prisma-client-py starts the Prisma query engine on the proxy's own stdout, and the engine announces
-# its build hash there in two writes (the text, then the newline), so with two workers the two
-# announcements land glued together or glued to a neighbor's line. The text is not litellm's and is
-# removed before the lines are read.
 PRISMA_ENGINE_TEXT: Final = re.compile(r"query-engine [0-9a-f]{40}")
 STARTED_WORKER: Final = "Started server process"
 MODEL_LIST_HEADER: Final = "Proxy initialized with Config, Set models:"
 CACHE_LINE: Final = "Setting Cache on Proxy"
-# printed by the CLI process before any worker exists, so it proves the launcher itself logs JSON
 CONNECTION_BUDGET_LINE: Final = "Postgres connection budget"
 REDIS_AUTH_CACHE_LINE: Final = "enable_redis_auth_cache"
 BANNER_FRAGMENT: Final = "██╗"
@@ -47,8 +43,6 @@ WORKER_COUNTS: Final = (1, 2)
 UNKNOWN_MODEL_STATUS: Final = 400
 BURST_SIZE: Final = 16
 CACHE_SETTINGS: Final[Mapping[str, JsonValue]] = {"cache": True, "cache_params": {"type": "redis"}}
-# the policy list and the required migration SQL are the startup listings that outgrow the stdout cap
-# (MAX_STRING_LENGTH_STDOUT_LOG, 4096 by default) that bounds echoed request payloads
 STDOUT_CAP: Final = 4096
 POLICY_COUNT: Final = 60
 POLICY_LIST_HEADER: Final = "LiteLLM Policy Engine: Loaded"
@@ -56,8 +50,6 @@ TRUNCATION_MARKER: Final = "litellm_truncated"
 DEPRECATED_FLAG: Final = "--enforce_prisma_migration_check"
 DEPRECATED_FLAG_NOTICE: Final = "--enforce_prisma_migration_check is deprecated and has no effect"
 UNPARSEABLE_CONFIG: Final = "model_list: [\n  - bad: yaml: here\n"
-# an operator logging config of the usual shape: it sets the proxy logger's level and gives it no handler
-# of its own, and formats everything else, uvicorn included, as JSON through the root handler
 OPERATOR_LOG_CONFIG: Final[Mapping[str, JsonValue]] = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -66,7 +58,6 @@ OPERATOR_LOG_CONFIG: Final[Mapping[str, JsonValue]] = {
     "loggers": {"LiteLLM Proxy": {"level": "INFO"}},
     "root": {"level": "INFO", "handlers": ["stdout"]},
 }
-# an operator logging config that silences the proxy logger with a handler of its own and keeps the rest JSON
 OPERATOR_SILENCING_LOG_CONFIG: Final[Mapping[str, JsonValue]] = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -222,8 +213,6 @@ def test_json_logs_env_keeps_every_line_json(gateway: Gateway, tmp_path: Path, w
 @pytest.mark.parametrize("workers", WORKER_COUNTS)
 def test_json_logs_config_keeps_every_line_json(gateway: Gateway, tmp_path: Path, workers: int) -> None:
     models: Final = _models()
-    # cache is listed before json_logs on purpose: the cache branch logs the Redis auth-cache line
-    # while the config is still being read, so JSON mode must not depend on the key order.
     config: Final = _write_config(tmp_path, gateway.upstream_url, models, {**CACHE_SETTINGS, "json_logs": True})
     log: Final = _boot_serve_and_stop(gateway, tmp_path, config, {"LITELLM_LOG": "INFO"}, workers, models)
     _assert_every_line_is_json(log, workers, models)
@@ -288,6 +277,20 @@ def test_json_logs_keeps_a_startup_listing_longer_than_the_stdout_cap_whole(gate
     assert TRUNCATION_MARKER not in listings[0], listings[0]
     for policy in policies:
         assert policy in listings[0], (policy, listings[0])
+
+
+def test_json_logs_model_list_keeps_a_model_name_the_secret_patterns_would_match(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    """The model list printed every model name as configured. The sk- key pattern matches inside a name such as
+    `risk-assessment-...`, so the JSON record must carry that name as the print did, not `riREDACTED`."""
+    models: Final = (f"risk-assessment-{uuid.uuid4().hex}",)
+    config: Final = _write_config(tmp_path, gateway.upstream_url, models, {**CACHE_SETTINGS, "json_logs": True})
+
+    log: Final = _boot_serve_and_stop(gateway, tmp_path, config, {"LITELLM_LOG": "INFO"}, 1, models)
+
+    _assert_every_line_is_json(log, 1, models)
+    assert f"    {models[0]}" in _messages(log), _messages(log)
 
 
 def test_json_logs_default_level_keeps_every_line_json(gateway: Gateway, tmp_path: Path) -> None:

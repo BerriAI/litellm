@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 import litellm
 from litellm.proxy._types import LiteLLMRoutes
 from litellm.proxy.proxy_server import app
-from litellm.types.router import ModelGroupInfo
+from litellm.types.router import DeploymentTypedDict, ModelGroupInfo
 from tests._master_key import MASTER_KEY
 
 client = TestClient(app)
@@ -21,12 +21,16 @@ LEGACY_MODEL_HUB_PATH = "/public/model_hub"
 
 @dataclass(frozen=True, slots=True)
 class _FakeRouter:
-    """Stands in for the running Router: `_get_model_group_info` only ever asks it this."""
+    """Stands in for the running Router: `_get_model_group_info` only ever asks it these."""
 
     infos: Mapping[str, ModelGroupInfo]
+    model_group_alias: Mapping[str, str] = MappingProxyType({})
 
     def get_model_group_info(self, model_group: str, team_id: str | None = None) -> ModelGroupInfo | None:
         return self.infos.get(model_group)
+
+    def get_model_list_of_routed_group(self, model_group: str) -> list[DeploymentTypedDict]:
+        return []
 
 
 def _info(

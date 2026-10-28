@@ -25,6 +25,14 @@ pub fn key_prefix(gcs_path: Option<&str>) -> String {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("GCS answered {0}")]
+struct UnexpectedStatus(reqwest::StatusCode);
+
+#[derive(Debug, thiserror::Error)]
+#[error("GCS cache worker thread panicked")]
+struct WorkerPanicked;
+
 #[derive(Clone, Debug)]
 pub struct GcsConfig {
     pub bucket_name: String,
@@ -114,9 +122,9 @@ impl<S: CacheCodec> GcsCache<S> {
             .body(payload)
             .send()
             .await
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(|error| Error::unavailable(litellm_http::Error::from(error)))?;
         if !response.status().is_success() {
-            return Err(Error::Unavailable);
+            return Err(Error::unavailable(UnexpectedStatus(response.status())));
         }
         Ok(())
     }
@@ -135,18 +143,18 @@ impl<S: CacheCodec> GcsCache<S> {
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .send()
             .await
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(|error| Error::unavailable(litellm_http::Error::from(error)))?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
         if !response.status().is_success() {
-            return Err(Error::Unavailable);
+            return Err(Error::unavailable(UnexpectedStatus(response.status())));
         }
-        let body = response.bytes().await.map_err(|_| Error::Unavailable)?;
-        self.codec
-            .decode(&body)
-            .map(Some)
-            .map_err(|_| Error::InvalidEntry)
+        let body = response
+            .bytes()
+            .await
+            .map_err(|error| Error::unavailable(litellm_http::Error::from(error)))?;
+        self.codec.decode(&body).map(Some)
     }
 
     fn run_sync<T, F>(future: F) -> Result<T, Error>
@@ -158,7 +166,7 @@ impl<S: CacheCodec> GcsCache<S> {
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|_| Error::Unavailable)
+                .map_err(Error::unavailable)
                 .and_then(|runtime| runtime.block_on(future))
         };
         match tokio::runtime::Handle::try_current() {
@@ -169,7 +177,7 @@ impl<S: CacheCodec> GcsCache<S> {
                 scope
                     .spawn(|| run(future))
                     .join()
-                    .map_err(|_| Error::Unavailable)
+                    .map_err(|_| Error::unavailable(WorkerPanicked))
                     .and_then(|result| result)
             }),
             Err(_) => run(future),
@@ -242,7 +250,7 @@ impl<S: CacheCodec> BatchCache for GcsCache<S> {
                 match self.async_get_cache(&key, &context).await {
                     Ok(Some(value)) => Ok(BatchEntry::Hit(value)),
                     Ok(None) => Ok(BatchEntry::Miss),
-                    Err(Error::InvalidEntry) => Ok(BatchEntry::Invalid),
+                    Err(Error::InvalidEntry(_)) => Ok(BatchEntry::Invalid),
                     Err(error) => Err(error),
                 }
             }

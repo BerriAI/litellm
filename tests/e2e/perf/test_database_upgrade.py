@@ -12,19 +12,29 @@ from lifecycle import ResourceManager
 from memory_readings import read_rss_everywhere
 from proxy_client import ProxyClient
 from setup.datastore import read_db_counters, read_redis_counters
-from setup.observe import Observation, evaluate, read_mock_requests, render, reset_mock, set_mock_latency
+from setup.observe import (
+    Observation,
+    evaluate,
+    junit_properties,
+    read_mock_requests,
+    render,
+    reset_mock,
+    set_mock_latency,
+)
 from setup.plan import build_plan
 from setup.podcpu import gateway_cpu_sampler
 from setup.provision import MOCK_PROVIDERS, build_setup, mock_url
 from setup.run import run_plan
-from setup.upgrade import assert_finished, monitor_for, upgrade_case
+from setup.upgrade import assert_finished, monitor_for, upgrade_case, upgrade_properties
 from setup.upgrade_worker import connect, read_state
 
 pytestmark = [pytest.mark.perf, pytest.mark.quiet_stack]
 
 
 @pytest.mark.skipif(os.environ.get("E2E_DATABASE_UPGRADE") != "1", reason="Dedicated disposable snapshot lane only")
-def test_database_upgrade(proxy: ProxyClient, idp: Keycloak, resources: ResourceManager) -> None:
+def test_database_upgrade(
+    proxy: ProxyClient, idp: Keycloak, resources: ResourceManager, request: pytest.FixtureRequest
+) -> None:
     case: Final = upgrade_case()
     urls: Final = tuple(mock_url(provider) for provider in MOCK_PROVIDERS)
     for url in urls:
@@ -52,12 +62,7 @@ def test_database_upgrade(proxy: ProxyClient, idp: Keycloak, resources: Resource
             f"successful_requests={monitor.successes} persisted_requests={monitor.persisted_count} "
             f"unmatched_requests={len(monitor.pending)}\n"
         )
-        monitor.assert_complete(state)
-        assert_finished(connection, state)
         rss_after: Final = read_rss_everywhere(proxy)
-        assert {(r.replica, r.hostname) for r in rss_before.readings} == {
-            (r.replica, r.hostname) for r in rss_after.readings
-        }, "Gateway pods replaced during the upgrade"
         observed: Final = Observation(
             records=outcome.records,
             mock_requests=tuple(seen for url in urls for seen in read_mock_requests(url)),
@@ -73,6 +78,13 @@ def test_database_upgrade(proxy: ProxyClient, idp: Keycloak, resources: Resource
             gateway_cpu_seconds=cpu.seconds,
         )
         rows, exceeded = evaluate(case, observed)
+        item: Final = request.node  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # pytest: untyped
+        assert isinstance(item, pytest.Item)
+        item.user_properties[:] = [
+            entry for entry in item.user_properties if not entry[0].startswith("perf_")
+        ]  # rebind-ok: a --reruns retry replaces the first attempt's numbers instead of appending a second set
+        item.user_properties.extend(junit_properties(rows))
+        item.user_properties.extend(upgrade_properties(state, monitor))
         _ = sys.stdout.write(render(case, observed, rows) + "\n")
         _ = sys.stdout.write(
             f"schema_seconds={state.schema_seconds:.3f} index_seconds={state.index_seconds:.3f} "
@@ -82,4 +94,9 @@ def test_database_upgrade(proxy: ProxyClient, idp: Keycloak, resources: Resource
         artifact: Final = os.environ.get("E2E_ARTIFACT_DIR")
         if artifact:
             _ = (Path(artifact) / "database-upgrade.json").write_text(state.model_dump_json(), encoding="utf-8")
+        monitor.assert_complete(state)
+        assert_finished(connection, state)
+        assert {(r.replica, r.hostname) for r in rss_before.readings} == {
+            (r.replica, r.hostname) for r in rss_after.readings
+        }, "Gateway pods replaced during the upgrade"
         assert not exceeded, "\n".join(exceeded)

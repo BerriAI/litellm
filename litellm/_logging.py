@@ -938,7 +938,8 @@ def print_startup_message(message: str) -> None:
     With JSON logs on, every line of stdout is read by a log pipeline, so the message goes out as one
     INFO record of the proxy logger instead, on stdout like the print whatever handlers the logging
     config gave that logger, with the ANSI color codes and surrounding blank lines removed, located at
-    the caller and emitted at any log level; a blank spacer produces no record.
+    the caller and emitted at any log level, whole and unredacted as the print showed it; a blank
+    spacer produces no record.
     """
     if litellm.suppress_startup_output is True:
         return
@@ -971,24 +972,8 @@ def _write_startup_message(message: str, caller: FrameType | None, level: int) -
         None,
         func=caller.f_code.co_name if caller is not None else None,
     )
-    # The print this replaces shows at any log level, so the record skips the level checks of the
-    # proxy logger (at the root's WARNING in the CLI process until initialize() runs) and of its JSON
-    # handler (LITELLM_LOG). It also skips the logger's stdout cap: that cap bounds echoed request
-    # payloads, while a startup message is operator text the print showed whole (the required migration
-    # SQL, the policy list), so it gets the uncapped processing of a DEBUG line, secret redaction and
-    # base64 collapse included, before the handler's filters and the formatter.
-    if not _process_record(
-        record,
-        base64_limit=_get_max_base64_length_stdout_log(),
-        text_limit=0,
-        redact=_ENABLE_SECRET_REDACTION,
-    ):
+    if not _process_record(record, base64_limit=_get_max_base64_length_stdout_log(), text_limit=0, redact=False):
         return
-    # The print wrote to stdout whatever the logging config said, so the record goes through the proxy's
-    # own JSON handler on stdout rather than the proxy logger's handlers: uvicorn applies an operator
-    # --log_config after proxy_cli's turn_on_json() and before initialize() re-installs the JSON handler
-    # through load_config(), and in that window, where the banner and the feedback box are emitted, a
-    # config that names "LiteLLM Proxy" has left the logger with no handler or with the operator's own.
     _startup_json_handler().handle(record)
 
 

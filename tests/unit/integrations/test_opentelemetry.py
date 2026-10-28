@@ -19,14 +19,16 @@ import pytest
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 from opentelemetry import trace
+from opentelemetry._logs import LogRecord
 from opentelemetry._logs.severity import SeverityNumber
-from opentelemetry.sdk._logs import LogData, LogRecord
+from opentelemetry.sdk._logs import ReadableLogRecord
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
-from opentelemetry.sdk._logs.export import InMemoryLogExporter, LogExportResult, SimpleLogRecordProcessor
+from opentelemetry.sdk._logs.export import InMemoryLogExporter, LogRecordExportResult, SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, MetricsData
+from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from parameterized import parameterized
@@ -46,6 +48,7 @@ from litellm.integrations.opentelemetry import (
     RAW_REQUEST_SPAN_NAME,
     _normalize_team_metadata_keys,
 )
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy import proxy_server
 from litellm.proxy._types import ManagementEndpointLoggingPayload, ProxyException, SpanAttributes
@@ -1045,6 +1048,15 @@ class TestOpenTelemetrySemconvStability(unittest.TestCase):
         h = self._make(env="gen_ai_latest_experimental")
         kwargs = {"model": "claude-sonnet-4-5", "call_type": "unknown"}
         self.assertEqual(h._get_span_name(kwargs), "chat claude-sonnet-4-5")
+
+    def test_passthrough_operation_names_the_span(self) -> None:
+        h: Final = self._make(env="gen_ai_latest_experimental")
+        kwargs: Final = {
+            "model": "unknown",
+            "call_type": "pass_through_endpoint",
+            PASSTHROUGH_OPERATION_KEY: GenAIOperation.RETRIEVAL,
+        }
+        self.assertEqual(h._get_span_name(kwargs), "retrieval unknown")
 
     def test_generation_name_metadata_overrides_semconv_name(self):
         h = self._make(env="gen_ai_latest_experimental")
@@ -2321,9 +2333,13 @@ def test_otlp_http_log_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPat
             severity_number=SeverityNumber.INFO,
             body="tls-export-test",
         )
-        log_data: Final = LogData(log_record=record, instrumentation_scope=InstrumentationScope("tls-export-test"))
+        log_data: Final = ReadableLogRecord(
+            log_record=record,
+            resource=Resource({}),
+            instrumentation_scope=InstrumentationScope("tls-export-test"),
+        )
         result: Final = exporter.export([log_data])
-        assert result is LogExportResult.SUCCESS, f"log export failed: {result}"
+        assert result is LogRecordExportResult.SUCCESS, f"log export failed: {result}"
         assert tls_sink.received.get(timeout=5) == "/v1/logs"
     finally:
         exporter.shutdown()
@@ -6639,7 +6655,7 @@ class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
             time.sleep(self.POLL_INTERVAL)
         return None
 
-    def _emitted_log_records(self, semconv_opt_in: str) -> tuple[LogData, ...]:
+    def _emitted_log_records(self, semconv_opt_in: str) -> tuple[ReadableLogRecord, ...]:
         log_exporter = InMemoryLogExporter()
         logger_provider = OTLoggerProvider()
         logger_provider.add_log_record_processor(SimpleLogRecordProcessor(log_exporter))
@@ -6713,7 +6729,12 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
     must be bounded and must shut down whatever it drops (LIT-5437: threads accumulated
     until pods were OOMKilled)."""
 
-    BSP_THREAD_NAME = "OtelBatchSpanProcessor"
+    def setUp(self) -> None:
+        processor: Final = BatchSpanProcessor(InMemorySpanExporter())
+        try:
+            self.bsp_thread_name = processor._batch_processor._worker_thread.name
+        finally:
+            processor.shutdown()
 
     def _logger(self, cap=3, exporter="console"):
         logger = OpenTelemetry(
@@ -6730,7 +6751,7 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
         logger._tracer_provider_cache.clear()
 
     def _live_exporter_threads(self):
-        return [t for t in threading.enumerate() if t.name == self.BSP_THREAD_NAME]
+        return [t for t in threading.enumerate() if t.name == self.bsp_thread_name]
 
     def _wait_for_exporter_threads(self, expected, timeout=10.0):
         """Dropped providers are shut down off-thread, so poll instead of sleeping."""
@@ -6751,8 +6772,6 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
             logger._get_tracer_with_dynamic_headers({"authorization": f"Basic tenant-{i}"})
 
         self.assertEqual(len(logger._tracer_provider_cache), 3)
-        # Guards the thread-name constant: a rename upstream would make this read 0 and the
-        # bound assertion below would pass while measuring nothing.
         self.assertGreaterEqual(len(self._live_exporter_threads()), 1)
         self.assertLessEqual(self._wait_for_exporter_threads(before + 3) - before, 3)
 

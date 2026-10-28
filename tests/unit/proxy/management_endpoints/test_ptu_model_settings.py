@@ -40,6 +40,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.router import Router
+from litellm.types.proxy.management_endpoints.model_management_endpoints import PatchModelRequest
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
@@ -1204,6 +1205,80 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         )
         for blob in ("model_info", "litellm_params"):
             assert json.loads(written[blob])["input_cost_per_token"] == 0, blob
+
+    @pytest.mark.parametrize("field,activating", [
+        ("input_cost_per_token", False), ("cache_read_input_token_cost", False),
+        ("input_cost_per_second", False), ("tiered_pricing", False), ("search_context_cost_per_query", False),
+        ("input_cost_per_token", True), ("cache_read_input_token_cost", True),
+        ("tiered_pricing", True), ("search_context_cost_per_query", True),
+    ])
+    def test_removing_ptu_managed_pricing_is_rejected(self, field: str, activating: bool) -> None:
+        original: Final = _deployment_without_ptu() if activating else _deployment_with_stored_ptu()
+        configured: Final = original.model_copy(update={
+            "litellm_params": original.litellm_params.model_copy(update={"input_cost_per_second": 0.0}),
+        })
+        with pytest.raises(HTTPException) as exc:
+            update_db_model(
+                db_model=configured if activating else _ptu_priced_deployment(configured),
+                updated_patch=PatchModelRequest(
+                    litellm_params_to_remove=(field,),
+                    model_info=_deployment_with_stored_ptu().model_info if activating else None,
+                ),
+            )
+        assert exc.value.status_code == 400
+        assert field in exc.value.detail
+        assert "ptu_count and cost_per_ptu_per_hour" in exc.value.detail
+
+    @pytest.mark.parametrize("mode,field", [
+        ("extra", "temperature"), ("disabled", "input_cost_per_token"),
+        ("disabled", "input_cost_per_second"), ("cleared", "input_cost_per_token"),
+        ("cleared", "input_cost_per_second"), ("activating", "input_cost_per_second"),
+        ("ordinary", "input_cost_per_second"),
+        ("ordinary", "input_cost_per_token_above_123k_tokens"),
+        ("ordinary", "regional_endpoint_uplift_multiplier"),
+    ])
+    def test_allowed_ptu_removals_stay_absent_after_another_save(
+        self, monkeypatch: pytest.MonkeyPatch, mode: str, field: str
+    ) -> None:
+        original: Final = (
+            _deployment_without_ptu() if mode in ("activating", "ordinary")
+            else _ptu_priced_deployment(_deployment_with_stored_ptu())
+        )
+        rate: Final = 0.5 if mode in ("activating", "ordinary") else 0.0
+        price_field: Final = field if mode == "ordinary" else "input_cost_per_second"
+        configured: Final = original.model_copy(update={
+            "litellm_params": original.litellm_params.model_copy(update={
+                "temperature": 0.4, price_field: rate,
+            }),
+            "model_info": original.model_info.model_copy(update={price_field: rate}),
+        })
+        if mode == "disabled":
+            monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR)
+        incoming_info: Final = (
+            ModelInfo(ptu_count=None, cost_per_ptu_per_hour=None) if mode == "cleared"
+            else _deployment_with_stored_ptu().model_info if mode == "activating" else ModelInfo()
+        )
+        patch: Final = PatchModelRequest(
+            litellm_params_to_remove=(field,),
+            model_info=incoming_info.model_copy(update={price_field: rate}),
+        )
+        written: Final = update_db_model(db_model=configured, updated_patch=patch)
+        assert json.loads(written["model_info"]).get("ptu_count") == (
+            None if mode in ("cleared", "ordinary") else 15
+        )
+        reloaded: Final = Deployment.model_validate({
+            "model_name": written["model_name"], "litellm_params": json.loads(written["litellm_params"]),
+            "model_info": json.loads(written["model_info"]),
+        })
+        saved_again: Final = update_db_model(
+            db_model=reloaded, updated_patch=updateDeployment(
+                model_name="renamed", model_info=ModelInfo.model_validate({price_field: rate}),
+            )
+        )
+        retried: Final = update_db_model(db_model=reloaded, updated_patch=patch)
+        for result in (written, saved_again, retried):
+            assert field not in json.loads(result["litellm_params"])
+            assert field not in json.loads(result["model_info"])
 
     def test_a_patch_pricing_a_ptu_deployment_is_refused(self):
         with pytest.raises(HTTPException) as exc:

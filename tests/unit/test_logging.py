@@ -1937,12 +1937,14 @@ def test_print_startup_warning_still_prints_when_suppressed(
         assert lines[0] == "LiteLLM: --ciphers is not applied when using --run_granian."
 
 
-def test_print_startup_message_is_one_json_record_in_json_mode(monkeypatch, capfd):
+def test_print_startup_message_is_one_json_record_in_json_mode(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
     """With JSON logs on, a multi-line colored startup message is one INFO record with the colors and the
     surrounding blank lines removed, so a log pipeline parses it like every other line. The logger sits
     at WARNING, as it does in the CLI process, and the record still goes out: a print has no level."""
     monkeypatch.setattr(litellm, "json_logs", True)
-    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     turn_on_json()
     verbose_proxy_logger.setLevel(logging.WARNING)
 
@@ -1958,11 +1960,12 @@ def test_print_startup_message_is_one_json_record_in_json_mode(monkeypatch, capf
     assert record["message"] == "LiteLLM: Proxy initialized with Config, Set models:\n    gpt-4o"
     assert record["level"] == "INFO"
     assert record["component"] == "LiteLLM Proxy"
-    # the record names the call site, not the helper, so operators can find the message
     assert str(record["logger"]).startswith("test_logging.py:"), record["logger"]
 
 
-def test_print_startup_message_yellow_notice_is_an_info_record_on_stdout(monkeypatch, capfd):
+def test_print_startup_message_yellow_notice_is_an_info_record_on_stdout(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
     """An operator notice printed in yellow (an ignored flag, a deprecation) stays on stdout in JSON mode,
     where the print put it, as one INFO record with the color codes removed."""
     monkeypatch.setattr(litellm, "json_logs", True)
@@ -1981,7 +1984,9 @@ def test_print_startup_message_yellow_notice_is_an_info_record_on_stdout(monkeyp
     assert record["level"] == "INFO"
 
 
-def test_print_startup_message_shows_above_the_json_handler_level(monkeypatch, capfd):
+def test_print_startup_message_shows_above_the_json_handler_level(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
     """`LITELLM_LOG=WARNING` sets the JSON handler to WARNING, which drops the INFO logger lines; the
     startup notices still go out, as the prints they replace did at every level."""
     monkeypatch.setattr(litellm, "json_logs", True)
@@ -2000,8 +2005,8 @@ def test_print_startup_message_shows_above_the_json_handler_level(monkeypatch, c
 
 
 def test_print_startup_message_emits_json_after_an_operator_log_config_removed_the_handlers(
-    request, monkeypatch, capfd
-):
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
     """uvicorn applies an operator `--log_config` after proxy_cli's turn_on_json() and before initialize()
     re-installs the JSON handler through load_config(); a config that names "LiteLLM Proxy" leaves the
     logger without handlers in that window, where the banner and the feedback box are emitted, and they
@@ -2011,7 +2016,7 @@ def test_print_startup_message_emits_json_after_an_operator_log_config_removed_t
     monkeypatch.setattr(litellm, "json_logs", True)
     monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     turn_on_json()
-    request.addfinalizer(turn_on_json)  # put the JSON handler back for the tests that follow
+    request.addfinalizer(turn_on_json)
     logging.config.dictConfig(
         {"version": 1, "disable_existing_loggers": False, "loggers": {"LiteLLM Proxy": {"level": "INFO"}}}
     )
@@ -2042,8 +2047,8 @@ OPERATOR_HANDLERS_ON_THE_PROXY_LOGGER: Final = {
 
 @pytest.mark.parametrize("handler", sorted(OPERATOR_HANDLERS_ON_THE_PROXY_LOGGER))
 def test_print_startup_message_stays_on_stdout_under_an_operator_handler_on_the_proxy_logger(
-    request, monkeypatch, capfd, handler: str
-):
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], handler: str
+) -> None:
     """An operator `--log_config` that gives "LiteLLM Proxy" a handler of its own, a NullHandler that silences
     it or a plain WARNING-level handler on stderr, is in force when the banner and the feedback box are
     emitted; the print they replace wrote to stdout whatever the logging config said, so the record still
@@ -2053,7 +2058,7 @@ def test_print_startup_message_stays_on_stdout_under_an_operator_handler_on_the_
     monkeypatch.setattr(litellm, "json_logs", True)
     monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     turn_on_json()
-    request.addfinalizer(turn_on_json)  # put the JSON handler back for the tests that follow
+    request.addfinalizer(turn_on_json)
     logging.config.dictConfig(
         {
             "version": 1,
@@ -2079,13 +2084,15 @@ def test_print_startup_message_stays_on_stdout_under_an_operator_handler_on_the_
     assert record["component"] == "LiteLLM Proxy"
 
 
-def test_print_startup_message_keeps_a_listing_longer_than_the_stdout_cap_whole(monkeypatch, capfd):
+def test_print_startup_message_keeps_a_listing_longer_than_the_stdout_cap_whole(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
     """The required migration SQL and the policy list run past MAX_STRING_LENGTH_STDOUT_LOG on a drifted
     deployment. The prints they replace showed them whole, and that cap exists for echoed request payloads,
     so the JSON record carries the whole listing too."""
     monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
     monkeypatch.setattr(litellm, "json_logs", True)
-    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     turn_on_json()
     commands: Final = tuple(f'ALTER TABLE "LiteLLM_Table{n}" ADD COLUMN "column_{n}" TEXT;' for n in range(40))
     listing: Final = "\n".join(("Changes to DB Schema detected", "Required SQL commands:", *commands))
@@ -2102,27 +2109,28 @@ def test_print_startup_message_keeps_a_listing_longer_than_the_stdout_cap_whole(
     assert record["message"] == listing
 
 
-def test_print_startup_message_still_redacts_a_secret_in_the_uncapped_record(monkeypatch, capfd):
-    """Skipping the stdout cap must not skip secret redaction: a startup message that echoes a credential,
-    such as a failed migration diff quoting the database error, goes out scrubbed."""
+def test_print_startup_message_keeps_a_model_name_the_secret_patterns_would_match(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """The model list printed `risk-assessment-gpt4o` as configured; the sk- key pattern matches inside
+    that name, so the JSON record has to carry the name as the print did, not `riREDACTED`."""
     monkeypatch.setattr(litellm, "json_logs", True)
-    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     turn_on_json()
+    assert secret_redaction.redact_string("risk-assessment-gpt4o") != "risk-assessment-gpt4o"
 
-    print_startup_message(
-        'Failed to generate migration diff. Error: {"api_key": "sk-abcdefghijklmnopqrstuvwxyz0123456789"}'
-    )
+    print_startup_message("\033[32m    risk-assessment-gpt4o\033[0m")
 
     out, err = capfd.readouterr()
     assert err == ""
     lines: Final = [raw for raw in out.splitlines() if raw.strip()]
     assert len(lines) == 1, lines
-    record: Final = json.loads(lines[0])
-    assert "sk-abcdefghijklmnopqrstuvwxyz0123456789" not in lines[0]
-    assert record["message"] == 'Failed to generate migration diff. Error: {"REDACTED"}'
+    assert json.loads(lines[0])["message"] == "    risk-assessment-gpt4o"
 
 
-def test_print_startup_message_blank_spacer_emits_no_json_record(monkeypatch, capfd):
+def test_print_startup_message_blank_spacer_emits_no_json_record(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
     """A spacer that only pads the terminal has nothing to say to a log pipeline."""
     monkeypatch.setattr(litellm, "json_logs", True)
     monkeypatch.setattr(sys, "excepthook", sys.excepthook)
