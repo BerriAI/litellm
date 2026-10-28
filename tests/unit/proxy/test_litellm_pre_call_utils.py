@@ -53,6 +53,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_provider_specific_headers_to_request,
     check_if_token_is_service_account,
     clean_headers,
+    forwarded_anthropic_oauth_token,
     get_dynamic_logging_metadata,
     get_metadata_variable_name,
     move_guardrails_to_metadata,
@@ -5964,6 +5965,25 @@ def test_clean_headers_strips_x_api_key_when_byok_disabled():
     )
 
     assert "x-api-key" not in result
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected_token"),
+    [
+        (
+            {"authorization": "Bearer sk-ant-oat01-caller", "x-litellm-api-key": "Bearer sk-proxy"},
+            "sk-ant-oat01-caller",
+        ),
+        ({"authorization": "Bearer sk-ant-oat01-caller"}, None),
+        ({"authorization": "Bearer sk-ant-api03-caller", "x-litellm-api-key": "Bearer sk-proxy"}, None),
+        ({"x-litellm-api-key": "Bearer sk-proxy"}, None),
+    ],
+    ids=["oauth-beside-proxy-key", "oauth-used-as-proxy-key", "non-oauth-authorization", "no-authorization"],
+)
+def test_forwarded_anthropic_oauth_token_follows_chats_forwarding_rule(
+    headers: dict[str, str], expected_token: str | None
+) -> None:
+    assert forwarded_anthropic_oauth_token(Headers(headers)) == expected_token
 
 
 def test_clean_headers_strips_x_api_key_when_byok_enabled_but_x_api_key_was_auth_header():
