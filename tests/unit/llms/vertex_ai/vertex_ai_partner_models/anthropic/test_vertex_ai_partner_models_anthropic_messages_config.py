@@ -2,20 +2,100 @@ import copy
 import json
 import os
 from collections.abc import Mapping
+from datetime import datetime, timedelta
+from queue import SimpleQueue
+from threading import get_ident
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import requests
+import responses
 
 import litellm
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
-from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_HOSTED_TOOLS
 from litellm.types.router import GenericLiteLLMParams
+
+
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("infer_project", (False, True), ids=("explicit-project", "credential-project"))
+@pytest.mark.asyncio
+async def test_messages_auth_load_and_refresh_leave_the_event_loop(stream: bool, infer_project: bool) -> None:
+    config: Final = VertexAIPartnerModelsAnthropicMessagesConfig()
+    loop_thread: Final = get_ident()
+    token_threads: Final[SimpleQueue[int]] = SimpleQueue()
+    now: Final = datetime(2025, 1, 1)
+    model: Final = "claude-sonnet-5"
+    headers: Final = {"Authorization": "Bearer incoming", "anthropic-beta": "retained-beta", "x-request-id": "req-1"}
+    optional_params: Final = {
+        "stream": stream,
+        "tools": [{"type": ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value, "name": "web_search"}],
+    }
+    litellm_params: Final = {
+        "vertex_ai_project": None if infer_project else "auth-project",
+        "vertex_ai_location": "global",
+        "vertex_credentials": json.dumps(
+            {
+                "type": "authorized_user",
+                "client_id": "synthetic-client",
+                "client_secret": "synthetic-secret",
+                "refresh_token": "synthetic-refresh",
+                "quota_project_id": "auth-project",
+            }
+        ),
+    }
+
+    async def validate() -> tuple[Mapping[str, object], str | None]:
+        return await config.avalidate_anthropic_messages_environment(
+            headers=headers, model=model, messages=[], optional_params=optional_params, litellm_params=litellm_params
+        )
+
+    with patch("google.auth._helpers.utcnow", return_value=now) as clock, responses.RequestsMock() as oauth:
+
+        def token_response(_request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+            token_threads.put(get_ident())
+            return 200, {}, json.dumps({"access_token": f"token-{len(oauth.calls) + 1}", "expires_in": 3600})
+
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        cold_headers, cold_url = await validate()
+        assert token_threads.get_nowait() != loop_thread
+        assert cold_headers["Authorization"] == "Bearer token-1"
+        assert await validate() == (cold_headers, cold_url)
+        assert len(oauth.calls) == 1
+
+        clock.return_value = now + timedelta(hours=2)
+        refreshed_headers, refreshed_url = await validate()
+        assert token_threads.get_nowait() != loop_thread
+        assert refreshed_headers["Authorization"] == "Bearer token-2"
+        assert refreshed_url == cold_url
+        assert len(oauth.calls) == 2
+        assert config.validate_anthropic_messages_environment(
+            headers=headers, model=model, messages=[], optional_params=optional_params, litellm_params=litellm_params
+        ) == (refreshed_headers, refreshed_url)
+        assert len(oauth.calls) == 2
+
+    endpoint: Final = "streamRawPredict" if stream else "rawPredict"
+    assert cold_url == (
+        "https://aiplatform.googleapis.com/v1/projects/auth-project/locations/global/"
+        f"publishers/anthropic/models/{model}:{endpoint}"
+    )
+    assert refreshed_headers == {
+        "Authorization": "Bearer token-2",
+        "anthropic-beta": cold_headers["anthropic-beta"],
+        "x-request-id": "req-1",
+        "content-type": "application/json",
+    }
+    beta_header: Final = cold_headers["anthropic-beta"]
+    assert isinstance(beta_header, str)
+    assert set(beta_header.split(",")) == {"retained-beta", ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value}
+    assert headers == {"Authorization": "Bearer incoming", "anthropic-beta": "retained-beta", "x-request-id": "req-1"}
 
 
 def test_validate_environment_uses_vertex_ai_location():
@@ -900,8 +980,8 @@ async def test_vertex_messages_request_sends_compact_2026_09_04_beta_on_the_wire
     client.post = AsyncMock(return_value=mock_response)
 
     with patch(
-        "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
-        return_value=("token", "test-project"),
+        "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token_async",
+        AsyncMock(return_value=("token", "test-project")),
     ):
         await litellm.anthropic.messages.acreate(
             model="vertex_ai/claude-sonnet-4-6",
@@ -929,7 +1009,7 @@ def test_messages_feature_beta_headers(feature: str, explicit_beta: bool) -> Non
 
     from google.oauth2.credentials import Credentials
     from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
-    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import VertexAIPartnerModelsAnthropicMessagesConfig
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import VertexAIPartnerModelsAnthropicMessagesConfig
     from litellm.types.llms.anthropic import (
         ANTHROPIC_BETA_HEADER_VALUES,
         ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,

@@ -7,6 +7,7 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.anthropic_beta_headers_manager import get_header_only_betas
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, inline_remote_image_urls
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
@@ -22,11 +23,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
-
-_VERTEX_HEADER_ONLY_BETAS: Final = frozenset(
-    {ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value, ANTHROPIC_BETA_HEADER_VALUES.INLINE_TOOLS_2026_09_15.value}
-)
-
 
 _BETA_VALUE: Final[TypeAdapter[str | tuple[str, ...] | None]] = TypeAdapter(str | tuple[str, ...] | None)
 
@@ -187,7 +183,8 @@ class VertexAIAnthropicConfig(AnthropicConfig):
             _NON_DEFAULT_PARAMS.validate_python(data).get("anthropic_beta"), "anthropic_beta", drop_params
         )
 
-        body_betas: Final = (injected_betas | client_body_betas) - _VERTEX_HEADER_ONLY_BETAS
+        header_only_betas: Final = get_header_only_betas("vertex_ai")
+        body_betas: Final = (injected_betas | client_body_betas) - header_only_betas
         if body_betas:
             data["anthropic_beta"] = sorted(body_betas)
         elif "anthropic_beta" in data:
@@ -195,7 +192,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         header_betas: Final = (
             injected_betas
             | compaction_betas
-            | (client_body_betas & _VERTEX_HEADER_ONLY_BETAS)
+            | (client_body_betas & header_only_betas)
             | _client_betas(
                 _NON_DEFAULT_PARAMS.validate_python(headers).get("anthropic-beta"),
                 "The anthropic-beta header",

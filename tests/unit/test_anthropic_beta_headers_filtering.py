@@ -17,7 +17,9 @@ import pytest
 
 import litellm
 from litellm.anthropic_beta_headers_manager import (
+    GetAnthropicBetaHeadersConfig,
     filter_and_transform_beta_headers,
+    get_beta_headers_config,
     update_headers_with_filtered_beta,
     update_request_with_filtered_beta,
 )
@@ -405,6 +407,38 @@ class TestAnthropicBetaHeadersFiltering:
                 test_case["expected"] in filtered
             ), f"Header '{test_case['input']}' should be mapped to '{test_case['expected']}' for {test_case['provider']}, but got: {filtered}"
 
+    @pytest.mark.parametrize("beta", ["compact-2026-09-04", "inline-tools-2026-09-15"])
+    def test_vertex_ai_header_only_beta_is_forwarded_as_the_header_and_dropped_from_the_body(
+        self, beta: str
+    ) -> None:
+        headers, body = update_request_with_filtered_beta(
+            headers={"anthropic-beta": f"{beta},context-1m-2025-08-07"},
+            request_data={"anthropic_beta": [beta, "context-1m-2025-08-07"]},
+            provider="vertex_ai",
+        )
+
+        assert set(headers["anthropic-beta"].split(",")) == {beta, "context-1m-2025-08-07"}
+        assert body["anthropic_beta"] == ["context-1m-2025-08-07"]
+
+    def test_header_only_betas_stay_out_of_the_provider_columns_older_proxies_read(self) -> None:
+        """Proxies released before header-only columns existed fetch this map from main, read only the
+        provider column, and copy its betas into the body field too, where Vertex answers 400. So a
+        header-only beta may sit in its provider column only if older proxies already forwarded it."""
+        header_only_columns: Final = {
+            column.removesuffix("_header_only"): betas
+            for column, betas in self.config.items()
+            if column.endswith("_header_only")
+        }
+        forwarded_by_older_proxies: Final = {
+            provider: {beta for beta in betas if self.config[provider].get(beta) is not None}
+            for provider, betas in header_only_columns.items()
+        }
+
+        assert "vertex_ai" in header_only_columns
+        assert {provider: betas for provider, betas in forwarded_by_older_proxies.items() if betas} == {
+            "vertex_ai": {"inline-tools-2026-09-15"}
+        }
+
     def test_filter_and_transform_beta_headers_vertex_ai_keeps_compact(self):
         """Vertex AI serves both compaction betas (threshold compaction behind compact-2026-01-12
         and on-demand compaction behind compact-2026-09-04, Google Cloud: beta on
@@ -432,13 +466,13 @@ class TestAnthropicBetaHeadersFiltering:
         assert filtered == ["fine-grained-tool-streaming-2025-05-14"]
 
     @pytest.mark.parametrize(
-        "provider", ["anthropic", "bedrock", "bedrock_converse", "vertex_ai", "databricks"]
+        "provider", ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai", "databricks"]
     )
     def test_thinking_binding_controls_forwarded(self, provider):
         """`thinking.block_binding` (preserved thinking, Claude Fable 5.1) is only
         accepted alongside thinking-binding-controls-2026-08-01. The body field is
         forwarded untouched, so stripping the header (previously unknown, hence
-        dropped) makes Bedrock and Vertex reject the request with
+        dropped) makes Bedrock, Vertex and Azure AI Foundry reject the request with
         "thinking.adaptive.block_binding: Extra inputs are not permitted"."""
         filtered = filter_and_transform_beta_headers(
             beta_headers=["thinking-binding-controls-2026-08-01"],
@@ -561,3 +595,13 @@ class TestAnthropicBetaHeadersFiltering:
         headers = {"anthropic-version": "2023-06-01"}
 
         assert update_headers_with_filtered_beta(headers, "bedrock_mantle") == {"anthropic-version": "2023-06-01"}
+
+
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "LITELLM_OFFLINE_MODE"])
+def test_local_flags_load_bundled_beta_headers_without_fetching(monkeypatch, flag):
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    monkeypatch.setenv(flag, "True")
+    with patch("litellm.anthropic_beta_headers_manager.httpx.get") as remote_get:
+        config = get_beta_headers_config(url="https://example.test/anthropic_beta_headers_config.json")
+    remote_get.assert_not_called()
+    assert config == GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()

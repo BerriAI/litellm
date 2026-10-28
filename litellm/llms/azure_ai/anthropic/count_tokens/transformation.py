@@ -6,8 +6,10 @@ Extends the base Anthropic CountTokens transformation with Azure authentication.
 
 from collections.abc import Sequence
 from typing import Final
+from urllib.parse import urlsplit
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import count_tokens_feature_betas, merge_anthropic_beta_headers
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
@@ -39,6 +41,7 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         Args:
             api_key: The Azure AI API key
             litellm_params: Optional LiteLLM parameters for additional auth config
+            messages: The request messages, read for betas the counted features need
 
         Returns:
             Dictionary of required headers with both x-api-key and Azure authentication
@@ -81,14 +84,8 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         Returns:
             The endpoint URL for the CountTokens API
         """
-        # Azure AI Anthropic endpoint format:
-        # https://<resource>.services.ai.azure.com/anthropic/v1/messages/count_tokens
-        api_base = api_base.rstrip("/")
-
-        # Ensure the URL has /anthropic path
-        if not api_base.endswith("/anthropic"):
-            if "/anthropic" not in api_base:
-                api_base = f"{api_base}/anthropic"
-
-        # Add the count_tokens path
-        return f"{api_base}/v1/messages/count_tokens"
+        base: Final = api_base.rstrip("/")
+        if base.endswith("/v1/messages"):
+            return join_api_base(base, "count_tokens")
+        anthropic_base: Final = base if "/anthropic" in urlsplit(base).path else join_api_base(base, "anthropic")
+        return join_api_base(anthropic_base, "v1/messages/count_tokens")

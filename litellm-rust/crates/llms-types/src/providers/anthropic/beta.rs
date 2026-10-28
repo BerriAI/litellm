@@ -241,7 +241,10 @@ impl AnthropicBeta {
                 BetaProvider::Databricks,
             ],
             Self::Compact20260112 => &[BetaProvider::AzureAi, BetaProvider::BedrockConverse],
-            Self::ComputerUse20250124 | Self::ComputerUse20251124 | Self::Context1m20250807 => &[],
+            Self::ComputerUse20250124
+            | Self::ComputerUse20251124
+            | Self::Context1m20250807
+            | Self::ThinkingBindingControls20260801 => &[],
             Self::DangerousToolUse20260903 => &[BetaProvider::BedrockConverse],
             Self::Effort20251124 => &[BetaProvider::VertexAi],
             Self::FastMode20260201 | Self::Oauth20250420 => &[
@@ -282,7 +285,6 @@ impl AnthropicBeta {
                 BetaProvider::Databricks,
             ],
             Self::StructuredOutputs20251113 => &[BetaProvider::Bedrock, BetaProvider::VertexAi],
-            Self::ThinkingBindingControls20260801 => &[BetaProvider::AzureAi],
             Self::ThinkingDisplayUpdates20260818 => &[BetaProvider::Databricks],
             Self::ToolSearchTool20251019 => &[
                 BetaProvider::Anthropic,
@@ -491,7 +493,7 @@ mod tests {
         let config = beta_headers_config();
         let config_columns: Vec<String> = config
             .keys()
-            .filter(|column| column.as_str() != "description")
+            .filter(|column| column.as_str() != "description" && !column.ends_with("_header_only"))
             .cloned()
             .collect();
         let beta_provider_columns: Vec<String> = BetaProvider::VARIANTS
@@ -510,12 +512,16 @@ mod tests {
         let config = beta_headers_config();
         for provider in BetaProvider::VARIANTS {
             for beta in &AnthropicBeta::KNOWN {
-                let expected = config
-                    .get(provider.as_ref())
-                    .and_then(serde_json::Value::as_object)
-                    .and_then(|column| column.get(beta.as_str()))
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string);
+                let cell = |column: &str| {
+                    config
+                        .get(column)
+                        .and_then(serde_json::Value::as_object)
+                        .and_then(|values| values.get(beta.as_str()))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                };
+                let expected = cell(&format!("{provider}_header_only"))
+                    .or_else(|| cell(provider.as_ref()));
                 let actual = beta.on(*provider).map(|name| name.to_string());
                 assert_eq!(actual, expected, "provider {provider}, beta {beta}");
                 if matches!(beta, AnthropicBeta::AdvancedToolUse20251120)
