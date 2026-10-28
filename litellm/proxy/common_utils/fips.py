@@ -58,11 +58,7 @@ def enforce_fips_mode() -> None:
 
     from litellm.llms.custom_httpx.http_handler import get_ssl_verify
 
-    if get_ssl_verify() is False:
-        raise FipsModeError(
-            f"{FIPS_MODE_ENV_VAR} is on but TLS certificate verification is disabled by SSL_VERIFY or "
-            "litellm_settings.ssl_verify. Remove the override, or point ssl_verify at a CA bundle."
-        )
+    get_ssl_verify()  # raises FipsModeError when SSL_VERIFY or litellm_settings.ssl_verify turns verification off
     if not openssl_enforces_fips():
         raise FipsModeError(
             f"{FIPS_MODE_ENV_VAR} is on but OpenSSL does not enforce FIPS. Run the proxy on an OpenSSL with "

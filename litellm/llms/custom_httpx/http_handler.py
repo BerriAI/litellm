@@ -370,6 +370,16 @@ def get_ssl_verify(
         if ssl_cert_file and os.path.exists(ssl_cert_file):
             return ssl_cert_file
 
+    if ssl_verify is False:
+        from litellm.proxy.common_utils.fips import FIPS_MODE_ENV_VAR, FipsModeError, is_fips_mode
+
+        if is_fips_mode():
+            raise FipsModeError(
+                f"{FIPS_MODE_ENV_VAR} is on but TLS certificate verification is disabled by SSL_VERIFY, "
+                "litellm_settings.ssl_verify or a model's ssl_verify. Remove the override, or point ssl_verify at a "
+                "CA bundle."
+            )
+
     return ssl_verify if ssl_verify is not None else True
 
 

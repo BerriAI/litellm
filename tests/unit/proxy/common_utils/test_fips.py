@@ -8,6 +8,7 @@ from cryptography.hazmat.bindings._rust import openssl as rust_openssl
 from cryptography.hazmat.primitives import hashes
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import get_ssl_verify
 from litellm.proxy.common_utils.fips import (
     FipsModeError,
     cryptography_enforces_fips,
@@ -118,3 +119,10 @@ def test_enforce_fips_mode(
 
     with pytest.raises(FipsModeError, match=refusal) if refusal else nullcontext():
         enforce_fips_mode()
+
+
+@pytest.mark.parametrize("fips_mode, refused", [("true", True), ("false", False)], ids=["fips", "fips-off"])
+def test_a_model_that_turns_tls_verification_off_is_refused_in_fips_mode(monkeypatch, fips_mode, refused):
+    monkeypatch.setenv("LITELLM_FIPS_MODE", fips_mode)
+    with pytest.raises(FipsModeError, match="or a model's ssl_verify") if refused else nullcontext():
+        assert get_ssl_verify(ssl_verify=False) is False
