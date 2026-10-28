@@ -1669,9 +1669,7 @@ async def _common_key_generation_helper(
 
         tags = data_json.get("tags")
         if premium_user is not True and isinstance(tags, list) and len(tags) > 0:
-            raise ValueError(
-                f"Only premium users can add tags to keys. {CommonProxyErrors.not_premium_user.value}"
-            )
+            raise ValueError(f"Only premium users can add tags to keys. {CommonProxyErrors.not_premium_user.value}")
 
         _metadata: Final = data_json.get("metadata")
         if tags is None:
