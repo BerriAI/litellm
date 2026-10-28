@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, cast
+from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, ORJSONResponse
@@ -36,8 +36,8 @@ class _GoogleCountTokensSystemInstruction(BaseModel):
 
     @field_validator("parts", mode="before")
     @classmethod
-    def normalize_parts(cls, parts: object) -> object:
-        return (cast(object, parts),) if isinstance(parts, Mapping) else parts
+    def normalize_parts(cls, parts: JsonValue) -> JsonValue:
+        return [parts] if isinstance(parts, dict) else parts
 
 
 class _GoogleCountTokensFunctionDeclaration(BaseModel):
