@@ -117,16 +117,31 @@ def marketplace_auth_required() -> bool:
     return general_settings_view().get("claude_code_marketplace_auth_required") is True
 
 
+async def _header_key_caller(request: Request) -> UserAPIKeyAuth:
+    try:
+        return await user_api_key_auth(
+            request=request,
+            api_key=request.headers.get(SpecialHeaders.openai_authorization.value) or "",
+            custom_litellm_key_header=request.headers.get(SpecialHeaders.custom_litellm_api_key.value),
+        )
+    except ProxyException as e:
+        if e.code != "401":
+            raise
+        raise ProxyException(
+            message=e.message,
+            type=e.type,
+            param=e.param,
+            code=401,
+            headers={**e.headers, "WWW-Authenticate": "Bearer"},
+        ) from e
+
+
 async def _marketplace_caller(request: Request, key: str | None) -> UserAPIKeyAuth | None:
+    if marketplace_auth_required():
+        return await _header_key_caller(request)
     if key:
         return await user_api_key_auth(request=request, api_key=f"Bearer {key}")
-    if not marketplace_auth_required():
-        return None
-    return await user_api_key_auth(
-        request=request,
-        api_key=request.headers.get(SpecialHeaders.openai_authorization.value) or "",
-        custom_litellm_key_header=request.headers.get(SpecialHeaders.custom_litellm_api_key.value),
-    )
+    return None
 
 
 @router.get(
@@ -145,9 +160,10 @@ async def get_marketplace(request: Request, key: str | None = None):
     the key is authenticated and the catalog also holds the disabled plugins granted
     to it through `object_permission.skills` or an access group on the key or its team.
 
-    With `general_settings.claude_code_marketplace_auth_required: true` a caller with
-    no key gets a 401, and the key may also come in the `Authorization` or
-    `x-litellm-api-key` header (Claude Code sends them from the marketplace's `headers`).
+    With `general_settings.claude_code_marketplace_auth_required: true` the key must come
+    in the `Authorization` or `x-litellm-api-key` header (Claude Code sends them from the
+    marketplace source's `headers`), `?key=` is ignored, and a caller with no valid key
+    gets a 401 with `WWW-Authenticate: Bearer`.
 
     Returns:
         Marketplace catalog with list of available plugins and their git sources.

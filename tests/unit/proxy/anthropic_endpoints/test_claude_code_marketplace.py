@@ -29,7 +29,7 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketp
     register_plugin,
     update_plugin,
 )
-from litellm.proxy.proxy_server import LitellmUserRoles
+from litellm.proxy.proxy_server import LitellmUserRoles, hash_token
 from litellm.types.proxy.claude_code_endpoints import (
     MarketplaceResponse,
     RegisterPluginRequest,
@@ -994,25 +994,37 @@ async def test_marketplace_auth_required_refuses_an_anonymous_caller(monkeypatch
     response: Final = await _get_marketplace_over_http()
 
     assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
+    assert "public-skill" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_marketplace_auth_required_refuses_a_key_in_the_query_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    _require_marketplace_auth(monkeypatch)
+    await _register_public_and_private_plugins()
+
+    response: Final = await _get_marketplace_over_http(params={"key": MASTER_KEY})
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
     assert "public-skill" not in response.text
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "headers, params",
+    "headers",
     [
-        ({"Authorization": f"Bearer {MASTER_KEY}"}, {}),
-        ({"x-litellm-api-key": f"Bearer {MASTER_KEY}"}, {}),
-        ({}, {"key": MASTER_KEY}),
+        {"Authorization": f"Bearer {MASTER_KEY}"},
+        {"x-litellm-api-key": f"Bearer {MASTER_KEY}"},
     ],
 )
 async def test_marketplace_auth_required_serves_a_caller_with_a_valid_key(
-    monkeypatch: pytest.MonkeyPatch, headers: Mapping[str, str], params: Mapping[str, str]
+    monkeypatch: pytest.MonkeyPatch, headers: Mapping[str, str]
 ) -> None:
     _require_marketplace_auth(monkeypatch)
     await _register_public_and_private_plugins()
 
-    response: Final = await _get_marketplace_over_http(headers, params)
+    response: Final = await _get_marketplace_over_http(headers)
 
     assert response.status_code == 200
     assert sorted(plugin["name"] for plugin in response.json()["plugins"]) == ["private-skill", "public-skill"]
@@ -1027,6 +1039,45 @@ async def test_marketplace_auth_required_refuses_an_unknown_bearer_key(monkeypat
     response: Final = await _get_marketplace_over_http({"Authorization": "Bearer sk-not-a-litellm-key"})
 
     assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
+    assert "public-skill" not in response.text
+
+
+_LIMITED_KEY: Final = "sk-limited"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "limited_key_auth, status_code",
+    [
+        (
+            UserAPIKeyAuth(
+                token=hash_token(_LIMITED_KEY),
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                allowed_routes=["/chat/completions"],
+            ),
+            403,
+        ),
+        (
+            UserAPIKeyAuth(
+                token=hash_token(_LIMITED_KEY), user_role=LitellmUserRoles.INTERNAL_USER, spend=2.0, max_budget=1.0
+            ),
+            422,
+        ),
+    ],
+    ids=["route-not-allowed", "over-budget"],
+)
+async def test_marketplace_auth_required_keeps_a_valid_key_refusal_status(
+    monkeypatch: pytest.MonkeyPatch, limited_key_auth: UserAPIKeyAuth, status_code: int
+) -> None:
+    _require_marketplace_auth(monkeypatch)
+    litellm.proxy.proxy_server.user_api_key_cache.set_cache(key=hash_token(_LIMITED_KEY), value=limited_key_auth)
+    await _register_public_and_private_plugins()
+
+    response: Final = await _get_marketplace_over_http({"Authorization": f"Bearer {_LIMITED_KEY}"})
+
+    assert response.status_code == status_code
+    assert "www-authenticate" not in response.headers
     assert "public-skill" not in response.text
 
 

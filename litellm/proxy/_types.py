@@ -2835,7 +2835,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     claude_code_marketplace_auth_required: bool = Field(
         False,
-        description="If True, GET /claude-code/marketplace.json requires a LiteLLM key (Authorization or x-litellm-api-key header, the litellm_key_header_name header, or ?key=) and answers 401 without one, and GET /public/skill_hub returns an empty list. Default is False, which serves the enabled plugins to anyone.",
+        description="If True, GET /claude-code/marketplace.json requires a LiteLLM key in the Authorization or x-litellm-api-key header (?key= is not accepted) and answers 401 with WWW-Authenticate: Bearer without one, and GET /public/skill_hub returns an empty list. Default is False, which serves the enabled plugins to anyone.",
     )
     disable_requester_ip_address_logging: bool | None = Field(
         None,

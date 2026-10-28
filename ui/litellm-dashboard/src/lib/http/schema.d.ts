@@ -2412,9 +2412,10 @@ export interface paths {
          *     the key is authenticated and the catalog also holds the disabled plugins granted
          *     to it through `object_permission.skills` or an access group on the key or its team.
          *
-         *     With `general_settings.claude_code_marketplace_auth_required: true` a caller with
-         *     no key gets a 401, and the key may also come in the `Authorization` or
-         *     `x-litellm-api-key` header (Claude Code sends them from the marketplace's `headers`).
+         *     With `general_settings.claude_code_marketplace_auth_required: true` the key must come
+         *     in the `Authorization` or `x-litellm-api-key` header (Claude Code sends them from the
+         *     marketplace source's `headers`), `?key=` is ignored, and a caller with no valid key
+         *     gets a 401 with `WWW-Authenticate: Bearer`.
          *
          *     Returns:
          *         Marketplace catalog with list of available plugins and their git sources.
@@ -29882,7 +29883,7 @@ export interface components {
             } | null;
             /**
              * Claude Code Marketplace Auth Required
-             * @description If True, GET /claude-code/marketplace.json requires a LiteLLM key (Authorization or x-litellm-api-key header, the litellm_key_header_name header, or ?key=) and answers 401 without one, and GET /public/skill_hub returns an empty list. Default is False, which serves the enabled plugins to anyone.
+             * @description If True, GET /claude-code/marketplace.json requires a LiteLLM key in the Authorization or x-litellm-api-key header (?key= is not accepted) and answers 401 with WWW-Authenticate: Bearer without one, and GET /public/skill_hub returns an empty list. Default is False, which serves the enabled plugins to anyone.
              * @default false
              */
             claude_code_marketplace_auth_required: boolean;
