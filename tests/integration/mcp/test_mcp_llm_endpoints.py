@@ -702,6 +702,14 @@ def test_streaming_responses_opens_the_gateway_tool_call_empty_and_streams_its_a
         assert len(rig.upstream_tools()) == 2
 
 
+STREAM_END_EVENT: Final[Mapping[Surface, str]] = {
+    "chat": "data: [DONE]",
+    "responses": "response.completed",
+    "messages": "message_stop",
+    "messages_bridge": "message_stop",
+}
+
+
 @pytest.mark.parametrize("surface", SURFACES)
 def test_streamed_auto_execute_gives_back_the_keys_only_parallel_slot_once_the_stream_ends(
     gateway: Gateway, surface: Surface
@@ -710,6 +718,8 @@ def test_streamed_auto_execute_gives_back_the_keys_only_parallel_slot_once_the_s
         key: Final = rig.scenario.key(object_permission={"mcp_servers": [rig.server_id]}, max_parallel_requests=1)
         streamed: Final = rig.send(key, [AUTO], stream=True)
         assert streamed.status_code == 200, streamed.text
+        assert streamed.headers["content-type"].startswith("text/event-stream"), streamed.headers
+        assert STREAM_END_EVENT[surface] in streamed.text, streamed.text
         assert ANSWER in streamed.text, streamed.text
         assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
         follow_up: Final = eventually(
