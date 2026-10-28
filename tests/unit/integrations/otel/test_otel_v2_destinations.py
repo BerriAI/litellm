@@ -1937,7 +1937,9 @@ class TestFailureOnlyDestination:
     NAMES: Final = {"POST /v1/chat/completions", "redis", "chat gpt-4"}
 
     @staticmethod
-    def _fan_out(dest_exporter: InMemorySpanExporter, global_exporter: InMemorySpanExporter | None = None):
+    def _fan_out(
+        dest_exporter: InMemorySpanExporter, global_exporter: InMemorySpanExporter | None = None
+    ) -> TracerProvider:
         provider: Final = TracerProvider()
         if global_exporter is not None:
             provider.add_span_processor(_OverriddenBackendFilter(SimpleSpanProcessor(global_exporter), "langfuse_otel"))
@@ -1954,7 +1956,7 @@ class TestFailureOnlyDestination:
         call_failed: bool = False,
         http_status: int = 200,
     ) -> None:
-        def run():
+        def run() -> None:
             set_request_destinations((self.FAILURE_ONLY,))
             tracer = get_tracer(provider, "litellm")
             with tracer.start_as_current_span("POST /v1/chat/completions") as root:
@@ -1968,28 +1970,28 @@ class TestFailureOnlyDestination:
 
         in_fresh_context(run)
 
-    def test_a_failed_model_call_sends_the_whole_tree(self):
+    def test_a_failed_model_call_sends_the_whole_tree(self) -> None:
         dest_exporter = InMemorySpanExporter()
 
         self._run(self._fan_out(dest_exporter), call_failed=True)
 
         assert {s.name for s in dest_exporter.get_finished_spans()} == self.NAMES
 
-    def test_a_successful_request_sends_nothing(self):
+    def test_a_successful_request_sends_nothing(self) -> None:
         dest_exporter = InMemorySpanExporter()
 
         self._run(self._fan_out(dest_exporter))
 
         assert dest_exporter.get_finished_spans() == ()
 
-    def test_a_failed_service_span_on_a_successful_request_sends_nothing(self):
+    def test_a_failed_service_span_on_a_successful_request_sends_nothing(self) -> None:
         dest_exporter = InMemorySpanExporter()
 
         self._run(self._fan_out(dest_exporter), service_failed=True)
 
         assert dest_exporter.get_finished_spans() == ()
 
-    def test_a_request_answering_an_http_error_sends_the_tree(self):
+    def test_a_request_answering_an_http_error_sends_the_tree(self) -> None:
         """A pre-call rejection the proxy answers itself fails the request without failing
         a model call, and the server span reports it as a 4xx status code, not an error."""
         dest_exporter = InMemorySpanExporter()
@@ -1998,7 +2000,7 @@ class TestFailureOnlyDestination:
 
         assert {s.name for s in dest_exporter.get_finished_spans()} == self.NAMES
 
-    def test_a_request_that_failed_before_an_llm_only_destination_held_anything_still_counts(self):
+    def test_a_request_that_failed_before_an_llm_only_destination_held_anything_still_counts(self) -> None:
         """Under ``llm_only`` only the model call is held, and a stream's server span answers
         before the model call closes in the post-call callback: the failure it reports must
         still decide the tree."""
@@ -2006,7 +2008,7 @@ class TestFailureOnlyDestination:
         provider: Final = self._fan_out(dest_exporter)
         destination: Final = self.FAILURE_ONLY.model_copy(update={"span_scope": "llm_only"})
 
-        def run():
+        def run() -> None:
             set_request_destinations((destination,))
             tracer = get_tracer(provider, "litellm")
             with tracer.start_as_current_span("POST /v1/chat/completions") as root:
@@ -2019,13 +2021,13 @@ class TestFailureOnlyDestination:
 
         assert [s.name for s in dest_exporter.get_finished_spans()] == ["chat gpt-4"]
 
-    def test_a_model_call_that_fails_after_the_server_span_ended_sends_the_tree(self):
+    def test_a_model_call_that_fails_after_the_server_span_ended_sends_the_tree(self) -> None:
         """A stream that breaks after the 200 went out: the model-call span closes in error
         after the server span has ended."""
         dest_exporter = InMemorySpanExporter()
         provider: Final = self._fan_out(dest_exporter)
 
-        def run():
+        def run() -> None:
             set_request_destinations((self.FAILURE_ONLY,))
             tracer = get_tracer(provider, "litellm")
             with tracer.start_as_current_span("POST /v1/chat/completions") as root:
@@ -2039,7 +2041,7 @@ class TestFailureOnlyDestination:
         assert {s.name for s in dest_exporter.get_finished_spans()} == {"POST /v1/chat/completions", "chat gpt-4"}
 
     @pytest.mark.parametrize("call_failed", [False, True], ids=["success", "failure"])
-    def test_the_operators_own_exporter_keeps_every_request(self, call_failed: bool):
+    def test_the_operators_own_exporter_keeps_every_request(self, call_failed: bool) -> None:
         global_exporter, dest_exporter = InMemorySpanExporter(), InMemorySpanExporter()
 
         self._run(self._fan_out(dest_exporter, global_exporter), call_failed=call_failed)
@@ -2047,11 +2049,11 @@ class TestFailureOnlyDestination:
         assert {s.name for s in global_exporter.get_finished_spans()} == self.NAMES
         assert {s.name for s in dest_exporter.get_finished_spans()} == (self.NAMES if call_failed else set())
 
-    def test_a_flood_of_held_trees_warns_that_failures_can_be_lost(self, caplog: pytest.LogCaptureFixture):
+    def test_a_flood_of_held_trees_warns_that_failures_can_be_lost(self, caplog: pytest.LogCaptureFixture) -> None:
         dest_exporter = InMemorySpanExporter()
         provider: Final = self._fan_out(dest_exporter)
 
-        def run():
+        def run() -> None:
             set_request_destinations((self.FAILURE_ONLY,))
             tracer = get_tracer(provider, "litellm")
             for index in range(otel_providers._MAX_PENDING_TREES + 2):
@@ -2068,11 +2070,11 @@ class TestFailureOnlyDestination:
 
     def test_a_request_that_outgrows_its_span_cap_warns_that_its_failure_can_be_lost(
         self, caplog: pytest.LogCaptureFixture
-    ):
+    ) -> None:
         dest_exporter = InMemorySpanExporter()
         provider: Final = self._fan_out(dest_exporter)
 
-        def run():
+        def run() -> None:
             set_request_destinations((self.FAILURE_ONLY,))
             tracer = get_tracer(provider, "litellm")
             with tracer.start_as_current_span("POST /v1/mcp"):
@@ -2392,7 +2394,7 @@ class TestProviderWiring:
 
     def test_auth_reads_no_key_or_team_config_when_nothing_can_deliver_a_destination(
         self, monkeypatch: pytest.MonkeyPatch
-    ):
+    ) -> None:
         from litellm.proxy import litellm_pre_call_utils
         from litellm.proxy.auth.user_api_key_auth import _seed_request_destinations
 
@@ -2405,7 +2407,7 @@ class TestProviderWiring:
         monkeypatch.setattr(litellm_pre_call_utils, "resolve_tenant_otel_destinations", resolve)
         monkeypatch.setattr(otel_logger, "fan_out_provider", TracerProvider)
 
-        def run():
+        def run() -> tuple[OtelDestination, ...]:
             set_request_destinations((LANGFUSE_DEST,))
             _seed_request_destinations(UserAPIKeyAuth(team_id="cfg-team"))
             return request_destinations()
@@ -4055,7 +4057,7 @@ class TestCallbackTypeFilter:
 
         assert resolve_tenant_otel_destinations(self._auth(callback_type)) != ()
 
-    def test_a_failure_only_entry_keeps_only_failed_requests(self, monkeypatch):
+    def test_a_failure_only_entry_keeps_only_failed_requests(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
         is_otel_v2_enabled.cache_clear()
 
@@ -4063,7 +4065,9 @@ class TestCallbackTypeFilter:
 
         assert destination.failure_only
 
-    def test_a_failure_only_entry_beside_a_success_entry_keeps_every_request(self, monkeypatch):
+    def test_a_failure_only_entry_beside_a_success_entry_keeps_every_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
         is_otel_v2_enabled.cache_clear()
         entries: Final = [
@@ -4082,13 +4086,13 @@ class TestConfigTeamDestinations:
 
     @staticmethod
     @pytest.fixture(autouse=True)
-    def config_team(monkeypatch):
+    def config_team(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         from litellm.proxy import proxy_server
 
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
         monkeypatch.setenv("CFG_TEAM_LANGFUSE_SK", "sk-from-env")
         is_otel_v2_enabled.cache_clear()
-        team: Final = {
+        team: Final[dict[str, object]] = {
             "team_id": "cfg-team",
             "success_callback": ["langfuse_otel"],
             "callback_vars": {
@@ -4105,14 +4109,14 @@ class TestConfigTeamDestinations:
         monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", [], raising=False)
         return team
 
-    def test_a_config_team_resolves_with_its_env_secret_and_unlisted_host(self):
+    def test_a_config_team_resolves_with_its_env_secret_and_unlisted_host(self) -> None:
         (destination,) = resolve_tenant_otel_destinations(UserAPIKeyAuth(team_id="cfg-team"))
 
         assert destination.endpoint == "http://cfg-team.internal/api/public/otel"
         assert destination.headers["Authorization"] == "Basic " + b64encode(b"pk:sk-from-env").decode()
         assert not destination.failure_only
 
-    def test_a_failure_only_config_team_keeps_only_failed_requests(self, config_team):
+    def test_a_failure_only_config_team_keeps_only_failed_requests(self, config_team: dict[str, object]) -> None:
         config_team["failure_callback"] = config_team.pop("success_callback")
 
         (destination,) = resolve_tenant_otel_destinations(UserAPIKeyAuth(team_id="cfg-team"))
@@ -4131,7 +4135,7 @@ class TestConfigTeamDestinations:
     )
     def test_a_level_that_wins_over_the_config_keeps_it_out(
         self, monkeypatch: pytest.MonkeyPatch, auth: UserAPIKeyAuth
-    ):
+    ) -> None:
         monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["cfg-team.internal"], raising=False)
 
         assert resolve_tenant_otel_destinations(auth) == ()

@@ -1633,7 +1633,9 @@ def test_ProxyConfig_load_team_config_no_settings_returns_empty():
         pc.load_team_config(team_id="anything")
 
 
-def test_ProxyConfig_load_team_config_resolves_env_values_without_touching_the_config(monkeypatch):
+def test_ProxyConfig_load_team_config_resolves_env_values_without_touching_the_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("TEAM_TA_LANGFUSE_SECRET", "sk-from-env")
     pc = ProxyConfig()
     team: Final = {

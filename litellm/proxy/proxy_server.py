@@ -6133,7 +6133,6 @@ class ProxyConfig:
         - return the relevant completion() call params
         """
 
-        # read in place: ``_get_team_config`` copies the one matching team, not the whole config
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
         litellm_settings: Final = self.config.get("litellm_settings", {})
         all_teams_config: Final = litellm_settings.get("default_team_settings", None)
