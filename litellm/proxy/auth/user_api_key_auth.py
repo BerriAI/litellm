@@ -3257,8 +3257,9 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
         if valid_token.budget_throttle_pct is not None:
             valid_token_dict["budget_throttle_pct"] = valid_token.budget_throttle_pct
 
-        if _end_user_object is not None:
+        if _end_user_object is not None or litellm.max_end_user_budget_id is not None:
             valid_token_dict.update(end_user_params)
+        if _end_user_object is not None:
             valid_token_dict["end_user_object_permission"] = _end_user_object.object_permission
 
     # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
