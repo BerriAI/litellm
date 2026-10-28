@@ -7943,3 +7943,81 @@ def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
     assert usage.prompt_tokens_details.cached_tokens == 80
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == 5
+
+
+def _tool_call_chunk(*, finish_reason: str | None = None) -> ModelResponseStream:
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+    return ModelResponseStream(
+        id="chatcmpl-tool-call",
+        created=1742056047,
+        model="gpt-4o-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            id="call_1",
+                            type="function",
+                            function=Function(name="get_weather", arguments="{}"),
+                            index=0,
+                        )
+                    ],
+                ),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+def _empty_stop_chunk() -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-tool-call",
+        created=1742056047,
+        model="gpt-4o-mini",
+        object="chat.completion.chunk",
+        choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+    )
+
+
+@pytest.mark.parametrize(
+    "upstream_chunks",
+    [
+        [_tool_call_chunk(), _empty_stop_chunk()],
+        [_tool_call_chunk(finish_reason="stop")],
+    ],
+    ids=["separate-chunks", "same-chunk"],
+)
+def test_streamed_tool_call_keeps_tool_calls_finish_reason(
+    logging_obj: Logging, upstream_chunks: list[ModelResponseStream]
+):
+    """A streamed call ends with ``tool_calls``, like the non-streaming path.
+
+    Providers that are OpenAI-compatible answer a call with
+    ``finish_reason: "stop"``.  The non-streaming path rewrites that to
+    ``tool_calls``, and so does ``finish_reason_handler()`` for the synthetic
+    terminal chunk -- but an OpenAI-compatible stream never reached either: the
+    rewrite depended on ``self.tool_call``, which was only set from
+    ``completion_obj`` while those chunks carry the calls on the delta.
+    """
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=upstream_chunks),
+        model="gpt-4o-mini",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    emitted: Final = list(wrapper)
+    terminal: Final = [
+        chunk.choices[0].finish_reason for chunk in emitted if chunk.choices and chunk.choices[0].finish_reason
+    ]
+
+    assert terminal == ["tool_calls"]
+
+    built: Final = litellm.stream_chunk_builder(chunks=wrapper.chunks)
+    assert built is not None
+    assert built.choices[0].finish_reason == "tool_calls"

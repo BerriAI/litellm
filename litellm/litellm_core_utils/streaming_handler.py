@@ -1265,9 +1265,14 @@ class CustomStreamWrapper:
             if _is_delta_empty:
                 model_response.choices[0].delta = Delta(content=None)  # ensure empty delta chunk returned
                 # get any function call arguments
-                model_response.choices[0].finish_reason = map_finish_reason(
+                _mapped_finish_reason: Final = map_finish_reason(
                     finish_reason=self.received_finish_reason
                 )  # ensure consistent output to openai
+                model_response.choices[0].finish_reason = (
+                    # the calls were streamed in an earlier chunk, so the terminal
+                    # reason says why the turn ended: tool_calls, not stop
+                    "tool_calls" if _mapped_finish_reason == "stop" and self.tool_call else _mapped_finish_reason
+                )
 
                 self.sent_last_chunk = True
 
@@ -1701,8 +1706,17 @@ class CustomStreamWrapper:
                     return
             ## CHECK FOR TOOL USE
 
-            if "tool_calls" in completion_obj and len(completion_obj["tool_calls"]) > 0:
-                if self.is_function_call is True:  # user passed in 'functions' param
+            # OpenAI-compatible providers deliver the calls on the delta, which is
+            # copied into model_response below the completion_obj in that branch, so
+            # checking completion_obj alone missed them and the stop -> tool_calls
+            # rewrite in finish_reason_handler() never fired for streamed calls.
+            tool_calls_in_completion_obj: Final = bool(
+                "tool_calls" in completion_obj and len(completion_obj["tool_calls"]) > 0
+            )
+            tool_calls_in_delta: Final = bool(model_response.choices and model_response.choices[0].delta.tool_calls)
+
+            if tool_calls_in_completion_obj or tool_calls_in_delta:
+                if self.is_function_call is True and tool_calls_in_completion_obj:  # user passed in 'functions' param
                     completion_obj["function_call"] = completion_obj["tool_calls"][0]["function"]
                     completion_obj["tool_calls"] = None
 
