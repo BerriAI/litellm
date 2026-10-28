@@ -479,16 +479,13 @@ def test_claude_redacted_thinking_replayed_in_content_reaches_converse_once(
 def test_block_split_across_merged_assistant_messages_reaches_converse_once(
     gateway: Gateway, block: dict[str, JsonValue], converse_part: dict[str, JsonValue]
 ) -> None:
-    """Consecutive assistant messages merge into one Converse turn, so a block one message carries in content and
-    the next in thinking_blocks is the same block and must go once"""
     assistants: Final[list[JsonValue]] = [
         {"role": "assistant", "content": [block, {"type": "text", "text": FIRST_ANSWER}]},
         {"role": "assistant", "content": "Checking again.", "thinking_blocks": [block]},
     ]
     with wire_server(_bedrock_peer()) as wire, gateway.scenario() as scenario:
         sent: Final = _replayed_to_converse(gateway, wire, _claude_on_converse(scenario, wire), assistants)
-    assert [part for part in sent if "reasoningContent" in part] == [converse_part]
-    assert [part["text"] for part in sent if "text" in part] == [FIRST_ANSWER, "Checking again."]
+    assert sent == (converse_part, {"text": FIRST_ANSWER}, {"text": "Checking again."})
 
 
 @pytest.mark.parametrize("drop", [True, False], ids=["drop-params", "no-drop-params"])
@@ -504,5 +501,5 @@ def test_converse_cache_point_after_replayed_thinking_follows_drop_params(gatewa
         sent: Final = _replayed_to_converse(
             gateway, wire, _claude_on_converse(scenario, wire), [assistant], drop_params=drop
         )
-    assert [part for part in sent if "reasoningContent" in part] == [_CONVERSE_REDACTED_PART]
-    assert sum("cachePoint" in part for part in sent) == (0 if drop else 1)
+    replayed: Final = (_CONVERSE_REDACTED_PART, {"text": FIRST_ANSWER})
+    assert sent == (replayed if drop else (*replayed, {"cachePoint": {"type": "default"}}))
