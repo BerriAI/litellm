@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 use strum::IntoStaticStr;
 
 use crate::{
-    Error,
+    Error, ErrorDetail,
     base_llm::{
         audio_transcription::transformation::{
             AudioTranscriptionRequestData, BaseAudioTranscriptionConfig, Headers,
@@ -59,20 +59,12 @@ fn audio_fields(audio: Value) -> Result<AudioInput, Error> {
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or(Error::MissingField("audio.data"))?;
-    let format = object.get("format").cloned().ok_or_else(|| {
-        Error::InvalidRequest(
-            "audio.format must be wav, mp3, flac, or ogg"
-                .to_string()
-                .into(),
-        )
-    })?;
-    let format: AudioFormat = serde_json::from_value(format).map_err(|_| {
-        Error::InvalidRequest(
-            "audio.format must be wav, mp3, flac, or ogg"
-                .to_string()
-                .into(),
-        )
-    })?;
+    let format = object
+        .get("format")
+        .cloned()
+        .ok_or(Error::MissingField("audio.format"))?;
+    let format: AudioFormat = serde_json::from_value(format)
+        .map_err(|error| Error::InvalidRequest(ErrorDetail::invalid("audio.format", error)))?;
     Ok(AudioInput {
         data: data.to_string(),
         format,
@@ -135,14 +127,13 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
     ) -> Result<AudioTranscriptionResponseData, Error> {
         let response: ConverseResponse =
             serde_json::from_value(response_json).map_err(|error| {
-                Error::InvalidResponse(format!("invalid Converse response: {error}").into())
+                Error::InvalidResponse(ErrorDetail::invalid("Converse response", error))
             })?;
         if response.message_content_is_non_text() {
-            return Err(Error::InvalidResponse(
-                "Bedrock response contains non-text transcript content"
-                    .to_string()
-                    .into(),
-            ));
+            return Err(Error::InvalidResponse(ErrorDetail::Expected {
+                subject: "Bedrock transcript content",
+                expected: "text",
+            }));
         }
         Ok(AudioTranscriptionResponseData {
             text: response.content_text(),

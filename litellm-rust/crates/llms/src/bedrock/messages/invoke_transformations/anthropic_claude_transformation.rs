@@ -1,3 +1,4 @@
+use litellm_core_utils::decline::Decline;
 use std::convert::Infallible;
 
 use crate::{
@@ -130,9 +131,9 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         _request: MessagesRequest,
         _context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        Err(Error::Unsupported(
+        Err(Error::Declined(Decline::new(
             "Bedrock invoke messages request shaping",
-        ))
+        )))
     }
 
     fn secret_names(&self) -> &'static [&'static str] {

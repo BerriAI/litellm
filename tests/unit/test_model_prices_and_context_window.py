@@ -224,6 +224,41 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
     )
 
 
+# Azure OpenAI web_search runs on Grounding with Bing and bills each Bing request reported in
+# tool_usage.web_search.num_requests: https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/web-search
+# Grounding with Bing lists $14 per 1,000 transactions: https://www.microsoft.com/en-us/bing/apis/grounding-pricing
+AZURE_WEB_SEARCH_COST_PER_REQUEST: Final = 0.014
+_AZURE_DEPLOYMENT_PREFIX: Final = re.compile(r"^azure/(us/|eu/|global/|global-standard/)?")
+
+
+def _azure_rows(prices: Mapping[str, object]) -> Mapping[str, dict]:
+    return MappingProxyType(
+        {key: row for key, row in prices.items() if key.startswith("azure/") and isinstance(row, dict)}
+    )
+
+
+def test_azure_web_search_rows_charge_the_grounding_with_bing_price(prices: dict):
+    wrong = {
+        key: row["search_context_cost_per_query"]
+        for key, row in _azure_rows(prices).items()
+        if row.get("search_context_cost_per_query")
+        and set(row["search_context_cost_per_query"].values()) != {AZURE_WEB_SEARCH_COST_PER_REQUEST}
+    }
+    assert wrong == {}
+
+
+def test_azure_rows_price_web_search_when_their_openai_model_does(prices: dict):
+    missing = sorted(
+        key
+        for key, row in _azure_rows(prices).items()
+        if not row.get("search_context_cost_per_query")
+        and row.get("mode") in ("chat", "responses", None)
+        and isinstance(twin := prices.get(_AZURE_DEPLOYMENT_PREFIX.sub("", key)), dict)
+        and twin.get("search_context_cost_per_query")
+    )
+    assert missing == []
+
+
 PRIORITY_SUFFIX: Final = "_priority"
 MIN_PRIORITY_MARKUP: Final = 1.0
 MAX_PRIORITY_MARKUP: Final = 5.0
@@ -845,7 +880,10 @@ def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata(pa
     assert entry["cache_read_input_token_cost"] == pytest.approx(1.2 / 6.9565 / 1_000_000, rel=1e-4)
     sibling = rows["volcengine/doubao-seed-2-1-pro-260628"]
     assert isinstance(sibling, dict)
-    assert all(entry[key] == sibling[key] for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"))
+    assert all(
+        entry[key] == sibling[key]
+        for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+    )
 
 
 def _bedrock_gpt_oss_rows(prices: Mapping[str, JsonValue]) -> tuple[str, ...]:

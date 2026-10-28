@@ -7,8 +7,8 @@ use litellm_host::interceptors::WireRequest;
 use litellm_http::{
     Client, ClientVariant, HttpClientConfig, HttpClientPool,
     media::{MediaFetcher, UrlPolicy},
-    outbound::{OutboundRequest, RequestSigner},
-    transport,
+    outbound::{RequestSigner, json, signed},
+    request::header_pairs,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -128,29 +128,17 @@ pub async fn ocr<C: BaseOcrConfig>(
 ) -> Result<LiteLLMOcrResponse, Error> {
     let http = config.prepare_request(request, client, hooks).await?;
     let url = http.url().to_string();
-    let headers = http.headers().to_vec();
-    let response = http
-        .send(client.provider_http())
+    let headers = header_pairs(http.headers());
+    let response = client
+        .provider_http()
+        .execute(http)
         .await
-        .map_err(transport_error)?;
+        .map_err(litellm_http::Error::from)?;
     if !response.status().is_success() {
-        let headers = response
-            .headers()
-            .iter()
-            .filter_map(|(name, value)| {
-                value
-                    .to_str()
-                    .ok()
-                    .map(|value| (name.to_string(), value.to_string()))
-            })
-            .collect();
-        return match read_response_bytes(response, request.connection.max_response_bytes).await {
-            Err(Error::Transport(transport::Error::Http { status, body })) => {
-                Err(config.get_error_class(body, status, headers))
-            }
-            Err(error) => Err(error),
-            Ok(_) => unreachable!("non-success response produces an HTTP error"),
-        };
+        let status = response.status().as_u16();
+        let headers = response.headers().clone();
+        let body = read_error_body(response, request.connection.max_response_bytes).await?;
+        return Err(config.get_error_class(body, status, headers));
     }
     let context = OcrResponseContext {
         client,
@@ -178,43 +166,41 @@ pub async fn read_response_bytes(
     mut response: reqwest::Response,
     limit: usize,
 ) -> Result<Bytes, Error> {
-    let status = response.status();
-    if status.is_success()
-        && response
-            .content_length()
-            .is_some_and(|length| length > limit as u64)
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let headers = response.headers().clone();
+        let body = read_error_body(response, limit).await?;
+        return Err(Error::Provider {
+            status,
+            body,
+            headers: Box::new(headers),
+        });
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
     {
         return Err(Error::TooLarge { limit });
     }
     let mut bytes = BytesMut::new();
-    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
-        let remaining = limit.saturating_sub(bytes.len());
-        if status.is_success() && chunk.len() > remaining {
+    while let Some(chunk) = response.chunk().await.map_err(litellm_http::Error::from)? {
+        if chunk.len() > limit.saturating_sub(bytes.len()) {
             return Err(Error::TooLarge { limit });
         }
-        bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
-        if !status.is_success() && bytes.len() == limit {
-            break;
-        }
-    }
-    if !status.is_success() {
-        return Err(transport::Error::Http {
-            status: status.as_u16(),
-            body: String::from_utf8_lossy(&bytes).into_owned(),
-        }
-        .into());
+        bytes.extend_from_slice(&chunk);
     }
     Ok(bytes.freeze())
 }
 
-pub fn transport_error(error: reqwest::Error) -> Error {
-    if error.is_timeout() {
-        return Error::Transport(transport::Error::Http {
-            status: 408,
-            body: "OCR request timed out".into(),
-        });
+async fn read_error_body(mut response: reqwest::Response, limit: usize) -> Result<String, Error> {
+    let mut bytes = BytesMut::new();
+    while bytes.len() < limit
+        && let Some(chunk) = response.chunk().await.map_err(litellm_http::Error::from)?
+    {
+        let remaining = limit - bytes.len();
+        bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
     }
-    transport::Error::from(error).into()
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
@@ -225,7 +211,7 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     body: B,
     signer: Option<&dyn RequestSigner>,
     hooks: &dyn CallHooks<Error>,
-) -> Result<OutboundRequest, Error> {
+) -> Result<reqwest::Request, Error> {
     let composed = litellm_core_utils::call_arguments::compose_body(
         &request.optional_params,
         &body,
@@ -238,20 +224,20 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     if !changed.body.is_object() {
         return Err(Error::RequestField {
             path: "guardrail.body".into(),
+            cause: None,
         });
     }
     config.validate_request_body(&changed.body)?;
-    let timeout = Some(request.connection.timeout);
+    let built = json(
+        url,
+        &changed.headers,
+        &changed.body,
+        Some(request.connection.timeout),
+    )?;
     Ok(match signer {
-        Some(signer) => OutboundRequest::signed_json(
-            url.into(),
-            changed.headers,
-            &changed.body,
-            timeout,
-            signer,
-        ),
-        None => OutboundRequest::json(url.into(), changed.headers, &changed.body, timeout),
-    }?)
+        Some(signer) => signed(built, signer)?,
+        None => built,
+    })
 }
 
 fn wire_request(url: &str, headers: &[(String, String)], body: Value) -> WireRequest {
@@ -267,10 +253,10 @@ pub fn build_http_request(
     url: String,
     headers: Vec<(String, String)>,
     body: &impl Serialize,
-) -> Result<OutboundRequest, Error> {
-    Ok(OutboundRequest::json(
-        url,
-        headers,
+) -> Result<reqwest::Request, Error> {
+    Ok(json(
+        &url,
+        &headers,
         body,
         Some(request.connection.timeout),
     )?)
@@ -282,9 +268,8 @@ pub async fn guardrail_document(
     headers: &[(String, String)],
     hooks: &dyn CallHooks<Error>,
 ) -> Result<(OcrDocument, Vec<(String, String)>), Error> {
-    let body = serde_json::to_value(&request.document).map_err(|_| Error::RequestField {
-        path: "document".into(),
-    })?;
+    let body = serde_json::to_value(&request.document)
+        .map_err(|error| Error::request_field("document", error))?;
     let changed = hooks
         .before_provider_request(wire_request(url, headers, body))
         .await?;
@@ -298,6 +283,7 @@ pub fn body_document(body: &Value) -> Result<OcrDocument, Error> {
         .and_then(Value::as_object)
         .ok_or_else(|| Error::RequestField {
             path: "body.document".into(),
+            cause: None,
         })?;
     let source = document
         .iter()
@@ -317,8 +303,6 @@ mod tests {
         net::TcpListener,
     };
 
-    use super::*;
-
     #[rstest::rstest]
     #[tokio::test]
     async fn request_timeout_has_an_http_408_status() {
@@ -334,10 +318,10 @@ mod tests {
             .send()
             .await
             .unwrap_err();
-        assert!(matches!(
-            transport_error(error),
-            Error::Transport(transport::Error::Http { status: 408, .. })
-        ));
+        assert_eq!(
+            Error::from(litellm_http::Error::from(error)).http_status_code(),
+            Some(408)
+        );
         server.abort();
     }
 
@@ -408,10 +392,7 @@ mod tests {
         .await
         .unwrap_err();
 
-        let Error::Transport(litellm_http::transport::Error::Http { status, body }) = error else {
-            panic!("unexpected error: {error}");
-        };
-        assert_eq!(status, 429);
-        assert_eq!(body, prefix);
+        let (status, body, _) = error.upstream_response().expect("the provider answered");
+        assert_eq!((status, body), (429, prefix.as_str()));
     }
 }

@@ -195,11 +195,10 @@ impl CohereParseConfig {
                     .and_then(env_lookup)
                     .filter(|key| !key.trim().is_empty())
             })
-            .ok_or_else(|| {
-                Error::Auth(litellm_auth::Error::ProviderAuthentication(
-                    "Missing COHERE_API_KEY - set it in the environment or pass api_key".into(),
-                ))
-            })?;
+            .ok_or(Error::Auth(litellm_auth::Error::MissingApiKey {
+                provider: "Cohere",
+                environment_variable: COHERE_API_KEY_ENV,
+            }))?;
         Ok(
             std::iter::once(("Authorization".into(), format!("Bearer {key}")))
                 .chain(connection.extra_headers.clone())
@@ -208,27 +207,28 @@ impl CohereParseConfig {
     }
 
     fn build_ocr_url(&self, api_base: &str) -> Result<String, Error> {
-        let parsed = reqwest::Url::parse(api_base).map_err(|_| invalid_api_base())?;
+        let parsed = reqwest::Url::parse(api_base)
+            .map_err(|error| Error::request_field("api_base", error))?;
         if !matches!(parsed.scheme(), "http" | "https") {
             return Err(invalid_api_base());
         }
         ApiUrl::parse(api_base)
             .and_then(|url| url.complete_path(&["v2", "parse"]))
             .map(|url| url.into_string())
-            .map_err(|_| invalid_api_base())
+            .map_err(|error| Error::request_field("api_base", error))
     }
 }
 
 pub fn validate_document(document: &OcrDocument) -> Result<(), Error> {
     let OcrDocument::ImageUrl { image_url, .. } = document else {
-        return Err(Error::CohereImageOnly);
+        return Err(image_only());
     };
     if image_url.is_empty() {
-        return Err(Error::CohereImageOnly);
+        return Err(image_only());
     }
     if let Some(inline) = InlineDocument::parse(image_url)? {
         if !inline.mime_type().type_.eq_ignore_ascii_case("image") {
-            return Err(Error::CohereImageOnly);
+            return Err(image_only());
         }
         inline.decode(OCR_INLINE_MAX_BYTES)?;
     }
@@ -260,7 +260,7 @@ pub fn normalize_response(
 fn image_url(document: OcrDocument) -> Result<String, Error> {
     validate_document(&document)?;
     let OcrDocument::ImageUrl { image_url, .. } = document else {
-        return Err(Error::CohereImageOnly);
+        return Err(image_only());
     };
     Ok(image_url)
 }
@@ -329,9 +329,17 @@ fn billed_pages(response: &CohereResponse) -> Option<i64> {
     response.meta.as_ref()?.billed_units.as_ref()?.pages
 }
 
+fn image_only() -> Error {
+    Error::UnsupportedDocument {
+        provider: "Cohere Parse",
+        guidance: "it only accepts `image_url` documents, not document_url or PDF inputs",
+    }
+}
+
 fn invalid_api_base() -> Error {
     Error::RequestField {
         path: "api_base".into(),
+        cause: None,
     }
 }
 
@@ -368,11 +376,14 @@ mod tests {
     #[test]
     fn options_reject_invalid_output_format() {
         let invalid = serde_json::from_value(json!({"output_format":"html"})).unwrap();
-        assert!(matches!(
-            CohereParseConfig.map_ocr_params(&invalid, "parse"),
-            Err(Error::RequestField { path })
-                if path == "optional_params.output_format"
-        ));
+        let Err(error) = CohereParseConfig.map_ocr_params(&invalid, "parse") else {
+            panic!("html is not a Cohere output format");
+        };
+        assert!(error.is_request());
+        let argument =
+            litellm_error::find::<litellm_core_utils::call_arguments::ArgumentError>(&error)
+                .expect("the argument failure is kept");
+        assert_eq!(argument.path, "output_format");
     }
 
     #[test]
@@ -432,7 +443,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             normalize_response("parse", response).unwrap_err(),
-            Error::ResponseField { path }
+            Error::ResponseField { path, .. }
                 if path == "pages[0].markdown.images[0].image_base64"
         ));
     }
@@ -657,7 +668,10 @@ mod tests {
     fn request_requires_image(#[case] value: Value) {
         assert!(matches!(
             validate_document(&serde_json::from_value(value).unwrap()),
-            Err(Error::CohereImageOnly)
+            Err(Error::UnsupportedDocument {
+                provider: "Cohere Parse",
+                ..
+            })
         ));
     }
 

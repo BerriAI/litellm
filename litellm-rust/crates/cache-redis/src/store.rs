@@ -32,7 +32,7 @@ where
         self.execute(|connection| {
             connection
                 .set_ex::<_, _, ()>(key, payload, ttl)
-                .map_err(|_| Error::Unavailable)
+                .map_err(Error::unavailable)
         })
     }
 
@@ -41,7 +41,7 @@ where
         let value = self.execute(|connection| {
             connection
                 .get::<_, redis::Value>(key)
-                .map_err(|_| Error::Unavailable)
+                .map_err(Error::unavailable)
         })?;
         self.decode_response(value)
     }
@@ -58,7 +58,7 @@ where
         self.run(move |connection| {
             connection
                 .set_ex::<_, _, ()>(key, payload, ttl)
-                .map_err(|_| Error::Unavailable)
+                .map_err(Error::unavailable)
         })
         .await
     }
@@ -73,7 +73,7 @@ where
             .run(move |connection| {
                 connection
                     .get::<_, redis::Value>(key)
-                    .map_err(|_| Error::Unavailable)
+                    .map_err(Error::unavailable)
             })
             .await?;
         self.decode_response(value)
@@ -158,7 +158,7 @@ pub(crate) fn mget(
     redis::cmd("MGET")
         .arg(keys)
         .query(connection)
-        .map_err(|_| Error::Unavailable)
+        .map_err(Error::unavailable)
 }
 
 impl<S, C> DeleteCache for RedisCache<S, C>
@@ -168,12 +168,12 @@ where
 {
     fn delete_cache(&self, key: &str) -> Result<(), Error> {
         let key = self.namespaced_key(key);
-        self.execute(|connection| connection.del::<_, ()>(key).map_err(|_| Error::Unavailable))
+        self.execute(|connection| connection.del::<_, ()>(key).map_err(Error::unavailable))
     }
 
     async fn async_delete_cache(&self, key: &str) -> Result<(), Error> {
         let key = self.namespaced_key(key);
-        self.run(move |connection| connection.del::<_, ()>(key).map_err(|_| Error::Unavailable))
+        self.run(move |connection| connection.del::<_, ()>(key).map_err(Error::unavailable))
             .await
     }
 }
@@ -188,7 +188,7 @@ where
             return Ok(0);
         }
         let keys = self.namespaced_keys(&keys);
-        self.run(move |connection| connection.del(keys).map_err(|_| Error::Unavailable))
+        self.run(move |connection| connection.del(keys).map_err(Error::unavailable))
             .await
     }
 }
@@ -225,7 +225,7 @@ fn flush_matching(connection: &mut ConnectionRef<'_>, pattern: &str) -> Result<(
         if !keys.is_empty() {
             connection
                 .del::<_, usize>(keys)
-                .map_err(|_| Error::Unavailable)?;
+                .map_err(Error::unavailable)?;
         }
         Ok(true)
     })

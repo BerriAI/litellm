@@ -37,6 +37,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.affinity_cache import ROUTER_SESSION_PINS_TARGET, claim_affinity_pin, read_affinity_pin
 from litellm.constants import (
+    COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY,
     EMPTY_MAPPING,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
@@ -4358,23 +4359,38 @@ class ComplexityRouter(CustomLogger):
         return newest_ask is not None and newest_ask.startswith(_CODEX_COMPACTION_SUMMARY_PREFIX)
 
     @staticmethod
-    def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
+    def _iter_metadata_dicts(request_kwargs: Mapping[str, object]) -> list[Mapping[str, object]]:
         """Metadata may land on `metadata` or `litellm_metadata` depending on the
         endpoint, mirroring DeploymentAffinityCheck's precedence."""
         return [
-            metadata
+            cast(Mapping[str, object], metadata)  # cast-ok: request metadata is a str-keyed JSON object
             for metadata_key in ("litellm_metadata", "metadata")
             if isinstance(metadata := request_kwargs.get(metadata_key), dict)
         ]
 
     @staticmethod
-    def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
+    def _get_session_id_from_request_kwargs(request_kwargs: Mapping[str, object]) -> str | None:
         """Resolve a client-supplied session_id."""
         for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
             session_id = metadata.get("session_id")
             if session_id is not None and not metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
                 return str(session_id)
         return None
+
+    def _get_tier_pin_session_id(self, request_kwargs: Mapping[str, object]) -> str | None:
+        if self.config.classification_mode == "user_turn" and not self.config.session_affinity:
+            child_metadata: Final = next(
+                (
+                    metadata
+                    for metadata in self._iter_metadata_dicts(request_kwargs)
+                    if COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY in metadata
+                ),
+                None,
+            )
+            if child_metadata is not None:
+                child_session: Final = child_metadata[COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY]
+                return child_session if isinstance(child_session, str) and child_session else None
+        return self._get_session_id_from_request_kwargs(request_kwargs)
 
     @staticmethod
     def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict) -> str | None:
@@ -4460,7 +4476,7 @@ class ComplexityRouter(CustomLogger):
         conversation_continuing: Final = _conversation_is_continuing(resolved_messages)
 
         use_session_affinity: Final = self._uses_tier_pin
-        session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
+        session_id: Final = self._get_tier_pin_session_id(request_kwargs) if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
         # In 'user_turn' mode a held pin is replayed only on continuation turns; a new human

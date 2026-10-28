@@ -346,11 +346,7 @@ async fn revert_reports_forward_only_error() {
         .revert("_sqlx_migrations", &migration)
         .await
         .expect_err("ClickHouse migrations cannot be reverted");
-    assert!(
-        error
-            .to_string()
-            .contains("ClickHouse migrations are forward-only")
-    );
+    assert!(matches!(storage_error(&error), Some(Error::Irreversible)));
 }
 
 #[rstest]
@@ -391,6 +387,7 @@ async fn applied_int64_versions_accept_numeric_and_quoted_json(
 #[tokio::test]
 async fn schema_requests_override_unsafe_connection_settings(
     #[future(awt)] mock_server: MockServer,
+    #[values("wait_end_of_query", "send_progress_in_http_headers", "async_insert")] name: &str,
 ) {
     Mock::given(method("POST"))
         .and(query_param("wait_end_of_query", "1"))
@@ -417,20 +414,14 @@ async fn schema_requests_override_unsafe_connection_settings(
         .received_requests()
         .await
         .expect("requests recorded");
-    for name in [
-        "wait_end_of_query",
-        "send_progress_in_http_headers",
-        "async_insert",
-    ] {
-        assert_eq!(
-            requests[0]
-                .url
-                .query_pairs()
-                .filter(|(key, _)| key == name)
-                .count(),
-            1
-        );
-    }
+    assert_eq!(
+        requests[0]
+            .url
+            .query_pairs()
+            .filter(|(key, _)| key == name)
+            .count(),
+        1
+    );
 }
 
 #[rstest]

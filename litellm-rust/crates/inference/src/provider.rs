@@ -25,11 +25,7 @@ pub fn resolve_llm_provider<'a>(
                 custom_llm_provider: provider,
             })
         })
-        .ok_or_else(|| {
-            Error::InvalidProvider(format!(
-                "unable to resolve custom_llm_provider for {route} request"
-            ))
-        })?;
+        .ok_or(Error::UnresolvedProvider { route })?;
     let provider = custom_llm_provider
         .parse()
         .map_err(|_| Error::InvalidProvider(custom_llm_provider.to_string()))?;
