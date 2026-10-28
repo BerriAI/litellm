@@ -397,6 +397,36 @@ def test_token_success_mints_bearer_and_is_single_use():
     assert replay.json()["error"] == "expired_token"
 
 
+@pytest.mark.parametrize(
+    ("chosen_team_id", "minted_team_id", "minted_alias"),
+    [("team-b", "team-b", "Team B"), (None, "team-a", "Team A")],
+    ids=["chosen_in_browser", "no_choice_recorded"],
+)
+def test_token_mints_for_the_team_chosen_in_the_browser(
+    chosen_team_id: str | None, minted_team_id: str, minted_alias: str
+):
+    two_team_session: Final = {
+        **_COMPLETED_SESSION,
+        "teams": ["team-a", "team-b"],
+        "team_details": [
+            *_COMPLETED_SESSION["team_details"],
+            {"team_id": "team-b", "team_alias": "Team B", "team_models": ["claude-opus-4-5"], "team_model_aliases": None},
+        ],
+    }
+    with _gateway_env() as (client, cache):
+        device_code: Final = _start_device_flow(client)
+        _complete_flow(cache, device_code, session_data=two_team_session)
+        flow_key: Final = _get_cli_sso_flow_cache_key(_login_id(device_code))
+        flow: Final = cache.get_cache(key=flow_key)
+        cache.set_cache(key=flow_key, value={**flow, "chosen_team_id": chosen_team_id}, ttl=600)
+        with patch(_MINT, return_value="sk-litellm-session-token") as mint:
+            resp: Final = _request_token(client, device_code)
+    assert resp.status_code == 200
+    assert mint.call_args.kwargs["team_id"] == minted_team_id
+    assert mint.call_args.kwargs["team_alias"] == minted_alias
+    assert _opened_refresh(resp.json()["refresh_token"]).team_id == minted_team_id
+
+
 def test_token_teamless_user_mints_without_a_team():
     with _gateway_env() as (client, cache):
         device_code = _start_device_flow(client)

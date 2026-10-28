@@ -62,7 +62,7 @@ button {{ flex: 1; padding: 10px; border-radius: 6px; font-size: 15px; cursor: p
 <p>Approving issues it a personal credential that expires within {CLI_JWT_EXPIRATION_HOURS} hours. <code>lite logout</code> stops it from being renewed. Only approve if you started this sign-in yourself.</p>
 <form method="post" action="{escape(complete_url)}">
 <input type="hidden" name="flow" value="{escape(flow_handle)}">
-{_team_field(teams)}
+{team_select_field(teams)}
 <div class="actions">
 <button type="submit" name="decision" value="deny" class="deny">Deny</button>
 <button type="submit" name="decision" value="approve" class="approve">Approve</button>
@@ -74,7 +74,7 @@ button {{ flex: 1; padding: 10px; border-radius: 6px; font-size: 15px; cursor: p
 """
 
 
-def _team_field(teams: Sequence[tuple[str, str]]) -> str:
+def team_select_field(teams: Sequence[tuple[str, str]]) -> str:
     if not teams:
         return ""
     if len(teams) == 1:
