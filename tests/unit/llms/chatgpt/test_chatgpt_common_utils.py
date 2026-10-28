@@ -103,6 +103,7 @@ class TestGetChatGPTSessionId:
             {"litellm_session_id": "chosen"},
             {"session_id": "chosen"},
             {"metadata": {"session_id": "chosen"}},
+            get_litellm_params(litellm_session_id="chosen", metadata={"trace_id": "chosen"}),
         ],
     )
     def test_explicit_session_id_wins_over_prompt_cache_key(self, explicit: Mapping[str, object]) -> None:
@@ -114,7 +115,7 @@ class TestGetChatGPTSessionId:
             {"litellm_trace_id": "trace-1"},
             {"litellm_call_id": "call-1"},
             get_litellm_params(metadata={"trace_id": "trace-1"}),
-            {"litellm_session_id": "trace-1", "litellm_metadata": {"trace_id": "trace-1"}},
+            get_litellm_params(litellm_metadata={"trace_id": "trace-1"}),
             {"litellm_session_id": "gen-1", "metadata": {"session_id": "gen-1", SESSION_ID_GENERATED_METADATA_KEY: True}},
             {
                 "litellm_session_id": "gen-1",
@@ -125,16 +126,19 @@ class TestGetChatGPTSessionId:
     def test_prompt_cache_key_wins_over_request_scoped_ids(self, request_scoped: Mapping[str, object]) -> None:
         assert get_chatgpt_session_id({**request_scoped, "prompt_cache_key": "conv-123"}) == "conv-123"
 
-    def test_proxy_mapped_session_header_wins_over_body_session_id(self) -> None:
+    @pytest.mark.parametrize(
+        "mapped_header",
+        [
+            {
+                "litellm_session_id": "header-session",
+                "metadata": {"trace_id": "header-session", "session_id": "header-session"},
+            },
+            get_litellm_params(metadata={"trace_id": "header-session", "session_id": "header-session"}),
+        ],
+    )
+    def test_proxy_mapped_session_header_wins_over_body_session_id(self, mapped_header: Mapping[str, object]) -> None:
         assert (
-            get_chatgpt_session_id(
-                {
-                    "litellm_session_id": "header-session",
-                    "metadata": {"trace_id": "header-session", "session_id": "header-session"},
-                    "session_id": "body-session",
-                    "prompt_cache_key": "conv-123",
-                }
-            )
+            get_chatgpt_session_id({**mapped_header, "session_id": "body-session", "prompt_cache_key": "conv-123"})
             == "header-session"
         )
 
