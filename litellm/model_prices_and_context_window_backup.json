@@ -76179,7 +76179,6 @@
         "use_openai_responses_path": true
     },
     "kyma/claude-fable-5": {
-        "max_tokens": 128000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.35e-05,
@@ -76195,7 +76194,6 @@
         "supports_sampling_params": false
     },
     "kyma/claude-fable-5.1": {
-        "max_tokens": 128000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.35e-05,
@@ -76211,7 +76209,6 @@
         "supports_sampling_params": false
     },
     "kyma/claude-haiku-4-5": {
-        "max_tokens": 64000,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 1.35e-06,
@@ -76226,7 +76223,6 @@
         "prompt_cache_min_tokens": 4096
     },
     "kyma/claude-opus-4-7": {
-        "max_tokens": 128000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 6.75e-06,
@@ -76243,7 +76239,6 @@
         "prompt_cache_min_tokens": 2048
     },
     "kyma/claude-opus-5": {
-        "max_tokens": 128000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 6.75e-06,
@@ -76260,7 +76255,6 @@
         "prompt_cache_min_tokens": 512
     },
     "kyma/claude-sonnet-4-6": {
-        "max_tokens": 128000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 4.05e-06,
@@ -76276,7 +76270,6 @@
         "prompt_cache_min_tokens": 1024
     },
     "kyma/claude-sonnet-5": {
-        "max_tokens": 128000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 2.7e-06,
@@ -76293,7 +76286,6 @@
         "prompt_cache_min_tokens": 1024
     },
     "kyma/deepseek-r1": {
-        "max_tokens": 32768,
         "max_input_tokens": 64000,
         "max_output_tokens": 32768,
         "input_cost_per_token": 7.425e-07,
@@ -76306,7 +76298,6 @@
         "supports_reasoning": true
     },
     "kyma/deepseek-v3": {
-        "max_tokens": 8192,
         "max_input_tokens": 160000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 5.18e-07,
@@ -76319,7 +76310,6 @@
         "supports_reasoning": true
     },
     "kyma/deepseek-v4-flash": {
-        "max_tokens": 65536,
         "max_input_tokens": 1000000,
         "max_output_tokens": 65536,
         "input_cost_per_token": 1.23e-07,
@@ -76333,7 +76323,6 @@
         "supports_reasoning": true
     },
     "kyma/deepseek-v4-flash-vision-exp": {
-        "max_tokens": 384000,
         "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
         "input_cost_per_token": 3.892e-07,
@@ -76346,7 +76335,6 @@
         "supports_reasoning": true
     },
     "kyma/gemini-3-flash": {
-        "max_tokens": 8192,
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "input_cost_per_token": 6.75e-07,
@@ -76360,7 +76348,6 @@
         "supports_reasoning": true
     },
     "kyma/gemini-3.1-pro": {
-        "max_tokens": 65536,
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "input_cost_per_token": 2.7e-06,
@@ -76374,7 +76361,6 @@
         "supports_reasoning": true
     },
     "kyma/gemini-3.5-flash": {
-        "max_tokens": 8192,
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2.025e-06,
@@ -76388,7 +76374,6 @@
         "supports_reasoning": true
     },
     "kyma/gemini-3.5-flash-lite": {
-        "max_tokens": 8192,
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "input_cost_per_token": 4.05e-07,
@@ -76402,7 +76387,6 @@
         "supports_reasoning": true
     },
     "kyma/gemini-3.6-flash": {
-        "max_tokens": 8192,
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.013e-06,
@@ -76416,7 +76400,6 @@
         "supports_reasoning": true
     },
     "kyma/gemini-3.7-flash": {
-        "max_tokens": 65536,
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "input_cost_per_token": 2.026e-06,
@@ -76430,7 +76413,6 @@
         "supports_reasoning": true
     },
     "kyma/gemini-3.8-flash": {
-        "max_tokens": 65536,
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "input_cost_per_token": 2.026e-06,
@@ -76443,7 +76425,6 @@
         "supports_reasoning": true
     },
     "kyma/gemma-4-31b": {
-        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.642e-07,
@@ -76457,7 +76438,6 @@
         "supports_reasoning": true
     },
     "kyma/glm-4.5-air": {
-        "max_tokens": 8192,
         "max_input_tokens": 131072,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.797e-07,
@@ -76471,7 +76451,6 @@
         "supports_reasoning": true
     },
     "kyma/glm-4.7-flash": {
-        "max_tokens": 65536,
         "max_input_tokens": 203000,
         "max_output_tokens": 65536,
         "input_cost_per_token": 8.1e-08,
@@ -76485,7 +76464,6 @@
         "supports_reasoning": true
     },
     "kyma/glm-5.1": {
-        "max_tokens": 65536,
         "max_input_tokens": 203000,
         "max_output_tokens": 65536,
         "input_cost_per_token": 1.89e-06,
@@ -76499,7 +76477,6 @@
         "supports_reasoning": true
     },
     "kyma/glm-5.2": {
-        "max_tokens": 131072,
         "max_input_tokens": 1000000,
         "max_output_tokens": 131072,
         "input_cost_per_token": 9.029e-07,
@@ -76513,7 +76490,6 @@
         "supports_reasoning": true
     },
     "kyma/glm-5.3": {
-        "max_tokens": 131072,
         "max_input_tokens": 1310720,
         "max_output_tokens": 131072,
         "input_cost_per_token": 1.178e-06,
@@ -76526,7 +76502,6 @@
         "supports_reasoning": true
     },
     "kyma/glm-5.3-flash": {
-        "max_tokens": 65536,
         "max_input_tokens": 1310720,
         "max_output_tokens": 65536,
         "input_cost_per_token": 1.72e-07,
@@ -76539,7 +76514,6 @@
         "supports_reasoning": true
     },
     "kyma/gpt-5.6-luna": {
-        "max_tokens": 128000,
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 2.944e-07,
@@ -76553,7 +76527,6 @@
         "supports_reasoning": true
     },
     "kyma/gpt-5.6-luna-pro": {
-        "max_tokens": 128000,
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 2.703e-07,
@@ -76567,7 +76540,6 @@
         "supports_reasoning": true
     },
     "kyma/gpt-5.6-sol": {
-        "max_tokens": 128000,
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 5.4e-06,
@@ -76581,7 +76553,6 @@
         "supports_reasoning": true
     },
     "kyma/gpt-5.6-sol-pro": {
-        "max_tokens": 128000,
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 5.4e-06,
@@ -76595,7 +76566,6 @@
         "supports_reasoning": true
     },
     "kyma/gpt-5.6-terra": {
-        "max_tokens": 8192,
         "max_input_tokens": 1050000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2.7e-06,
@@ -76611,7 +76581,6 @@
         "supports_reasoning": true
     },
     "kyma/gpt-5.6-terra-pro": {
-        "max_tokens": 128000,
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 2.7e-06,
@@ -76625,7 +76594,6 @@
         "supports_reasoning": true
     },
     "kyma/gpt-oss-120b": {
-        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 4.73e-08,
@@ -76638,7 +76606,6 @@
         "supports_reasoning": true
     },
     "kyma/grok-4.20": {
-        "max_tokens": 8192,
         "max_input_tokens": 2000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.763e-06,
@@ -76651,7 +76618,6 @@
         "supports_reasoning": true
     },
     "kyma/grok-4.20-multi-agent": {
-        "max_tokens": 8192,
         "max_input_tokens": 2000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.767e-06,
@@ -76664,7 +76630,6 @@
         "supports_reasoning": true
     },
     "kyma/grok-4.3": {
-        "max_tokens": 32768,
         "max_input_tokens": 1000000,
         "max_output_tokens": 32768,
         "input_cost_per_token": 1.92e-06,
@@ -76680,7 +76645,6 @@
         "supports_reasoning": true
     },
     "kyma/grok-4.5": {
-        "max_tokens": 8192,
         "max_input_tokens": 500000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2.73e-06,
@@ -76693,7 +76657,6 @@
         "supports_reasoning": true
     },
     "kyma/grok-4.6": {
-        "max_tokens": 8192,
         "max_input_tokens": 500000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2.758e-06,
@@ -76706,7 +76669,6 @@
         "supports_reasoning": true
     },
     "kyma/grok-build": {
-        "max_tokens": 32768,
         "max_input_tokens": 256000,
         "max_output_tokens": 32768,
         "input_cost_per_token": 1.389e-06,
@@ -76722,7 +76684,6 @@
         "supports_reasoning": true
     },
     "kyma/hy3": {
-        "max_tokens": 8192,
         "max_input_tokens": 262144,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.594e-07,
@@ -76735,7 +76696,6 @@
         "supports_reasoning": true
     },
     "kyma/kimi-k2.6": {
-        "max_tokens": 32768,
         "max_input_tokens": 262144,
         "max_output_tokens": 32768,
         "input_cost_per_token": 5.909e-07,
@@ -76748,7 +76708,6 @@
         "supports_reasoning": true
     },
     "kyma/kimi-k2.7-code": {
-        "max_tokens": 16384,
         "max_input_tokens": 262144,
         "max_output_tokens": 16384,
         "input_cost_per_token": 1.009e-06,
@@ -76761,7 +76720,6 @@
         "supports_reasoning": true
     },
     "kyma/kimi-k3": {
-        "max_tokens": 32768,
         "max_input_tokens": 1048576,
         "max_output_tokens": 32768,
         "input_cost_per_token": 3.052e-06,
@@ -76775,7 +76733,6 @@
         "supports_reasoning": true
     },
     "kyma/llama-3.3-70b": {
-        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.35e-07,
@@ -76788,7 +76745,6 @@
         "supports_reasoning": false
     },
     "kyma/llama-4-maverick": {
-        "max_tokens": 16384,
         "max_input_tokens": 1048576,
         "max_output_tokens": 16384,
         "input_cost_per_token": 3.344e-07,
@@ -76801,7 +76757,6 @@
         "supports_reasoning": false
     },
     "kyma/mimo-v2.5": {
-        "max_tokens": 16384,
         "max_input_tokens": 1050000,
         "max_output_tokens": 16384,
         "input_cost_per_token": 1.859e-07,
@@ -76814,7 +76769,6 @@
         "supports_reasoning": true
     },
     "kyma/minimax-m2.5": {
-        "max_tokens": 32768,
         "max_input_tokens": 196608,
         "max_output_tokens": 32768,
         "input_cost_per_token": 4.188e-07,
@@ -76827,7 +76781,6 @@
         "supports_reasoning": true
     },
     "kyma/minimax-m2.7": {
-        "max_tokens": 32768,
         "max_input_tokens": 204800,
         "max_output_tokens": 32768,
         "input_cost_per_token": 4.05e-07,
@@ -76840,7 +76793,6 @@
         "supports_reasoning": true
     },
     "kyma/minimax-m3": {
-        "max_tokens": 32768,
         "max_input_tokens": 1048576,
         "max_output_tokens": 32768,
         "input_cost_per_token": 3.956e-07,
@@ -76854,7 +76806,6 @@
         "supports_reasoning": true
     },
     "kyma/muse-glimmer-30b": {
-        "max_tokens": 8192,
         "max_input_tokens": 131072,
         "max_output_tokens": 8192,
         "input_cost_per_token": 4.554e-07,
@@ -76867,7 +76818,6 @@
         "supports_reasoning": true
     },
     "kyma/muse-spark-1.1": {
-        "max_tokens": 8192,
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.542e-06,
@@ -76880,7 +76830,6 @@
         "supports_reasoning": true
     },
     "kyma/muse-spark-1.2": {
-        "max_tokens": 8192,
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.773e-06,
@@ -76893,7 +76842,6 @@
         "supports_reasoning": true
     },
     "kyma/nemotron-3-ultra-550b": {
-        "max_tokens": 32768,
         "max_input_tokens": 1000000,
         "max_output_tokens": 32768,
         "input_cost_per_token": 6.75e-07,
@@ -76907,7 +76855,6 @@
         "supports_reasoning": true
     },
     "kyma/qwen-3-32b": {
-        "max_tokens": 8192,
         "max_input_tokens": 32768,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.08e-07,
@@ -76920,7 +76867,6 @@
         "supports_reasoning": true
     },
     "kyma/qwen-3-coder": {
-        "max_tokens": 32768,
         "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "input_cost_per_token": 3.546e-07,
@@ -76934,7 +76880,6 @@
         "supports_reasoning": false
     },
     "kyma/qwen-3.6-plus": {
-        "max_tokens": 65536,
         "max_input_tokens": 1000000,
         "max_output_tokens": 65536,
         "input_cost_per_token": 4.388e-07,
@@ -76949,7 +76894,6 @@
         "supports_reasoning": true
     },
     "kyma/qwen-3.7-max": {
-        "max_tokens": 32768,
         "max_input_tokens": 1000000,
         "max_output_tokens": 32768,
         "input_cost_per_token": 2.071e-06,
@@ -76963,7 +76907,6 @@
         "supports_reasoning": true
     },
     "kyma/qwen-3.7-plus": {
-        "max_tokens": 32768,
         "max_input_tokens": 1000000,
         "max_output_tokens": 32768,
         "input_cost_per_token": 4.325e-07,
@@ -76979,7 +76922,6 @@
         "supports_reasoning": true
     },
     "kyma/qwen-3.8-max": {
-        "max_tokens": 131072,
         "max_input_tokens": 1000000,
         "max_output_tokens": 131072,
         "input_cost_per_token": 2.228e-06,
@@ -76993,7 +76935,6 @@
         "supports_reasoning": true
     },
     "kyma/qwen3.7-flash": {
-        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 4.35e-08,
@@ -77011,7 +76952,6 @@
         "supports_reasoning": true
     },
     "kyma/qwen3.8-27b": {
-        "max_tokens": 131072,
         "max_input_tokens": 1000000,
         "max_output_tokens": 131072,
         "input_cost_per_token": 3.826e-07,
@@ -77024,7 +76964,6 @@
         "supports_reasoning": true
     },
     "kyma/qwen3.8-flash": {
-        "max_tokens": 131072,
         "max_input_tokens": 1000000,
         "max_output_tokens": 131072,
         "input_cost_per_token": 2.045e-07,
@@ -77037,7 +76976,6 @@
         "supports_reasoning": true
     },
     "kyma/sonar": {
-        "max_tokens": 4096,
         "max_input_tokens": 127072,
         "max_output_tokens": 4096,
         "input_cost_per_token": 1.35e-06,
@@ -77050,7 +76988,6 @@
         "supports_reasoning": false
     },
     "kyma/sonar-pro": {
-        "max_tokens": 8000,
         "max_input_tokens": 200000,
         "max_output_tokens": 8000,
         "input_cost_per_token": 4.05e-06,
@@ -77063,7 +77000,6 @@
         "supports_reasoning": false
     },
     "kyma/step-3.7-flash": {
-        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2.229e-07,
