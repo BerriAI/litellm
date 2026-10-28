@@ -1029,10 +1029,10 @@ def _cost_map_model_name(model: str, custom_llm_provider: str | None, region_nam
 
 
 def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
+    if _declares_rates(_cost_map_model_info(model, custom_llm_provider)):
+        return True
     rule_info: Final = unmapped_model_generalization(model, custom_llm_provider)
-    if rule_info is not None:
-        return _cost_map_entry_prices_anything(rule_info)
-    return _declares_rates(_cost_map_model_info(model, custom_llm_provider))
+    return rule_info is not None and _cost_map_entry_prices_anything(rule_info)
 
 
 def _served_or_priced_requested_model(served: str, requested: str | None, custom_llm_provider: str | None) -> str:
