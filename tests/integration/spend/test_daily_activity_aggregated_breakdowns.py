@@ -326,6 +326,7 @@ async def test_get_daily_activity_aggregated_breaks_down_guardrail_spend(gateway
             "topic-filter": (pytest.approx(0.01), {"key-b": 0.0}),
         }
         assert _guardrail_spend(_day_breakdown(gateway, day, model="gpt-5")) == {}
+        assert _guardrail_spend(_day_breakdown(gateway, day, model="")) == _guardrail_spend(everyone)
     finally:
         _clean(day)
         write_rows('DELETE FROM "LiteLLM_DailyGuardrailUsageUnits" WHERE date = %s', (day,))

@@ -1049,6 +1049,18 @@ def _with_guardrail_breakdown(
     return tuple(_day_with_guardrails(day, rows_by_date.get(day.date.strftime("%Y-%m-%d"), ())) for day in results)
 
 
+async def _guardrail_spend_or_empty(
+    repository: DailyActivityRepository, scope: DailyActivityScope
+) -> tuple[GuardrailSpendRow, ...]:
+    from prisma.errors import PrismaError
+
+    try:
+        return await repository.guardrail_spend(scope)
+    except PrismaError as exc:
+        verbose_proxy_logger.warning("Returning daily activity without its guardrail breakdown: %s", exc)
+        return ()
+
+
 async def get_daily_activity_aggregated(
     repository: DailyActivityRepository,
     scope: DailyActivityScope,
@@ -1063,8 +1075,8 @@ async def get_daily_activity_aggregated(
             repository.aggregated(
                 scope, include_entity_breakdown=include_entity_breakdown, api_key_limit=api_key_limit
             ),
-            repository.guardrail_spend(scope)
-            if include_guardrail_breakdown and scope.model is None
+            _guardrail_spend_or_empty(repository, scope)
+            if include_guardrail_breakdown and not scope.model
             else asyncio.sleep(0, result=()),
         )
         records: Final = aggregated_rows.grouping_rows
