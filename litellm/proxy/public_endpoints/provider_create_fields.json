@@ -1,5 +1,33 @@
 [
   {
+    "provider": "NEXUS",
+    "provider_display_name": "Nexus",
+    "litellm_provider": "nexus",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.nexus.inc/v1",
+        "tooltip": "Optional. Leave blank to use the provider's default endpoint.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "nexus/anthropic/claude-sonnet-5.5"
+  },
+  {
     "provider": "AIAND",
     "provider_display_name": "ai&",
     "litellm_provider": "aiand",
