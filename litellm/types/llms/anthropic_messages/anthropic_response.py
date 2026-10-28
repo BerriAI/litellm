@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from typing import Any, Literal, TypeAlias
+from typing import Literal, TypeAlias
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -20,7 +20,7 @@ class AnthropicResponseTextBlock(TypedDict, total=False):
     Anthropic Response Text Block: https://docs.anthropic.com/en/api/messages
     """
 
-    citations: list[dict[str, Any]] | None
+    citations: list[dict[str, object]] | None
     text: str
     type: Literal["text"]
 

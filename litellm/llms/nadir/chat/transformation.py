@@ -2,8 +2,9 @@ import math
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_response_cost_in_hidden_params
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -19,13 +20,17 @@ _SUPPORTED_OPENAI_PARAMS: Final = (
     "temperature",
     "top_p",
 )
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _reported_cost_usd(raw_response: httpx.Response) -> float | None:
     try:
-        cost: Final = raw_response.json()["nadir_metadata"]["cost"]["total_cost_usd"]
+        body: Final = as_str_mapping(_DECODED_JSON.validate_python(raw_response.json()))
     except (ValueError, KeyError, TypeError):
         return None
+    metadata: Final = as_str_mapping(body.get("nadir_metadata")) if body is not None else None
+    cost_block: Final = as_str_mapping(metadata.get("cost")) if metadata is not None else None
+    cost: Final = cost_block.get("total_cost_usd") if cost_block is not None else None
     if isinstance(cost, bool) or not isinstance(cost, (int, float)):
         return None
     if not math.isfinite(cost) or cost < 0:

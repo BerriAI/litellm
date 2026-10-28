@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Annotated, Final, Literal
+from typing import Annotated, Final, Literal, TypeAlias
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse  # pyright: ignore[reportDeprecated]  # required endpoint contract
@@ -18,6 +18,7 @@ from litellm.types.decisions import (
     OpenAIDecisionRequestBody,
     OpenAIDecisionResponse,
 )
+from litellm.types.extraction import ExtractionRequest, ExtractionRequestBody, ExtractionResponse
 
 router: Final = APIRouter()
 _REQUEST_DATA_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
@@ -25,6 +26,7 @@ _DECISIONS_REQUEST_BODY_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = Type
 _OPENAI_DECISION_REQUEST_BODY_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(
     OpenAIDecisionRequestBody
 )
+_EXTRACTION_REQUEST_BODY_ADAPTER: Final[TypeAdapter[ExtractionRequestBody]] = TypeAdapter(ExtractionRequestBody)
 _GENERAL_SETTINGS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 _OPTIONAL_FLOAT_ADAPTER: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
@@ -73,16 +75,35 @@ _DECISIONS_REQUEST_BODY: Final = inline_request_body(
         ],
     },
 )
+_EXTRACTION_REQUEST_BODY: Final = inline_request_body(
+    ExtractionRequest,
+    {
+        "model": "clairic",
+        "state": "Invoice #4471 from Acme Tools, dated 2026-03-03. 12 hammers. Total $174. Payment due in 30 days.",
+        "fields": {
+            "vendor": {"type": "text", "instructions": "Who sent the invoice?"},
+            "invoice_date": {"type": "date"},
+            "total": {"type": "number", "unit": "USD"},
+            "items": {"type": "list", "items": "text", "instructions": "What was bought?"},
+            "days_to_pay": {"type": "estimate", "min": 0, "max": 90},
+        },
+    },
+)
+_ApiName: TypeAlias = Literal["Decisions", "Extraction"]
+_RouteType: TypeAlias = Literal["adecisions", "asystemone", "aextraction"]
 
 
 async def _invalid_request(
-    raw_data: Mapping[str, object], error: ValidationError, user_api_key_dict: UserAPIKeyAuth
+    raw_data: Mapping[str, object],
+    error: ValidationError,
+    user_api_key_dict: UserAPIKeyAuth,
+    api_name: _ApiName,
 ) -> Exception:
     from litellm.proxy.proxy_server import proxy_logging_obj, version
 
     return await ProxyBaseLLMRequestProcessing(data=dict(raw_data)).handle_llm_api_exception(
         e=BadRequestError(
-            message=f"Invalid Decisions request: {error}",
+            message=f"Invalid {api_name} request: {error}",
             model=str(raw_data.get("model", "")),
             llm_provider="",
         ),
@@ -95,19 +116,21 @@ async def _invalid_request(
 _FIELDS_CHECKED_AFTER_ROUTING: Final = frozenset({"safety_identifier", "images", "assets", "audio", "videos"})
 
 
-def _fields_checked_before_routing(data: Mapping[str, object]) -> Mapping[str, object]:
+def _fields_checked_before_routing(data: Mapping[str, object], route_type: _RouteType) -> Mapping[str, object]:
+    if route_type == "aextraction":
+        return data
     return MappingProxyType({key: value for key, value in data.items() if key not in _FIELDS_CHECKED_AFTER_ROUTING})
 
 
 _DEPLOYMENT_ONLY_FIELDS: Final = frozenset({"model_info"})
 
 
-async def _request_data(request: Request, user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
+async def _request_data(request: Request, user_api_key_dict: UserAPIKeyAuth, api_name: _ApiName) -> dict[str, object]:
     body: Final = await request.body()
     try:
         data: Final = _REQUEST_DATA_ADAPTER.validate_json(body)
     except ValidationError as error:
-        raise await _invalid_request(raw_data={}, error=error, user_api_key_dict=user_api_key_dict)
+        raise await _invalid_request(raw_data={}, error=error, user_api_key_dict=user_api_key_dict, api_name=api_name)
     return {key: value for key, value in data.items() if key not in _DEPLOYMENT_ONLY_FIELDS}
 
 
@@ -115,8 +138,10 @@ async def _process_decisions(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
-    body_adapter: TypeAdapter[DecisionsRequestBody] | TypeAdapter[OpenAIDecisionRequestBody],
-    route_type: Literal["adecisions", "asystemone"],
+    body_adapter: (
+        TypeAdapter[DecisionsRequestBody] | TypeAdapter[OpenAIDecisionRequestBody] | TypeAdapter[ExtractionRequestBody]
+    ),
+    route_type: _RouteType,
 ) -> object:
     from litellm.proxy.proxy_server import (
         general_settings as proxy_general_settings,
@@ -139,15 +164,17 @@ async def _process_decisions(
         user_temperature as proxy_user_temperature,
     )
 
-    data: Final = await _request_data(request, user_api_key_dict)
+    api_name: Final[_ApiName] = "Extraction" if route_type == "aextraction" else "Decisions"
+    data: Final = await _request_data(request, user_api_key_dict, api_name)
     try:
-        body_adapter.validate_python(_fields_checked_before_routing(data))
+        body_adapter.validate_python(_fields_checked_before_routing(data, route_type))
     except ValidationError as error:
-        raise await _invalid_request(raw_data=data, error=error, user_api_key_dict=user_api_key_dict)
+        raise await _invalid_request(raw_data=data, error=error, user_api_key_dict=user_api_key_dict, api_name=api_name)
     general_settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_general_settings)
     user_api_base: Final = _OPTIONAL_STRING_ADAPTER.validate_python(proxy_user_api_base)
     user_model: Final = _OPTIONAL_STRING_ADAPTER.validate_python(proxy_user_model)
     user_temperature: Final = _OPTIONAL_FLOAT_ADAPTER.validate_python(proxy_user_temperature)
+    takes_generation_settings: Final = route_type != "aextraction"
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -162,9 +189,9 @@ async def _process_decisions(
             select_data_generator=None,
             model=None,
             user_model=user_model,
-            user_temperature=user_temperature,
+            user_temperature=user_temperature if takes_generation_settings else None,
             user_request_timeout=user_request_timeout,
-            user_max_tokens=user_max_tokens,
+            user_max_tokens=user_max_tokens if takes_generation_settings else None,
             user_api_base=user_api_base,
             version=version,
         )
@@ -201,7 +228,7 @@ async def systemone(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
-    Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+    Judge a `state` against one or more named `questions` and get one calibrated answer per question name.
 
     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
@@ -262,4 +289,54 @@ async def decisions(
         user_api_key_dict=user_api_key_dict,
         body_adapter=_OPENAI_DECISION_REQUEST_BODY_ADAPTER,
         route_type="adecisions",
+    )
+
+
+@router.post(
+    "/v1/extraction",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,  # pyright: ignore[reportDeprecated]  # required endpoint contract
+    tags=["extraction"],
+    summary="Extract typed fields from a state",
+    responses={200: {"model": ExtractionResponse}},
+    response_model=None,
+    openapi_extra={"requestBody": _EXTRACTION_REQUEST_BODY},
+)
+@router.post(
+    "/extraction",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,  # pyright: ignore[reportDeprecated]  # required endpoint contract
+    tags=["extraction"],
+    summary="Extract typed fields from a state",
+    responses={200: {"model": ExtractionResponse}},
+    response_model=None,
+    openapi_extra={"requestBody": _EXTRACTION_REQUEST_BODY},
+)
+async def extraction(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> object:
+    """
+    Read a `state` text and up to 4 images and get one typed answer per named field in `fields`.
+
+    Field types are `text`, `number`, `date`, `time`, `datetime`, `duration`, `list` (set `items`), `estimate`
+    (set `min` and `max`) and `forecast` (set `min`, `max` and `horizon`). Each answer carries its `value`, which is
+    null when the input does not determine it, plus `confidence`, `p_null`, text `span`s into the state and, for
+    estimates, `mean`, `median`, `p10` and `p90`. Images are data URLs or `{content_type, base64}` objects, remote
+    URLs are not accepted. An unknown field type, a field name that is not 1 to 64 letters, digits, `_`, `.` or `-`
+    starting with a letter or `_`, a remote image URL or more than 4 images is rejected with a 400 before any
+    provider is called. Any other top-level key, `stream: true` and OpenAI generation settings such as `temperature`
+    included, is rejected with a 400 naming it unless `drop_params` or the deployment's `additional_drop_params`
+    drops it. Settings inside `fields` and `options` go to the provider as sent, so a field missing a setting its
+    type needs or an empty `state` with no images comes back with the provider's own error. `model` is any
+    extraction model in the proxy model list, such as Cloudflare Clairic. The request and the answers keep the
+    provider's format.
+    """
+    return await _process_decisions(
+        request=request,
+        fastapi_response=fastapi_response,
+        user_api_key_dict=user_api_key_dict,
+        body_adapter=_EXTRACTION_REQUEST_BODY_ADAPTER,
+        route_type="aextraction",
     )
