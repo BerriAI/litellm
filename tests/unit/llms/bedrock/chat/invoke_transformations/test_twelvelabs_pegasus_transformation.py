@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import Mock
 
 import httpx
@@ -96,8 +97,8 @@ def test_transform_request_includes_s3_media():
     ("finish_reason", "expected"),
     [("length", "length"), (None, "stop")],
 )
-def test_transform_response_accepts_null_finish_reason(finish_reason, expected):
-    result = AmazonTwelveLabsPegasusConfig().transform_response(
+def test_transform_response_accepts_null_finish_reason(finish_reason: str | None, expected: str) -> None:
+    result: Final = AmazonTwelveLabsPegasusConfig().transform_response(
         model="twelvelabs.pegasus-1-2-v1:0",
         raw_response=httpx.Response(200, json={"message": "A cat jumps.", "finishReason": finish_reason}),
         model_response=ModelResponse(),
