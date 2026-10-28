@@ -11,6 +11,11 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled", () =>
   usePtuCostAttributionEnabled: () => mockUsePtuCostAttributionEnabled(),
 }));
 
+// The real selector requests /vector_store/list from the proxy as soon as it mounts
+vi.mock("@/components/vector_store_management/VectorStoreSelector", () => ({
+  default: () => <div data-testid="vector-store-selector" />,
+}));
+
 const PTU_LABELS = ["PTU Count", "Calculated Cost per PTU / Hour (USD)", "PTU Effective From (UTC)"];
 
 const KubernetesPodDiscoveryValue = () => {
