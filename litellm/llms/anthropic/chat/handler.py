@@ -518,6 +518,7 @@ class AnthropicChatCompletion(BaseLLM):
             gated: Final = strip_beta_gated_request_fields(
                 filtered_data,
                 active_beta_values(request_headers, filtered_data.get("anthropic_beta") or ()),
+                drop_params=litellm_params.get("drop_params"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is the handler's bare dict
             )
             log_beta_gated_strips(gated.stripped, model=model, provider=custom_llm_provider)
             data: Final = dict(gated.request)

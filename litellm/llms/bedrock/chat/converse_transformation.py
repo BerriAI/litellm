@@ -2037,6 +2037,7 @@ class AmazonConverseConfig(BaseConfig):
         gated_thinking: Final = strip_beta_gated_thinking(
             requested_thinking,  # pyright: ignore[reportUnknownArgumentType]  # same bare dict
             active_beta_values({}, body_betas) | frozenset(anthropic_beta_list),  # pyright: ignore[reportUnknownArgumentType]  # _process_tools_and_beta hands back a bare list
+            drop_params=drop_params,
         )
         if gated_thinking.stripped:
             log_beta_gated_strips(gated_thinking.stripped, model=model, provider="bedrock_converse")

@@ -16,6 +16,7 @@ pytestmark: Final = pytest.mark.shares_worker_state
 
 ANTHROPIC_MODEL: Final = "beta-gated-anthropic"
 FOUNDRY_MODEL: Final = "beta-gated-foundry"
+FOUNDRY_DROP_PARAMS_MODEL: Final = "beta-gated-foundry-drop-params"
 CLEAR_AT_BETA: Final = "mid-conversation-system-clear-at-2026-08-21"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _NONCE: Final = re.compile(rb"nonce-([0-9a-f]{32})")
@@ -51,10 +52,15 @@ def respond(request: Request) -> Reply:
     return claude_reply(request)
 
 
-def deployment(name: str, model: str, api_base: str) -> dict[str, JsonValue]:
+def deployment(name: str, model: str, api_base: str, drop_params: bool = False) -> dict[str, JsonValue]:
     return {
         "model_name": name,
-        "litellm_params": {"model": model, "api_base": api_base, "api_key": f"synthetic-{name}-key"},
+        "litellm_params": {
+            "model": model,
+            "api_base": api_base,
+            "api_key": f"synthetic-{name}-key",
+            **({"drop_params": True} if drop_params else {}),
+        },
     }
 
 
@@ -66,6 +72,9 @@ def write_config(directory: Path, wire_url: str) -> Path:
                 "model_list": [
                     deployment(ANTHROPIC_MODEL, "anthropic/claude-opus-4-8", f"{wire_url}/anthropic"),
                     deployment(FOUNDRY_MODEL, "azure_ai/claude-opus-4-8", f"{wire_url}/foundry"),
+                    deployment(
+                        FOUNDRY_DROP_PARAMS_MODEL, "azure_ai/claude-opus-4-8", f"{wire_url}/foundry", drop_params=True
+                    ),
                 ],
                 "general_settings": {
                     "master_key": "os.environ/LITELLM_MASTER_KEY",
@@ -139,13 +148,26 @@ def system_message(body: bytes) -> dict[str, JsonValue]:
     return system[0]
 
 
-def test_a_leg_whose_row_lacks_the_beta_sends_neither_the_beta_nor_clear_at(rig: Rig) -> None:
+def test_a_drop_params_leg_whose_row_lacks_the_beta_sends_neither_the_beta_nor_clear_at(rig: Rig) -> None:
+    request_nonce: Final = nonce()
+    status, raw = rig.send(FOUNDRY_DROP_PARAMS_MODEL, request_nonce)
+    assert reply_text(status, raw) == f"answered {request_nonce.removeprefix('nonce-')}"
+    upstream: Final = rig.received(request_nonce)
+    assert CLEAR_AT_BETA not in beta_header(upstream.headers), upstream.headers
+    assert system_message(upstream.body) == {"role": "system", "content": "Answer in French"}
+
+
+def test_a_leg_whose_row_lacks_the_beta_forwards_clear_at_as_sent_without_drop_params(rig: Rig) -> None:
     request_nonce: Final = nonce()
     status, raw = rig.send(FOUNDRY_MODEL, request_nonce)
     assert reply_text(status, raw) == f"answered {request_nonce.removeprefix('nonce-')}"
     upstream: Final = rig.received(request_nonce)
     assert CLEAR_AT_BETA not in beta_header(upstream.headers), upstream.headers
-    assert system_message(upstream.body) == {"role": "system", "content": "Answer in French"}
+    assert system_message(upstream.body) == {
+        "role": "system",
+        "content": "Answer in French",
+        "clear_at": "next_user_message",
+    }
 
 
 def test_a_leg_that_carries_the_beta_forwards_clear_at_untouched(rig: Rig) -> None:

@@ -422,7 +422,7 @@ def test_drop_params_forwards_a_non_object_message_item_as_sent_on_the_native_re
 BINDING_AND_DISPLAY_BETAS: Final = "thinking-binding-controls-2026-08-01,thinking-display-updates-2026-08-18"
 
 
-def _bound_adaptive_request(headers: dict[str, str]) -> dict[str, object]:
+def _bound_adaptive_request(headers: dict[str, str], drop_params: bool | None = True) -> dict[str, object]:
     thinking: Final = {
         "type": "adaptive",
         "block_binding": {"prefix_mismatch_behavior": "error"},
@@ -433,7 +433,7 @@ def _bound_adaptive_request(headers: dict[str, str]) -> dict[str, object]:
         model="claude-opus-4-8",
         messages=[{"role": "user", "content": "hi"}],
         anthropic_messages_optional_request_params=optional_params,
-        litellm_params=GenericLiteLLMParams(),
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
         headers=headers,
     )
     assert thinking == {
@@ -462,13 +462,25 @@ def test_messages_request_drops_beta_gated_thinking_fields_the_final_header_does
     assert any("thinking.display=updates" in record.getMessage() for record in caplog.records)
 
 
+def test_messages_request_sends_beta_gated_thinking_fields_as_is_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _bound_adaptive_request({}, drop_params=None)
+    assert request["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+
+
 def test_messages_request_drops_clear_at_from_a_mid_conversation_system_turn_without_its_beta() -> None:
     system_turn: Final = {"role": "system", "content": "be terse", "clear_at": "end_turn"}
     request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
         model="claude-opus-4-8",
         messages=[{"role": "user", "content": "hi"}, system_turn, {"role": "user", "content": "go"}],
         anthropic_messages_optional_request_params={"max_tokens": 64},
-        litellm_params=GenericLiteLLMParams(),
+        litellm_params=GenericLiteLLMParams(drop_params=True),
         headers={"anthropic-beta": "mid-conversation-system-2026-07-01"},
     )
     assert request["messages"][1] == {"role": "system", "content": "be terse"}

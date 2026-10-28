@@ -2,10 +2,12 @@
 
 ``anthropic_beta_headers_config.json`` says which beta each provider leg
 carries. When a leg drops a beta, the request fields that beta unlocks
-would make the provider 400, so the same request degrades on that leg by
-dropping those fields too. Every helper here is copy-on-write: the caller's
-containers are returned untouched when nothing is stripped, and a shallow
-copy is returned otherwise, so a fallback leg still sends the full request.
+would make the provider 400. Under ``drop_params`` the same request degrades on
+that leg by dropping those fields too; without it the request goes out as sent
+and the provider answers its own 400, like any unsupported param. Every helper
+here is copy-on-write: the caller's containers are returned untouched when
+nothing is stripped, and a shallow copy is returned otherwise, so a fallback
+leg still sends the full request.
 """
 
 from collections.abc import Mapping, Sequence, Set
@@ -16,6 +18,7 @@ from typing import Final
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
@@ -25,6 +28,7 @@ from litellm.types.llms.anthropic import (
 
 ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER: Final = "thinking-binding-controls-2026-08-01"
 ANTHROPIC_MID_CONVERSATION_SYSTEM_CLEAR_AT_BETA_HEADER: Final = "mid-conversation-system-clear-at-2026-08-21"
+ANTHROPIC_INLINE_TOOLS_BETA_HEADER: Final = "inline-tools-2026-09-15"
 
 THINKING_BLOCK_BINDING: Final = "thinking.block_binding"
 THINKING_DISPLAY_UPDATES: Final = "thinking.display=updates"
@@ -43,6 +47,7 @@ BETA_GATED_FIELDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
         ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER: (SYSTEM_OUTPUT_CONFIG,),
         ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value: (SYSTEM_OUTPUT_CONFIG,),
         ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER: (SYSTEM_TOOL_CHANGES,),
+        ANTHROPIC_INLINE_TOOLS_BETA_HEADER: (SYSTEM_TOOL_CHANGES,),
     }
 )
 
@@ -125,10 +130,10 @@ class StrippedRequest:
     stripped: tuple[str, ...]
 
 
-def strip_beta_gated_thinking(thinking: object, active_betas: Set[str]) -> StrippedThinking:
+def strip_beta_gated_thinking(thinking: object, active_betas: Set[str], *, drop_params: object) -> StrippedThinking:
     """Drop ``thinking`` sub-fields whose beta is absent. Returns the same object when nothing is gated."""
     mapping: Final = _as_mapping(thinking)
-    if mapping is None:
+    if mapping is None or not drops_unsupported_params(drop_params):
         return StrippedThinking(thinking=thinking, stripped=())
     binding_gated: Final = "block_binding" in mapping and field_is_gated(THINKING_BLOCK_BINDING, active_betas)
     display_gated: Final = mapping.get("display") == "updates" and field_is_gated(
@@ -191,9 +196,13 @@ def _strip_beta_gated_message(message: object, active_betas: Set[str]) -> Stripp
     return _strip_beta_gated_system_message(mapping, active_betas)
 
 
-def strip_beta_gated_system_messages(messages: Sequence[object], active_betas: Set[str]) -> StrippedMessages:
+def strip_beta_gated_system_messages(
+    messages: Sequence[object], active_betas: Set[str], *, drop_params: object
+) -> StrippedMessages:
     """Drop the gated fields of every mid-conversation ``role: system`` message. Returns the same
     sequence when nothing is gated."""
+    if not drops_unsupported_params(drop_params):
+        return StrippedMessages(messages=messages, stripped=())
     per_message: Final = tuple(_strip_beta_gated_message(message, active_betas) for message in messages)
     stripped: Final = tuple(
         name for result in per_message for name in result.stripped
@@ -208,14 +217,16 @@ def strip_beta_gated_system_messages(messages: Sequence[object], active_betas: S
     )
 
 
-def strip_beta_gated_request_fields(request: Mapping[str, object], active_betas: Set[str]) -> StrippedRequest:
+def strip_beta_gated_request_fields(
+    request: Mapping[str, object], active_betas: Set[str], *, drop_params: object
+) -> StrippedRequest:
     """Apply both strips to an Anthropic ``/v1/messages`` shaped body. Returns the same mapping when
     nothing is gated, otherwise a shallow copy with ``thinking`` and ``messages`` replaced."""
-    thinking: Final = strip_beta_gated_thinking(request.get("thinking"), active_betas)
+    thinking: Final = strip_beta_gated_thinking(request.get("thinking"), active_betas, drop_params=drop_params)
     messages: Final = request.get("messages")
     message_sequence: Final = _as_sequence(messages) if not isinstance(messages, str) else None
     system_messages: Final = (
-        strip_beta_gated_system_messages(message_sequence, active_betas)
+        strip_beta_gated_system_messages(message_sequence, active_betas, drop_params=drop_params)
         if message_sequence is not None
         else StrippedMessages(messages=(), stripped=())
     )
@@ -253,16 +264,18 @@ def unstripped_native_request(optional_params: object, messages: object) -> Stri
 
 
 def strip_beta_gated_native_request(
-    headers: object, optional_params: object, messages: object, body_betas: object = ()
+    headers: object, optional_params: object, messages: object, *, body_betas: object = (), drop_params: object
 ) -> StrippedNativeRequest:
     """The ``/v1/messages`` seam, fed the final (already filtered) headers, the final body ``anthropic_beta``
     list on legs that carry betas in the body, plus the body parts it may rewrite."""
+    if not drops_unsupported_params(drop_params):
+        return unstripped_native_request(optional_params, messages)
     active_betas: Final = active_beta_values(headers, body_betas)
     params: Final = _as_mapping(optional_params) or MappingProxyType({})
-    thinking: Final = strip_beta_gated_thinking(params.get("thinking"), active_betas)
+    thinking: Final = strip_beta_gated_thinking(params.get("thinking"), active_betas, drop_params=drop_params)
     message_sequence: Final = _as_sequence(messages) if not isinstance(messages, str) else None
     system_messages: Final = (
-        strip_beta_gated_system_messages(message_sequence, active_betas)
+        strip_beta_gated_system_messages(message_sequence, active_betas, drop_params=drop_params)
         if message_sequence is not None
         else StrippedMessages(messages=(), stripped=())
     )

@@ -4215,7 +4215,7 @@ def test_bedrock_messages_keeps_mid_conversation_output_config_its_auto_added_be
         model="anthropic.claude-opus-4-8-v1:0",
         messages=messages,
         anthropic_messages_optional_request_params={"max_tokens": 4096},
-        litellm_params=GenericLiteLLMParams(),
+        litellm_params=GenericLiteLLMParams(drop_params=True),
         headers={},
     )
 
@@ -4233,9 +4233,13 @@ _SENT_MESSAGES: Final = TypeAdapter(list[_SentMessage])
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
-def test_bedrock_messages_drops_tool_changes_from_a_system_turn_an_older_model_gets_as_a_user_turn() -> None:
-    """A model without mid-conversation system support sends no tool-changes beta, so the converted turn
-    must not carry the blocks that beta gates."""
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_bedrock_messages_drops_tool_changes_from_a_system_turn_an_older_model_gets_as_a_user_turn(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model without mid-conversation system support sends no tool-changes beta, so under drop_params the
+    converted turn must not carry the blocks that beta gates, and without it they go out as sent."""
+    monkeypatch.setattr(litellm, "drop_params", False)
     from litellm.types.router import GenericLiteLLMParams
 
     messages: Final = [
@@ -4254,7 +4258,7 @@ def test_bedrock_messages_drops_tool_changes_from_a_system_turn_an_older_model_g
         model="anthropic.claude-3-7-sonnet-20250219-v1:0",
         messages=messages,
         anthropic_messages_optional_request_params={"max_tokens": 4096},
-        litellm_params=GenericLiteLLMParams(),
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
         headers={},
     )
 
@@ -4263,6 +4267,6 @@ def test_bedrock_messages_drops_tool_changes_from_a_system_turn_an_older_model_g
         block for message in sent for block in message.content
     ]  # comprehension-ok: flattening the sent content blocks
     assert "mid-conversation-tool-changes-2026-07-01" not in result.get("anthropic_beta", [])
-    assert all(block["type"] != "tool_addition" for block in blocks)
+    assert any(block["type"] == "tool_addition" for block in blocks) is not drop_params
     assert {"type": "text", "text": "A weather tool is now available"} in blocks
     assert all(message.role != "system" for message in sent)

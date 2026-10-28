@@ -3617,7 +3617,9 @@ def test_streamed_end_turn_carries_no_stop_details():
     assert "stop_reason" not in provider_fields
 
 
-def _anthropic_chat_body_for_bound_thinking(extra_headers: dict[str, str] | None) -> dict[str, object]:
+def _anthropic_chat_body_for_bound_thinking(
+    extra_headers: dict[str, str] | None, drop_params: bool | None = None
+) -> dict[str, object]:
     captured_requests: Final[list[httpx.Request]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -3646,6 +3648,7 @@ def _anthropic_chat_body_for_bound_thinking(extra_headers: dict[str, str] | None
             client=client,
             thinking=thinking,
             extra_headers=extra_headers,
+            drop_params=drop_params,
         )
     finally:
         client.close()
@@ -3657,7 +3660,9 @@ def test_anthropic_chat_keeps_block_binding_when_the_final_header_carries_the_bi
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
-    body: Final = _anthropic_chat_body_for_bound_thinking({"anthropic-beta": "thinking-binding-controls-2026-08-01"})
+    body: Final = _anthropic_chat_body_for_bound_thinking(
+        {"anthropic-beta": "thinking-binding-controls-2026-08-01"}, drop_params=True
+    )
     assert body["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
 
 
@@ -3665,5 +3670,12 @@ def test_anthropic_chat_drops_block_binding_when_no_header_carries_the_binding_b
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
-    body: Final = _anthropic_chat_body_for_bound_thinking(None)
+    body: Final = _anthropic_chat_body_for_bound_thinking(None, drop_params=True)
     assert body["thinking"] == {"type": "adaptive"}
+
+
+def test_anthropic_chat_sends_block_binding_as_is_without_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    body: Final = _anthropic_chat_body_for_bound_thinking(None)
+    assert body["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}

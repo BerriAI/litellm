@@ -228,7 +228,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         else:
             return system_param
 
-    def _normalize_system_role_messages(self, anthropic_messages_request: dict, model: str) -> None:
+    def _normalize_system_role_messages(
+        self, anthropic_messages_request: dict, model: str, drop_params: object
+    ) -> None:
         """Normalize ``role: "system"`` entries in ``messages`` per the Anthropic
         ``/v1/messages`` contract, which the first-party API, Bedrock Invoke,
         Vertex, and Azure Foundry all enforce identically.
@@ -278,7 +280,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         gated: Final = (
             StrippedMessages(messages=trailing_messages, stripped=())
             if keeps_system_turns
-            else strip_beta_gated_system_messages(trailing_messages, frozenset())
+            else strip_beta_gated_system_messages(trailing_messages, frozenset(), drop_params=drop_params)
         )
         log_beta_gated_strips(gated.stripped, model=model, provider=self.custom_llm_provider or "anthropic")
         remaining: Final = (
@@ -732,7 +734,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             messages = strip_advisor_blocks_from_messages(messages)
 
         gated: Final = (
-            strip_beta_gated_native_request(headers, anthropic_messages_optional_request_params, messages)  # pyright: ignore[reportUnknownArgumentType]  # the base signature types these as bare dicts
+            strip_beta_gated_native_request(
+                headers,  # pyright: ignore[reportUnknownArgumentType]  # the base signature types this as a bare dict
+                anthropic_messages_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # the base signature types this as a bare dict
+                messages,  # pyright: ignore[reportUnknownArgumentType]  # the base signature types this as a bare list
+                drop_params=getattr(litellm_params, "drop_params", None),
+            )
             if self.strips_beta_gated_fields_from_final_headers()
             else unstripped_native_request(anthropic_messages_optional_request_params, messages)  # pyright: ignore[reportUnknownArgumentType]  # the base signature types these as bare dicts
         )

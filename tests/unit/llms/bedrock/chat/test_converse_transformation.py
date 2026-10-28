@@ -10795,7 +10795,7 @@ def test_a_deployment_with_a_batch_control_plane_endpoint_keeps_it_out_of_chat_r
 
 
 def _converse_bound_thinking_request(
-    headers: dict[str, str] | None, body_betas: tuple[str, ...] = ()
+    headers: dict[str, str] | None, body_betas: tuple[str, ...] = (), drop_params: bool = True
 ) -> dict[str, object]:
     thinking: Final = {
         "type": "adaptive",
@@ -10808,6 +10808,7 @@ def _converse_bound_thinking_request(
         optional_params={"thinking": thinking, **({"anthropic_beta": list(body_betas)} if body_betas else {})},
         messages=[{"role": "user", "content": "hi"}],
         headers=headers,
+        drop_params=drop_params,
     )
     assert thinking == {
         "type": "adaptive",
@@ -10842,6 +10843,17 @@ def test_converse_drops_beta_gated_thinking_fields_when_the_request_carries_no_b
         "thinking.block_binding" in record.getMessage() and "provider=bedrock_converse" in record.getMessage()
         for record in caplog.records
     )
+
+
+def test_converse_sends_beta_gated_thinking_fields_as_is_without_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    fields: Final = _converse_bound_thinking_request(None, drop_params=False)
+    assert fields["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
 
 
 def test_converse_keeps_beta_gated_thinking_fields_the_body_anthropic_beta_carries(
