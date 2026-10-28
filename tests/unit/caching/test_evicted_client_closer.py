@@ -19,6 +19,7 @@ from redis.asyncio import ConnectionPool, Redis
 
 from litellm.caching.evicted_client_closer import EvictedClientCloser
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from tests.unit.caching._event_loop_reuse import runs_until_a_loop_address_repeats
 
 
 class FakeClock:
@@ -278,37 +279,28 @@ def test_sync_client_evicted_outside_an_event_loop_is_still_closed():
 def test_async_client_from_collected_loop_is_not_closed_by_fresh_loops() -> None:
     clock: Final = FakeClock()
     closer: Final = EvictedClientCloser(grace_seconds=0, clock=clock)
-    client: Final = RecordingAsyncClient()
-    closer.mark_owned(client)
-    loop_a: Final = asyncio.new_event_loop()
 
-    async def schedule() -> None:
-        closer.schedule(client)
-
-    try:
-        loop_a.run_until_complete(schedule())
-    finally:
-        loop_a.close()
-    del loop_a
-    gc.collect()
-
-    async def reap() -> None:
+    async def reap_then_schedule(client: RecordingAsyncClient) -> None:
         closer.reap()
         await asyncio.sleep(0)
+        closer.schedule(client)
 
-    def reap_on_new_loop() -> None:
+    def run_on_new_loop() -> tuple[int, RecordingAsyncClient]:
+        client: Final = RecordingAsyncClient()
+        closer.mark_owned(client)
         loop: Final = asyncio.new_event_loop()
+        loop_id: Final = id(loop)
         try:
-            loop.run_until_complete(reap())
+            loop.run_until_complete(reap_then_schedule(client))
         finally:
             loop.close()
         del loop
         gc.collect()
+        return loop_id, client
 
-    for _ in range(50):
-        reap_on_new_loop()
+    runs: Final = runs_until_a_loop_address_repeats(run_on_new_loop)
 
-    assert client.close_calls == 0
+    assert all(client.close_calls == 0 for _, client in runs)
 
 
 def test_async_client_queued_on_a_live_loop_is_closed_only_by_that_loop() -> None:
