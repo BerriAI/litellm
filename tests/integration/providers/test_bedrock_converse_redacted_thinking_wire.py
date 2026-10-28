@@ -6,7 +6,7 @@ from typing import Final
 from urllib.parse import unquote
 
 import pytest
-from integration._support.client import Gateway
+from integration._support.client import Gateway, Scenario
 from integration._support.upstream import _aws_event_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -414,3 +414,92 @@ def test_converse_redacted_thinking_replays_to_the_anthropic_api_as_claude_nativ
             {"type": "redacted_thinking", "data": NATIVE_REDACTED},
             {"type": "text", "text": FIRST_ANSWER},
         )
+
+
+_SIGNED_THINKING: Final[dict[str, JsonValue]] = {
+    "type": "thinking",
+    "thinking": "Checking the forecast.",
+    "signature": "scripted-signature-" + "s" * 32,
+}
+_CONVERSE_REDACTED_PART: Final[dict[str, JsonValue]] = {"reasoningContent": {"redactedContent": CONVERSE_REDACTED}}
+_CONVERSE_SIGNED_PART: Final[dict[str, JsonValue]] = {
+    "reasoningContent": {
+        "reasoningText": {"text": _SIGNED_THINKING["thinking"], "signature": _SIGNED_THINKING["signature"]}
+    }
+}
+
+
+def _replayed_to_converse(
+    gateway: Gateway, wire: Wire, model: str, assistants: list[JsonValue], **fields: JsonValue
+) -> tuple[dict[str, JsonValue], ...]:
+    reply: Final = _chat(
+        gateway,
+        {
+            "model": model,
+            "thinking": THINKING,
+            "max_tokens": 2048,
+            "messages": [{"role": "user", "content": QUESTION}, *assistants, {"role": "user", "content": FOLLOW_UP}],
+            **fields,
+        },
+    )
+    assert reply.content == FINAL_ANSWER
+    return _replayed_assistant_turn(wire).content
+
+
+def _claude_on_converse(scenario: Scenario, wire: Wire) -> str:
+    return scenario.model(
+        model=f"bedrock/converse/{CLAUDE_MODEL_ID}",
+        api_key=TOKEN,
+        aws_region_name="us-east-1",
+        aws_bedrock_runtime_endpoint=wire.url,
+    )
+
+
+@pytest.mark.parametrize(
+    "thinking_blocks", [None, [_redacted(NATIVE_REDACTED)]], ids=["content", "content-and-thinking-blocks"]
+)
+def test_claude_redacted_thinking_replayed_in_content_reaches_converse_once(
+    gateway: Gateway, thinking_blocks: list[JsonValue] | None
+) -> None:
+    assistant: Final[dict[str, JsonValue]] = {
+        "role": "assistant",
+        "content": [_redacted(NATIVE_REDACTED), {"type": "text", "text": FIRST_ANSWER}],
+        **({} if thinking_blocks is None else {"thinking_blocks": thinking_blocks}),
+    }
+    with wire_server(_bedrock_peer()) as wire, gateway.scenario() as scenario:
+        sent: Final = _replayed_to_converse(gateway, wire, _claude_on_converse(scenario, wire), [assistant])
+    assert sent == (_CONVERSE_REDACTED_PART, {"text": FIRST_ANSWER})
+
+
+@pytest.mark.parametrize(
+    "block, converse_part",
+    [(_redacted(NATIVE_REDACTED), _CONVERSE_REDACTED_PART), (_SIGNED_THINKING, _CONVERSE_SIGNED_PART)],
+    ids=["redacted", "signed"],
+)
+def test_block_split_across_merged_assistant_messages_reaches_converse_once(
+    gateway: Gateway, block: dict[str, JsonValue], converse_part: dict[str, JsonValue]
+) -> None:
+    assistants: Final[list[JsonValue]] = [
+        {"role": "assistant", "content": [block, {"type": "text", "text": FIRST_ANSWER}]},
+        {"role": "assistant", "content": "Checking again.", "thinking_blocks": [block]},
+    ]
+    with wire_server(_bedrock_peer()) as wire, gateway.scenario() as scenario:
+        sent: Final = _replayed_to_converse(gateway, wire, _claude_on_converse(scenario, wire), assistants)
+    assert sent == (converse_part, {"text": FIRST_ANSWER}, {"text": "Checking again."})
+
+
+@pytest.mark.parametrize("drop", [True, False], ids=["drop-params", "no-drop-params"])
+def test_converse_cache_point_after_replayed_thinking_follows_drop_params(gateway: Gateway, drop: bool) -> None:
+    assistant: Final[dict[str, JsonValue]] = {
+        "role": "assistant",
+        "content": [
+            {**_redacted(NATIVE_REDACTED), "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": FIRST_ANSWER},
+        ],
+    }
+    with wire_server(_bedrock_peer()) as wire, gateway.scenario() as scenario:
+        sent: Final = _replayed_to_converse(
+            gateway, wire, _claude_on_converse(scenario, wire), [assistant], drop_params=drop
+        )
+    replayed: Final = (_CONVERSE_REDACTED_PART, {"text": FIRST_ANSWER})
+    assert sent == (replayed if drop else (*replayed, {"cachePoint": {"type": "default"}}))
