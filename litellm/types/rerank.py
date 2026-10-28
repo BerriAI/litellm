@@ -48,8 +48,6 @@ class OptionalRerankParams(TypedDict, total=False):
     max_chunks_per_doc: int | None
     max_tokens_per_doc: int | None
     instruction: str | None
-    truncate: ReadOnly[bool]
-    truncation_direction: ReadOnly[str | None]
     truncate_prompt_tokens: ReadOnly[int | None]
     truncation_side: ReadOnly[Literal["left", "right"] | None]
     max_tokens_per_query: ReadOnly[int | None]
