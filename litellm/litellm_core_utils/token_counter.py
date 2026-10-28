@@ -3,11 +3,12 @@
 import base64
 import io
 import math
+import re
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
-from itertools import accumulate, chain
+from itertools import accumulate, chain, islice
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 
@@ -406,8 +407,7 @@ class _PdfBox(Protocol):
 
 
 class _PdfContent(Protocol):
-    @property
-    def operations(self) -> Sequence[tuple[object, bytes]]: ...
+    def get_data(self) -> bytes: ...
 
 
 class _PdfPage(Protocol):
@@ -1043,26 +1043,44 @@ def _pdf_xobjects(container: Mapping[str, object], inherited: _PdfXObjects) -> _
     return _pdf_dictionary(_pdf_value(resources, "/XObject"))
 
 
+_PDF_WHITESPACE: Final = rb"\x00\t\n\x0c\r "
+_PDF_TOKEN_END: Final = _PDF_WHITESPACE + rb"()<>\[\]{}/%"
+_PDF_XOBJECT_DRAW: Final = re.compile(
+    rb"/([^" + _PDF_TOKEN_END + rb"]*)[" + _PDF_WHITESPACE + rb"]+Do(?![^" + _PDF_TOKEN_END + rb"])"
+)
+_PDF_INLINE_IMAGE: Final = re.compile(rb"(?<![^" + _PDF_WHITESPACE + rb"])BI(?![^" + _PDF_WHITESPACE + rb"/])")
+_PDF_NAME_ESCAPE: Final = re.compile(rb"#([0-9A-Fa-f]{2})")
+_PDF_NAME_CHARSETS: Final = ("utf-8", "gbk")
+
+
+def _decoded(raw: bytes, charset: str) -> str | None:
+    try:
+        return raw.decode(charset)
+    except UnicodeDecodeError:
+        return None
+
+
+def _pdf_name(escaped: bytes) -> str:
+    raw: Final = _PDF_NAME_ESCAPE.sub(lambda escape: bytes.fromhex(escape[1].decode("ascii")), escaped)
+    decoded: Final = (_decoded(raw, charset) for charset in _PDF_NAME_CHARSETS)
+    return "/" + next((name for name in decoded if name is not None), raw.decode("latin-1"))
+
+
 def _pdf_content_summary(content: _PdfContent) -> _PdfContentSummary:
-    operations: Final = content.operations
-    operand_lists: Final = (operands for operands, operator in operations if operator == b"Do")
-    names: Final[Iterable[object]] = (
-        cast(Sequence[object], operands)[0]  # cast-ok: pypdf parses an operator's operands into a list
-        for operands in operand_lists
-        if isinstance(operands, list) and operands
-    )
+    data: Final = content.get_data()
+    draws: Final = islice(_PDF_XOBJECT_DRAW.finditer(data), PDF_MAX_XOBJECT_DRAWS_PER_PAGE + 1)
     return _PdfContentSummary(
-        drawn_names=tuple(name for name in names if isinstance(name, str)),
-        draws_inline_image=any(operator == b"INLINE IMAGE" for _, operator in operations),
+        drawn_names=tuple(_pdf_name(draw[1]) for draw in draws),
+        draws_inline_image=_PDF_INLINE_IMAGE.search(data) is not None,
     )
 
 
 def _pdf_form_summary(form: Mapping[str, object]) -> _PdfContentSummary | None:
-    from pypdf.generic import ContentStream, StreamObject
+    from pypdf.generic import StreamObject
 
     if not isinstance(form, StreamObject):
         return None
-    return _pdf_content_summary(cast(_PdfContent, ContentStream(form, None)))  # cast-ok: pypdf is untyped
+    return _pdf_content_summary(cast(_PdfContent, form))  # cast-ok: pypdf is untyped
 
 
 def _pdf_drawn_xobjects(drawing: _PdfDrawing) -> tuple[_PdfXObjectUse, ...]:

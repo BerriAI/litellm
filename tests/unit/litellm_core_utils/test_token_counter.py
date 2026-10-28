@@ -2283,6 +2283,32 @@ def test_openai_model_finds_an_image_a_shared_form_without_resources_draws_from_
 
 
 @pytest.mark.timeout(10)
+def test_openai_model_prices_a_page_of_a_million_drawing_operators_promptly():
+    """A page of a million drawing operators and no image took about 30 seconds to price, since every operator was
+    parsed to find the images it draws, while the stream compresses into a request a few kilobytes long."""
+    model: Final = "gpt-4o"
+
+    assert _pdf_cost(model, _pdf_base64(("",), drawing=b" q Q" * 1_000_000, page_resources="<< >>")) == 0
+
+
+@pytest.mark.parametrize("escaped_name", ["/Im#231", "/#C4#E3", "/caf#C3#A9"], ids=["hex_escape", "gbk", "utf8"])
+def test_openai_model_finds_an_image_drawn_by_an_escaped_name(escaped_name: str):
+    """A name written with #xx escapes reads the same in the content stream and in /Resources, decoded the way pypdf
+    decodes it, so an image drawn under such a name still prices the page as rendered."""
+    model: Final = "gpt-4o"
+
+    assert _pdf_cost(
+        model,
+        _pdf_base64(
+            ("",),
+            xobjects=(_ONE_PIXEL_IMAGE,),
+            drawing=f" {escaped_name} Do".encode(),
+            page_resources=f"<< /XObject << {escaped_name} 6 0 R >> >>",
+        ),
+    ) == _rendered_page_cost()
+
+
+@pytest.mark.timeout(10)
 def test_openai_model_reads_resources_shared_by_many_forms_once():
     """3,000 forms that all list the same /Resources took 17 seconds to price before each dictionary was read once."""
     model: Final = "gpt-4o"
