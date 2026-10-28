@@ -9160,9 +9160,16 @@ class Router:
         """
         model_group: Final = kwargs.get("model")
         response = original_function(*args, **kwargs)
-        if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
+        is_async_call: Final[bool] = coroutine_checker.is_async_callable(response) or bool(
+            inspect.isawaitable(response)  # pyright: ignore[reportAny]  # dynamic response object
+        )
+        if is_async_call:
             response = await response
-        await self.increment_deployment_usage_for_response(response=response, request_kwargs=kwargs)
+        await self.increment_deployment_usage_for_response(
+            response=response,  # pyright: ignore[reportAny]  # dynamic response object
+            request_kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # kwargs dict
+            sync_mode=not is_async_call,
+        )
         ## PROCESS RESPONSE HEADERS
         response = await self.set_response_headers(response=response, model_group=model_group, request_kwargs=kwargs)
 
@@ -9379,6 +9386,9 @@ class Router:
             total_tokens: Final[float] = standard_logging_object.get("total_tokens", 0)
             counted_tokens: Final = get_counted_usage_tokens(litellm_params)
             deployment_name: Final = metadata.get("deployment", None)
+            sync_mode: Final[bool] = isinstance(litellm_params, Mapping) and LiteLLMLogging.is_sync_litellm_request(
+                litellm_params  # pyright: ignore[reportUnknownArgumentType]  # mapping from kwargs
+            )
             return await self._increment_deployment_usage(
                 deployment_id=str(deployment_id),
                 deployment_name=deployment_name if isinstance(deployment_name, str) else None,
@@ -9386,6 +9396,7 @@ class Router:
                 total_tokens=total_tokens if counted_tokens is None else max(0, total_tokens - counted_tokens),
                 rpm_increment=1 if counted_tokens is None else 0,
                 parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
+                sync_mode=sync_mode,
             )
 
         except Exception as e:
@@ -9427,6 +9438,7 @@ class Router:
         self,
         response: object,
         request_kwargs: dict[str, object],
+        sync_mode: bool = False,
     ) -> None:
         if response is None:
             return
@@ -9442,6 +9454,10 @@ class Router:
             total_tokens: Final = response_total_token_count(response)
             deployment_name: Final = deployment_metadata.get("deployment")
             deployment_metadata[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] = total_tokens
+            req_litellm_params: Final = request_kwargs.get("litellm_params")
+            is_sync: Final[bool] = sync_mode or (
+                isinstance(req_litellm_params, Mapping) and LiteLLMLogging.is_sync_litellm_request(req_litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # mapping from request_kwargs
+            )
             try:
                 await self._increment_deployment_usage(
                     deployment_id=str(deployment_id),
@@ -9450,6 +9466,7 @@ class Router:
                     total_tokens=total_tokens,
                     rpm_increment=1,
                     parent_otel_span=get_parent_otel_span_from_kwargs(request_kwargs),
+                    sync_mode=is_sync,
                 )
             except Exception:
                 deployment_metadata.pop(ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY, None)
@@ -9468,6 +9485,7 @@ class Router:
         total_tokens: float,
         rpm_increment: int,
         parent_otel_span: Span | None,
+        sync_mode: bool = False,
     ) -> str | None:
         from litellm.types.caching import RedisPipelineIncrementOperation
 
@@ -9487,15 +9505,26 @@ class Router:
             RedisPipelineIncrementOperation(key=key, increment_value=increment_value, ttl=RoutingArgs.ttl.value)
             for key, increment_value in ((tpm_key, total_tokens), (rpm_key, rpm_increment))
         ]
-        post_increment_values: Final = await self.cache.async_increment_cache_pipeline(
-            increment_list=pipeline_operations,
-            parent_otel_span=parent_otel_span,
-        )
-        if post_increment_values is not None and self.cache.redis_cache is not None:
-            for operation, value in zip(pipeline_operations, post_increment_values):
-                await self.cache.async_set_cache(
-                    operation["key"], int(value), local_only=True, ttl=RoutingArgs.ttl.value
-                )
+        if sync_mode:
+            sync_post_increment_values: Final = self.cache.increment_cache_pipeline(
+                increment_list=pipeline_operations,
+                parent_otel_span=parent_otel_span,
+            )
+            if sync_post_increment_values is not None and self.cache.redis_cache is not None:
+                for operation, value in zip(pipeline_operations, sync_post_increment_values):
+                    self.cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # cache method
+                        operation["key"], int(value), local_only=True, ttl=RoutingArgs.ttl.value
+                    )
+        else:
+            async_post_increment_values: Final = await self.cache.async_increment_cache_pipeline(  # pyright: ignore[reportUnknownMemberType]  # cache method
+                increment_list=pipeline_operations,
+                parent_otel_span=parent_otel_span,
+            )
+            if async_post_increment_values is not None and self.cache.redis_cache is not None:
+                for operation, value in zip(pipeline_operations, async_post_increment_values):
+                    await self.cache.async_set_cache(  # pyright: ignore[reportUnknownMemberType]  # cache method
+                        operation["key"], int(value), local_only=True, ttl=RoutingArgs.ttl.value
+                    )
         return tpm_key
 
     def _deployment_tracks_usage(self, deployment_id: str, model_group: str) -> bool:

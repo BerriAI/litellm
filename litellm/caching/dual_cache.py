@@ -615,6 +615,34 @@ class DualCache(BaseCache):
                 _log_deferred_increment_failure
             )
 
+    def increment_cache_pipeline(
+        self,
+        increment_list: Sequence["RedisPipelineIncrementOperation"],
+        local_only: bool = False,
+        parent_otel_span: Span | None = None,
+        **kwargs: object,  # kwargs-ok: forward extra params
+    ) -> list[float] | None:  # mutable-ok: list return type
+        result: list[float] | None = None  # rebind-ok: conditional cache assignment # mutable-ok: list result type
+        try:
+            result = self.in_memory_cache.increment_pipeline(  # rebind-ok: update result from in-memory
+                increment_list=increment_list,
+                parent_otel_span=parent_otel_span,
+            )
+
+            if self.redis_cache is not None and local_only is False:
+                result = self.redis_cache.increment_pipeline(  # rebind-ok: update result from redis
+                    increment_list=increment_list,
+                    parent_otel_span=parent_otel_span,
+                )
+        except Exception as e:  # noqa: BLE001  # fallback to in-memory on redis error
+            log_redis_failure(
+                verbose_logger,
+                logging.WARNING,
+                "Redis increment_cache_pipeline failed, falling back to in-memory result",
+                e,
+            )
+        return result
+
     async def async_increment_cache_pipeline(
         self,
         increment_list: list["RedisPipelineIncrementOperation"],

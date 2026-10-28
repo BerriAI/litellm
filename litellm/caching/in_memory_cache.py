@@ -13,7 +13,7 @@ import json
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
@@ -268,6 +268,17 @@ class InMemoryCache(BaseCache):
 
     async def async_increment(self, key, value: float, **kwargs) -> float:
         return self.increment_cache(key=key, value=value, **kwargs)
+
+    def increment_pipeline(
+        self,
+        increment_list: Sequence["RedisPipelineIncrementOperation"],
+        **kwargs: object,  # kwargs-ok: forward extra params
+    ) -> list[float] | None:  # mutable-ok: list return type
+        results: Final[list[float]] = [  # mutable-ok: list accumulator
+            self.increment_cache(increment["key"], increment["increment_value"], **kwargs)  # pyright: ignore[reportUnknownMemberType]  # unannotated base method
+            for increment in increment_list
+        ]
+        return results
 
     async def async_increment_pipeline(
         self, increment_list: list["RedisPipelineIncrementOperation"], **kwargs
