@@ -311,6 +311,18 @@ class TestGoogleInteractionsCreate:
                 {"agent": "antigravity-preview-09-2026"},
                 id="agent-drops-a-non-object",
             ),
+            pytest.param(
+                {"agent": "antigravity-preview-09-2026"},
+                {"model": "gemini-3.8-flash"},
+                {"agent": "antigravity-preview-09-2026"},
+                id="agent-drops-an-object-without-a-type",
+            ),
+            pytest.param(
+                {"agent": "antigravity-preview-09-2026"},
+                {"type": 7, "model": "gemini-3.8-flash"},
+                {"agent": "antigravity-preview-09-2026"},
+                id="agent-drops-a-non-string-type",
+            ),
         ],
     )
     @pytest.mark.usefixtures("fake_provider_credentials")
@@ -334,6 +346,41 @@ class TestGoogleInteractionsCreate:
         )
 
         assert json.loads(route.calls.last.request.content) == {**expected_target, "input": "Say hi in one word."}
+
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_create_rejects_agent_config_a_bridged_provider_cannot_take(self, respx_mock: MockRouter) -> None:
+        route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=_openai_response_body("resp-agent-config", "Hi"))
+        )
+
+        with pytest.raises(litellm.UnsupportedParamsError, match="'agent_config' is not supported for openai") as e:
+            interactions.create(
+                model="gpt-5.6",
+                agent_config={"type": "antigravity", "model": "gemini-3.8-flash"},
+                input="Say hi in one word.",
+                api_key="sk-offline",
+            )
+
+        assert e.value.status_code == 400
+        assert not route.called
+
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_create_with_drop_params_drops_agent_config_a_bridged_provider_cannot_take(
+        self, respx_mock: MockRouter
+    ) -> None:
+        route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=_openai_response_body("resp-agent-config", "Hi"))
+        )
+
+        interactions.create(
+            model="gpt-5.6",
+            agent_config={"type": "antigravity", "model": "gemini-3.8-flash"},
+            input="Say hi in one word.",
+            drop_params=True,
+            api_key="sk-offline",
+        )
+
+        assert json.loads(route.calls.last.request.content) == {"model": "gpt-5.6", "input": "Say hi in one word."}
 
     @pytest.mark.parametrize(
         ("model", "api_key", "url", "expected_body", "sse_body", "expected_chunks"),

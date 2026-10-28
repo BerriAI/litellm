@@ -49,6 +49,7 @@ from litellm.interactions.utils import (
     InteractionsAPIRequestUtils,
     get_provider_interactions_api_config,
 )
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.interactions import (
     CancelInteractionResult,
@@ -307,6 +308,13 @@ def create(
         # Check if this is a bridge provider (litellm_responses) - similar to responses API
         # Either provider is explicitly "litellm_responses" or no config found (bridge to responses)
         if custom_llm_provider == "litellm_responses" or interactions_api_config is None:
+            if agent_config is not None and not drops_unsupported_params(kwargs.get("drop_params")):
+                raise litellm.UnsupportedParamsError(
+                    message=f"'agent_config' is not supported for {custom_llm_provider} interactions. "
+                    "Set drop_params to drop it.",
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                )
             # Bridge to litellm.responses() for non-native providers
             from litellm.interactions.litellm_responses_transformation.handler import (
                 LiteLLMResponsesInteractionsHandler,
