@@ -43,6 +43,15 @@ def _servers(response: httpx.Response) -> list[JsonValue]:
     return list(list_value(_schema(response).get("servers", [])))
 
 
+def _chat(candidate: Gateway, model: str, key: str, content: str) -> httpx.Response:
+    return candidate.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "messages": [{"role": "user", "content": content}], "cache": {"no-cache": True}},
+        key=key,
+    )
+
+
 def _warmed_feature_operations(response: httpx.Response) -> dict[str, JsonValue]:
     paths: Final = object_value(_schema(response)["paths"])
     return {path: operations for path, operations in paths.items() if WARMED_FEATURE.matches(path)}
@@ -88,24 +97,14 @@ def test_chat_completions_overlapping_a_cold_openapi_build_all_succeed(gateway: 
     ):
         model: Final = scenario.model()
         key: Final = scenario.key(models=[model])
+        first_chat: Final = _chat(owned.gateway, model, key, "before the docs build")
         docs: Final = pool.submit(owned.gateway.request, "GET", "/openapi.json")
         chats: Final = tuple(
-            pool.map(
-                lambda index: owned.gateway.request(
-                    "POST",
-                    "/v1/chat/completions",
-                    {
-                        "model": model,
-                        "messages": [{"role": "user", "content": f"overlapping docs build {index}"}],
-                        "cache": {"no-cache": True},
-                    },
-                    key=key,
-                ),
-                range(CHATS),
-            )
+            pool.map(lambda index: _chat(owned.gateway, model, key, f"overlapping docs build {index}"), range(CHATS))
         )
         chats_returned_during_build: Final = not docs.done()
         docs_response: Final = docs.result()
+    assert first_chat.status_code == 200, first_chat.text[:300]
     assert chats_returned_during_build, "the chat calls returned only after the cold docs build finished"
     assert [(response.status_code, response.text[:300]) for response in chats if response.status_code != 200] == []
     replies: Final = tuple(JSON_OBJECT.validate_json(response.content) for response in chats)
