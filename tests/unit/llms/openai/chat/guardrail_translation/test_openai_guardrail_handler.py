@@ -1587,6 +1587,55 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert sink.holdback_per_choice == {0: len("alpha"), 1: len("bravo-long")}
 
     @pytest.mark.asyncio
+    async def test_diff_mode_withholds_tool_calls_until_their_arguments_are_complete(self) -> None:
+        """Mid-round the assembled arguments are a truncated JSON fragment, so they are not sent.
+
+        Sending them would hand the guardrail something like `{"ci`, which main never did.
+        """
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class RecordingGuardrail(CustomGuardrail):
+            seen: list[object] = []
+
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                type(self).seen.append(inputs.get("tool_calls"))
+                return inputs
+
+        def chunk(text: str, arguments: str, finish_reason: str | None) -> ModelResponseStream:
+            # The text keeps the guardrail in play for the partial round; without any text the
+            # transform path has nothing to inspect and never calls it at all.
+            return ModelResponseStream(choices=[StreamingChoices(
+                index=0, delta=Delta(content=text, tool_calls=[{
+                    "index": 0, "id": "call_0", "type": "function",
+                    "function": {"name": "weather", "arguments": arguments},
+                }]), finish_reason=finish_reason,
+            )])
+
+        RecordingGuardrail.seen = []
+        handler: Final = OpenAIChatCompletionsHandler()
+        guardrail: Final = RecordingGuardrail(guardrail_name="recording")
+        partial: Final = [chunk("looking", '{"ci', None)]
+        await handler.process_output_streaming_response(
+            responses_so_far=partial, guardrail_to_apply=guardrail,
+            litellm_logging_obj=None, stream_transform_sink=StreamTransformSink(),
+        )
+        assert RecordingGuardrail.seen == [None]
+
+        RecordingGuardrail.seen = []
+        complete: Final = [chunk("looking", '{"ci', None), chunk(" it up", 'ty": "Paris"}', "tool_calls")]
+        await handler.process_output_streaming_response(
+            responses_so_far=complete, guardrail_to_apply=guardrail,
+            litellm_logging_obj=None, stream_transform_sink=StreamTransformSink(),
+        )
+        sent: Final = RecordingGuardrail.seen[-1]
+        assert sent is not None
+        assert [call["function"]["arguments"] for call in sent] == ['{"city": "Paris"}']
+
+    @pytest.mark.asyncio
     async def test_deliver_ended_stream_tool_rewrites_keep_choice_indices(self) -> None:
         handler: Final = OpenAIChatCompletionsHandler()
         chunks: Final = self._two_choice_tool_call_stream_chunks()

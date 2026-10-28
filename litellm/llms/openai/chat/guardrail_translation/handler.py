@@ -909,14 +909,19 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 )
                 sink.record(merged_texts, merged_holdback)
                 return
-            tool_calls: Final = chain.from_iterable(choice.message.tool_calls or () for choice in assembled.choices)
-            inputs["tool_calls"] = TypeAdapter(list[ChatCompletionToolCallChunk]).validate_python(
-                tuple(
-                    MappingProxyType({"index": index, **converted})
-                    for index, tool_call in enumerate(tool_calls)
-                    if (converted := self._convert_tool_call_to_dict(tool_call)) is not None
+            # Mid-round the assembled arguments are a truncated JSON fragment such as `{"ci`, which
+            # main never handed to a guardrail: one that parses them either errors or judges
+            # arguments that do not exist yet. Send tool calls only once the stream has finished and
+            # the arguments are complete; the text of those rounds is still inspected above.
+            if self._first_choice_has_finished(responses_so_far):
+                tool_calls: Final = chain.from_iterable(choice.message.tool_calls or () for choice in assembled.choices)
+                inputs["tool_calls"] = TypeAdapter(list[ChatCompletionToolCallChunk]).validate_python(
+                    tuple(
+                        MappingProxyType({"index": index, **converted})
+                        for index, tool_call in enumerate(tool_calls)
+                        if (converted := self._convert_tool_call_to_dict(tool_call)) is not None
+                    )
                 )
-            )
         if responses_so_far and getattr(responses_so_far[0], "model", None):
             inputs["model"] = responses_so_far[0].model
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
