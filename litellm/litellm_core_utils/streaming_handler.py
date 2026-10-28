@@ -23,6 +23,7 @@ from typing_extensions import NotRequired, TypedDict
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.constants import STREAM_CHUNK_CHOICE_FIELDS, STREAM_FINISH_CHOICE_FIELDS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
 from litellm.litellm_core_utils.hidden_params import (
@@ -111,6 +112,29 @@ def _prepend_upstream_choice_extras(
     upstream_extras: Final[Mapping[str, object]] = upstream_choice.model_dump(include=set(extra_keys))
     choice.__pydantic_extra__ = {**upstream_extras, **(choice.__pydantic_extra__ or {})}  # rebind-ok: reuse choice
     choice.__pydantic_fields_set__.update(upstream_extras)
+
+
+_NO_UPSTREAM_CHOICE_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _upstream_choice_fields(upstream_chunk: object, fields: Sequence[str]) -> Mapping[str, object]:
+    match getattr(upstream_chunk, "choices", None):
+        case [BaseModel() as first_choice, *_]:
+            upstream_extras: Final[Mapping[str, object]] = first_choice.model_extra or {}
+            return MappingProxyType({field: upstream_extras[field] for field in fields if field in upstream_extras})
+        case _:
+            return _NO_UPSTREAM_CHOICE_FIELDS
+
+
+def _non_null_upstream_choice_fields(upstream_chunk: object, fields: Sequence[str]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {field: value for field, value in _upstream_choice_fields(upstream_chunk, fields).items() if value is not None}
+    )
+
+
+def _apply_choice_fields(choice: StreamingChoices, fields: Mapping[str, object]) -> None:
+    for field, value in fields.items():
+        setattr(choice, field, value)
 
 
 def _holds_only_scalars(fields: Iterable[tuple[str, object]]) -> bool:
@@ -337,6 +361,7 @@ class CustomStreamWrapper:
         self.system_fingerprint: str | None = None
         self._provider_response_model: str | None = None
         self.received_finish_reason: str | None = None
+        self.received_finish_choice_fields: Mapping[str, object] = _NO_UPSTREAM_CHOICE_FIELDS
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.special_tokens = [
             "<|assistant|>",
@@ -1268,12 +1293,24 @@ class CustomStreamWrapper:
                 model_response.choices[0].finish_reason = map_finish_reason(
                     finish_reason=self.received_finish_reason
                 )  # ensure consistent output to openai
+                _apply_choice_fields(model_response.choices[0], self.received_finish_choice_fields)
+                if response_obj.get("is_finished"):
+                    _apply_choice_fields(
+                        model_response.choices[0],
+                        _non_null_upstream_choice_fields(_original_chunk, STREAM_CHUNK_CHOICE_FIELDS),
+                    )
 
                 self.sent_last_chunk = True
 
             return model_response
         elif self._has_special_delta_content(model_response):
             return self._handle_special_delta_content(model_response)
+        elif upstream_chunk_fields := _non_null_upstream_choice_fields(
+            response_obj.get("original_chunk"), STREAM_CHUNK_CHOICE_FIELDS
+        ):
+            model_response.choices[0].delta = Delta(content=None)  # rebind-ok: chunks are built in place here
+            _apply_choice_fields(model_response.choices[0], upstream_chunk_fields)
+            return model_response
         else:
             if hasattr(model_response, "usage"):
                 self.chunks.append(model_response)
@@ -1492,6 +1529,7 @@ class CustomStreamWrapper:
             print_verbose(f"completion obj content: {completion_obj['content']}")
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
+                self.received_finish_choice_fields = _upstream_choice_fields(chunk, STREAM_FINISH_CHOICE_FIELDS)
             if response_obj["usage"] is not None:
                 _text_completion_usage: Final[Usage] = response_obj["usage"]
                 setattr(
@@ -1575,6 +1613,7 @@ class CustomStreamWrapper:
                         f"{self.custom_llm_provider} raised a streaming error - finish_reason: error, no content string given. Received Chunk={response_obj}"
                     )
                 self.received_finish_reason = response_obj["finish_reason"]
+                self.received_finish_choice_fields = _upstream_choice_fields(chunk, STREAM_FINISH_CHOICE_FIELDS)
             if response_obj.get("original_chunk", None) is not None:
                 if hasattr(response_obj["original_chunk"], "id"):
                     model_response = self.set_model_id(response_obj["original_chunk"].id, model_response)
@@ -1920,6 +1959,7 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = _finish_reason
         else:
             model_response.choices[0].finish_reason = "stop"
+        _apply_choice_fields(model_response.choices[0], self.received_finish_choice_fields)
 
         ## if tool use
         if (

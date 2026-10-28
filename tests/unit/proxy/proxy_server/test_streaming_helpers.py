@@ -576,6 +576,16 @@ def test_serialize_streaming_chunk_simple_uses_fast_path_bytes():
     }
 
 
+def test_serialize_streaming_chunk_keeps_provider_choice_fields():
+    chunk = _simple_chunk(content="1,2,3,4")
+    chunk.choices[0]["stop_reason"] = ",5"
+    chunk.choices[0]["token_ids"] = [20]
+
+    assert json.loads(_serialize_streaming_chunk(chunk))["choices"] == [
+        {"index": 0, "delta": {"role": "assistant", "content": "1,2,3,4"}, "stop_reason": ",5", "token_ids": [20]}
+    ]
+
+
 def test_serialize_streaming_chunk_invalid_input_raises_attribute_error():
     """The helper is typed as ``BaseModel`` — handing it a plain dict trips
     the attribute-access path (no ``model_dump_json``)."""

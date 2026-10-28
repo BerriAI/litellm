@@ -1,5 +1,6 @@
 from typing import Final
 
+from litellm.constants import STREAM_FINISH_CHOICE_FIELDS
 from litellm.types.utils import Choices, ModelResponse, TextChoices, TextCompletionResponse
 
 
@@ -34,11 +35,15 @@ class TextCompletionStreamWrapper:
                 raise Exception
 
             if chunk["choices"]:
-                delta: Final = chunk["choices"][0]["delta"]
+                chat_choice: Final = chunk["choices"][0]
+                delta: Final = chat_choice["delta"]
                 text_choices["text"] = delta["content"]
                 text_choices["reasoning_content"] = delta.get("reasoning_content")
-                text_choices["index"] = chunk["choices"][0]["index"]
-                text_choices["finish_reason"] = chunk["choices"][0]["finish_reason"]
+                text_choices["index"] = chat_choice["index"]
+                text_choices["finish_reason"] = chat_choice["finish_reason"]
+                for field in STREAM_FINISH_CHOICE_FIELDS:
+                    if field in chat_choice:
+                        text_choices[field] = chat_choice[field]
                 response["choices"] = [text_choices]
             else:
                 response["choices"] = []

@@ -7,6 +7,7 @@ import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from types import CodeType, FrameType, MappingProxyType
 from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -28,6 +29,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkParsed,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
@@ -5899,6 +5901,70 @@ def test_chunk_creator_keeps_upstream_index_on_single_choice_chunk(logging_obj: 
     assert result is not None
     assert result.choices[0].index == 1
     assert result.choices[0].delta.content == "hello"
+
+
+def _hosted_vllm_stream_choices(
+    logging_obj: Logging, upstream_choices: Sequence[Mapping[str, object]]
+) -> tuple[dict[str, object], ...]:
+    sse_lines: Final = (
+        *(
+            "data: " + json.dumps({"id": "chatcmpl-1", "object": "chat.completion.chunk", "model": "m", "choices": [c]})
+            for c in upstream_choices
+        ),
+        "data: [DONE]",
+    )
+    completion_stream: Final = HostedVLLMChatConfig().get_model_response_iterator(
+        streaming_response=iter(sse_lines), sync_stream=True, json_mode=False
+    )
+    return tuple(
+        chunk.choices[0].model_dump()
+        for chunk in CustomStreamWrapper(
+            completion_stream=completion_stream, model="m", custom_llm_provider="hosted_vllm", logging_obj=logging_obj
+        )
+    )
+
+
+@pytest.mark.parametrize("stop_reason", [",5", 151645])
+@pytest.mark.parametrize("final_content", [",3", ""], ids=["content-then-finish", "finish-only"])
+def test_hosted_vllm_stream_keeps_stop_reason_and_every_token_id(
+    logging_obj: Logging, final_content: str, stop_reason: str | int
+) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": None, "token_ids": [16]},
+            {"index": 0, "delta": {"content": "1,2"}, "finish_reason": None, "token_ids": [11, 17]},
+            {
+                "index": 0,
+                "delta": {"content": final_content},
+                "finish_reason": "stop",
+                "stop_reason": stop_reason,
+                "token_ids": [20],
+            },
+        ),
+    )
+
+    assert (emitted[-1]["finish_reason"], emitted[-1].get("stop_reason")) == ("stop", stop_reason)
+    assert list(chain.from_iterable(choice.get("token_ids") or () for choice in emitted)) == [16, 11, 17, 20]
+
+
+def _held_back_stop_string_stream(token_ids: Mapping[str, None]) -> tuple[Mapping[str, object], ...]:
+    return (
+        {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+        {"index": 0, "delta": {"content": ""}, "finish_reason": None, **token_ids},
+        {"index": 0, "delta": {"content": "1,2"}, "finish_reason": None, **token_ids},
+        {"index": 0, "delta": {"content": ""}, "finish_reason": "stop", "stop_reason": ",3", **token_ids},
+    )
+
+
+def test_hosted_vllm_stream_with_null_token_ids_emits_the_same_chunks_as_without_them(logging_obj: Logging) -> None:
+    with_null_ids: Final = _hosted_vllm_stream_choices(logging_obj, _held_back_stop_string_stream({"token_ids": None}))
+    without_ids: Final = _hosted_vllm_stream_choices(logging_obj, _held_back_stop_string_stream({}))
+
+    assert [(c["delta"], c["finish_reason"]) for c in with_null_ids] == [
+        (c["delta"], c["finish_reason"]) for c in without_ids
+    ]
 
 
 def _later_chunk_outputs(

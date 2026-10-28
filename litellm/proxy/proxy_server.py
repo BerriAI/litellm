@@ -10061,6 +10061,9 @@ def _restamp_nested_response_model_in_sse_line(line: bytes, target_model: str) -
     return _SSE_DATA_FIELD + b" " + serialized_event.encode() + line_ending
 
 
+_STANDARD_STREAM_CHOICE_FIELDS: Final = frozenset({"finish_reason", "index", "delta", "logprobs", "enhancements"})
+
+
 def _fast_serialize_simple_model_response_stream(
     chunk: ModelResponseStream,
 ) -> bytes | None:
@@ -10082,6 +10085,8 @@ def _fast_serialize_simple_model_response_stream(
 
     choice: Final = choices[0]
     if getattr(choice, "logprobs", None) is not None or getattr(choice, "enhancements", None) is not None:
+        return None
+    if not isinstance(choice, BaseModel) or (choice.model_extra or {}).keys() - _STANDARD_STREAM_CHOICE_FIELDS:
         return None
 
     delta: Final[object] = getattr(choice, "delta", None)
@@ -10160,6 +10165,11 @@ def _is_empty_streaming_choice(choice: StreamingChoices) -> bool:
     if choice.finish_reason is not None:
         return False
     if getattr(choice, "logprobs", None) is not None:
+        return False
+    provider_choice_values: Final = (
+        value for field, value in (choice.model_extra or {}).items() if field not in _STANDARD_STREAM_CHOICE_FIELDS
+    )
+    if not _all_values_none(provider_choice_values):
         return False
     delta: Final = choice.delta if hasattr(choice, "delta") else None
     if delta is None:

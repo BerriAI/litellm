@@ -2,8 +2,11 @@ from collections.abc import AsyncIterator, Iterator
 from typing import Final
 
 import pytest
+from openai.types.completion import Completion
 
 from litellm.exceptions import APIConnectionError
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
 from litellm.types.utils import Choices, Delta, ModelResponseStream, StreamingChoices, Usage
 
@@ -83,6 +86,44 @@ async def test_text_completion_stream_usage_is_opt_in(
             **expected_usage,
         }
     ]
+
+
+def _completion_chunk(text: str, finish_reason: str | None, **choice_extras: object) -> Completion:
+    return Completion.construct(
+        id="cmpl-1",
+        created=1,
+        model="m",
+        object="text_completion",
+        choices=[{"index": 0, "text": text, "finish_reason": finish_reason, "logprobs": None, **choice_extras}],
+    )
+
+
+@pytest.mark.parametrize("final_text", [", 5, 6", ""], ids=["text-then-finish", "finish-only"])
+def test_text_completion_stream_keeps_stop_reason_on_the_finish_chunk(final_text: str) -> None:
+    logging_obj: Final = Logging(
+        model="m",
+        messages=[{"role": "user", "content": "1, 2, 3, 4"}],
+        stream=True,
+        call_type="text_completion",
+        start_time=0.0,
+        litellm_call_id="call-1",
+        function_id="function-1",
+    )
+    upstream: Final = (_completion_chunk(", 5", None), _completion_chunk(final_text, "stop", stop_reason=", 7"))
+    chat_stream: Final = CustomStreamWrapper(
+        completion_stream=iter(upstream),
+        model="m",
+        custom_llm_provider="text-completion-openai",
+        logging_obj=logging_obj,
+    )
+
+    responses: Final = list(TextCompletionStreamWrapper(completion_stream=chat_stream, model="m"))
+
+    assert responses[-1].choices[0].model_dump(exclude_none=True) == {
+        "finish_reason": "stop",
+        "index": 0,
+        "stop_reason": ", 7",
+    }
 
 
 def test_text_completion_conversion_rejects_non_streaming_choices() -> None:
