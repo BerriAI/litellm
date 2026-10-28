@@ -878,7 +878,7 @@ class TestAgentCoreForwardToolsEndToEnd:
     """
 
     def test_tools_dropped_without_allowed_openai_params(self):
-        optional_params = litellm.utils.get_optional_params(
+        optional_params: Final[dict[str, object]] = litellm.utils.get_optional_params(
             model=AGENTCORE_TEST_MODEL,
             custom_llm_provider="bedrock",
             tools=[WEB_SEARCH_TOOL],
@@ -888,7 +888,7 @@ class TestAgentCoreForwardToolsEndToEnd:
         assert "tools" not in optional_params
 
     def test_allowed_openai_params_carries_tools_to_the_transform(self):
-        optional_params = litellm.utils.get_optional_params(
+        optional_params: Final[dict[str, object]] = litellm.utils.get_optional_params(
             model=AGENTCORE_TEST_MODEL,
             custom_llm_provider="bedrock",
             tools=[WEB_SEARCH_TOOL],
@@ -914,7 +914,7 @@ class TestAgentCoreForwardToolsEndToEnd:
         forward_tools, so this is the path every real caller takes: both the flag and
         the tools list arrive in optional_params and litellm_params stays empty.
         """
-        optional_params = litellm.utils.get_optional_params(
+        optional_params: Final[dict[str, object]] = litellm.utils.get_optional_params(
             model=AGENTCORE_TEST_MODEL,
             custom_llm_provider="bedrock",
             tools=[WEB_SEARCH_TOOL],
@@ -936,7 +936,7 @@ class TestAgentCoreForwardToolsEndToEnd:
 
     def test_allowed_openai_params_alone_does_not_forward(self):
         """Both opt-ins are required; the escape hatch alone changes nothing."""
-        optional_params = litellm.utils.get_optional_params(
+        optional_params: Final[dict[str, object]] = litellm.utils.get_optional_params(
             model=AGENTCORE_TEST_MODEL,
             custom_llm_provider="bedrock",
             tools=[WEB_SEARCH_TOOL],

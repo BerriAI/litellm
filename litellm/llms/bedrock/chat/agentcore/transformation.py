@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import quote
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -49,6 +50,9 @@ else:
     LiteLLMLoggingObj = Any
     HTTPHandler = Any
     AsyncHTTPHandler = Any
+
+_PARAMS: Final = TypeAdapter(dict[str, object])
+_TOOLS: Final = TypeAdapter(tuple[object, ...])
 
 
 class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
@@ -267,7 +271,10 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         # list verbatim under "content" so an attachment-aware agent can read the raw
         # blocks (image_url, file, etc.). Default off keeps the payload byte-identical
         # to the legacy {"prompt": "..."} shape for agents that only read the prompt.
-        if self._is_flag_enabled(optional_params, litellm_params, "forward_multimodal_content"):
+        typed_optional_params: Final = _PARAMS.validate_python(optional_params)
+        typed_litellm_params: Final = _PARAMS.validate_python(litellm_params)
+
+        if self._is_flag_enabled(typed_optional_params, typed_litellm_params, "forward_multimodal_content"):
             last_content: Final = messages[-1].get("content")
             if isinstance(last_content, list) and any(
                 isinstance(block, dict) and block.get("type") not in (None, "text") for block in last_content
@@ -276,13 +283,13 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 # not deep, to avoid cloning large base64 media on the request path.
                 payload["content"] = list(last_content)
 
-        if self._is_flag_enabled(optional_params, litellm_params, "forward_tools"):
-            tools: Final = optional_params.get("tools")
+        if self._is_flag_enabled(typed_optional_params, typed_litellm_params, "forward_tools"):
+            tools: Final = typed_optional_params.get("tools")
             if isinstance(tools, list) and tools:
                 # Immutable shallow copy: the payload can never alias the caller's list,
                 # the nested dicts stay shared to avoid a deep clone, and json.dumps
                 # serializes a tuple to the same JSON array a list would.
-                payload["tools"] = tuple(tools)
+                payload["tools"] = _TOOLS.validate_python(tools)
 
         # Get or generate session ID - this goes in the header
         runtime_session_id: Final = self._get_runtime_session_id(optional_params)
