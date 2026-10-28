@@ -14,3 +14,6 @@ venv_python=.venv/bin/python
 uv pip install --no-deps --python "${venv_python}" rust-bridge-dist/*.whl
 cp rust-bridge-dist/litellm/rust_bridge/_native.* litellm/rust_bridge/
 uv run --no-sync python -c "import importlib.metadata, litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
+for rust in 0 1; do
+  LITELLM_RUST="$rust" LITELLM_LOCAL_MODEL_COST_MAP=True "${venv_python}" -I tests/base_sdk_tests/check_base_sdk_install.py --profile native
+done
