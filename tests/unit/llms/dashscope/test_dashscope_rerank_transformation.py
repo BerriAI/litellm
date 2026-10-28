@@ -3,6 +3,7 @@ Unit tests for DashScope rerank transformation.
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -27,11 +28,19 @@ class TestDashScopeRerankURL:
         assert url == DEFAULT_RERANK_URL
 
     def test_domain_root_remaps_to_rerank_route(self):
-        url = self.config.get_complete_url(
+        url: Final = self.config.get_complete_url(
             api_base="https://llm-abc123.cn-beijing.maas.aliyuncs.com",
             model="qwen3-rerank",
         )
         assert url == "https://llm-abc123.cn-beijing.maas.aliyuncs.com/compatible-api/v1/reranks"
+
+    def test_explicit_rerank_url_wins_over_the_rerank_env(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("DASHSCOPE_API_BASE_RERANK", DEFAULT_RERANK_URL)
+        explicit_url: Final = "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"
+
+        url: Final = self.config.get_complete_url(api_base=explicit_url, model="qwen3-rerank")
+
+        assert url == explicit_url
 
     def test_chat_shaped_base_remaps_to_rerank_route(self):
         url = self.config.get_complete_url(

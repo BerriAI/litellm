@@ -146,7 +146,13 @@ def _rerank_origin(api_base: str | None) -> str | None:
     return endpoints.origin if endpoints is not None else _chat_shaped_aliyun_origin(api_base)
 
 
+def _is_rerank_url(api_base: str) -> bool:
+    return urlparse(api_base).path.rstrip("/") == DASHSCOPE_RERANK_PATH
+
+
 def resolve_dashscope_family_rerank_api_base(api_base: str | None, env_var: str, default_rerank_base: str) -> str:
+    if api_base is not None and _is_rerank_url(api_base):
+        return api_base
     origin: Final = _rerank_origin(api_base)
     if origin is not None:
         return get_secret_str(env_var) or f"{origin}{DASHSCOPE_RERANK_PATH}"

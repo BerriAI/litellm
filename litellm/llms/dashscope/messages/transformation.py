@@ -10,7 +10,7 @@ from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
-from litellm.secret_managers.main import get_secret_str
+from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str
 
 from ..common_utils import (
     dashscope_base_selects_anthropic_messages,
@@ -42,7 +42,11 @@ class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
-        return api_key or get_secret_str("DASHSCOPE_API_KEY") or litellm.api_key
+        return (
+            normalize_nonempty_secret_str(api_key)
+            or normalize_nonempty_secret_str(get_secret_str("DASHSCOPE_API_KEY"))
+            or normalize_nonempty_secret_str(litellm.api_key)
+        )
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str:

@@ -1120,14 +1120,14 @@ class TestDashScopeVideoEnvironment:
         assert url == "https://ws-123.cn-beijing.maas.aliyuncs.com"
 
     def test_every_protocol_base_normalizes_to_the_host(self):
-        workspace = "https://ws-123.cn-beijing.maas.aliyuncs.com"
+        workspace: Final = "https://ws-123.cn-beijing.maas.aliyuncs.com"
 
         for api_base in (
             f"{workspace}/compatible-mode/v1",
             f"{workspace}/apps/anthropic",
             f"{workspace}/api/v1",
         ):
-            url = DashScopeVideoConfig().get_complete_url(
+            url: Final = DashScopeVideoConfig().get_complete_url(
                 model="wan3.0-video", api_base=api_base, litellm_params={}
             )
 

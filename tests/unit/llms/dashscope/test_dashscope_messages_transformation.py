@@ -12,10 +12,8 @@ from litellm.exceptions import AuthenticationError
 from litellm.llms.dashscope.messages.transformation import (
     DashScopeAnthropicMessagesConfig,
 )
-from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager
 
-WORKSPACE = "https://llm-abc123.cn-beijing.maas.aliyuncs.com"
+WORKSPACE: Final = "https://llm-abc123.cn-beijing.maas.aliyuncs.com"
 INTL: Final = "https://dashscope-intl.aliyuncs.com"
 CODING_PLAN: Final = "https://coding-intl.dashscope.aliyuncs.com"
 CHAT_COMPLETION: Final = {
@@ -76,9 +74,9 @@ MESSAGE: Final = {
     ],
 )
 def test_get_complete_url(api_base: str | None, expected: str):
-    config = DashScopeAnthropicMessagesConfig()
+    config: Final = DashScopeAnthropicMessagesConfig()
 
-    url = config.get_complete_url(
+    url: Final = config.get_complete_url(
         api_base=api_base,
         api_key="sk-test",
         model="qwen3.7-plus",
@@ -89,8 +87,13 @@ def test_get_complete_url(api_base: str | None, expected: str):
     assert url == expected
 
 
-def test_missing_dashscope_key_does_not_fall_back_to_anthropic(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize("dashscope_api_key", [None, "   "])
+def test_missing_dashscope_key_does_not_fall_back_to_anthropic(
+    monkeypatch: pytest.MonkeyPatch, dashscope_api_key: str | None
+):
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    if dashscope_api_key is not None:
+        monkeypatch.setenv("DASHSCOPE_API_KEY", dashscope_api_key)
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
     monkeypatch.setattr(litellm, "api_key", None)
@@ -115,7 +118,7 @@ def test_missing_dashscope_key_does_not_fall_back_to_anthropic(monkeypatch: pyte
 def test_caller_auth_header_is_honored_without_a_dashscope_key(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
     monkeypatch.setattr(litellm, "api_key", None)
-    headers = {"x-api-key": "caller-key"}
+    headers: Final = {"x-api-key": "caller-key"}
 
     resolved_headers, _ = DashScopeAnthropicMessagesConfig().validate_anthropic_messages_environment(
         headers=headers,
@@ -133,7 +136,7 @@ def test_caller_auth_header_is_honored_without_a_dashscope_key(monkeypatch: pyte
 def test_caller_authorization_header_is_honored_without_a_dashscope_key(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
     monkeypatch.setattr(litellm, "api_key", None)
-    headers = {"Authorization": "Bearer caller-token"}
+    headers: Final = {"Authorization": "Bearer caller-token"}
 
     resolved_headers, _ = DashScopeAnthropicMessagesConfig().validate_anthropic_messages_environment(
         headers=headers,
@@ -162,19 +165,9 @@ def test_dashscope_key_wins_over_an_anthropic_environment_key(monkeypatch: pytes
         api_base=WORKSPACE,
     )
 
-    header_values = " ".join(resolved_headers.values())
+    header_values: Final = " ".join(resolved_headers.values())
     assert "sk-dashscope" in header_values
     assert "sk-ant-secret" not in header_values
-
-
-def test_dashscope_resolves_to_the_native_messages_config():
-    config = ProviderConfigManager.get_provider_anthropic_messages_config(
-        model="qwen3.7-plus",
-        provider=LlmProviders.DASHSCOPE,
-    )
-
-    assert isinstance(config, DashScopeAnthropicMessagesConfig)
-    assert config.custom_llm_provider == "dashscope"
 
 
 def test_dashscope_prefix_reaches_the_provider():

@@ -109,6 +109,9 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
     def _resolve_image_api_base(self, image_api_base: str | None) -> str:
         return image_api_base or get_secret_str("DASHSCOPE_API_BASE_IMAGE") or DEFAULT_API_BASE
 
+    def _configured_chat_api_base(self) -> str | None:
+        return get_secret_str("DASHSCOPE_API_BASE")
+
     def get_complete_url(
         self,
         api_base: str | None,
@@ -118,12 +121,13 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        if api_base and api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH):
+        configured_api_base: Final = api_base or self._configured_chat_api_base()
+        if configured_api_base and configured_api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH):
             return self._resolve_image_api_base(None)
-        endpoints: Final = resolve_dashscope_endpoints(api_base)
+        endpoints: Final = resolve_dashscope_endpoints(configured_api_base)
         if endpoints is not None:
             return f"{endpoints.origin}{DASHSCOPE_IMAGE_PATH}"
-        return self._resolve_image_api_base(api_base)
+        return self._resolve_image_api_base(configured_api_base)
 
     def validate_environment(
         self,

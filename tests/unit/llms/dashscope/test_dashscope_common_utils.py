@@ -2,6 +2,8 @@
 Unit tests for DashScope's protocol-specific base URL derivation.
 """
 
+from typing import Final
+
 import pytest
 
 from litellm.llms.dashscope.common_utils import (
@@ -12,7 +14,7 @@ from litellm.llms.dashscope.common_utils import (
     resolve_dashscope_openai_api_base,
 )
 
-WORKSPACE = "https://llm-abc123.cn-beijing.maas.aliyuncs.com"
+WORKSPACE: Final = "https://llm-abc123.cn-beijing.maas.aliyuncs.com"
 
 
 @pytest.mark.parametrize(
@@ -29,7 +31,7 @@ WORKSPACE = "https://llm-abc123.cn-beijing.maas.aliyuncs.com"
     ],
 )
 def test_workspace_base_derives_every_protocol(api_base: str):
-    endpoints = resolve_dashscope_endpoints(api_base)
+    endpoints: Final = resolve_dashscope_endpoints(api_base)
 
     assert endpoints is not None
     assert endpoints.origin == WORKSPACE
@@ -48,7 +50,7 @@ def test_workspace_base_derives_every_protocol(api_base: str):
 )
 @pytest.mark.parametrize("path", ["", "/", "/compatible-mode/v1"])
 def test_standard_hosts_derive_every_protocol(origin: str, path: str):
-    endpoints = resolve_dashscope_endpoints(f"{origin}{path}")
+    endpoints: Final = resolve_dashscope_endpoints(f"{origin}{path}")
 
     assert endpoints is not None
     assert endpoints.openai == f"{origin}/compatible-mode/v1"
@@ -119,7 +121,7 @@ def test_rerank_base_derives_from_the_domain(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_rerank_base_keeps_unrecognized_hosts():
-    gateway = "https://gateway.example.com/v1"
+    gateway: Final = "https://gateway.example.com/v1"
 
     assert (
         resolve_dashscope_family_rerank_api_base(gateway, "DASHSCOPE_API_BASE_RERANK", "https://default/reranks")
