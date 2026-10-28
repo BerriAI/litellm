@@ -29,5 +29,6 @@ webpki-roots.workspace = true
 futures-util.workspace = true
 rcgen = "0.14.10"
 tempfile.workspace = true
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 rstest.workspace = true
 tokio.workspace = true

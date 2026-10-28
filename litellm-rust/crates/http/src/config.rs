@@ -16,6 +16,7 @@ pub enum Verify {
     Disabled,
     CaBundle(PathBuf),
     BuiltInRoots,
+    NativeRoots,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

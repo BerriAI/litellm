@@ -195,6 +195,12 @@ impl TryFrom<&HttpClientConfig> for ClientConfig {
             Verify::BuiltInRoots => builder.with_root_certificates(RootCertStore {
                 roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
             }),
+            Verify::NativeRoots => {
+                let native = rustls_native_certs::load_native_certs();
+                let mut roots = RootCertStore::empty();
+                roots.add_parsable_certificates(native.certs);
+                builder.with_root_certificates(roots)
+            }
             Verify::CaBundle(path) => {
                 builder.with_root_certificates(bundle_roots(path, TlsSource::CaBundle)?)
             }
