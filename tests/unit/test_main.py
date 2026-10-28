@@ -2265,7 +2265,16 @@ def test_openai_responses_bridge_drops_a_reasoning_effort_dict_for_a_model_witho
     "drop_params, expected_reasoning",
     [
         (True, {"effort": "low", "context": "current_turn"}),
-        (False, {"effort": "low", "exclude": False, "mode": "turbo", "context": "current_turn"}),
+        (
+            False,
+            {
+                "effort": "low",
+                "exclude": False,
+                "mode": "turbo",
+                "context": "current_turn",
+                "generate_summary": "concise",
+            },
+        ),
     ],
 )
 def test_openai_responses_bridge_drops_reasoning_fields_openai_refuses_only_under_drop_params(
@@ -2276,13 +2285,36 @@ def test_openai_responses_bridge_drops_reasoning_fields_openai_refuses_only_unde
     litellm.completion(
         model="openai/responses/gpt-6.1-terra",
         messages=[{"role": "user", "content": "hello"}],
-        reasoning_effort={"effort": "low", "exclude": False, "mode": "turbo", "context": "current_turn"},
+        reasoning_effort={
+            "effort": "low",
+            "exclude": False,
+            "mode": "turbo",
+            "context": "current_turn",
+            "generate_summary": "concise",
+        },
         drop_params=drop_params,
         api_key="fake-key",
     )
 
     request_body: Final = json.loads(openai_responses_route.calls[0].request.content)
     assert request_body["reasoning"] == expected_reasoning
+
+
+def test_openai_responses_bridge_forwards_a_reasoning_effort_dict_whole_for_a_model_outside_the_openai_catalog(
+    openai_responses_route: respx.Route,
+):
+    reasoning_effort: Final = {"effort": "high", "exclude": True, "budget_tokens": 2000}
+
+    litellm.completion(
+        model="openai/responses/my-proxy-alias",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort=reasoning_effort,
+        drop_params=True,
+        api_key="fake-key",
+    )
+
+    request_body: Final = json.loads(openai_responses_route.calls[0].request.content)
+    assert request_body["reasoning"] == reasoning_effort
 
 
 @pytest.mark.parametrize(

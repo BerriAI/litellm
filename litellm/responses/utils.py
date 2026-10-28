@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig, ReasoningSummaryLevel
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
     InputTokensDetails,
@@ -1407,7 +1408,6 @@ _SUMMARY_VALUES: Final = frozenset((*get_args(ReasoningSummaryLevel), None))
 _OPENAI_REASONING_FIELD_VALUES: Final = MappingProxyType(
     {
         "summary": _SUMMARY_VALUES,
-        "generate_summary": _SUMMARY_VALUES,
         "mode": frozenset(("standard", "pro")),
         "context": frozenset(("auto", "current_turn", "all_turns")),
     }
@@ -1438,7 +1438,7 @@ def openai_bridge_reasoning(
     with_summary: Final = reasoning_with_summary_default(validated, summary_alias, model, "openai")
     accepted: Final = (
         {key: value for key, value in with_summary.items() if _openai_accepts_reasoning_field(key, value)}
-        if drop_params
+        if drop_params and OpenAIGPTConfig.is_openai_catalog_model(model)
         else {**with_summary}
     )
     remaining: Final = as_str_mapping(
