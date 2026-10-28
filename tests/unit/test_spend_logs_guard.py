@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 _SCRIPT: Final = Path(__file__).resolve().parents[2] / "ci_cd" / "spend_logs_guard.py"
 _SPEC: Final = importlib.util.spec_from_file_location("spend_logs_guard", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -130,6 +132,18 @@ class TestSpendLogHits:
         elsewhere: Final = _added("litellm/proxy/utils.py", 'table = "LiteLLM_SpendLogs"', 5)
         assert guard.spend_log_hits(other + elsewhere, _NO_BLOCKS) == ()
 
+    def test_a_table_whose_name_only_starts_with_the_watched_one_is_not_a_hit(self):
+        index: Final = '  @@index([team_id], map: "LiteLLM_SpendLogs_team_id_idx")'
+        head: Final = _with_line(_with_line(SCHEMA, 18, "model LiteLLM_SpendLogsArchive {"), 12, index)
+        diff: Final = _diff(
+            "schema.prisma",
+            _hunk(12, 0, 13, 1, f"+{index}"),
+            _hunk(18, 0, 20, 1, "+model LiteLLM_SpendLogsArchive {"),
+        )
+        assert guard.spend_log_hits(diff, _blocks("schema.prisma", head=head)) == (
+            'schema.prisma: +@@index([team_id], map: "LiteLLM_SpendLogs_team_id_idx")',
+        )
+
     def test_two_files_in_one_diff_are_attributed_to_their_own_path(self):
         head: Final = _with_line(SCHEMA, 9, "  a String")
         diff: Final = _added("litellm/proxy/schema.prisma", "  a String") + _added("schema.prisma", "  b String", 2)
@@ -153,6 +167,20 @@ class TestApprovedBy:
         )
         assert guard.approved_by(reviews, "kerry-berri") is True
         assert guard.approved_by(reviews[::-1], "kerry-berri") is False
+
+    @pytest.mark.parametrize(
+        ("states", "approved"),
+        (
+            (("APPROVED", "COMMENTED"), True),
+            (("APPROVED", "PENDING"), True),
+            (("CHANGES_REQUESTED", "COMMENTED"), False),
+            (("APPROVED", "DISMISSED"), False),
+            (("COMMENTED",), False),
+        ),
+    )
+    def test_a_comment_or_pending_review_does_not_change_the_answer(self, states, approved):
+        reviews: Final = tuple(guard.Review(state=state, user=guard.Reviewer(login="kerry-berri")) for state in states)
+        assert guard.approved_by(reviews, "kerry-berri") is approved
 
     def test_no_review_from_the_approver_is_not_an_approval(self):
         other: Final = guard.Review(state="APPROVED", user=guard.Reviewer(login="someone-else"))
