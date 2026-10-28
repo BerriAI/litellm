@@ -642,6 +642,15 @@ def _key_budget(scenario: Scenario, budget_owner: str, model_budget: JsonValue) 
     return {}
 
 
+def _assert_the_next_create_exceeds_the_model_budget(scenario: Scenario, key: str, model: str) -> None:
+    refused: Final = eventually(
+        lambda: _next_create(scenario, key, model),
+        lambda response: response.status_code != 200,
+        seconds=SPEND_LANDING_SECONDS,
+    )
+    assert f"exceeded budget for model={model}" in refused.text, refused.text
+
+
 @pytest.mark.timeout(240)
 @pytest.mark.parametrize("budget_owner", ["key", "team", "user", "budget_tier"])
 def test_a_billed_background_response_counts_toward_its_creators_project_and_model_budget(
@@ -663,12 +672,24 @@ def test_a_billed_background_response_counts_toward_its_creators_project_and_mod
             lambda spends: spends[0] > 0 and costs(spends[0])(spends[1]),
             seconds=SPEND_LANDING_SECONDS,
         )
-        refused: Final = eventually(
-            lambda: _next_create(scenario, key, upstream.model),
-            lambda response: response.status_code != 200,
-            seconds=SPEND_LANDING_SECONDS,
+        _assert_the_next_create_exceeds_the_model_budget(scenario, key, upstream.model)
+
+
+@pytest.mark.timeout(240)
+def test_a_billed_background_response_on_a_team_model_counts_toward_the_budget_of_the_model_name_it_was_created_with(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        team_id: Final = scenario.team()
+        upstream: Final = scripted_upstream(scenario, background_routes("completed"), model_info={"team_id": team_id})
+        key: Final = scenario.key(
+            team_id=team_id, model_max_budget={upstream.model: {"max_budget": PRICE / 2, "budget_duration": "1d"}}
         )
-        assert f"exceeded budget for model={upstream.model}" in refused.text, refused.text
+        response_id: Final = create_background_response(scenario, key, upstream.model)
+        read: Final = read_response(gateway, key, response_id)
+        assert (read,) in (settling_reads("completed", 1), free_reads("completed", 1))
+        eventually(lambda: key_spend(key), lambda spend: spend > 0, seconds=SPEND_LANDING_SECONDS)
+        _assert_the_next_create_exceeds_the_model_budget(scenario, key, upstream.model)
 
 
 @pytest.mark.timeout(240)
