@@ -792,8 +792,9 @@ def openai_tokenizer_encoding_name(model: str) -> str:
 
     A listed OpenAI or Azure model that tiktoken does not know is either a suffixed variant of a model it does
     know (`text-embedding-ada-002-v2`) or a newer release than its table, which gets o200k_base, the encoding every
-    OpenAI model since gpt-4o uses."""
-    model_to_use: Final = _fix_model_name(_without_openai_provider_prefix(model))
+    OpenAI model since gpt-4o uses. Provider and region prefixes (`azure/eu/`) are dropped, and a bare Azure
+    deployment model (`gpt-41`) counts as listed through its `azure/` cost-map key."""
+    model_to_use: Final = _listed_openai_model_name(model) or _fix_model_name(model)
     if "gpt-4o" in model_to_use:
         return "o200k_base"
     try:
@@ -802,10 +803,53 @@ def openai_tokenizer_encoding_name(model: str) -> str:
         return _suffixed_variant_encoding_name(model_to_use) or "o200k_base"
 
 
-def _without_openai_provider_prefix(model: str) -> str:
+def is_listed_openai_model(model: str) -> bool:
+    """Whether `model` names an OpenAI or Azure OpenAI model the cost map lists, with or without its prefixes."""
+    return _listed_openai_model_name(model) is not None
+
+
+def _listed_openai_model_name(model: str) -> str | None:
     provider, separator, name = model.partition("/")
-    is_listed_openai_model: Final = provider in ("openai", "azure") and _fix_model_name(name) == name
-    return name if separator and is_listed_openai_model else model
+    candidates: Final = (model, name) if separator and provider in ("openai", "azure") else (model, f"azure/{model}")
+    return model.rsplit("/", 1)[-1] if any(_is_openai_cost_map_model(candidate) for candidate in candidates) else None
+
+
+def _is_openai_cost_map_model(model: str) -> bool:
+    return (
+        model in litellm.azure_llms
+        or model in litellm.open_ai_chat_completion_models
+        or _is_azure_openai_text_model(model)
+    )
+
+
+_TEXT_MODEL_MODES: Final = frozenset({"chat", "completion", "responses", "realtime"})
+
+
+def _is_azure_openai_text_model(model: str) -> bool:
+    cost_info: Final[Mapping[str, object]] = litellm.model_cost.get(model) or {}
+    return (
+        cost_info.get("litellm_provider") == "azure"
+        and cost_info.get("mode") in _TEXT_MODEL_MODES
+        and _is_openai_model_name(model.rsplit("/", 1)[-1])
+    )
+
+
+def _is_openai_model_name(name: str) -> bool:
+    return (
+        name in litellm.open_ai_chat_completion_models
+        or _tiktoken_knows(name)
+        or any(
+            name.startswith(f"{listed}-") or listed.startswith(f"{name}-")
+            for listed in litellm.open_ai_chat_completion_models
+        )
+    )
+
+
+def _tiktoken_knows(model: str) -> bool:
+    try:
+        return bool(tiktoken.encoding_name_for_model(model))
+    except KeyError:
+        return False
 
 
 def _suffixed_variant_encoding_name(model: str) -> str | None:

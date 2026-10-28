@@ -28,6 +28,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
+    count_request_input_tokens,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -426,3 +427,48 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
 )
 def test_budget_window_start_reads_json_encoded_windows(window: str, expected: datetime | None) -> None:
     assert get_budget_window_start(window) == expected
+
+
+_MULTILINGUAL_MESSAGES: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+
+
+def _router_with_groups(*groups: tuple[str, str]) -> Router:
+    return Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": model, "api_key": "sk-test"}} for name, model in groups
+        ]
+    )
+
+
+async def _input_tokens(router: Router, model: str) -> dict[str, int]:
+    return dict(
+        await count_request_input_tokens(
+            request_body={"model": model, "messages": _MULTILINGUAL_MESSAGES},
+            route="/v1/chat/completions",
+            llm_router=router,
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_alias_group_of_an_openai_model_reserves_on_that_models_token_count():
+    router: Final = _router_with_groups(("gpt-6.1-sol", "openai/gpt-6.1-sol"), ("prod-gpt-6", "openai/gpt-6.1-sol"))
+
+    by_name: Final = await _input_tokens(router, "gpt-6.1-sol")
+
+    assert await _input_tokens(router, "prod-gpt-6") == {"prod-gpt-6": by_name["gpt-6.1-sol"]}
+
+
+@pytest.mark.asyncio
+async def test_group_mixing_in_a_non_openai_model_keeps_counting_by_its_own_name():
+    router: Final = _router_with_groups(
+        ("mixed", "openai/gpt-6.1-sol"),
+        ("mixed", "anthropic/claude-sonnet-5-5"),
+        ("claude", "anthropic/claude-sonnet-5-5"),
+        ("gpt-6.1-sol", "openai/gpt-6.1-sol"),
+    )
+
+    mixed: Final = (await _input_tokens(router, "mixed"))["mixed"]
+
+    assert mixed == (await _input_tokens(router, "claude"))["claude"]
+    assert mixed != (await _input_tokens(router, "gpt-6.1-sol"))["gpt-6.1-sol"]
