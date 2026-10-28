@@ -87,7 +87,7 @@ _SUBSCRIPTION_LOGINS: Final = MappingProxyType({"claude": "claude.ai", "codex": 
 _SUBSCRIPTION_AGENTS: Final = frozenset(_SUBSCRIPTION_LOGINS)
 
 CODEX_PROXY_PROVIDER: Final = "litellm"
-CODEX_SUBSCRIPTION_PROVIDER: Final = "litellm_subscription"
+CODEX_SUBSCRIPTION_PROVIDER: Final = "lite_subscription"
 CODEX_HOME_ENV: Final = "CODEX_HOME"
 CODEX_MODEL_CATALOG_FILENAME: Final = "litellm-models.json"
 _CODEX_PREFLIGHT_TIMEOUT_SECONDS: Final = 10.0
@@ -321,10 +321,11 @@ def _codex_proxy_args(base_url: str, subscription: bool) -> list[str]:
     inline; supports_websockets=false forces the HTTP/SSE Responses transport
     because the proxy does not speak the Responses WebSocket protocol. The key is
     read from OPENAI_API_KEY, which build_agent_env already exports.
-    With subscription=True the provider is `litellm_subscription` with requires_openai_auth, so Codex
+    With subscription=True the provider is `lite_subscription` with requires_openai_auth, so Codex
     signs in with its own ChatGPT login, and the key travels in the x-litellm-api-key header from
-    LITELLM_PROXY_API_KEY. It sets no env_key, which would win over the login, and its own id keeps the
-    static Authorization header that `lite configure codex` writes under `litellm` out of the request.
+    LITELLM_PROXY_API_KEY. It sets no env_key, which would win over the login. A `-c` override cannot
+    remove keys, so the id is one no config.toml defines: `lite configure codex` writes `litellm`, and
+    the cookbook tells users to write `litellm_subscription`, whose env_key or headers would otherwise apply.
     """
     provider_id: Final = CODEX_SUBSCRIPTION_PROVIDER if subscription else CODEX_PROXY_PROVIDER
     provider: Final = f"model_providers.{provider_id}"

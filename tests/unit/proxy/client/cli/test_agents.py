@@ -1,3 +1,4 @@
+import functools
 import inspect
 import json
 import os
@@ -200,6 +201,22 @@ def _codex_config(args):
     return tomllib.loads("\n".join(args[1::2]))
 
 
+def _set_codex_key(config, keys, value):
+    if len(keys) == 1:
+        return {**config, keys[0]: value}
+    return {**config, keys[0]: _set_codex_key(config.get(keys[0], {}), keys[1:], value)}
+
+
+def _with_codex_override(config, override):
+    path, value = override.split("=", 1)
+    return _set_codex_key(config, path.split("."), tomllib.loads(f"value = {value}")["value"])
+
+
+def _codex_config_over(user_config_toml, args):
+    assert set(args[0::2]) == {"-c"}
+    return functools.reduce(_with_codex_override, args[1::2], tomllib.loads(user_config_toml))
+
+
 class TestAgentProfile:
     def test_claude_is_anthropic(self):
         name, profiles = agent_profile("claude")
@@ -396,9 +413,9 @@ class TestAgentLaunchArgs:
         assert _codex_config(
             agent_launch_args("/usr/local/bin/codex", "http://localhost:4000/", subscription=True)
         ) == {
-            "model_provider": "litellm_subscription",
+            "model_provider": "lite_subscription",
             "model_providers": {
-                "litellm_subscription": {
+                "lite_subscription": {
                     "name": "LiteLLM proxy",
                     "base_url": "http://localhost:4000/v1",
                     "wire_api": "responses",
@@ -409,6 +426,29 @@ class TestAgentLaunchArgs:
                 }
             },
         }
+
+    def test_codex_subscription_leaves_the_cookbook_provider_table_out_of_the_launch(self):
+        user_config = """
+model_provider = "litellm_subscription"
+
+[model_providers.litellm_subscription]
+name = "LiteLLM subscription"
+base_url = "https://litellm.example.com/v1"
+wire_api = "responses"
+requires_openai_auth = true
+env_key = "OPENAI_API_KEY"
+http_headers = { "x-team" = "qa" }
+"""
+        config = _codex_config_over(
+            user_config, agent_launch_args("codex", "http://localhost:4000/", subscription=True)
+        )
+        launched = config["model_providers"][config["model_provider"]]
+        assert "env_key" not in launched
+        assert launched["requires_openai_auth"] is True
+        assert launched["base_url"] == "http://localhost:4000/v1"
+        assert config["model_providers"]["litellm_subscription"] == tomllib.loads(user_config)["model_providers"][
+            "litellm_subscription"
+        ]
 
     @pytest.mark.parametrize("agent", ["claude", "opencode", "pi", "mytool"])
     def test_subscription_adds_no_args_for_agents_without_a_proxy_provider(self, agent):
@@ -1676,7 +1716,7 @@ class TestRunAgent:
         assert launched["path"] == "/usr/local/bin/codex"
         assert launched["args"][0] == "codex"
         assert launched["args"][-3:] == ("exec", "--settings", "kept")
-        assert _codex_config(launched["args"][1:-3])["model_provider"] == "litellm_subscription"
+        assert _codex_config(launched["args"][1:-3])["model_provider"] == "lite_subscription"
         assert "OPENAI_BASE_URL" not in launched["env"]
         assert launched["env"]["LITELLM_PROXY_API_KEY"] == "sk-key"
         assert "OPENAI_API_KEY" not in launched["env"]
