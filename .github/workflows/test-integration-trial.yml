@@ -87,6 +87,16 @@ jobs:
         timeout-minutes: 20
         run: .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras
 
+      - name: Install redis-server 7.2.16
+        timeout-minutes: 3
+        run: |
+          mkdir -p "$RUNNER_TEMP/redis-bin"
+          cid="$(docker create redis:7.2.16@sha256:0637954999d01b7c9ce9167db2da50656e2590d3b884f1c600c5f63bb6e6773c)"
+          docker cp "${cid}:/usr/local/bin/redis-server" "$RUNNER_TEMP/redis-bin/redis-server"
+          docker rm "$cid"
+          "$RUNNER_TEMP/redis-bin/redis-server" --version | grep -q 'v=7.2.16'
+          echo "$RUNNER_TEMP/redis-bin" >> "$GITHUB_PATH"
+
       - name: Run integration contracts
         timeout-minutes: 45
         env:
