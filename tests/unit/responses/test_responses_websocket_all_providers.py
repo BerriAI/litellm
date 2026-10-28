@@ -2213,6 +2213,20 @@ class TestNativeWebSocketDeploymentDefaults:
         assert (forwarded["response"] if nested else forwarded)["input"] == [compaction, user_turn]
 
     @pytest.mark.asyncio
+    async def test_saved_reasoning_item_is_forwarded_without_its_null_fields(self):
+        handler: Final = _make_streaming(authorized_model="gpt-5-pro")
+        reasoning: Final = {"id": "rs_1", "type": "reasoning", "summary": []}
+        frame: Final = {
+            "type": "response.create",
+            "model": "gpt-5-pro",
+            "input": [{**reasoning, "status": None, "content": None, "encrypted_content": None}],
+        }
+
+        forwarded: Final = json.loads(await handler._mask_response_create(json.dumps(frame)))
+
+        assert forwarded["input"] == [reasoning]
+
+    @pytest.mark.asyncio
     async def test_input_items_with_nothing_to_drop_pass_through_untouched(self):
         handler: Final = _make_streaming(authorized_model="gpt-5-pro")
         frame: Final = json.dumps(

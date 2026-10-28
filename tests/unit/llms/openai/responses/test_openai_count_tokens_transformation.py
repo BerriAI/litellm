@@ -641,3 +641,16 @@ def test_a_text_input_is_counted_as_sent() -> None:
     body: Final = native_count_request({"model": "gpt-5.6", "input": "Hello"}, "gpt-5.6", policy)
 
     assert body["input"] == "Hello"
+
+
+def test_a_reasoning_item_is_counted_without_its_null_fields() -> None:
+    reasoning: Final = {"id": "rs_1", "type": "reasoning", "summary": []}
+    request: Final = {
+        "model": "gpt-5.6",
+        "input": [{**reasoning, "status": None, "content": None, "encrypted_content": None}],
+    }
+    policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset())
+
+    body: Final = native_count_request(request, "gpt-5.6", policy)
+
+    assert body["input"] == [reasoning]
