@@ -223,7 +223,7 @@ async with httpx.AsyncClient(headers=headers, timeout=60.0) as http_client:
 ```python
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from litellm import experimental_mcp_client
+from litellm import mcp_client
 import litellm
 
 server_params = StdioServerParameters(command="python", args=["mcp_server.py"])
@@ -233,7 +233,7 @@ async with stdio_client(server_params) as (read, write):
         await session.initialize()
 
         # Load MCP tools in OpenAI format
-        tools = await experimental_mcp_client.load_mcp_tools(session=session, format="openai")
+        tools = await mcp_client.load_mcp_tools(session=session, format="openai")
 
         # Use with any LiteLLM model
         response = await litellm.acompletion(

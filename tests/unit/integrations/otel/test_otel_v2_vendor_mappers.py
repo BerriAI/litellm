@@ -957,3 +957,29 @@ def test_span_data_builds_from_request_metadata_of_unexpected_shape(unexpected_s
     attrs: Final = _langfuse_attrs({**unexpected_shape, "user_api_key_alias": "prod-key"})
 
     assert json.loads(attrs["langfuse.observation.metadata"]) == {"user_api_key_alias": "prod-key"}
+
+
+def test_langfuse_mapper_leaves_the_trace_name_off_an_unnamed_generation() -> None:
+    attrs: Final = LangfuseMapper().map(_llm_call(call_type="acompletion", trace=TraceControls()))
+
+    assert "langfuse.trace.name" not in attrs
+
+
+def test_langfuse_mapper_carries_the_caller_trace_name_on_the_generation() -> None:
+    attrs: Final = LangfuseMapper().map(_llm_call(call_type="acompletion", trace=TraceControls(name="caller-trace")))
+
+    assert attrs["langfuse.trace.name"] == "caller-trace"
+
+
+@pytest.mark.parametrize(
+    ("trace", "call_type", "expected"),
+    [
+        (TraceControls(), "aresponses", {"langfuse.trace.name": "litellm-aresponses"}),
+        (TraceControls(name="caller-trace"), "aresponses", {"langfuse.trace.name": "caller-trace"}),
+        (TraceControls(), None, {}),
+    ],
+)
+def test_langfuse_root_trace_attributes_derive_the_name_only_when_the_caller_gave_none(
+    trace: TraceControls, call_type: str | None, expected: Mapping[str, object]
+) -> None:
+    assert LangfuseMapper.trace_attributes(trace, call_type) == expected

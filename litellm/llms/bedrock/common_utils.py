@@ -45,6 +45,8 @@ if TYPE_CHECKING:
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.types.llms.openai import AllMessageValues
 
+BEDROCK_INVOKE_TRACE_FIELD: Final = "amazon-bedrock-trace"
+
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
 _OPENAI_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])openai\.")
