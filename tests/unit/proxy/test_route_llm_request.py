@@ -3027,64 +3027,74 @@ async def test_user_config_routers_discard_the_least_recently_used_router_past_c
     routers.clear()
 
 
-def _allowlist_router() -> "litellm.Router":
+def _allowlist_router() -> litellm.Router:
     return litellm.Router(
         model_list=[
             {
-                "model_name": "allowed-model",
-                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake", "mock_response": "ok"},
-            },
-            {
-                "model_name": "denied-model",
-                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "ok"},
-            },
+                "model_name": name,
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake", "mock_response": f"from {name}"},
+            }
+            for name in ("model-a", "model-b", "model-c")
         ]
     )
 
 
-@pytest.mark.asyncio
-async def test_route_request_denies_resolved_model_outside_key_allowlist():
-    from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+def _hi() -> list[dict[str, str]]:
+    return [{"role": "user", "content": "hi"}]
 
-    router = _allowlist_router()
-    key = UserAPIKeyAuth(api_key="sk-test", models=["allowed-model"])
-    data = {"model": "denied-model", "messages": [{"role": "user", "content": "hi"}]}
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested",
+    ["model-c", "model-a,model-c", ["model-a", "model-c"]],
+    ids=["single", "comma_batch", "list"],
+)
+async def test_route_request_denies_any_routed_model_outside_key_allowlist(requested):
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    key = UserAPIKeyAuth(api_key="sk-test", models=["model-a", "model-b"])
 
     with pytest.raises(ProxyException) as exc:
-        await route_request(data, router, None, "acompletion", user_api_key_dict=key)
+        await route_request(
+            {"model": requested, "messages": _hi()}, _allowlist_router(), None, "acompletion", user_api_key_dict=key
+        )
     assert exc.value.type == ProxyErrorTypes.key_model_access_denied.value
 
 
 @pytest.mark.asyncio
-async def test_route_request_allows_resolved_model_inside_key_allowlist():
-    from litellm.proxy._types import UserAPIKeyAuth
+async def test_route_request_serves_a_model_inside_key_allowlist():
+    key = UserAPIKeyAuth(api_key="sk-test", models=["model-a", "model-b"])
 
-    router = _allowlist_router()
-    key = UserAPIKeyAuth(api_key="sk-test", models=["allowed-model"])
-    data = {"model": "allowed-model", "messages": [{"role": "user", "content": "hi"}]}
+    llm_call = await route_request(
+        {"model": "model-a", "messages": _hi()}, _allowlist_router(), None, "acompletion", user_api_key_dict=key
+    )
+    response = await llm_call
 
-    response = await route_request(data, router, None, "acompletion", user_api_key_dict=key)
-    assert await response if asyncio.iscoroutine(response) else response
-
-
-@pytest.mark.asyncio
-async def test_route_request_without_a_key_skips_the_allowlist_check():
-    router = _allowlist_router()
-    data = {"model": "denied-model", "messages": [{"role": "user", "content": "hi"}]}
-
-    response = await route_request(data, router, None, "acompletion")
-    assert await response if asyncio.iscoroutine(response) else response
+    assert response.choices[0].message.content == "from model-a"
 
 
 @pytest.mark.asyncio
-async def test_route_request_list_model_is_not_blocked_by_the_allowlist_check():
-    from litellm.proxy._types import UserAPIKeyAuth
+async def test_route_request_serves_a_comma_batch_when_key_allows_every_model():
+    key = UserAPIKeyAuth(api_key="sk-test", models=["model-a", "model-b"])
 
-    router = _allowlist_router()
-    key = UserAPIKeyAuth(api_key="sk-test", models=["allowed-model"])
-    data = {"model": ["allowed-model", "denied-model"], "messages": [{"role": "user", "content": "hi"}]}
+    llm_call = await route_request(
+        {"model": "model-a, model-b", "messages": _hi()},
+        _allowlist_router(),
+        None,
+        "acompletion",
+        user_api_key_dict=key,
+    )
+    responses = await llm_call
 
-    # A list model value is handled by the per-model auth path, not this backstop,
-    # so the check must not raise on it.
-    with contextlib.suppress(Exception):
-        await route_request(data, router, None, "acompletion", user_api_key_dict=key)
+    assert sorted(response.choices[0].message.content for response in responses) == [
+        "from model-a",
+        "from model-b",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_route_request_without_a_key_leaves_model_access_to_auth():
+    llm_call = await route_request({"model": "model-c", "messages": _hi()}, _allowlist_router(), None, "acompletion")
+    response = await llm_call
+
+    assert response.choices[0].message.content == "from model-c"
