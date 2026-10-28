@@ -10,7 +10,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
-from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
+from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.public_call import known_params, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
@@ -64,7 +64,7 @@ def body_params(request: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, object]:
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.streaming_iterator import (
         anthropic_messages_stream_hidden_params,
     )
 

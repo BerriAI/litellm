@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
@@ -23,9 +23,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.llms.openai.chat.gpt_5_transformation import (
+from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     is_gpt_reasoning_series_name,
     unsupported_reasoning_effort_message,
 )
@@ -291,7 +291,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         level the row cannot gate because the same model takes it here and refuses it on chat.
         Azure overrides this so a bare deployment name reads the azure/ entry.
         """
-        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+        from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 
         return OpenAIGPT5Config.row_disables_reasoning_effort_level(model, level)
 
@@ -305,7 +305,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         copy of the rule here is what let this surface keep forwarding temperature after the
         chat surface stopped.
         """
-        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+        from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 
         return OpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
@@ -369,6 +369,20 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        return dict(
+            self.map_openai_params_for_deployment(
+                response_api_optional_params, model, drop_params, declared_reasoning_efforts=()
+            )
+        )
+
+    def map_openai_params_for_deployment(
+        self,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str],
+    ) -> Mapping[str, object]:
         """No mapping applied since inputs are in OpenAI spec already.
 
         GPT-5 models have restrictions on temperature and top_p (only temperature=1
@@ -405,6 +419,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             if (
                 isinstance(reasoning, dict)
                 and isinstance(requested_effort, str)
+                and requested_effort not in declared_reasoning_efforts
                 and self._effort_level_is_disabled(lookup_name, requested_effort)
             ):
                 if not (drop_params or litellm.drop_params):
@@ -866,10 +881,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             or "https://api.openai.com/v1"
         )
 
-        # Remove trailing slashes
-        api_base = api_base.rstrip("/")
-
-        return f"{api_base}/responses"
+        return join_api_base(api_base, "responses")
 
     def transform_streaming_response(
         self,
@@ -1096,7 +1108,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         order: Literal["asc", "desc"] = "desc",
     ) -> tuple[str, dict]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
-        url: Final = f"{api_base}/{encoded_response_id}/input_items"
+        url: Final = join_api_base(api_base, f"{encoded_response_id}/input_items")
         params: Final[dict[str, object]] = {}
         if after is not None:
             params["after"] = after
@@ -1137,7 +1149,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         - POST /v1/responses/{response_id}/cancel
         """
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
-        url: Final = f"{api_base}/{encoded_response_id}/cancel"
+        url: Final = join_api_base(api_base, f"{encoded_response_id}/cancel")
         data: Final[dict] = {}
         return url, data
 

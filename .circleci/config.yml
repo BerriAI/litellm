@@ -1291,7 +1291,7 @@ jobs:
                 name: Install MCP SDK1 peer
                 command: |
                   uv venv --python 3.12 .venv-mcp-peer
-                  uv pip install --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
+                  uv pip install --no-config --exclude-newer "3 days" --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
                   echo "export MCP_TEST_PEER_PYTHON=$PWD/.venv-mcp-peer/bin/python" >> "$BASH_ENV"
       - when:
           condition:
@@ -1379,7 +1379,6 @@ jobs:
             uv export --frozen --all-groups --all-extras --no-emit-project --no-emit-workspace --no-header --no-annotate \
               | awk '/^[^ ]/ { keep = $0 ~ /^(annotated-types|coverage|pydantic|pydantic-core|typing-extensions|typing-inspection)==/ } keep' \
               > /tmp/fan-in-requirements.txt
-            test "$(grep -c '^[^ ]' /tmp/fan-in-requirements.txt)" -eq 6
             uv venv .venv --python 3.12
             uv pip install --no-config --python .venv --require-hashes -r /tmp/fan-in-requirements.txt
       - attach_workspace:

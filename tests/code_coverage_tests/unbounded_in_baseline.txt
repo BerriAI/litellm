@@ -2,12 +2,12 @@
 # Fix a site and delete its line; regenerate with `check_unbounded_in_lists.py --update-baseline`.
 litellm/integrations/shadow_eval_logger.py ShadowEvalLogger._active_jobs prisma job_id.in `[str(record.id) for record in records]` 0
 litellm/llms/litellm_proxy/skills/handler.py LiteLLMSkillsHandler.list_skills prisma created_by.in `owner_scopes` 0
-litellm/proxy/_experimental/mcp_server/db.py get_mcp_servers prisma server_id.in `server_ids` 0
-litellm/proxy/_experimental/mcp_server/db.py get_user_env_vars_bulk prisma server_id.in `ids` 0
-litellm/proxy/_experimental/mcp_server/db.py purge_user_oauth_credentials_for_server prisma user_id.in `[row.user_id for row in oauth_rows]` 0
-litellm/proxy/_experimental/mcp_server/oauth2_flow_backfill.py backfill_null_oauth2_flows prisma server_id.in `server_ids_for_flow` 0
-litellm/proxy/_experimental/mcp_server/oauth2_flow_backfill.py backfill_null_oauth2_flows prisma server_id.in `server_ids` 0
-litellm/proxy/_experimental/mcp_server/toolset_db.py list_mcp_toolsets prisma toolset_id.in `toolset_ids` 0
+litellm/proxy/mcp_server/db.py get_mcp_servers prisma server_id.in `server_ids` 0
+litellm/proxy/mcp_server/db.py get_user_env_vars_bulk prisma server_id.in `ids` 0
+litellm/proxy/mcp_server/db.py purge_user_oauth_credentials_for_server prisma user_id.in `[row.user_id for row in oauth_rows]` 0
+litellm/proxy/mcp_server/oauth2_flow_backfill.py backfill_null_oauth2_flows prisma server_id.in `server_ids_for_flow` 0
+litellm/proxy/mcp_server/oauth2_flow_backfill.py backfill_null_oauth2_flows prisma server_id.in `server_ids` 0
+litellm/proxy/mcp_server/toolset_db.py list_mcp_toolsets prisma toolset_id.in `toolset_ids` 0
 litellm/proxy/agent_endpoints/endpoints.py _attach_keys_to_agents prisma agent_id.in `agent_ids` 0
 litellm/proxy/agent_endpoints/endpoints.py get_agents prisma agent_id.in `agent_ids` 0
 litellm/proxy/anthropic_endpoints/claude_code_endpoints/claude_code_skill_access.py SkillVisibility.where prisma name.in `sorted(self.granted)` 0
@@ -80,14 +80,12 @@ litellm/proxy/management_endpoints/team_endpoints.py _get_keys_count_by_team pri
 litellm/proxy/management_endpoints/team_endpoints.py _hydrate_member_user_details prisma user_id.in `sorted(user_ids)` 0
 litellm/proxy/management_endpoints/team_endpoints.py _resolve_existing_member_user_ids prisma user_id.in `sorted(requested_user_ids)` 0
 litellm/proxy/management_endpoints/team_endpoints.py resolve_team_daily_activity_scope prisma team_id.in `list(team_ids_list)` 0
-litellm/proxy/management_endpoints/team_endpoints.py _sweep_deleted_team_references prisma team_id.in `tuple(team_ids)` 0
 litellm/proxy/management_endpoints/team_endpoints.py _sweep_deleted_team_references_tx prisma team_id.in `tuple(team_ids)` 0
 litellm/proxy/management_endpoints/team_endpoints.py _team_member_delete prisma user_id.in `sorted(addressed_user_ids)` 0
 litellm/proxy/management_endpoints/team_endpoints.py _team_member_delete prisma user_id.in `sorted(user_ids_to_delete)` 0
 litellm/proxy/management_endpoints/team_endpoints.py _team_member_delete prisma user_id.in `sorted(user_ids_to_delete)` 1
 litellm/proxy/management_endpoints/team_endpoints.py _team_user_spend_sql raw-sql sl.team_id.IN `IN ({team_placeholders})` 0
-litellm/proxy/management_endpoints/team_endpoints.py delete_team prisma team_id.in `data.team_ids` 0
-litellm/proxy/management_endpoints/team_endpoints.py delete_team prisma team_id.in `data.team_ids` 1
+litellm/proxy/management_endpoints/team_endpoints.py delete_validated_teams prisma team_id.in `team_ids` 0
 litellm/proxy/management_endpoints/team_endpoints.py get_all_team_memberships prisma team_id.in `team_ids` 0
 litellm/proxy/management_endpoints/team_endpoints.py list_available_teams prisma team_id.in `available_teams` 0
 litellm/proxy/management_endpoints/tool_management_endpoints.py get_tool_spend prisma tool_name.in `[row.tool_name for row in top_tools]` 0

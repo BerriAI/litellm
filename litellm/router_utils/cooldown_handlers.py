@@ -38,6 +38,7 @@ from litellm.types.utils import (
     CooldownDeploymentInfo,
     InternalCallOrigin,
 )
+from litellm.types.videos.utils import VIDEO_ID_CALL_TYPES
 
 from .router_callbacks.track_deployment_metrics import (
     get_deployment_failures_for_current_minute,
@@ -90,6 +91,11 @@ def is_background_response_poll_not_found(exception: Exception, litellm_params: 
         and candidate.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) in _BACKGROUND_RESPONSE_POLL_CALL_ORIGINS
         for candidate in (litellm_params.get("metadata"), litellm_params.get("litellm_metadata"))
     )
+
+
+def is_video_lookup_not_found(exception: object, failure_kwargs: Mapping[str, object]) -> bool:
+    """Whether a call on an existing video id failed with a provider 404: the video is not on that account."""
+    return getattr(exception, "status_code", None) == 404 and failure_kwargs.get("call_type") in VIDEO_ID_CALL_TYPES
 
 
 _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
@@ -179,7 +185,14 @@ def _should_cooldown_based_on_deployment_policy(
     override that safety net, matching `_has_explicit_allowed_fails_policy_for_exception`.
     """
     allowed_fails_from_policy: Final = _resolve_allowed_fails_from_policy(dep_policy, original_exception)
-    if allowed_fails_from_policy is None and dep_allowed_fails is not None and is_single_deployment_model_group:
+    if (
+        allowed_fails_from_policy is None
+        and is_single_deployment_model_group
+        and (
+            dep_allowed_fails is not None
+            or litellm_router_instance.get_allowed_fails_from_policy(original_exception) is None
+        )
+    ):
         return False
 
     allowed_fails_override: Final[int | None] = (
@@ -393,6 +406,34 @@ def _should_run_cooldown_logic(
     return True
 
 
+_FALLBACK_ENTRIES_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, list[str | Mapping[str, object]]] | str, ...])
+
+
+def _fallback_target_name(target: str | Mapping[str, object]) -> str:
+    return target if isinstance(target, str) else str(target.get("model", ""))
+
+
+def _fallback_chain_names(
+    entry: Mapping[str, Sequence[str | Mapping[str, object]]],
+) -> Mapping[str, list[str]]:  # mutable-ok: mirrors get_fallback_model_group's fallbacks shape
+    return {key: [_fallback_target_name(target) for target in targets] for key, targets in entry.items()}
+
+
+def _has_fallback_group(litellm_router_instance: LitellmRouter, requested_model_group: str | None) -> bool:
+    from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+
+    configured: Final[object] = getattr(litellm_router_instance, "fallbacks", None)
+    if requested_model_group is None or not configured:
+        return False
+    chains: Final = tuple(
+        _fallback_chain_names(entry)
+        for entry in _FALLBACK_ENTRIES_ADAPTER.validate_python(configured)
+        if isinstance(entry, Mapping)
+    )
+    fallback_group, _ = get_fallback_model_group(fallbacks=chains, model_group=requested_model_group)
+    return bool(fallback_group)
+
+
 def _should_cooldown_deployment(
     litellm_router_instance: LitellmRouter,
     deployment: str,
@@ -425,6 +466,9 @@ def _should_cooldown_deployment(
             litellm_router_instance.routing_group_has_alternatives(requested_model_group)
             or litellm_router_instance.team_model_has_alternatives(deployment)
         )
+    is_lone_deployment: Final = is_single_deployment_model_group and not _has_fallback_group(
+        litellm_router_instance, requested_model_group
+    )
 
     exception_status_int: Final = cast_exception_status_to_int(exception_status)
     dep_policy, dep_allowed_fails = _get_deployment_cooldown_policy(litellm_router_instance, deployment)
@@ -444,7 +488,7 @@ def _should_cooldown_deployment(
             original_exception,
             dep_policy,
             dep_allowed_fails,
-            is_single_deployment_model_group,
+            is_lone_deployment,
         )
 
     ## BASE CASE - single deployment
@@ -489,6 +533,8 @@ def _should_cooldown_deployment(
 
         return False
     else:
+        if is_lone_deployment and litellm_router_instance.get_allowed_fails_from_policy(original_exception) is None:
+            return False
         return should_cooldown_based_on_allowed_fails_policy(
             litellm_router_instance=litellm_router_instance,
             deployment=deployment,

@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 import respx
-from jsonschema import validate
+from jsonschema import Draft7Validator, validate
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
@@ -59,6 +59,7 @@ from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_K
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import (
+    CredentialItem,
     ADDRESSED_RESPONSE_ID_FIELD,
     CallTypes,
     Choices,
@@ -89,7 +90,6 @@ from litellm.utils import (
     get_llm_provider,
     get_optional_params_embeddings,
     ProviderConfigManager,
-    TextCompletionStreamWrapper,
     _check_provider_match,
     get_potential_model_names,
     _is_litellm_router_call,
@@ -576,7 +576,7 @@ def test_all_model_configs():
     from litellm.llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
         VertexAIAi21Config,
     )
-    from litellm.llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.llama.transformation import (
         VertexAILlama3Config,
     )
 
@@ -865,6 +865,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "cache_creation_input_token_cost",
         "cache_creation_input_audio_token_cost",
         "cache_read_input_token_cost",
+        "explicit_cache_read_input_token_cost",
         "cache_read_input_audio_token_cost",
         "cache_read_input_image_token_cost",
         "input_dbu_cost_per_token",
@@ -922,424 +923,463 @@ def validate_model_cost_values(model_data, exceptions=None):
     return len(violations) == 0, violations
 
 
+_COST_MAP_ROW_SCHEMA: Final = {
+    "type": "object",
+    "additionalProperties": {
+        "type": "object",
+        "properties": {
+            "supports_computer_use": {"type": "boolean"},
+            "cache_creation_input_audio_token_cost": {"type": "number"},
+            "cache_creation_input_token_cost": {"type": "number"},
+            "cache_creation_input_token_cost_above_1hr": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens": {
+                "type": "number"
+            },
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex": {
+                "type": "number"
+            },
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority": {
+                "type": "number"
+            },
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches": {
+                "type": "number"
+            },
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast": {
+                "type": "number"
+            },
+            "cache_creation_input_token_cost_above_12hr_flex": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_priority": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_batches": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_ultrafast": {"type": "number"},
+            "cache_creation_input_token_cost_above_32k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_100k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_100k_tokens_batches": {"type": "number"},
+            "cache_creation_input_token_cost_above_128k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_256k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_272k_tokens_flex": {"type": "number"},
+            "cache_creation_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
+            "cache_creation_input_token_cost_above_272k_tokens_priority": {"type": "number"},
+            "cache_creation_input_token_cost_above_200k_tokens_batches": {"type": "number"},
+            "cache_creation_input_token_cost_above_272k_tokens_batches": {"type": "number"},
+            "cache_creation_input_token_cost_batches": {"type": "number"},
+            "cache_creation_input_token_cost_decisions": {"type": "number"},
+            "cache_creation_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+            "cache_read_input_token_cost_decisions": {"type": "number"},
+            "cache_read_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+            "input_cost_per_token_decisions": {"type": "number"},
+            "input_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+            "output_cost_per_token_decisions": {"type": "number"},
+            "output_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+            "cache_creation_input_token_cost_flex": {"type": "number"},
+            "cache_creation_input_token_cost_priority": {"type": "number"},
+            "cache_creation_input_token_cost_ultrafast": {"type": "number"},
+            "cache_read_input_token_cost": {"type": "number"},
+            "explicit_cache_read_input_token_cost": {"type": "number"},
+            "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
+            "cache_read_input_token_cost_above_100k_tokens": {"type": "number"},
+            "cache_read_input_token_cost_above_100k_tokens_batches": {"type": "number"},
+            "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
+            "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
+            "cache_read_input_token_cost_above_200k_tokens_batches": {"type": "number"},
+            "cache_read_input_token_cost_above_256k_tokens": {"type": "number"},
+            "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
+            "cache_read_input_token_cost_above_272k_tokens_flex": {"type": "number"},
+            "cache_read_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
+            "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
+            "input_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
+            "cache_read_input_token_cost_batches": {"type": "number"},
+            "cache_read_input_token_cost_above_272k_tokens_batches": {"type": "number"},
+            "cache_creation_input_token_cost_above_1hr_above_100k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
+            "cache_read_input_audio_token_cost": {"type": "number"},
+            "cache_read_input_audio_token_cost_batches": {"type": "number"},
+            "cache_read_input_audio_token_cost_flex": {"type": "number"},
+            "cache_read_input_audio_token_cost_priority": {"type": "number"},
+            "cache_read_input_image_token_cost": {"type": "number"},
+            "audio_transcription_config": {"type": "string"},
+            "deprecation_date": {"type": "string"},
+            "input_cost_per_audio_per_second": {"type": "number"},
+            "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
+            "google_maps_grounding_cost_per_query": {"type": "number"},
+            "input_cost_per_audio_token": {"type": "number"},
+            "input_cost_per_audio_token_flex": {"type": "number"},
+            "input_cost_per_image_token": {"type": "number"},
+            "input_cost_per_character": {"type": "number"},
+            "input_cost_per_character_above_128k_tokens": {"type": "number"},
+            "input_cost_per_image": {"type": "number"},
+            "input_cost_per_image_above_128k_tokens": {"type": "number"},
+            "input_cost_per_video_token": {"type": "number"},
+            "input_cost_per_token_above_32k_tokens": {"type": "number"},
+            "input_cost_per_token_above_100k_tokens": {"type": "number"},
+            "input_cost_per_token_above_100k_tokens_batches": {"type": "number"},
+            "input_cost_per_token_above_200k_tokens": {"type": "number"},
+            "input_cost_per_token_above_200k_tokens_batches": {"type": "number"},
+            "input_cost_per_token_above_256k_tokens": {"type": "number"},
+            "input_cost_per_token_above_272k_tokens": {"type": "number"},
+            "input_cost_per_token_above_512k_tokens": {"type": "number"},
+            "cache_read_input_token_cost_flex": {"type": "number"},
+            "cache_read_input_token_cost_priority": {"type": "number"},
+            "cache_read_input_token_cost_balanced": {"type": "number"},
+            "cache_read_input_token_cost_ultrafast": {"type": "number"},
+            "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
+            "cache_read_input_token_cost_above_272k_tokens_priority": {"type": "number"},
+            "input_cost_per_token_flex": {"type": "number"},
+            "input_cost_per_token_priority": {"type": "number"},
+            "input_cost_per_token_balanced": {"type": "number"},
+            "input_cost_per_token_ultrafast": {"type": "number"},
+            "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
+            "input_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+            "input_cost_per_token_above_272k_tokens_batches": {"type": "number"},
+            "input_cost_per_token_above_272k_tokens_flex": {"type": "number"},
+            "input_cost_per_audio_token_priority": {"type": "number"},
+            "output_cost_per_token_flex": {"type": "number"},
+            "output_cost_per_token_priority": {"type": "number"},
+            "output_cost_per_token_balanced": {"type": "number"},
+            "output_cost_per_token_ultrafast": {"type": "number"},
+            "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
+            "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+            "output_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
+            "output_cost_per_token_above_272k_tokens_batches": {"type": "number"},
+            "output_cost_per_token_above_272k_tokens_flex": {"type": "number"},
+            "regional_endpoint_uplift_multiplier": {"type": "number"},
+            "regional_processing_uplift_multiplier_eu": {"type": "number"},
+            "regional_processing_uplift_multiplier_us": {"type": "number"},
+            "input_cost_per_pixel": {"type": "number"},
+            "input_cost_per_query": {"type": "number"},
+            "input_cost_per_request": {"type": "number"},
+            "cost_per_second": {"type": "number"},
+            "input_cost_per_second": {"type": "number"},
+            "input_cost_per_text_message": {"type": "number"},
+            "input_cost_per_token": {"type": "number"},
+            "input_cost_per_token_above_128k_tokens": {"type": "number"},
+            "input_cost_per_audio_token_batches": {"type": "number"},
+            "input_cost_per_image_token_batches": {"type": "number"},
+            "input_cost_per_token_batches": {"type": "number"},
+            "input_cost_per_video_token_batches": {"type": "number"},
+            "input_cost_per_token_cache_hit": {"type": "number"},
+            "input_cost_per_video_per_second": {"type": "number"},
+            "input_cost_per_video_per_second_above_8s_interval": {"type": "number"},
+            "input_cost_per_video_per_second_above_15s_interval": {"type": "number"},
+            "input_cost_per_video_per_second_above_128k_tokens": {"type": "number"},
+            "input_dbu_cost_per_token": {"type": "number"},
+            "annotation_cost_per_page": {"type": "number"},
+            "annotation_cost_per_page_batches": {"type": "number"},
+            "ocr_cost_per_page": {"type": "number"},
+            "ocr_cost_per_page_batches": {"type": "number"},
+            "ocr_cost_per_credit": {"type": "number"},
+            "code_interpreter_cost_per_session": {"type": "number"},
+            "inference_geo": {"type": "string"},
+            "litellm_provider": {"type": "string"},
+            "max_input_tokens": {"type": "number"},
+            "max_output_tokens": {"type": "number"},
+            "max_tokens": {"type": "number"},
+            "metadata": {"type": "object"},
+            "provider_specific_entry": {"type": "object"},
+            "mode": {
+                "type": "string",
+                "enum": [
+                    "audio_speech",
+                    "audio_transcription",
+                    "chat",
+                    "completion",
+                    "container",
+                    "decisions",
+                    "image_edit",
+                    "embedding",
+                    "evaluation",
+                    "extraction",
+                    "guardrail",
+                    "image_generation",
+                    "video_generation",
+                    "moderation",
+                    "rerank",
+                    "realtime",
+                    "responses",
+                    "ocr",
+                    "search",
+                    "vector_store",
+                ],
+            },
+            "output_cost_per_audio_token": {"type": "number"},
+            "output_cost_per_character": {"type": "number"},
+            "output_cost_per_character_above_128k_tokens": {"type": "number"},
+            "output_cost_per_image": {"type": "number"},
+            "output_cost_per_image_512": {"type": "number"},
+            "output_cost_per_image_1024": {"type": "number"},
+            "output_cost_per_image_1536": {"type": "number"},
+            "output_cost_per_image_0.5K": {"type": "number"},
+            "output_cost_per_image_1K": {"type": "number"},
+            "output_cost_per_image_2K": {"type": "number"},
+            "output_cost_per_image_4K": {"type": "number"},
+            "output_cost_per_image_token": {"type": "number"},
+            "output_cost_per_image_token_batches": {"type": "number"},
+            "output_cost_per_video_token": {"type": "number"},
+            "output_cost_per_pixel": {"type": "number"},
+            "output_cost_per_second": {"type": "number"},
+            "output_cost_per_second_480p": {"type": "number"},
+            "output_cost_per_second_720p": {"type": "number"},
+            "output_cost_per_second_768p": {"type": "number"},
+            "output_cost_per_second_2k": {"type": "number"},
+            "output_cost_per_second_1080p": {"type": "number"},
+            "output_cost_per_second_4k": {"type": "number"},
+            "output_cost_per_token": {"type": "number"},
+            "output_cost_per_token_above_32k_tokens": {"type": "number"},
+            "output_cost_per_token_above_100k_tokens": {"type": "number"},
+            "output_cost_per_token_above_100k_tokens_batches": {"type": "number"},
+            "output_cost_per_token_above_128k_tokens": {"type": "number"},
+            "output_cost_per_token_above_200k_tokens": {"type": "number"},
+            "output_cost_per_token_above_200k_tokens_batches": {"type": "number"},
+            "output_cost_per_token_above_256k_tokens": {"type": "number"},
+            "output_cost_per_token_above_272k_tokens": {"type": "number"},
+            "output_cost_per_token_above_512k_tokens": {"type": "number"},
+            "output_cost_per_token_batches": {"type": "number"},
+            "output_cost_per_reasoning_token": {"type": "number"},
+            "output_cost_per_video_per_second": {"type": "number"},
+            "output_db_cost_per_token": {"type": "number"},
+            "output_dbu_cost_per_token": {"type": "number"},
+            "output_vector_size": {"type": "number"},
+            "rpd": {"type": "number"},
+            "rpm": {"type": "number"},
+            "source": {"type": "string"},
+            "comment": {"type": "string"},
+            "supports_assistant_prefill": {"type": "boolean"},
+            "supports_anthropic_compaction": {"type": "boolean"},
+            "supports_audio_input": {"type": "boolean"},
+            "supports_audio_output": {"type": "boolean"},
+            "gemini_native_audio": {"type": "boolean"},
+            "gemini_audio_only_live": {"type": "boolean"},
+            "supports_embedding_image_input": {"type": "boolean"},
+            "supports_forced_tool_use": {"type": "boolean"},
+            "supports_function_calling": {"type": "boolean"},
+            "supports_image_input": {"type": "boolean"},
+            "supports_nova_canvas_image_edit": {"type": "boolean"},
+            "supports_parallel_function_calling": {"type": "boolean"},
+            "supports_parallel_tool_use_config": {"type": "boolean"},
+            "supports_pdf_input": {"type": "boolean"},
+            "prompt_cache_min_tokens": {"type": "number"},
+            "supports_prompt_cache_breakpoint": {"type": "boolean"},
+            "supports_thinking_cache_preservation": {"type": "boolean"},
+            "supports_prompt_caching": {"type": "boolean"},
+            "supports_response_schema": {"type": "boolean"},
+            "supports_system_messages": {"type": "boolean"},
+            "supports_tool_choice": {"type": "boolean"},
+            "supports_tool_search": {"type": "boolean"},
+            "supports_video_input": {"type": "boolean"},
+            "supports_box_questions": {"type": "boolean"},
+            "supports_vision": {"type": "boolean"},
+            "supports_web_search": {"type": "boolean"},
+            "token_count_framing": {"type": "integer"},
+            "token_count_model": {
+                "type": "object",
+                "properties": {"model": {"type": "string"}, "region": {"type": "string"}},
+                "required": ["model"],
+            },
+            "token_count_tokenizer": {"type": "string", "enum": ["kimi_k3"]},
+            "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
+            "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
+            "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},
+            "supports_bedrock_converse_tool_result_images": {"type": "boolean"},
+            "supports_url_context": {"type": "boolean"},
+            "supports_multimodal": {"type": "boolean"},
+            "uses_embed_content": {"type": "boolean"},
+            "supports_reasoning": {"type": "boolean"},
+            "supports_minimal_reasoning_effort": {"type": "boolean"},
+            "supports_low_reasoning_effort": {"type": "boolean"},
+            "supports_none_reasoning_effort": {"type": "boolean"},
+            "supports_xhigh_reasoning_effort": {"type": "boolean"},
+            "supports_max_reasoning_effort": {"type": "boolean"},
+            "reasoning_effort_levels": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]},
+            },
+            "default_reasoning_effort": {
+                "type": "string",
+                "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
+            },
+            "supports_adaptive_thinking": {"type": "boolean"},
+            "supports_anthropic_thinking_payload": {"type": "boolean"},
+            "supports_legacy_thinking": {"type": "boolean"},
+            "thinking_always_on": {"type": "boolean"},
+            "supports_mid_conversation_system": {"type": "boolean"},
+            "supports_sampling_params": {"type": "boolean"},
+            "supports_output_config": {"type": "boolean"},
+            "supports_speed": {"type": "boolean"},
+            "supports_fast_mode": {"type": "boolean"},
+            "supported_audio_formats": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["mp3", "wav"],
+                },
+            },
+            "vertex_ai_audio_api": {
+                "type": "string",
+                "enum": ["lyria_predict", "lyria_interactions"],
+            },
+            "bedrock_output_config_effort_ceiling": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "max", "xhigh"],
+            },
+            "bedrock_converse_supports_strict_tools": {"type": "boolean"},
+            "supports_regex_lookaround": {"type": "boolean"},
+            "tpm": {"type": "number"},
+            "supported_endpoints": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": [
+                        "/v1/responses",
+                        "/v1/embeddings",
+                        "/v1/chat/completions",
+                        "/v1/completions",
+                        "/v1/messages",
+                        "/v1/images/generations",
+                        "/v1/realtime",
+                        "/v1/realtime/transcription_sessions",
+                        "/v1/images/variations",
+                        "/v1/images/edits",
+                        "/v1/batch",
+                        "/v1beta/interactions",
+                        "/v1beta/models",
+                        "/v1/audio/transcriptions",
+                        "/v1/audio/speech",
+                        "/v1/ocr",
+                        "/v1/videos",
+                        "/vertex_ai/live",
+                        "/v1/listen",
+                        "/v1/systemone",
+                        "/v1/decisions",
+                        "/v1beta/interactions",
+                    ],
+                },
+            },
+            "supported_regions": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                },
+            },
+            "guardrail_cost_per_unit": {
+                "type": "object",
+                "additionalProperties": {"type": "number"},
+            },
+            "search_context_cost_per_query": {
+                "type": "object",
+                "properties": {
+                    "search_context_size_low": {"type": "number"},
+                    "search_context_size_medium": {"type": "number"},
+                    "search_context_size_high": {"type": "number"},
+                },
+                "additionalProperties": False,
+            },
+            "web_search_billing_unit": {
+                "type": "string",
+                "enum": ["per_prompt", "per_query"],
+            },
+            "search_free_requests": {
+                "type": "object",
+                "properties": {
+                    "count": {"type": "integer", "minimum": 1},
+                    "period": {"type": "string", "enum": ["day", "month"]},
+                    "shared_group": {"type": "string"},
+                },
+                "required": ["count", "period", "shared_group"],
+                "additionalProperties": False,
+            },
+            "citation_cost_per_token": {"type": "number"},
+            "supported_modalities": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["text", "audio", "image", "video"],
+                },
+            },
+            "supported_output_modalities": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["text", "image", "audio", "code", "video"],
+                },
+            },
+            "supports_native_streaming": {"type": "boolean"},
+            "supports_image_size": {"type": "boolean"},
+            "supports_native_structured_output": {"type": "boolean"},
+            "supports_bedrock_native_structured_output": {"type": "boolean"},
+            "use_openai_responses_path": {"type": "boolean"},
+            "off_peak_pricing": {
+                "type": "object",
+                "properties": {
+                    "hours_utc": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                    },
+                    "windows": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "hours_utc": {
+                                    "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                                },
+                                "weekdays": {
+                                    "type": "array",
+                                    "items": {"oneOf": [{"type": "integer"}, {"type": "string"}]},
+                                },
+                            },
+                            "required": ["hours_utc"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "weekday_timezone": {"type": "string"},
+                    "input_cost_per_token": {"type": "number"},
+                    "output_cost_per_token": {"type": "number"},
+                    "output_cost_per_reasoning_token": {"type": "number"},
+                    "cache_read_input_token_cost": {"type": "number"},
+                    "cache_creation_input_token_cost": {"type": "number"},
+                },
+                "additionalProperties": False,
+            },
+            "tiered_pricing": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "range": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "minItems": 2,
+                            "maxItems": 2,
+                        },
+                        "input_cost_per_token": {"type": "number"},
+                        "output_cost_per_token": {"type": "number"},
+                        "cache_read_input_token_cost": {"type": "number"},
+                        "cache_creation_input_token_cost": {"type": "number"},
+                        "output_cost_per_reasoning_token": {"type": "number"},
+                        "max_results_range": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "minItems": 2,
+                            "maxItems": 2,
+                        },
+                        "input_cost_per_query": {"type": "number"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "additionalProperties": False,
+    },
+}
+
+
 def test_aaamodel_prices_and_context_window_json_is_valid():
     """
     Validates the `model_prices_and_context_window.json` file.
 
     If this test fails after you update the json, you need to update the schema or correct the change you made.
     """
-
-    INTENDED_SCHEMA = {
-        "type": "object",
-        "additionalProperties": {
-            "type": "object",
-            "properties": {
-                "supports_computer_use": {"type": "boolean"},
-                "cache_creation_input_audio_token_cost": {"type": "number"},
-                "cache_creation_input_token_cost": {"type": "number"},
-                "cache_creation_input_token_cost_above_1hr": {"type": "number"},
-                "cache_creation_input_token_cost_above_32k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_100k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_100k_tokens_batches": {"type": "number"},
-                "cache_creation_input_token_cost_above_128k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_256k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_272k_tokens_flex": {"type": "number"},
-                "cache_creation_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
-                "cache_creation_input_token_cost_above_272k_tokens_priority": {"type": "number"},
-                "cache_creation_input_token_cost_above_200k_tokens_batches": {"type": "number"},
-                "cache_creation_input_token_cost_above_272k_tokens_batches": {"type": "number"},
-                "cache_creation_input_token_cost_batches": {"type": "number"},
-                "cache_creation_input_token_cost_decisions": {"type": "number"},
-                "cache_creation_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
-                "cache_read_input_token_cost_decisions": {"type": "number"},
-                "cache_read_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
-                "input_cost_per_token_decisions": {"type": "number"},
-                "input_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
-                "output_cost_per_token_decisions": {"type": "number"},
-                "output_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
-                "cache_creation_input_token_cost_flex": {"type": "number"},
-                "cache_creation_input_token_cost_priority": {"type": "number"},
-                "cache_creation_input_token_cost_ultrafast": {"type": "number"},
-                "cache_read_input_token_cost": {"type": "number"},
-                "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_above_100k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_above_100k_tokens_batches": {"type": "number"},
-                "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_above_200k_tokens_batches": {"type": "number"},
-                "cache_read_input_token_cost_above_256k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_above_272k_tokens_flex": {"type": "number"},
-                "cache_read_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
-                "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
-                "input_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
-                "cache_read_input_token_cost_batches": {"type": "number"},
-                "cache_read_input_token_cost_above_272k_tokens_batches": {"type": "number"},
-                "cache_creation_input_token_cost_above_1hr_above_100k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
-                "cache_read_input_audio_token_cost": {"type": "number"},
-                "cache_read_input_image_token_cost": {"type": "number"},
-                "audio_transcription_config": {"type": "string"},
-                "deprecation_date": {"type": "string"},
-                "input_cost_per_audio_per_second": {"type": "number"},
-                "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
-                "google_maps_grounding_cost_per_query": {"type": "number"},
-                "input_cost_per_audio_token": {"type": "number"},
-                "input_cost_per_image_token": {"type": "number"},
-                "input_cost_per_character": {"type": "number"},
-                "input_cost_per_character_above_128k_tokens": {"type": "number"},
-                "input_cost_per_image": {"type": "number"},
-                "input_cost_per_image_above_128k_tokens": {"type": "number"},
-                "input_cost_per_video_token": {"type": "number"},
-                "input_cost_per_token_above_32k_tokens": {"type": "number"},
-                "input_cost_per_token_above_100k_tokens": {"type": "number"},
-                "input_cost_per_token_above_100k_tokens_batches": {"type": "number"},
-                "input_cost_per_token_above_200k_tokens": {"type": "number"},
-                "input_cost_per_token_above_200k_tokens_batches": {"type": "number"},
-                "input_cost_per_token_above_256k_tokens": {"type": "number"},
-                "input_cost_per_token_above_272k_tokens": {"type": "number"},
-                "input_cost_per_token_above_512k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_flex": {"type": "number"},
-                "cache_read_input_token_cost_priority": {"type": "number"},
-                "cache_read_input_token_cost_balanced": {"type": "number"},
-                "cache_read_input_token_cost_ultrafast": {"type": "number"},
-                "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
-                "cache_read_input_token_cost_above_272k_tokens_priority": {"type": "number"},
-                "input_cost_per_token_flex": {"type": "number"},
-                "input_cost_per_token_priority": {"type": "number"},
-                "input_cost_per_token_balanced": {"type": "number"},
-                "input_cost_per_token_ultrafast": {"type": "number"},
-                "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
-                "input_cost_per_token_above_272k_tokens_priority": {"type": "number"},
-                "input_cost_per_token_above_272k_tokens_batches": {"type": "number"},
-                "input_cost_per_token_above_272k_tokens_flex": {"type": "number"},
-                "input_cost_per_audio_token_priority": {"type": "number"},
-                "output_cost_per_token_flex": {"type": "number"},
-                "output_cost_per_token_priority": {"type": "number"},
-                "output_cost_per_token_balanced": {"type": "number"},
-                "output_cost_per_token_ultrafast": {"type": "number"},
-                "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
-                "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
-                "output_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
-                "output_cost_per_token_above_272k_tokens_batches": {"type": "number"},
-                "output_cost_per_token_above_272k_tokens_flex": {"type": "number"},
-                "regional_endpoint_uplift_multiplier": {"type": "number"},
-                "regional_processing_uplift_multiplier_eu": {"type": "number"},
-                "regional_processing_uplift_multiplier_us": {"type": "number"},
-                "input_cost_per_pixel": {"type": "number"},
-                "input_cost_per_query": {"type": "number"},
-                "input_cost_per_request": {"type": "number"},
-                "cost_per_second": {"type": "number"},
-                "input_cost_per_second": {"type": "number"},
-                "input_cost_per_text_message": {"type": "number"},
-                "input_cost_per_token": {"type": "number"},
-                "input_cost_per_token_above_128k_tokens": {"type": "number"},
-                "input_cost_per_audio_token_batches": {"type": "number"},
-                "input_cost_per_image_token_batches": {"type": "number"},
-                "input_cost_per_token_batches": {"type": "number"},
-                "input_cost_per_video_token_batches": {"type": "number"},
-                "input_cost_per_token_cache_hit": {"type": "number"},
-                "input_cost_per_video_per_second": {"type": "number"},
-                "input_cost_per_video_per_second_above_8s_interval": {"type": "number"},
-                "input_cost_per_video_per_second_above_15s_interval": {"type": "number"},
-                "input_cost_per_video_per_second_above_128k_tokens": {"type": "number"},
-                "input_dbu_cost_per_token": {"type": "number"},
-                "annotation_cost_per_page": {"type": "number"},
-                "annotation_cost_per_page_batches": {"type": "number"},
-                "ocr_cost_per_page": {"type": "number"},
-                "ocr_cost_per_page_batches": {"type": "number"},
-                "ocr_cost_per_credit": {"type": "number"},
-                "code_interpreter_cost_per_session": {"type": "number"},
-                "inference_geo": {"type": "string"},
-                "litellm_provider": {"type": "string"},
-                "max_input_tokens": {"type": "number"},
-                "max_output_tokens": {"type": "number"},
-                "max_tokens": {"type": "number"},
-                "metadata": {"type": "object"},
-                "provider_specific_entry": {"type": "object"},
-                "mode": {
-                    "type": "string",
-                    "enum": [
-                        "audio_speech",
-                        "audio_transcription",
-                        "chat",
-                        "completion",
-                        "container",
-                        "image_edit",
-                        "embedding",
-                        "evaluation",
-                        "guardrail",
-                        "image_generation",
-                        "video_generation",
-                        "moderation",
-                        "rerank",
-                        "realtime",
-                        "responses",
-                        "ocr",
-                        "search",
-                        "vector_store",
-                    ],
-                },
-                "output_cost_per_audio_token": {"type": "number"},
-                "output_cost_per_character": {"type": "number"},
-                "output_cost_per_character_above_128k_tokens": {"type": "number"},
-                "output_cost_per_image": {"type": "number"},
-                "output_cost_per_image_512": {"type": "number"},
-                "output_cost_per_image_1024": {"type": "number"},
-                "output_cost_per_image_1536": {"type": "number"},
-                "output_cost_per_image_0.5K": {"type": "number"},
-                "output_cost_per_image_1K": {"type": "number"},
-                "output_cost_per_image_2K": {"type": "number"},
-                "output_cost_per_image_4K": {"type": "number"},
-                "output_cost_per_image_token": {"type": "number"},
-                "output_cost_per_image_token_batches": {"type": "number"},
-                "output_cost_per_video_token": {"type": "number"},
-                "output_cost_per_pixel": {"type": "number"},
-                "output_cost_per_second": {"type": "number"},
-                "output_cost_per_second_480p": {"type": "number"},
-                "output_cost_per_second_720p": {"type": "number"},
-                "output_cost_per_second_768p": {"type": "number"},
-                "output_cost_per_second_2k": {"type": "number"},
-                "output_cost_per_second_1080p": {"type": "number"},
-                "output_cost_per_second_4k": {"type": "number"},
-                "output_cost_per_token": {"type": "number"},
-                "output_cost_per_token_above_32k_tokens": {"type": "number"},
-                "output_cost_per_token_above_100k_tokens": {"type": "number"},
-                "output_cost_per_token_above_100k_tokens_batches": {"type": "number"},
-                "output_cost_per_token_above_128k_tokens": {"type": "number"},
-                "output_cost_per_token_above_200k_tokens": {"type": "number"},
-                "output_cost_per_token_above_200k_tokens_batches": {"type": "number"},
-                "output_cost_per_token_above_256k_tokens": {"type": "number"},
-                "output_cost_per_token_above_272k_tokens": {"type": "number"},
-                "output_cost_per_token_above_512k_tokens": {"type": "number"},
-                "output_cost_per_token_batches": {"type": "number"},
-                "output_cost_per_reasoning_token": {"type": "number"},
-                "output_cost_per_video_per_second": {"type": "number"},
-                "output_db_cost_per_token": {"type": "number"},
-                "output_dbu_cost_per_token": {"type": "number"},
-                "output_vector_size": {"type": "number"},
-                "rpd": {"type": "number"},
-                "rpm": {"type": "number"},
-                "source": {"type": "string"},
-                "comment": {"type": "string"},
-                "supports_assistant_prefill": {"type": "boolean"},
-                "supports_anthropic_compaction": {"type": "boolean"},
-                "supports_audio_input": {"type": "boolean"},
-                "supports_audio_output": {"type": "boolean"},
-                "gemini_native_audio": {"type": "boolean"},
-                "gemini_audio_only_live": {"type": "boolean"},
-                "supports_embedding_image_input": {"type": "boolean"},
-                "supports_forced_tool_use": {"type": "boolean"},
-                "supports_function_calling": {"type": "boolean"},
-                "supports_image_input": {"type": "boolean"},
-                "supports_nova_canvas_image_edit": {"type": "boolean"},
-                "supports_parallel_function_calling": {"type": "boolean"},
-                "supports_parallel_tool_use_config": {"type": "boolean"},
-                "supports_pdf_input": {"type": "boolean"},
-                "prompt_cache_min_tokens": {"type": "number"},
-                "supports_prompt_cache_breakpoint": {"type": "boolean"},
-                "supports_thinking_cache_preservation": {"type": "boolean"},
-                "supports_prompt_caching": {"type": "boolean"},
-                "supports_response_schema": {"type": "boolean"},
-                "supports_system_messages": {"type": "boolean"},
-                "supports_tool_choice": {"type": "boolean"},
-                "supports_tool_search": {"type": "boolean"},
-                "supports_video_input": {"type": "boolean"},
-                "supports_box_questions": {"type": "boolean"},
-                "supports_vision": {"type": "boolean"},
-                "supports_web_search": {"type": "boolean"},
-                "token_count_framing": {"type": "integer"},
-                "token_count_model": {
-                    "type": "object",
-                    "properties": {"model": {"type": "string"}, "region": {"type": "string"}},
-                    "required": ["model"],
-                },
-                "token_count_tokenizer": {"type": "string", "enum": ["kimi_k3"]},
-                "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
-                "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
-                "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},
-                "supports_bedrock_converse_tool_result_images": {"type": "boolean"},
-                "supports_url_context": {"type": "boolean"},
-                "supports_multimodal": {"type": "boolean"},
-                "uses_embed_content": {"type": "boolean"},
-                "supports_reasoning": {"type": "boolean"},
-                "supports_minimal_reasoning_effort": {"type": "boolean"},
-                "supports_low_reasoning_effort": {"type": "boolean"},
-                "supports_none_reasoning_effort": {"type": "boolean"},
-                "supports_xhigh_reasoning_effort": {"type": "boolean"},
-                "supports_max_reasoning_effort": {"type": "boolean"},
-                "reasoning_effort_levels": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]},
-                },
-                "default_reasoning_effort": {
-                    "type": "string",
-                    "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
-                },
-                "supports_adaptive_thinking": {"type": "boolean"},
-                "supports_anthropic_thinking_payload": {"type": "boolean"},
-                "supports_legacy_thinking": {"type": "boolean"},
-                "thinking_always_on": {"type": "boolean"},
-                "supports_mid_conversation_system": {"type": "boolean"},
-                "supports_sampling_params": {"type": "boolean"},
-                "supports_output_config": {"type": "boolean"},
-                "supports_speed": {"type": "boolean"},
-                "supports_fast_mode": {"type": "boolean"},
-                "supported_audio_formats": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "enum": ["mp3", "wav"],
-                    },
-                },
-                "vertex_ai_audio_api": {
-                    "type": "string",
-                    "enum": ["lyria_predict", "lyria_interactions"],
-                },
-                "bedrock_output_config_effort_ceiling": {
-                    "type": "string",
-                    "enum": ["low", "medium", "high", "max", "xhigh"],
-                },
-                "bedrock_converse_supports_strict_tools": {"type": "boolean"},
-                "supports_regex_lookaround": {"type": "boolean"},
-                "tpm": {"type": "number"},
-                "supported_endpoints": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "enum": [
-                            "/v1/responses",
-                            "/v1/embeddings",
-                            "/v1/chat/completions",
-                            "/v1/completions",
-                            "/v1/messages",
-                            "/v1/images/generations",
-                            "/v1/realtime",
-                            "/v1/realtime/transcription_sessions",
-                            "/v1/images/variations",
-                            "/v1/images/edits",
-                            "/v1/batch",
-                            "/v1beta/interactions",
-                            "/v1/audio/transcriptions",
-                            "/v1/audio/speech",
-                            "/v1/ocr",
-                            "/v1/videos",
-                            "/vertex_ai/live",
-                            "/v1/listen",
-                            "/v1/systemone",
-                            "/v1/decisions",
-                            "/v1beta/interactions",
-                        ],
-                    },
-                },
-                "supported_regions": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                    },
-                },
-                "guardrail_cost_per_unit": {
-                    "type": "object",
-                    "additionalProperties": {"type": "number"},
-                },
-                "search_context_cost_per_query": {
-                    "type": "object",
-                    "properties": {
-                        "search_context_size_low": {"type": "number"},
-                        "search_context_size_medium": {"type": "number"},
-                        "search_context_size_high": {"type": "number"},
-                    },
-                    "additionalProperties": False,
-                },
-                "web_search_billing_unit": {
-                    "type": "string",
-                    "enum": ["per_prompt", "per_query"],
-                },
-                "citation_cost_per_token": {"type": "number"},
-                "supported_modalities": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "enum": ["text", "audio", "image", "video"],
-                    },
-                },
-                "supported_output_modalities": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "enum": ["text", "image", "audio", "code", "video"],
-                    },
-                },
-                "supports_native_streaming": {"type": "boolean"},
-                "supports_image_size": {"type": "boolean"},
-                "supports_native_structured_output": {"type": "boolean"},
-                "supports_bedrock_native_structured_output": {"type": "boolean"},
-                "use_openai_responses_path": {"type": "boolean"},
-                "off_peak_pricing": {
-                    "type": "object",
-                    "properties": {
-                        "hours_utc": {
-                            "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
-                        },
-                        "windows": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "hours_utc": {
-                                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
-                                    },
-                                    "weekdays": {
-                                        "type": "array",
-                                        "items": {"oneOf": [{"type": "integer"}, {"type": "string"}]},
-                                    },
-                                },
-                                "required": ["hours_utc"],
-                                "additionalProperties": False,
-                            },
-                        },
-                        "weekday_timezone": {"type": "string"},
-                        "input_cost_per_token": {"type": "number"},
-                        "output_cost_per_token": {"type": "number"},
-                        "output_cost_per_reasoning_token": {"type": "number"},
-                        "cache_read_input_token_cost": {"type": "number"},
-                        "cache_creation_input_token_cost": {"type": "number"},
-                    },
-                    "additionalProperties": False,
-                },
-                "tiered_pricing": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "range": {
-                                "type": "array",
-                                "items": {"type": "number"},
-                                "minItems": 2,
-                                "maxItems": 2,
-                            },
-                            "input_cost_per_token": {"type": "number"},
-                            "output_cost_per_token": {"type": "number"},
-                            "cache_read_input_token_cost": {"type": "number"},
-                            "cache_creation_input_token_cost": {"type": "number"},
-                            "output_cost_per_reasoning_token": {"type": "number"},
-                            "max_results_range": {
-                                "type": "array",
-                                "items": {"type": "number"},
-                                "minItems": 2,
-                                "maxItems": 2,
-                            },
-                            "input_cost_per_query": {"type": "number"},
-                        },
-                        "additionalProperties": False,
-                    },
-                },
-            },
-            "additionalProperties": False,
-        },
-    }
 
     prod_json = os.path.join(os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json")
     with open(prod_json, "r") as model_prices_file:
@@ -1349,7 +1389,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
     actual_json.pop("fallback_generalizations", None)  # reserved meta key, not a model entry
 
     # Validate schema
-    validate(actual_json, INTENDED_SCHEMA)
+    validate(actual_json, _COST_MAP_ROW_SCHEMA)
 
     # Validate cost values
     # Define exceptions for models that are allowed to have costs > 1
@@ -1369,6 +1409,21 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         error_message = "Cost validation failed:\n" + "\n".join(violations)
         error_message += "\n\nTo add exceptions, add the model ID to the 'exceptions' list in the test function."
         raise AssertionError(error_message)
+
+
+def test_cost_map_schema_accepts_12hr_cache_write_rates_for_batch_and_ultrafast_tiers() -> None:
+    row: Final = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "cache_creation_input_token_cost_above_12hr_batches": 3e-6,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches": 4e-6,
+        "cache_creation_input_token_cost_above_12hr_ultrafast": 5e-6,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast": 6e-6,
+    }
+
+    assert Draft7Validator(_COST_MAP_ROW_SCHEMA).is_valid({"synthetic-12hr-cache-write-model": row})
 
 
 def test_max_tokens_consistency():
@@ -2205,6 +2260,45 @@ class TestProxyFunctionCalling:
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
+def test_get_model_info_derives_max_tokens_from_the_output_limit() -> None:
+    model: Final = "derived-max-tokens-chat-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "max_input_tokens": 400000,
+                "max_output_tokens": 128000,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    info: Final = litellm.get_model_info(model, custom_llm_provider="openai")
+    assert info["max_tokens"] == 128000
+    assert litellm.get_max_tokens(model) == 128000
+
+
+def test_get_model_info_derives_max_tokens_from_the_input_limit_when_the_row_has_no_output_limit() -> None:
+    model: Final = "derived-max-tokens-embedding-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "embedding",
+                "max_input_tokens": 8191,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    info: Final = litellm.get_model_info(model, custom_llm_provider="openai")
+    assert info["max_tokens"] == 8191
+    assert info["max_output_tokens"] is None
+
+
 def test_register_model_price_is_used_for_completion_cost() -> None:
     model: Final = "migration-custom-pricing-model"
     price: Final = {
@@ -2355,7 +2449,6 @@ def test_register_model_with_scientific_notation():
     _invalidate_model_cost_lowercase_map()
 
 
-@pytest.mark.usefixtures("isolated_openai_model_sets")
 @pytest.mark.usefixtures("isolated_openai_model_sets")
 @respx.mock
 def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
@@ -2515,44 +2608,9 @@ def test_priced_router_deployment_id_stays_out_of_wildcard_model_listing():
     assert litellm.model_cost[deployment_id]["input_cost_per_token"] == 0.000001
 
 
-def test_reasoning_content_preserved_in_text_completion_wrapper():
-    """Ensure reasoning_content is copied from delta to text_choices."""
-    chunk = ModelResponseStream(
-        id="test-id",
-        created=1234567890,
-        model="test-model",
-        object="chat.completion.chunk",
-        choices=[
-            StreamingChoices(
-                finish_reason=None,
-                index=0,
-                delta=Delta(
-                    content="Some answer text",
-                    role="assistant",
-                    reasoning_content="Here's my chain of thought...",
-                ),
-            )
-        ],
-    )
-
-    wrapper = TextCompletionStreamWrapper(
-        completion_stream=None,  # Not used in convert_to_text_completion_object
-        model="test-model",
-        stream_options=None,
-    )
-
-    transformed = wrapper.convert_to_text_completion_object(chunk)
-
-    assert "choices" in transformed
-    assert len(transformed["choices"]) == 1
-    choice = transformed["choices"][0]
-    assert choice["text"] == "Some answer text"
-    assert choice["reasoning_content"] == "Here's my chain of thought..."
-
-
 def test_anthropic_claude_4_invoke_chat_provider_config():
     """Test that the Anthropic Claude 4 Invoke chat provider config is correct."""
-    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeConfig,
     )
 
@@ -3878,6 +3936,114 @@ class TestCallbackAsyncSyncSeparation:
         assert my_sync_cb not in litellm._async_input_callback
 
 
+class _DropsACallbackFromAnotherThreadWhenComparedToDynamodb:
+    def __init__(self, dropped: Callable[..., object]) -> None:
+        self.dropped = dropped
+        self.drop_thread: threading.Thread | None = None
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str) and other == "dynamodb" and self.drop_thread is None:
+            self.drop_thread = threading.Thread(
+                target=litellm.logging_callback_manager.drop_callbacks, args=((self.dropped,),)
+            )
+            self.drop_thread.start()
+            self.drop_thread.join(timeout=0.2)
+        return self is other
+
+    __hash__ = object.__hash__
+
+
+def test_function_setup_moves_async_callbacks_while_another_thread_drops_a_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def dropped_callback(*args: object, **kwargs: object) -> None:
+        return None
+
+    async def async_callback(*args: object, **kwargs: object) -> None:
+        return None
+
+    drops_on_compare: Final = _DropsACallbackFromAnotherThreadWhenComparedToDynamodb(dropped_callback)
+    monkeypatch.setattr(litellm.utils, "callback_list", ["initialized"])
+    for list_name in (
+        "callbacks",
+        "input_callback",
+        "failure_callback",
+        "service_callback",
+        "_async_input_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, list_name, [])
+    monkeypatch.setattr(litellm, "success_callback", [dropped_callback, drops_on_compare, async_callback])
+
+    litellm.utils.function_setup(
+        "completion",
+        litellm.utils.Rules(),
+        datetime.now(),
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id="callback-drop-race",
+    )
+    assert drops_on_compare.drop_thread is not None
+    drops_on_compare.drop_thread.join()
+
+    assert litellm.success_callback == [drops_on_compare]
+    assert litellm._async_success_callback == [async_callback]
+
+
+class _DropsACallbackFromAnotherThreadWhenComparedToSentry:
+    def __init__(self, dropped: Callable[..., object]) -> None:
+        self.dropped = dropped
+        self.drop_thread: threading.Thread | None = None
+        self.drop_finished_during_logger_setup = False
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str) and other == "sentry" and self.drop_thread is None:
+            self.drop_thread = threading.Thread(
+                target=litellm.logging_callback_manager.drop_callbacks, args=((self.dropped,),)
+            )
+            self.drop_thread.start()
+            self.drop_thread.join(timeout=5)
+            self.drop_finished_during_logger_setup = not self.drop_thread.is_alive()
+        return self is other
+
+    __hash__ = object.__hash__
+
+
+def test_function_setup_lets_other_threads_drop_callbacks_while_it_sets_up_loggers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def dropped_callback(*args: object, **kwargs: object) -> None:
+        return None
+
+    drops_on_compare: Final = _DropsACallbackFromAnotherThreadWhenComparedToSentry(dropped_callback)
+    monkeypatch.setattr(litellm.utils, "callback_list", [])
+    for list_name in (
+        "callbacks",
+        "input_callback",
+        "failure_callback",
+        "service_callback",
+        "_async_input_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, list_name, [])
+    monkeypatch.setattr(litellm, "success_callback", [drops_on_compare])
+
+    litellm.utils.function_setup(
+        "completion",
+        litellm.utils.Rules(),
+        datetime.now(),
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id="logger-setup-outside-lock",
+    )
+    assert drops_on_compare.drop_thread is not None
+    drops_on_compare.drop_thread.join()
+
+    assert drops_on_compare.drop_finished_during_logger_setup
+
+
 class TestMetadataNoneHandling:
     """
     Test that metadata=None in kwargs doesn't cause TypeError.
@@ -4800,9 +4966,12 @@ async def test_builtin_string_callback_registers_when_subclass_already_active(
     assert any(type(cb) is S3Logger for cb in litellm._async_success_callback)
 
 
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypatch):
+@pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
+@pytest.mark.parametrize("rate", (0.0, 0.000123))
+@pytest.mark.parametrize("updated_rate", (None, 0.0, 0.000456))
+def test_reapply_runtime_registrations_replays_register_model_overrides(
+    monkeypatch: pytest.MonkeyPatch, rate: float, updated_rate: float | None
+) -> None:
     """
     register_model is the documented way to override pricing for a model. A
     price-data reload swaps litellm.model_cost for a freshly fetched catalog,
@@ -4826,17 +4995,24 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypa
     # installed would make this depend on when that happens.
     monkeypatch.setattr(litellm_utils._LiveDeploymentReplay, "callback", None)
 
-    saved_model_cost = litellm.model_cost
+    saved_model_cost: Final = litellm.model_cost
+    monkeypatch.setattr(litellm, "model_cost", dict(saved_model_cost))
     try:
         litellm.register_model(
             model_cost={
                 "openai/gpt-4o": {
                     "litellm_provider": "openai",
                     "mode": "chat",
-                    "input_cost_per_token": 0.000123,
+                    "input_cost_per_token": rate,
                 }
             }
         )
+
+        litellm.register_model({"openai/gpt-4o": {"supports_function_calling": True, "input_cost_per_token": None}})
+        litellm.register_model(
+            {"openai/gpt-4o": {"input_cost_per_token": str(updated_rate) if updated_rate is not None else None}}
+        )
+        litellm.register_model({"openai/gpt-4o": {"supports_function_calling": False}})
 
         litellm.model_cost = {
             "openai/gpt-4o": {
@@ -4849,15 +5025,16 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypa
         _invalidate_model_cost_lowercase_map()
         reapply_runtime_model_cost_registrations()
 
-        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.000123
+        expected_rate: Final = rate if updated_rate is None else updated_rate
+        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == expected_rate
+        assert litellm.model_cost["openai/gpt-4o"]["supports_function_calling"] is False
         assert litellm.model_cost["openai/gpt-4o"]["max_input_tokens"] == 4242
     finally:
         litellm.model_cost = saved_model_cost
         _invalidate_model_cost_lowercase_map()
 
 
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-@pytest.mark.usefixtures("isolated_openai_model_sets")
+@pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
 def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkeypatch):
     """
     Per-request custom pricing describes one call, so it must not be re-asserted
@@ -4979,7 +5156,7 @@ def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
     from litellm.llms.fal_ai.cost_calculator import _keyed_rows
     from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
     from litellm.llms.ollama.common_utils import OllamaModelInfo
-    from litellm.llms.openai.chat.gpt_5_transformation import _catalogue_declares_default_effort
+    from litellm.llms.openai.chat.gpt_reasoning_transformation import _catalogue_declares_default_effort
     from litellm.utils import _handle_new_key_with_scan, _invalidate_model_cost_lowercase_map
 
     walks: Final[Mapping[str, Callable[[], object]]] = {
@@ -7004,6 +7181,555 @@ def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_with
     assert _credential_warnings(caplog) == []
 
 
+_MISTRAL_CHAT_URL: Final = "https://api.mistral.ai/v1/chat/completions"
+_MISTRAL_REPLY: Final = {
+    "id": "chatcmpl-oidc",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "devstral-latest",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def _allowed_token_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str) -> Path:
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    token: Final = tmp_path / "token"
+    token.write_text(content)
+    return token
+
+
+def _mistral_credential(api_key: str) -> CredentialItem:
+    return CredentialItem(credential_name="mistral-sa", credential_values={"api_key": api_key}, credential_info={})
+
+
+_PING: Final = [{"role": "user", "content": "ping"}]
+
+
+def _ping_mistral_through(credential_name: str) -> None:
+    litellm.completion(model="mistral/devstral-latest", messages=_PING, litellm_credential_name=credential_name)
+
+
+def test_named_credential_oidc_file_api_key_sends_the_token_read_on_each_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "token-before-rotation")
+    reference: Final = f"oidc/file/{token}"
+    monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(reference)])
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        _ping_mistral_through("mistral-sa")
+        token.write_text("token-after-rotation")
+        _ping_mistral_through("mistral-sa")
+        sent: Final = [call.request.headers["Authorization"] for call in upstream.calls]
+
+    assert sent == ["Bearer token-before-rotation", "Bearer token-after-rotation"]
+    assert litellm.credential_list[0].credential_values["api_key"] == reference
+
+
+@pytest.mark.asyncio
+async def test_deployment_oidc_env_api_key_resolves_per_call_and_the_router_keeps_the_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token-one")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_key": "oidc/env/MISTRAL_SA_TOKEN"},
+            }
+        ]
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        await router.acompletion(model="devstral", messages=[{"role": "user", "content": "ping"}])
+        monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token-two")
+        await router.acompletion(model="devstral", messages=[{"role": "user", "content": "ping"}])
+        sent: Final = [call.request.headers["Authorization"] for call in upstream.calls]
+
+    assert sent == ["Bearer env-token-one", "Bearer env-token-two"]
+    assert router.get_model_list(model_name="devstral")[0]["litellm_params"]["api_key"] == "oidc/env/MISTRAL_SA_TOKEN"
+
+
+def test_explicit_api_key_wins_over_a_named_credential_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(f"oidc/file/{tmp_path / 'absent'}")])
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        litellm.completion(
+            model="mistral/devstral-latest",
+            messages=_PING,
+            litellm_credential_name="mistral-sa",
+            api_key="sk-explicit",
+        )
+        sent: Final = upstream.calls.last.request.headers["Authorization"]
+
+    assert sent == "Bearer sk-explicit"
+
+
+@pytest.mark.parametrize(
+    ("make_reference", "reason"),
+    [
+        (lambda tmp_path: f"oidc/file/{tmp_path / 'absent'}", "No such file or directory"),
+        (lambda tmp_path: f"oidc/file/{tmp_path.parent}/outside", "outside the allowed credential directories"),
+        (lambda tmp_path: "oidc/file//run/secrets/lit-absent-token", "outside the allowed credential directories"),
+        (lambda tmp_path: "oidc/file/relative/token", "must be absolute"),
+        (lambda tmp_path: "oidc/env/LIT_UNSET_SA_TOKEN", "environment variable is not set"),
+        (lambda tmp_path: f"oidc/file/{tmp_path / 'empty'}", "empty value"),
+        (lambda tmp_path: f"oidc/file/{tmp_path / 'binary'}", "not UTF-8 text"),
+    ],
+)
+def test_unresolvable_oidc_api_key_fails_closed_naming_the_reason_without_its_target_or_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    make_reference: Callable[[Path], str],
+    reason: str,
+) -> None:
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    monkeypatch.delenv("LIT_UNSET_SA_TOKEN", raising=False)
+    (tmp_path / "empty").write_text("")
+    (tmp_path / "binary").write_bytes(b"\xffFILE-CONTENT")
+    (tmp_path.parent / "outside").write_text("FILE-CONTENT")
+    reference: Final = make_reference(tmp_path)
+    monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(reference)])
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"), pytest.raises(litellm.AuthenticationError) as excinfo:
+            _ping_mistral_through("mistral-sa")
+
+    assert not route.called
+    assert excinfo.value.status_code == 401
+    assert reason in excinfo.value.message
+    assert reference.split("/", 2)[2] not in excinfo.value.message
+    assert reference in caplog.text
+    assert "FILE-CONTENT" not in excinfo.value.message
+    assert "0xff" not in excinfo.value.message
+
+
+@pytest.mark.parametrize(
+    ("reference", "kind"),
+    [
+        ("oidc/env_path/MISTRAL_SA_TOKEN_PATH", "oidc/env_path"),
+        ("oidc/google/https://api.mistral.ai", "oidc/google"),
+        ("oidc/github/mistral", "oidc/github"),
+        ("oidc/env_MISTRAL_SA_TOKEN_PATH", "oidc/<unknown kind>"),
+        ("oidc/LIT-UNKNOWN-KIND/MISTRAL_SA_TOKEN_PATH", "oidc/<unknown kind>"),
+    ],
+)
+def test_oidc_api_key_of_a_kind_api_key_cannot_resolve_fails_closed_as_an_authentication_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reference: str, kind: str
+) -> None:
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "must-not-be-sent")
+    monkeypatch.setenv("MISTRAL_SA_TOKEN_PATH", str(token))
+    monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(reference)])
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        with pytest.raises(litellm.AuthenticationError) as excinfo:
+            _ping_mistral_through("mistral-sa")
+
+    assert not route.called
+    assert excinfo.value.status_code == 401
+    assert f"{kind} secret reference" in excinfo.value.message
+    assert reference.removeprefix(kind).lstrip("/") not in excinfo.value.message
+    assert "MISTRAL_SA_TOKEN_PATH" not in excinfo.value.message
+
+
+@pytest.mark.asyncio
+async def test_router_fails_over_from_a_deployment_whose_oidc_api_key_kind_cannot_resolve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {
+                    "model": "mistral/devstral-latest",
+                    "api_key": "oidc/google/https://api.mistral.ai",
+                    "order": 1,
+                },
+            },
+            {
+                "model_name": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_key": "sk-healthy", "order": 2},
+            },
+        ],
+        num_retries=1,
+        retry_after=0,
+    )
+
+    try:
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+            response: Final = await router.acompletion(model="devstral", messages=_PING)
+            sent: Final = [call.request.headers["Authorization"] for call in upstream.calls]
+    finally:
+        router.discard()
+
+    assert response.choices[0].message.content == "pong"
+    assert sent == ["Bearer sk-healthy"]
+
+
+def test_an_oidc_api_key_sent_with_the_call_goes_upstream_as_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "server-secret")
+    reference: Final = f"oidc/file/{token}"
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        litellm.completion(model="mistral/devstral-latest", messages=_PING, api_key=reference)
+        sent: Final = upstream.calls.last.request.headers["Authorization"]
+
+    assert sent == f"Bearer {reference}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_info", "expected"),
+    [({}, "Bearer env-token"), ({"team_id": "team-1"}, "Bearer oidc/env/MISTRAL_SA_TOKEN")],
+    ids=["proxy-level deployment", "team-scoped deployment"],
+)
+async def test_router_resolves_an_oidc_api_key_only_on_a_proxy_level_deployment(
+    monkeypatch: pytest.MonkeyPatch, model_info: Mapping[str, str], expected: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_key": "oidc/env/MISTRAL_SA_TOKEN"},
+                "model_info": dict(model_info),
+            }
+        ]
+    )
+
+    try:
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+            await router.acompletion(
+                model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"}
+            )
+            sent: Final = upstream.calls.last.request.headers["Authorization"]
+    finally:
+        router.discard()
+
+    assert sent == expected
+
+
+_DEPLOYMENT_HOST_REFERENCE_REFUSAL: Final = "goes only to the host its deployment configures"
+_BEDROCK_RUNTIME: Final = "https://bedrock-runtime.us-east-1.amazonaws.com"
+_BEDROCK_CLAUDE: Final = "us.anthropic.claude-sonnet-5-5"
+_BEDROCK_REPLY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "pong"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+}
+
+
+def _bedrock_router(api_key: str, endpoint: str | None) -> litellm.Router:
+    params: Final = {"model": f"bedrock/converse/{_BEDROCK_CLAUDE}", "aws_region_name": "us-east-1", "api_key": api_key}
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {**params, "aws_bedrock_runtime_endpoint": endpoint} if endpoint else params,
+            }
+        ],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_endpoint", "call_endpoint"),
+    [(None, "https://caller.example"), (_BEDROCK_RUNTIME, f"{_BEDROCK_RUNTIME}:8443")],
+    ids=["deployment without an endpoint", "endpoint on another port"],
+)
+async def test_an_inline_oidc_api_key_is_refused_before_its_file_is_read_when_the_call_picks_another_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deployment_endpoint: str | None, call_endpoint: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    router: Final = _bedrock_router("oidc/file//run/secrets/lit-missing-token", deployment_endpoint)
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_BEDROCK_REPLY)
+            with pytest.raises(litellm.AuthenticationError, match=_DEPLOYMENT_HOST_REFERENCE_REFUSAL) as excinfo:
+                await router.acompletion(model="claude", messages=_PING, aws_bedrock_runtime_endpoint=call_endpoint)
+    finally:
+        router.discard()
+
+    assert upstream.calls.call_count == 0
+    assert "/run/secrets" not in excinfo.value.message
+
+
+@pytest.mark.asyncio
+async def test_an_inline_oidc_api_key_reaches_the_endpoint_its_deployment_configures_when_the_call_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "file-token")
+    router: Final = _bedrock_router(f"oidc/file/{token}", _BEDROCK_RUNTIME)
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_BEDROCK_REPLY)
+            await router.acompletion(
+                model="claude", messages=_PING, aws_bedrock_runtime_endpoint="https://BEDROCK-runtime.us-east-1.amazonaws.com"
+            )
+            sent: Final = tuple(
+                (call.request.url.host, call.request.headers["Authorization"]) for call in upstream.calls
+            )
+    finally:
+        router.discard()
+
+    assert sent == (("bedrock-runtime.us-east-1.amazonaws.com", "Bearer file-token"),)
+
+
+_HUGGINGFACE_EMBEDDING: Final = [[0.1, 0.2]]
+
+
+def _authorizations(calls: respx.models.CallList) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (call.request.url.host, call.request.headers["Authorization"])
+        for call in calls
+        if "Authorization" in call.request.headers
+    )
+
+
+def _huggingface_router(model: str, api_key: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[{"model_name": model, "litellm_params": {"model": model, "api_key": api_key}}],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_inline_oidc_api_key_is_refused_when_a_wildcard_call_names_its_own_url_as_the_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "file-token")
+    router: Final = _huggingface_router("huggingface/*", f"oidc/file/{token}")
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_HUGGINGFACE_EMBEDDING)
+            with pytest.raises(litellm.AuthenticationError, match=_DEPLOYMENT_HOST_REFERENCE_REFUSAL):
+                await router.aembedding(
+                    model="huggingface/https://caller.example/embed", input=["hello"], input_type="feature-extraction"
+                )
+    finally:
+        router.discard()
+
+    assert _authorizations(upstream.calls) == ()
+
+
+@pytest.mark.asyncio
+async def test_an_inline_oidc_api_key_reaches_the_url_its_deployment_names_as_the_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "file-token")
+    model: Final = "huggingface/https://endpoint.example/embed"
+    router: Final = _huggingface_router(model, f"oidc/file/{token}")
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_HUGGINGFACE_EMBEDDING)
+            await router.aembedding(model=model, input=["hello"], input_type="feature-extraction")
+            sent: Final = _authorizations(upstream.calls)
+    finally:
+        router.discard()
+
+    assert sent == (("endpoint.example", "Bearer file-token"),)
+
+
+_CALLER_HOST_REFERENCE_REFUSAL: Final = "sends it only to that credential's own api_base"
+
+
+@pytest.mark.parametrize(
+    ("credential_api_base", "call_api_base"),
+    [
+        ("https://api.mistral.ai/v1", "https://caller.example/v1"),
+        (None, "https://caller.example/v1"),
+        ("https://api.mistral.ai/v1", "http://api.mistral.ai/v1"),
+        ("https://api.mistral.ai/v1", "https://api.mistral.ai@caller.example/v1"),
+        ("https://api.mistral.ai/v1", "https://api.mistral.ai:8443/v1"),
+        ("https://api.mistral.ai/v1", "http://[api.mistral.ai/v1"),
+        ("https://mistral-gateway.example/v1", None),
+    ],
+    ids=[
+        "another host",
+        "credential without api_base",
+        "another scheme",
+        "userinfo trick",
+        "another port",
+        "unparseable",
+        "call clears the api_base",
+    ],
+)
+def test_a_named_credentials_oidc_api_key_never_goes_to_an_api_base_the_credential_does_not_set(
+    monkeypatch: pytest.MonkeyPatch, credential_api_base: str | None, call_api_base: str | None
+) -> None:
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    credential_values: Final = {"api_key": "oidc/env/MISTRAL_SA_TOKEN", "api_base": credential_api_base}
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="mistral-sa", credential_values=credential_values, credential_info={})],
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.route().respond(200, json=_MISTRAL_REPLY)
+        with pytest.raises(litellm.AuthenticationError, match=_CALLER_HOST_REFERENCE_REFUSAL):
+            litellm.completion(
+                model="mistral/devstral-latest",
+                messages=_PING,
+                litellm_credential_name="mistral-sa",
+                api_base=call_api_base,
+            )
+
+    assert upstream.calls.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("credential_api_base", "call_api_base"),
+    [
+        ("https://api.mistral.ai/v1", "https://api.mistral.ai:443/v1"),
+        ("https://api.mistral.ai:443/v1", "https://API.mistral.ai./v1"),
+    ],
+    ids=["explicit default port on the call", "explicit default port on the credential"],
+)
+def test_a_named_credentials_oidc_api_key_reaches_an_api_base_on_the_same_origin(
+    monkeypatch: pytest.MonkeyPatch, credential_api_base: str, call_api_base: str
+) -> None:
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    credential_values: Final = {"api_key": "oidc/env/MISTRAL_SA_TOKEN", "api_base": credential_api_base}
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="mistral-sa", credential_values=credential_values, credential_info={})],
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.route().respond(200, json=_MISTRAL_REPLY)
+        litellm.completion(
+            model="mistral/devstral-latest",
+            messages=_PING,
+            litellm_credential_name="mistral-sa",
+            api_base=call_api_base,
+        )
+        sent: Final = tuple(authorization for _, authorization in _authorizations(upstream.calls))
+
+    assert sent == ("Bearer env-token",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("row_api_base", "refused"),
+    [(None, False), ("https://API.mistral.ai/v1/", False), ("https://team-admin-host.example/v1", True)],
+    ids=["row without api_base", "row on the credential's host", "row on another host"],
+)
+async def test_a_team_row_naming_an_oidc_credential_reaches_only_the_credentials_host(
+    monkeypatch: pytest.MonkeyPatch, row_api_base: str | None, refused: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="mistral-sa",
+                credential_values={"api_key": "oidc/env/MISTRAL_SA_TOKEN", "api_base": "https://api.mistral.ai"},
+                credential_info={},
+            )
+        ],
+    )
+    row_params: Final = {"model": "mistral/devstral-latest", "litellm_credential_name": "mistral-sa"}
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {**row_params, "api_base": row_api_base} if row_api_base else row_params,
+                "model_info": {"team_id": "team-1"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_MISTRAL_REPLY)
+            if refused:
+                with pytest.raises(litellm.AuthenticationError, match=_CALLER_HOST_REFERENCE_REFUSAL):
+                    await router.acompletion(
+                        model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"}
+                    )
+            else:
+                await router.acompletion(model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"})
+            sent: Final = tuple(
+                (call.request.url.host, call.request.headers["Authorization"]) for call in upstream.calls
+            )
+    finally:
+        router.discard()
+
+    assert sent == (() if refused else (("api.mistral.ai", "Bearer env-token"),))
+
+
+@pytest.mark.parametrize(
+    ("listing_params", "expected"),
+    [
+        (
+            lambda reference: LiteLLM_Params(
+                **litellm.Router(
+                    model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": reference}}]
+                ).get_model_list(model_name="openai/*")[0]["litellm_params"]
+            ),
+            lambda reference: "Bearer listing-token",
+        ),
+        (
+            lambda reference: LiteLLM_Params(model="openai/*", api_key=reference),
+            lambda reference: f"Bearer {reference}",
+        ),
+    ],
+    ids=["proxy-level deployment", "caller-built params"],
+)
+def test_provider_model_listing_sends_the_token_only_behind_a_deployment_oidc_api_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    listing_params: Callable[[str], LiteLLM_Params],
+    expected: Callable[[str], str],
+) -> None:
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "listing-token")
+    reference: Final = f"oidc/file/{token}"
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.get("https://api.openai.com/v1/models").respond(
+            200, json={"object": "list", "data": [{"id": "gpt-listed", "object": "model"}]}
+        )
+        listed: Final = get_valid_models(
+            check_provider_endpoint=True, custom_llm_provider="openai", litellm_params=listing_params(reference)
+        )
+        sent: Final = upstream.calls.last.request.headers["Authorization"]
+
+    assert sent == expected(reference)
+    assert any(model.endswith("gpt-listed") for model in listed)
+
+
 _MOCK_STREAM_ID: Final = "chatcmpl-mock-stream"
 _ChunkSnapshot = tuple[str, tuple[str | None, ...], Usage | None]
 
@@ -7223,6 +7949,51 @@ def test_register_model_without_a_provider_never_inherits_another_providers_entr
         assert info["litellm_provider"] == "azure"
         assert info["input_cost_per_token"] == 1e-07
         assert info["output_cost_per_token"] == 4e-07
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(
+    "registered_prices, billed_cache_read_rate",
+    [
+        pytest.param({"input_cost_per_token": 2e-06}, 2.5e-07, id="inherits-builtin-explicit-rate"),
+        pytest.param({"cache_read_input_token_cost": 1e-07}, 1e-07, id="own-cache-read-price-wins"),
+        pytest.param(
+            {"cache_read_input_token_cost": 1e-07, "explicit_cache_read_input_token_cost": 5e-08},
+            5e-08,
+            id="own-explicit-price-wins",
+        ),
+    ],
+)
+def test_register_model_over_a_builtin_row_bills_explicit_cache_hits(
+    monkeypatch: pytest.MonkeyPatch, registered_prices: dict[str, float], billed_cache_read_rate: float
+) -> None:
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    key: Final = "dashscope/qwen-register-explicit-cache-test"
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    litellm.model_cost[key] = {
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 7.5e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "explicit_cache_read_input_token_cost": 2.5e-07,
+    }
+    _invalidate_model_cost_lowercase_map()
+    try:
+        litellm.register_model({key: registered_prices}, persist_across_reloads=False)
+        explicit_hit: Final = ModelResponse(
+            usage=Usage(
+                prompt_tokens=1000,
+                completion_tokens=0,
+                prompt_tokens_details={"cached_tokens": 1000, "cache_type": "ephemeral"},
+            )
+        )
+
+        assert litellm.completion_cost(completion_response=explicit_hit, model=key) == pytest.approx(
+            1000 * billed_cache_read_rate
+        )
     finally:
         _invalidate_model_cost_lowercase_map()
 
@@ -7897,7 +8668,7 @@ def test_basic_trimming_no_max_tokens_specified():
     trimmed_messages = trim_messages(messages, model="gpt-4")
     print("trimmed messages for gpt-4")
     print(trimmed_messages)
-    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost["gpt-4"]["max_tokens"]
+    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost["gpt-4"]["max_input_tokens"]
 
 
 def test_multiple_messages_trimming():
@@ -8761,7 +9532,7 @@ def test_models_by_provider():
             continue
         elif v["litellm_provider"] == "sagemaker" or v["litellm_provider"] == "bedrock_converse":
             continue
-        elif v.get("mode") in ("search", "decisions", "evaluation"):
+        elif v.get("mode") in ("search", "decisions", "evaluation", "extraction"):
             continue
         else:
             providers.add(v["litellm_provider"])
@@ -10060,6 +10831,27 @@ def test_vertex_llama3_model_info_resolves_without_the_meta_prefix():
         assert prefixed_info["key"] == f"vertex_ai/{model}", model
 
 
+@pytest.mark.parametrize(
+    "key", ("openai.test-converse", "bedrock/openai.test-converse", "bedrock/converse/openai.test-converse")
+)
+def test_runtime_model_cost_registrations_resolve_bedrock_routing(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    from litellm import utils as model_utils
+    from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+
+    rates: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+    alias: Final = "openai.test-converse-alias"
+    entry: Final = AliasedCostEntry({"litellm_provider": "bedrock_converse", "mode": "chat"}, (key, alias))
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, key: entry, alias: entry})
+    litellm.register_model({key: rates}, persist_across_reloads=False)
+
+    registrations: Final = dict(
+        model_utils.runtime_model_cost_registrations("bedrock/converse/openai.test-converse", "bedrock")
+    )
+    assert registrations[key] == rates
+    assert dict(model_utils.runtime_model_cost_registrations(alias, "bedrock"))[alias] == rates
+    assert model_utils.runtime_model_cost_registrations("bedrock/converse/openai.other-converse", "bedrock") == ()
+
+
 def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_extra_body():
     """LIT-9880: the hook hands a tool_config point on for the provider step, and OpenAI has no
     step that consumes it, so it must not ride along in extra_body and 400 at OpenAI."""
@@ -10073,3 +10865,18 @@ def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_e
 
     assert optional_params["extra_body"] == {"kept": True}
     assert "cache_control_injection_points" not in optional_params
+
+
+def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_litellm_proxy():
+    """A litellm_proxy deployment calls the downstream proxy through the OpenAI SDK, and that proxy
+    applies cache_control_injection_points itself, so the point must ride along in extra_body."""
+    point: Final = {"location": "tool_config", "control": {"type": "ephemeral"}}
+    optional_params: Final[dict[str, object]] = litellm.utils.get_optional_params(
+        model="claude-sonnet-4-5",
+        custom_llm_provider="litellm_proxy",
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        cache_control_injection_points=[point],
+        extra_body={"kept": True},
+    )
+
+    assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}

@@ -12,8 +12,10 @@ the JSON-serialized payloads. ``trace_attributes`` maps the caller's trace contr
 
 import json
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Final
 
+from litellm.integrations.langfuse.langfuse_otel_attributes import serialize_langfuse_datetime
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
     collect,
@@ -45,6 +47,11 @@ class LangfuseMapper:
         "langfuse.observation.id": lambda d: d.identity.call_id or None,
         "langfuse.trace.metadata.team_id": lambda d: d.identity.team_id or None,
         "langfuse.trace.metadata.team_alias": lambda d: d.identity.team_alias or None,
+        "langfuse.observation.completion_start_time": lambda d: (
+            serialize_langfuse_datetime(datetime.fromtimestamp(d.completion_start_seconds, tz=timezone.utc))
+            if d.completion_start_seconds is not None
+            else None
+        ),
     }
 
     # Sub-tables folded into their respective JSON blobs.
@@ -89,10 +96,10 @@ class LangfuseMapper:
                 return {}
 
     @staticmethod
-    def trace_attributes(trace: TraceControls) -> AttributeMap:
+    def trace_attributes(trace: TraceControls, call_type: str | None = None) -> AttributeMap:
         return drop_none_pairs(
             (
-                (LANGFUSE_TRACE_NAME, trace.name or None),
+                (LANGFUSE_TRACE_NAME, trace.name or (f"litellm-{call_type}" if call_type else None)),
                 (LANGFUSE_TRACE_USER_ID, trace.user_id or None),
                 (LANGFUSE_TRACE_SESSION_ID, trace.session_id or None),
                 (LANGFUSE_TRACE_TAGS, trace.tags or None),

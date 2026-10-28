@@ -15,7 +15,6 @@ import openai
 import pytest
 import yaml
 from integration._support.client import GATEWAY_LIMITS, Gateway, eventually, gateway_from_environment, object_value
-from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.redis_process import OwnedRedis, owned_redis
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -166,9 +165,9 @@ def send_chat(rig: Rig, name: str, extra: Mapping[str, JsonValue]) -> Outcome:
     return Outcome(response.status_code, response.text, response.headers["x-litellm-call-id"])
 
 
-def failure_row(call_id: str) -> dict[str, JsonValue]:
+def failure_row(gateway: Gateway, call_id: str) -> dict[str, JsonValue]:
     rows: Final = eventually(
-        lambda: read_rows(FAILURE_ROW, (call_id,)), lambda found: len(found) == 1, seconds=ROW_SECONDS
+        lambda: gateway.rows(FAILURE_ROW, (call_id,)), lambda found: len(found) == 1, seconds=ROW_SECONDS
     )
     assert rows[0]["status"] == "failure", rows
     return rows[0]
@@ -204,8 +203,8 @@ def cooldown_entries(error: Mapping[str, JsonValue]) -> list[JsonValue] | None:
     return sorted(entries, key=lambda entry: str(object_value(entry)["model_id"]))
 
 
-def assert_refusal_row(call_id: str, deployments: Mapping[str, str]) -> Mapping[str, JsonValue]:
-    row: Final = failure_row(call_id)
+def assert_refusal_row(gateway: Gateway, call_id: str, deployments: Mapping[str, str]) -> Mapping[str, JsonValue]:
+    row: Final = failure_row(gateway, call_id)
     error: Final = object_value(row["error"])
     assert (error["error_class"], error["error_code"]) == ("RouterRateLimitError", "429"), row
     assert cooldown_entries(error) == expected_cooldown(deployments), error.get("error_message")
@@ -213,18 +212,18 @@ def assert_refusal_row(call_id: str, deployments: Mapping[str, str]) -> Mapping[
     return error
 
 
-def provider_row(call_id: str) -> tuple[str, str, str, JsonValue]:
-    row: Final = failure_row(call_id)
+def provider_row(gateway: Gateway, call_id: str) -> tuple[str, str, str, JsonValue]:
+    row: Final = failure_row(gateway, call_id)
     error: Final = object_value(row["error"])
     return str(row["model_id"]), str(row["api_base"]), str(error["error_code"]), error.get("error_cooldown_deployments")
 
 
-def assert_provider_rows(history: tuple[Outcome, ...], deployments: Mapping[str, str]) -> None:
+def assert_provider_rows(gateway: Gateway, history: tuple[Outcome, ...], deployments: Mapping[str, str]) -> None:
     provider: Final = history[:-1]
     assert all(outcome.status == 429 and NO_DEPLOYMENTS not in outcome.detail for outcome in provider), [
         (o.status, o.detail[:200]) for o in provider
     ]
-    rows: Final = tuple(provider_row(outcome.call_id) for outcome in provider)
+    rows: Final = tuple(provider_row(gateway, outcome.call_id) for outcome in provider)
     assert {identity for identity, _, _, _ in rows} == set(deployments), rows
     assert all(base.startswith(deployments[identity]) for identity, base, _, _ in rows), rows
     assert all((code, cooldown) == ("429", None) for _, _, code, cooldown in rows), rows
@@ -236,8 +235,8 @@ def test_all_cooled_refusal_row_records_429_and_every_cooled_deployment(rig: Rig
     history: Final = until_router_refusal(lambda: send(rig.gateway, path, rig.group(name), stream))
     refusal: Final = history[-1]
     assert refusal.status == 429, (refusal.status, refusal.detail[:300])
-    assert_refusal_row(refusal.call_id, rig.deployments(name))
-    assert_provider_rows(history, rig.deployments(name))
+    assert_refusal_row(rig.gateway, refusal.call_id, rig.deployments(name))
+    assert_provider_rows(rig.gateway, history, rig.deployments(name))
 
 
 def openai_chat(rig: Rig, group: str) -> Outcome:
@@ -283,8 +282,8 @@ SDK_CLIENTS: Final = {
 @pytest.mark.parametrize("client", SDK_CELLS)
 def test_sdk_clients_get_429_and_the_row_names_the_cooled_deployments(rig: Rig, client: str) -> None:
     history: Final = until_router_refusal(lambda: SDK_CLIENTS[client](rig, rig.group(client)))
-    assert_refusal_row(history[-1].call_id, rig.deployments(client))
-    assert_provider_rows(history, rig.deployments(client))
+    assert_refusal_row(rig.gateway, history[-1].call_id, rig.deployments(client))
+    assert_provider_rows(rig.gateway, history, rig.deployments(client))
 
 
 def test_the_row_lists_only_the_requested_groups_deployments_while_another_group_cools(rig: Rig) -> None:
@@ -297,7 +296,7 @@ def test_the_row_lists_only_the_requested_groups_deployments_while_another_group
             and all(identity in outcome.detail for identity in rig.deployments("neighbour"))
         ),
     )
-    assert_refusal_row(refusal.call_id, rig.deployments("scoped"))
+    assert_refusal_row(rig.gateway, refusal.call_id, rig.deployments("scoped"))
 
 
 def test_a_concurrent_burst_on_a_cooled_group_writes_one_complete_row_per_refusal(rig: Rig) -> None:
@@ -319,9 +318,9 @@ def test_a_concurrent_burst_on_a_cooled_group_writes_one_complete_row_per_refusa
     assert refusals, [(o.status, o.detail[:200]) for o in outcomes]
     assert len(tuple(request for request in rig.wire.drain() if not is_model_probe(request))) == len(reached)
     for outcome in refusals:
-        assert_refusal_row(outcome.call_id, rig.deployments("burst"))
+        assert_refusal_row(rig.gateway, outcome.call_id, rig.deployments("burst"))
     for outcome in reached:
-        identity, api_base, code, cooldown = provider_row(outcome.call_id)
+        identity, api_base, code, cooldown = provider_row(rig.gateway, outcome.call_id)
         assert api_base.startswith(rig.deployments("burst")[identity]), (identity, api_base)
         assert (code, cooldown) == ("429", None), outcome
 
@@ -343,8 +342,8 @@ def test_a_tag_routed_refusal_row_names_only_the_cooled_deployments_its_tags_rea
     tenant: Final = f"{rig.group(TAGGED)}-a"
     cool_lane(rig, TAGGED, "a", TENANT_A)
     cool_lane(rig, TAGGED, "b", UNTAGGED)
-    assert_refusal_row(router_refusal(rig, TAGGED, TENANT_A).call_id, {tenant: deployments[tenant]})
-    assert_refusal_row(router_refusal(rig, TAGGED, UNTAGGED).call_id, deployments)
+    assert_refusal_row(rig.gateway, router_refusal(rig, TAGGED, TENANT_A).call_id, {tenant: deployments[tenant]})
+    assert_refusal_row(rig.gateway, router_refusal(rig, TAGGED, UNTAGGED).call_id, deployments)
 
 
 def test_a_region_restricted_refusal_row_names_only_the_cooled_deployments_in_its_region(rig: Rig) -> None:
@@ -355,4 +354,6 @@ def test_a_region_restricted_refusal_row_names_only_the_cooled_deployments_in_it
         rig.gateway.post("/customer/new", {"user_id": customer, "allowed_model_region": "eu"})
         cleanups.callback(rig.gateway.post, "/customer/delete", {"user_ids": [customer]})
         cool_group(rig, REGIONAL)
-        assert_refusal_row(router_refusal(rig, REGIONAL, {"user": customer}).call_id, {european: deployments[european]})
+        assert_refusal_row(
+            rig.gateway, router_refusal(rig, REGIONAL, {"user": customer}).call_id, {european: deployments[european]}
+        )
