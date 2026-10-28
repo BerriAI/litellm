@@ -4437,6 +4437,32 @@
         "generateContent": true
       }
     },
+    "zerogpu": {
+      "display_name": "ZeroGPU (`zerogpu`)",
+      "url": "https://docs.litellm.ai/docs/providers/zerogpu",
+      "endpoints": {
+        "chat_completions": true,
+        "responses": true,
+        "text_completion": true,
+        "embeddings": false,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": true,
+        "interactions": true,
+        "systemone": false,
+        "a2a": true,
+        "generateContent": true
+      }
+    },
     "ragflow": {
       "display_name": "RAGFlow (`ragflow`)",
       "url": "https://docs.litellm.ai/docs/providers/ragflow",
