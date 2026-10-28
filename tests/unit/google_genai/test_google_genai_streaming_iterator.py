@@ -193,7 +193,7 @@ async def test_streaming_iterator_keeps_unicode_line_separators_inside_the_event
     event: Final = f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
     iterator: Final = iterator_cls(
         response=_sse_response(event),
-        model="gemini-3.1-flash",
+        model="gemini-3.8-flash",
         logging_obj=_logging_obj(),
         generate_content_provider_config=MagicMock(),
         litellm_metadata={},

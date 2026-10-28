@@ -2503,6 +2503,33 @@ def test_stream_was_interrupted_skips_data_lines_that_are_not_json_objects(
     assert AnthropicPassthroughLoggingHandler._stream_was_interrupted(all_chunks) is interrupted
 
 
+
+def test_stream_was_interrupted_reads_a_message_delta_whose_json_holds_unicode_line_separators() -> None:
+    message_delta: Final = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "stop_sequence", "stop_sequence": "END\u2028OF\u2029TURN"},
+        "usage": {"output_tokens": 3},
+    }
+    all_chunks: Final = [
+        'data: {"type": "content_block_stop", "index": 0}',
+        f"data: {json.dumps(message_delta, ensure_ascii=False)}",
+    ]
+
+    assert AnthropicPassthroughLoggingHandler._stream_was_interrupted(all_chunks) is False
+
+
+def test_extract_model_reads_a_message_start_whose_json_holds_unicode_line_separators() -> None:
+    message_start: Final = {
+        "type": "message_start",
+        "message": {
+            "model": "claude-sonnet-5",
+            "content": [{"type": "text", "text": "Prefill\u2028line\u2029two"}],
+        },
+    }
+    chunk: Final = f"event: message_start\ndata: {json.dumps(message_start, ensure_ascii=False)}\n\n"
+
+    assert AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks([chunk]) == "claude-sonnet-5"
+
 @pytest.mark.asyncio
 async def test_anthropic_passthrough_handler(mock_httpx_response, mock_response, mock_logging_obj):
     """
@@ -3004,3 +3031,24 @@ def test_anthropic_passthrough_stream_bills_the_bedrock_guardrail_trace_of_the_m
     (entry,) = _recorded_guardrail_entries(mock_logging_obj)
     assert entry["guardrail_usage"] == {"topicPolicyUnits": 3, "contentPolicyUnits": 3}
     assert entry["guardrail_cost"] == pytest.approx(6 * 0.00015)
+
+
+def test_anthropic_passthrough_stream_bills_a_bedrock_guardrail_trace_whose_json_holds_unicode_line_separators(
+    monkeypatch: pytest.MonkeyPatch, mock_logging_obj: LiteLLMLoggingObj, all_chunks: list[str]
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _BEDROCK_TRACE_PRICING)
+    mock_logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    trace: Final = {"guardrail": {**_BEDROCK_INVOKE_TRACE["guardrail"], "actionReason": "Blocked\u2028by\u2029policy"}}
+    stop_event: Final = json.dumps({"type": "message_stop", "amazon-bedrock-trace": trace}, ensure_ascii=False)
+    AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=mock_logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude", "messages": []},
+        endpoint_type=MagicMock(),
+        start_time=datetime(2025, 1, 1),
+        all_chunks=[*all_chunks, f"event: message_stop\ndata: {stop_event}\n\n"],
+        end_time=datetime(2025, 1, 1),
+    )
+    (entry,) = _recorded_guardrail_entries(mock_logging_obj)
+    assert entry["guardrail_usage"] == {"topicPolicyUnits": 3, "contentPolicyUnits": 3}

@@ -385,7 +385,7 @@ def test_completion_cloudflare_stream(sync_mode: bool, _cloudflare_httpx_transpo
 async def test_cloudflare_stream_keeps_unicode_line_separators_inside_content(
     sync_mode: bool, _cloudflare_httpx_transport: None
 ) -> None:
-    streamed_text: Final = ("alpha ", "beta ", "gamma")
+    streamed_text: Final = ("alpha\u2028", "beta\u2029", "gamma")
     base: Final = {"id": "chatcmpl-cf", "object": "chat.completion.chunk", "created": 1, "model": "@cf/glm"}
     body: Final = "".join(
         f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {'content': text}}]}, ensure_ascii=False)}\n\n"

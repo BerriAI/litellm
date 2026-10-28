@@ -150,7 +150,7 @@ async def test_stream_logs_its_first_event_time_measured_from_the_call_start():
     assert recorder.logged == [(call_start, first_event_at)]
 
 
-_LINE_SEPARATED_TEXT: Final = "before between after"
+_LINE_SEPARATED_TEXT: Final = "before\u2028between\u2029after"
 
 
 async def _first_event(
@@ -168,10 +168,10 @@ async def test_stream_keeps_unicode_line_separators_inside_the_delta_text(iterat
     event: Final = {"event_type": "step.delta", "id": "interaction-1", "delta": delta}
     iterator: Final = iterator_cls(
         response=httpx.Response(200, stream=httpx.ByteStream(f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode())),
-        model="gemini/gemini-3-pro-preview",
+        model="gemini/gemini-3.1-pro-preview",
         interactions_api_config=GoogleAIStudioInteractionsConfig(),
         logging_obj=LitellmLogging(
-            model="gemini/gemini-3-pro-preview",
+            model="gemini/gemini-3.1-pro-preview",
             messages=[{"role": "user", "content": "hi"}],
             stream=True,
             call_type="ainteraction",

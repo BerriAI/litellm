@@ -35,6 +35,7 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.responses.litellm_completion_transformation.tool_search import is_anthropic_tool_search_chat_tool
 from litellm.responses.sse_output_recovery import (
     parse_sse_json_chunk,
@@ -1352,7 +1353,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         recovered_output_items: Final[dict[int, dict[str, object]]] = {}
         recovered_text_only_items: Final[dict[int, dict[str, object]]] = {}
 
-        for chunk in raw_sse.splitlines():
+        for chunk in split_sse_lines(raw_sse):
             parsed_chunk = parse_sse_json_chunk(chunk)
             if parsed_chunk is None:
                 continue

@@ -25,7 +25,7 @@ class _SSELineSplitter:
             return ()
         fresh: Final = text[1:] if self._after_cr and text.startswith("\n") else text
         self._after_cr = fresh.endswith("\r")
-        *ended, tail = _SSE_LINE_BREAK.split(fresh)
+        *ended, tail = fresh.split("\n") if "\r" not in fresh else _SSE_LINE_BREAK.split(fresh)
         if not ended:
             _ = self._partial_line.write(tail)
             return ()
@@ -45,6 +45,10 @@ def iter_sse_lines(text_chunks: Iterable[str]) -> Iterator[str]:
     for text in text_chunks:
         yield from splitter.feed(text)
     yield from splitter.flush()
+
+
+def split_sse_lines(text: str) -> tuple[str, ...]:
+    return tuple(iter_sse_lines((text,)))
 
 
 async def aiter_sse_lines(text_chunks: AsyncIterable[str]) -> AsyncIterator[str]:

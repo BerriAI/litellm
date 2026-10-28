@@ -642,7 +642,7 @@ def test_predibase_completion_passes_existing_config_to_async_completion(monkeyp
     assert captured["async_kwargs"]["predibase_config"] is captured["config_instance"]
 
 
-_LINE_SEPARATED_TEXT: Final = "before between after"
+_LINE_SEPARATED_TEXT: Final = "before\u2028between\u2029after"
 
 
 def _generate_stream_body(text: str) -> bytes:

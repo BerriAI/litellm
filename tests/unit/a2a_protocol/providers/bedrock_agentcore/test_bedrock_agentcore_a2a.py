@@ -10,6 +10,7 @@ Verifies that:
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -561,12 +562,13 @@ class TestStreaming:
         assert [event["result"]["kind"] for event in events] == ["task", "status-update"]
 
     @pytest.mark.asyncio
-    async def test_streaming_keeps_unicode_line_separators_inside_an_sse_event(self, httpx_transport):
+    @pytest.mark.usefixtures("httpx_transport")
+    async def test_streaming_keeps_unicode_line_separators_inside_an_sse_event(self) -> None:
         from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
             BedrockAgentCoreA2AConfig,
         )
 
-        event = {
+        event: Final = {
             "jsonrpc": "2.0",
             "id": "req-001",
             "result": {"kind": "artifact-update", "artifact": {"parts": [{"kind": "text", "text": "a\u2028b\u2029c"}]}},

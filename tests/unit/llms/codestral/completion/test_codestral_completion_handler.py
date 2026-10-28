@@ -7,7 +7,7 @@ import respx
 
 import litellm
 
-_LINE_SEPARATED_TEXT: Final = "before between after"
+_LINE_SEPARATED_TEXT: Final = "before\u2028between\u2029after"
 
 
 def _fim_stream_body(text: str) -> bytes:
