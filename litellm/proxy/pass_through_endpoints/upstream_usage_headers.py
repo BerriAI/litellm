@@ -5,18 +5,21 @@ price the request from the response body. Those targets report the totals for
 the whole HTTP request in ``x-litellm-*`` response headers instead; LiteLLM
 records the reported values without recomputing them. A target may also name
 the request in ``x-litellm-upstream-model`` so its spend can be told apart from
-other requests that carry no ``model`` in the body.
+other requests that carry no ``model`` in the body, and name the GenAI
+operation it performed, which labels the request's trace.
 """
 
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 import httpx
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_SPEND_LOG_MODEL_NAME_LENGTH
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.utils import Usage
 
@@ -25,6 +28,8 @@ UPSTREAM_TOTAL_TOKENS_HEADER: Final = "x-litellm-total-tokens"
 # Deliberately not x-litellm-model-name/-id/-group: the gateway already sends
 # those to clients, and pass-through relays upstream headers back to the client.
 UPSTREAM_MODEL_HEADER: Final = "x-litellm-upstream-model"
+UPSTREAM_OPERATION_NAME_HEADER: Final = "x-litellm-operation-name"
+_OPERATIONS_BY_NAME: Final = MappingProxyType({operation.value: operation for operation in GenAIOperation})
 
 # model_call_details key holding what the upstream reported, so later stages of
 # the success path can tell an upstream-reported cost apart from one LiteLLM
@@ -175,3 +180,19 @@ def has_upstream_reported_usage(logging_obj: LiteLLMLoggingObj) -> bool:
     means zero, never a fallback to someone else's estimate.
     """
     return isinstance(logging_obj.model_call_details.get(UPSTREAM_REPORTED_USAGE_KEY), UpstreamReportedUsage)
+
+
+def apply_upstream_reported_operation(logging_obj: LiteLLMLoggingObj, headers: Mapping[str, str]) -> None:
+    """Record the GenAI operation the upstream named, overriding the route's label. An unknown name is ignored."""
+    raw_operation: Final = headers.get(UPSTREAM_OPERATION_NAME_HEADER)
+    if raw_operation is None:
+        return
+    operation: Final = _OPERATIONS_BY_NAME.get(raw_operation)
+    if operation is None:
+        verbose_proxy_logger.warning(
+            "pass_through_endpoint: upstream sent unknown %s=%r; ignoring it",
+            UPSTREAM_OPERATION_NAME_HEADER,
+            raw_operation,
+        )
+        return
+    logging_obj.model_call_details[PASSTHROUGH_OPERATION_KEY] = operation  # rebind-ok: annotates the request's record

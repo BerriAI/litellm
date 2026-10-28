@@ -464,6 +464,7 @@ class LLMCallSpanData:
         session_id: str | None = None,
         *,
         metadata_keys: tuple[str, ...] = (),
+        operation: GenAIOperation | None = None,
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
         cache_hit: Final = as_bool(payload.get("cache_hit")) is True  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
@@ -486,13 +487,13 @@ class LLMCallSpanData:
         # no prompt/response text.
         finish_reasons: Final = _finish_reasons(choices_out)
         call_type: Final = as_str(payload.get("call_type"))
-        operation: Final = resolve_operation(call_type)
+        resolved_operation: Final = operation or resolve_operation(call_type)
         embedding_output: Final = (
-            EmbeddingOutput.from_response(response) if operation is GenAIOperation.EMBEDDINGS else None
+            EmbeddingOutput.from_response(response) if resolved_operation is GenAIOperation.EMBEDDINGS else None
         )
         cost_lookup_failed: Final = payload.get("response_cost_failure_debug_info") is not None and not cache_hit
         return cls(
-            operation=operation,
+            operation=resolved_operation,
             provider=resolve_provider(as_str(payload.get("custom_llm_provider"))),
             request_model=context.request_model,
             response_model=context.response_model,

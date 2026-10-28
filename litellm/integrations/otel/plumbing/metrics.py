@@ -26,6 +26,7 @@ from litellm.integrations.opentelemetry import (
 )
 from litellm.integrations.otel.model.metadata import time_to_first_chunk_seconds
 from litellm.integrations.otel.model.semconv import (
+    PASSTHROUGH_OPERATION_KEY,
     Error,
     GenAI,
     Metric,
@@ -280,7 +281,9 @@ class GenAIMetricRecorder:
     def _common_attributes(self, kwargs: Mapping[str, Any]) -> dict:
         params: Final = kwargs.get("litellm_params") or {}
         common_attrs: Final[dict] = {
-            GenAI.OPERATION_NAME: resolve_operation(kwargs.get("call_type")).value,
+            GenAI.OPERATION_NAME: resolve_operation(
+                kwargs.get("call_type"), kwargs.get(PASSTHROUGH_OPERATION_KEY)
+            ).value,
             **_provider_attributes(params.get("custom_llm_provider")),
             GenAI.REQUEST_MODEL: kwargs.get("model"),
             "gen_ai.framework": "litellm",

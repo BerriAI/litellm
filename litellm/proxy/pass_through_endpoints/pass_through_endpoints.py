@@ -54,6 +54,7 @@ from litellm.integrations.custom_guardrail import (
     without_server_streaming_classification,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     get_metadata_variable_name_from_kwargs,
@@ -151,6 +152,7 @@ from .success_handler import PassThroughEndpointLogging
 from .upstream_usage_headers import (
     UpstreamReportedUsage,
     apply_upstream_reported_model,
+    apply_upstream_reported_operation,
     apply_upstream_reported_usage,
 )
 
@@ -1134,6 +1136,7 @@ async def pass_through_request(
     guardrails_config: dict | None = None,
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
+    operation: GenAIOperation | None = None,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1155,6 +1158,7 @@ async def pass_through_request(
         timeout: Optional per-endpoint timeout in seconds. Falls back to
             general_settings.pass_through_request_timeout, then 600s.
         upstream_headers_filter: Optional last rewrite of the headers sent upstream, after x-pass- expansion
+        operation: Optional GenAI operation the route reports, unless the upstream names its own
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1353,6 +1357,8 @@ async def pass_through_request(
             call_type="pass_through_endpoint",
         )
         logging_obj.model_call_details["litellm_call_id"] = litellm_call_id
+        if operation is not None:
+            logging_obj.model_call_details[PASSTHROUGH_OPERATION_KEY] = operation
 
         ## PASSTHROUGH MANAGED ID RESOLUTION (INPUT) ##
         # Resolve managed IDs in path, query params, and body back to raw
@@ -1553,6 +1559,7 @@ async def pass_through_request(
                 logging_obj=logging_obj,
                 headers=response.headers,
             )
+            apply_upstream_reported_operation(logging_obj, response.headers)
 
             relay_response: Final = await _log_passthrough_upstream_failure(
                 response=response,
@@ -1646,6 +1653,7 @@ async def pass_through_request(
             logging_obj=logging_obj,
             headers=response.headers,
         )
+        apply_upstream_reported_operation(logging_obj, response.headers)
 
         if _is_streaming_response(response) is True:
             logging_obj.stream = True
@@ -2161,6 +2169,7 @@ def create_pass_through_route(
     config_file_path: str | None = None,
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
+    operation: GenAIOperation | None = None,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -2301,6 +2310,7 @@ def create_pass_through_route(
                         guardrails_config=cast(dict | None, param_guardrails),
                         timeout=cast(float | None, param_timeout),
                         upstream_headers_filter=upstream_headers_filter,
+                        operation=operation,
                     )
                 finally:
                     if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
@@ -3232,6 +3242,7 @@ class InitPassThroughEndpointHelpers:
                 guardrails=guardrails,
                 config_file_path=config_file_path,
                 timeout=timeout,
+                operation=GenAIOperation.LITELLM_PASSTHROUGH,
             ),
             methods=methods,
             dependencies=dependencies,
@@ -3316,6 +3327,7 @@ class InitPassThroughEndpointHelpers:
                 guardrails=guardrails,
                 config_file_path=config_file_path,
                 timeout=timeout,
+                operation=GenAIOperation.LITELLM_PASSTHROUGH,
             ),
             methods=methods,
             dependencies=dependencies,
