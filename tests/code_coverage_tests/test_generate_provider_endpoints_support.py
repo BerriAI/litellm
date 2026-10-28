@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from scripts.generate_provider_endpoints_support import (
     generate_provider_endpoints_support,
@@ -36,6 +36,15 @@ def _provider(flags: Mapping[str, JsonValue] | None = None) -> dict[str, JsonVal
         "url": "https://docs.litellm.ai/docs/providers/example",
         "endpoints": dict(flags or {}),
     }
+
+
+def _write_openai_like_providers(repo_root: Path, providers: Mapping[str, JsonValue]) -> None:
+    registry_path: Final = repo_root / "litellm/llms/openai_like/providers.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(json.dumps(dict(providers)), encoding="utf-8")
+
+
+GENERATED_JSON: Final = TypeAdapter(dict[str, JsonValue])
 
 
 def _flags(generated: Mapping[str, JsonValue], slug: str) -> Mapping[str, JsonValue]:
@@ -147,6 +156,7 @@ def test_check_reports_stale_output_without_writing(tmp_path: Path, capsys: pyte
     source_path: Final = tmp_path / "provider_endpoints_support.json"
     source_content: Final = json.dumps(current_json)
     source_path.write_text(source_content, encoding="utf-8")
+    _write_openai_like_providers(tmp_path, {})
 
     result: Final = main(["--check"], repo_root=tmp_path)
 
@@ -170,6 +180,7 @@ def test_check_reports_stale_backup_without_writing(tmp_path: Path, capsys: pyte
     source_path.write_text(generated_content, encoding="utf-8")
     backup_path.parent.mkdir()
     backup_path.write_text(backup_content, encoding="utf-8")
+    _write_openai_like_providers(tmp_path, {})
 
     result: Final = main(["--check"], repo_root=tmp_path)
 
@@ -177,3 +188,49 @@ def test_check_reports_stale_backup_without_writing(tmp_path: Path, capsys: pyte
     assert source_path.read_text(encoding="utf-8") == generated_content
     assert backup_path.read_text(encoding="utf-8") == backup_content
     assert str(backup_path) in capsys.readouterr().err
+
+
+def test_main_unions_openai_like_supported_endpoints_with_model_evidence(tmp_path: Path) -> None:
+    cost_map: Final = {"catalog_provider/embed": {"litellm_provider": "catalog_provider", "mode": "embedding"}}
+    current_json: Final = _current_json(
+        {
+            "catalog_provider": _provider(),
+            "workspace_provider": _provider(),
+        }
+    )
+    (tmp_path / "model_prices_and_context_window.json").write_text(json.dumps(cost_map), encoding="utf-8")
+    source_path: Final = tmp_path / "provider_endpoints_support.json"
+    source_path.write_text(json.dumps(current_json), encoding="utf-8")
+    _write_openai_like_providers(
+        tmp_path,
+        {"workspace_provider": {"supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]}},
+    )
+
+    assert main([], repo_root=tmp_path) == 0
+
+    generated: Final = GENERATED_JSON.validate_json(source_path.read_bytes())
+    assert _flags(generated, "workspace_provider") == {
+        "chat_completions": True,
+        "responses": True,
+        "messages": True,
+        "text_completion": False,
+        "embeddings": False,
+        "image_generations": False,
+        "image_edits": False,
+        "audio_transcriptions": False,
+        "audio_speech": False,
+        "rerank": False,
+        "ocr": False,
+        "search": False,
+        "moderations": False,
+        "realtime": False,
+        "video_generations": False,
+        "batches": False,
+        "interactions": False,
+        "systemone": False,
+        "a2a": False,
+        "generateContent": False,
+    }
+    assert _flags(generated, "catalog_provider")["embeddings"] is True
+    backup_path: Final = tmp_path / "litellm/provider_endpoints_support_backup.json"
+    assert backup_path.read_bytes() == source_path.read_bytes()

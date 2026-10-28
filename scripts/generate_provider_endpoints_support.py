@@ -14,6 +14,7 @@ from pydantic import JsonValue, TypeAdapter
 ROOT: Final = Path(__file__).resolve().parents[1]
 COST_MAP_PATH: Final = ROOT / "model_prices_and_context_window.json"
 SOURCE_PATH: Final = ROOT / "provider_endpoints_support.json"
+OPENAI_LIKE_PROVIDERS_PATH: Final = ROOT / "litellm/llms/openai_like/providers.json"
 OUTPUT_PATHS: Final = (
     SOURCE_PATH,
     ROOT / "litellm/provider_endpoints_support_backup.json",
@@ -146,6 +147,16 @@ def _provider_evidence(
     )
 
 
+def _openai_like_evidence(providers: Mapping[str, JsonValue] | None) -> Iterator[tuple[str, str]]:
+    if providers is None:
+        return
+    for provider, config in providers.items():
+        if not isinstance(config, dict):
+            continue
+        for flag in _model_flags(config):
+            yield _provider_slug(provider), flag
+
+
 def _provider_slugs(cost_map: Mapping[str, JsonValue]) -> frozenset[str]:
     return frozenset(
         provider_slug
@@ -181,6 +192,8 @@ def _generated_provider(
 def generate_provider_endpoints_support(
     cost_map: Mapping[str, JsonValue],
     current_json: Mapping[str, JsonValue],
+    *,
+    openai_like_providers: Mapping[str, JsonValue] | None = None,
 ) -> dict[str, JsonValue]:
     current_providers: Final = _json_object(
         current_json.get("providers"), "provider_endpoints_support providers"
@@ -193,7 +206,12 @@ def generate_provider_endpoints_support(
     missing_slugs: Final = tuple(sorted(provider_slugs - frozenset(current_providers)))
     if missing_slugs:
         raise ValueError(f"Cost map providers missing from provider_endpoints_support.json: {', '.join(missing_slugs)}")
-    evidence: Final = frozenset(_provider_evidence(cost_map, bridged_fields))
+    evidence: Final = frozenset(
+        chain(
+            _provider_evidence(cost_map, bridged_fields),
+            _openai_like_evidence(openai_like_providers),
+        )
+    )
     providers: Final = {
         slug: _generated_provider(slug, value, derived_keys, derived_key_set, evidence)
         for slug, value in current_providers.items()
@@ -206,8 +224,12 @@ def generate_files(
     current_json: Mapping[str, JsonValue],
     output_paths: tuple[Path, ...],
     check: bool,
+    *,
+    openai_like_providers: Mapping[str, JsonValue] | None = None,
 ) -> int:
-    generated: Final = generate_provider_endpoints_support(cost_map, current_json)
+    generated: Final = generate_provider_endpoints_support(
+        cost_map, current_json, openai_like_providers=openai_like_providers
+    )
     content: Final = json.dumps(generated, indent=2, ensure_ascii=False) + "\n"
     stale_paths: Final = tuple(
         path for path in output_paths if not path.exists() or path.read_text(encoding="utf-8") != content
@@ -228,11 +250,16 @@ def generate_files(
 
 
 def main(argv: Sequence[str] | None = None, *, repo_root: Path = ROOT) -> int:
-    parser: Final = argparse.ArgumentParser(description="Generate provider endpoint support from the model cost map")
+    parser: Final = argparse.ArgumentParser(
+        description="Generate provider endpoint support from the model and provider catalogs"
+    )
     parser.add_argument("--check", action="store_true", help="fail if either generated file is stale")
     args: Final = parser.parse_args(argv)
     cost_map: Final = JSON_OBJECT.validate_json((repo_root / COST_MAP_PATH.name).read_bytes())
     current_json: Final = JSON_OBJECT.validate_json((repo_root / SOURCE_PATH.name).read_bytes())
+    openai_like_providers: Final = JSON_OBJECT.validate_json(
+        (repo_root / OPENAI_LIKE_PROVIDERS_PATH.relative_to(ROOT)).read_bytes()
+    )
     return generate_files(
         cost_map,
         current_json,
@@ -241,6 +268,7 @@ def main(argv: Sequence[str] | None = None, *, repo_root: Path = ROOT) -> int:
             repo_root / OUTPUT_PATHS[1].relative_to(ROOT),
         ),
         args.check,
+        openai_like_providers=openai_like_providers,
     )
 
 
