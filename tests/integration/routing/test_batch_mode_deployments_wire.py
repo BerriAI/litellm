@@ -34,7 +34,6 @@ _TEAM_GROUP: Final = "batch-team-mix"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _JSON_LIST: Final = TypeAdapter(list[JsonValue])
 _ENDPOINTS: Final = TypeAdapter(list[str] | None)
-_PREFERRED: Final = 1_000_000
 _OWNED_PROXY_TIMEOUT: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 Provider = Literal["azure", "openai"]
@@ -245,8 +244,8 @@ def _assert_creates_reach_only(wire: Wire, creates: Sequence[_Create], sku: _Sku
 def test_a_batch_create_on_a_mixed_group_reaches_the_deployment_its_provider_allows(
     gateway: Gateway, provider: Provider, creates_reach: Mode
 ) -> None:
-    chat: Final = _sku(provider, "chat", weight=_PREFERRED)
-    batch: Final = _sku(provider, "batch", weight=1)
+    chat: Final = _sku(provider, "chat", weight=1)
+    batch: Final = _sku(provider, "batch", weight=0)
     with wire_server(_vendor) as wire, gateway.scenario() as scenario:
         group: Final = _group(scenario, wire, (chat, batch))
         managed_file: Final = _managed_upload(gateway, group, gateway.key)
@@ -257,9 +256,9 @@ def test_a_batch_create_on_a_mixed_group_reaches_the_deployment_its_provider_all
         _assert_creates_reach_only(wire, creates, batch if creates_reach == "batch" else chat)
 
 
-def test_chat_beside_batch_creates_keeps_the_preferred_chat_deployment(gateway: Gateway) -> None:
-    chat: Final = _sku("azure", "chat", weight=_PREFERRED)
-    batch: Final = _sku("azure", "batch", weight=1)
+def test_concurrent_batch_creates_and_chats_each_reach_their_own_deployment(gateway: Gateway) -> None:
+    chat: Final = _sku("azure", "chat", weight=1)
+    batch: Final = _sku("azure", "batch", weight=0)
     with wire_server(_vendor) as wire, gateway.scenario() as scenario:
         group: Final = _group(scenario, wire, (chat, batch))
         managed_file: Final = _managed_upload(gateway, group, gateway.key)
@@ -268,17 +267,19 @@ def test_chat_beside_batch_creates_keeps_the_preferred_chat_deployment(gateway: 
         with ThreadPoolExecutor(max_workers=16) as pool:
             burst: Final = tuple(
                 pool.map(
-                    lambda turn: (
-                        _create(gateway, managed_file, gateway.key).status if turn % 2 else _chat(gateway, group)
-                    ),
+                    lambda turn: _create(gateway, managed_file, gateway.key) if turn % 2 else _chat(gateway, group),
                     range(24),
                 )
             )
         after: Final = tuple(_chat(gateway, group) for _ in range(6))
+        received: Final = wire.drain()
 
-        chat_statuses: Final = tuple(burst[turn] for turn in range(0, len(burst), 2))
+        chat_statuses: Final = tuple(result for result in burst if isinstance(result, int))
+        creates: Final = tuple(result for result in burst if isinstance(result, _Create))
         assert chat_statuses + after == (200,) * 18, (burst, after)
-        assert _keys_posted_to(wire.drain(), "/chat/completions") == (chat.key,) * 18
+        assert [create.status for create in creates] == [200] * 12, creates
+        assert _keys_posted_to(received, "/chat/completions") == (chat.key,) * 18
+        assert _keys_posted_to(received, "/batches") == (batch.key,) * 12
 
 
 def _group_endpoints(gateway: Gateway, group: str, key: str | None = None) -> list[str] | None:
