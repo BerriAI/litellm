@@ -450,10 +450,6 @@ def test_legacy_server_path_resolves_lists_groups_and_fails_closed_on_unknown_na
 
 @pytest.mark.parametrize("client", ("raw-jsonrpc", "official-sdk"))
 def test_legacy_toolset_path_scopes_the_session_to_the_toolsets_tools(gateway: Gateway, client: str) -> None:
-    pytest.skip(
-        "BUG: a /{toolset}/mcp session lists every granted server's tools instead of the toolset's "
-        "tools (the toolset's tool filter is not applied on the legacy path)"
-    )
     open_before: Final = _open_aliases()
     with mcp_peer() as peer_a, mcp_peer() as peer_b, mcp_peer() as peer_c, gateway.scenario() as scenario:
         alias_a: Final = "rt2ta" + uuid.uuid4().hex[:10]
