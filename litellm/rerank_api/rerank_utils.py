@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Final
 
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 
@@ -8,7 +8,7 @@ def get_optional_rerank_params(
     model: str,
     drop_params: bool,
     query: str,
-    documents: list[str | dict[str, Any]],
+    documents: list[str | dict[str, object]],
     custom_llm_provider: str | None = None,
     top_n: int | None = None,
     rank_fields: list[str] | None = None,

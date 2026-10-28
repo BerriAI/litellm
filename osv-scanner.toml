@@ -4,6 +4,24 @@ ignoreUntil = 2026-11-01
 reason = "diskcache has no fixed release published; remove this entry once one exists"
 
 [[IgnoredVulns]]
+id = "GHSA-v4x8-3wr5-3wq8"
+ignoreUntil = 2026-11-20
+reason = "the only fixed filelock is 4.2.1, a new major that requires Python >= 3.11 while litellm still supports 3.10, and the advisory is in ReadWriteLock, which litellm never uses (only FileLock); bump filelock and remove this entry once 3.10 is dropped or a 3.x fix ships"
+
+[[IgnoredVulns]]
 id = "GHSA-vfj7-8cjw-p6xm"
 ignoreUntil = 2026-11-03
 reason = "braces has no fixed release published (3.0.3, 2024-05-21, is latest and last_affected); dev-only via knip > fast-glob > micromatch; remove this entry once one exists"
+
+[[IgnoredVulns]]
+id = "GHSA-6q48-6c7w-9gw2"
+ignoreUntil = 2026-10-23
+reason = "certifi 2026.10.19 (published 2026-10-20) is inside the 3-day uv exclude-newer window until 2026-10-23 02:24 UTC; bump certifi and remove this entry once it clears"
+
+[[PackageOverrides]]
+name = "pillow"
+version = "12.3.0"
+ecosystem = "PyPI"
+vulnerability.ignore = true
+effectiveUntil = 2026-10-27
+reason = "pillow 13.0.0 requires Python >= 3.11, so the Python 3.10 resolution of the ci and dev groups stays on 12.3.0; 3.11+ is on 13.0.0"

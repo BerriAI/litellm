@@ -23,6 +23,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
 from litellm.proxy._types import UserAPIKeyAuth
@@ -281,7 +282,7 @@ async def _a2a_sse_event_source(
     request_id: str | int | None = None,
     extra_headers: Mapping[str, str] | None = None,
     served_version: A2AVersion = "0.3",
-) -> AsyncGenerator[Mapping[str, object], None]:
+) -> AsyncGenerator[object, None]:
     """Stream an upstream A2A SSE response as parsed JSON-RPC event dicts.
 
     Upstream HTTP/JSON-RPC errors are surfaced as a single JSON-RPC error event
@@ -327,12 +328,14 @@ async def _a2a_sse_event_source(
             if not payload:
                 continue
             try:
-                event = json.loads(payload)
+                event = _DECODED_JSON.validate_python(json.loads(payload))
             except Exception:
                 continue
-            if isinstance(event, dict):
-                event = normalize_stream_event(event, served_version, request_id=request_id)
-            yield event
+            event_fields = as_str_mapping(event)
+            if isinstance(event_fields, dict):
+                yield normalize_stream_event(event_fields, served_version, request_id=request_id)
+            else:
+                yield event
     finally:
         await resp.aclose()
 
@@ -731,13 +734,17 @@ async def invoke_agent_a2a(
             )
 
         user_api_key_dict.invoked_agent_id = agent.agent_id
+        strict_policy: Final = agent.identity_managed or bool(user_api_key_dict.requires_fresh_policy)
+        user_api_key_auth_for_call: Final = await AgentRequestHandler.personal_key_agent_billing_auth(
+            user_api_key_dict, agent.agent_id, strict=strict_policy
+        )
 
         _enforce_inbound_trace_id(agent, request)
 
         # Get backend URL and agent name
         agent_card_params: Final = agent.agent_card_params or {}
         agent_url: Final = agent_card_params.get("url")
-        agent_name: Final = agent_card_params.get("name", agent_id)
+        agent_name: Final = (as_str_mapping(agent_card_params) or {}).get("name", agent_id)
 
         # Get litellm_params (may include custom_llm_provider for completion bridge)
         litellm_params: dict[str, object] = agent.litellm_params or {}
@@ -790,7 +797,7 @@ async def invoke_agent_a2a(
         data, logging_obj = await processor.common_processing_pre_call_logic(
             request=request,
             general_settings=general_settings,
-            user_api_key_dict=user_api_key_dict,
+            user_api_key_dict=user_api_key_auth_for_call,
             proxy_logging_obj=proxy_logging_obj,
             proxy_config=proxy_config,
             route_type="asend_message",
@@ -889,7 +896,7 @@ async def invoke_agent_a2a(
 
             try:
                 response = await proxy_logging_obj.post_call_success_hook(
-                    user_api_key_dict=user_api_key_dict,
+                    user_api_key_dict=user_api_key_auth_for_call,
                     data=data,
                     response=response,
                 )
@@ -924,7 +931,7 @@ async def invoke_agent_a2a(
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
                 agent_extra_headers=agent_extra_headers,
-                user_api_key_dict=user_api_key_dict,
+                user_api_key_dict=user_api_key_auth_for_call,
                 request_data=data,
                 proxy_logging_obj=proxy_logging_obj,
                 served_version=served_version,
@@ -990,7 +997,7 @@ async def invoke_agent_a2a(
 
             response = LiteLLMSendMessageResponse.from_dict(result, request_id=request_id)
             response = await proxy_logging_obj.post_call_success_hook(
-                user_api_key_dict=user_api_key_dict,
+                user_api_key_dict=user_api_key_auth_for_call,
                 data=data,
                 response=response,
             )
@@ -1017,7 +1024,7 @@ async def invoke_agent_a2a(
                 request_id=request_id,
                 extra_headers=agent_extra_headers,
                 proxy_logging_obj=proxy_logging_obj,
-                user_api_key_dict=user_api_key_dict,
+                user_api_key_dict=user_api_key_auth_for_call,
                 request_data=data,
                 served_version=served_version,
             )

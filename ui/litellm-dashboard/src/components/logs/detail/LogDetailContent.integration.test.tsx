@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { GuardrailJumpLink, LogDetailContent } from "./LogDetailContent";
 import type { LogEntry } from "../types";
+import { toast } from "@/lib/toast";
 
 vi.mock("./sections/GuardrailViewer/GuardrailViewer", () => ({
   default: ({ data }: { data: unknown }) => <div data-testid="guardrail-viewer">{JSON.stringify(data)}</div>,
@@ -295,6 +296,46 @@ describe("LogDetailContent", () => {
     expect(screen.queryByRole("tab", { name: "Request" })).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["Request", true],
+    ["Response", true],
+    ["Metadata", true],
+    ["Request", false],
+  ] as const)("copies %s through the fallback and reports its outcome (%s)", async (section, success) => {
+    const user = userEvent.setup();
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
+    const writeText = vi.fn<(value: string) => boolean>().mockReturnValue(success);
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: (command: string) =>
+        command === "copy" && writeText((document.activeElement as HTMLTextAreaElement).value),
+    });
+    vi.mocked(toast.success).mockClear();
+    const log = createLogEntry();
+    const expected = { Request: log.messages, Response: log.response, Metadata: log.metadata }[section];
+
+    try {
+      render(<LogDetailContent logEntry={log} />);
+      if (section !== "Metadata") {
+        await user.click(screen.getByRole("tab", { name: "JSON", exact: true }));
+        await user.click(screen.getByRole("tab", { name: section, exact: true }));
+      }
+      const label = section === "Metadata" ? "Copy Metadata" : "Copy JSON";
+      const button = screen.getByRole("button", { name: label, exact: true });
+      await user.click(button);
+
+      expect(writeText).toHaveBeenCalledWith(JSON.stringify(expected, null, 2));
+      expect(button).toHaveAccessibleName(success ? "Copied!" : label);
+      expect(toast.success).toHaveBeenCalledTimes(success ? 1 : 0);
+    } finally {
+      if (clipboardDescriptor) Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+      if (execCommandDescriptor) Object.defineProperty(document, "execCommand", execCommandDescriptor);
+      else Reflect.deleteProperty(document, "execCommand");
+    }
+  });
+
   it.each(["object", "serialized", "messages only", "null captures"])(
     "preserves request inspection and copying for classifier logs with %s data",
     async (shape) => {
@@ -429,6 +470,37 @@ describe("LogDetailContent", () => {
     expect(screen.queryByText("Credential")).not.toBeInTheDocument();
     expect(screen.queryByText("Client OAuth token")).not.toBeInTheDocument();
     expect(screen.queryByText("Configured key")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { selection: "round_robin", label: "Round robin" },
+    { selection: "session_affinity", label: "Session affinity" },
+    { selection: "session_affinity_retry", label: "Session affinity (retry)" },
+  ] as const)("shows the selected Kubernetes pod and routing mode", ({ selection, label }) => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          metadata: {
+            status: "success",
+            kubernetes_pod_routing: {
+              service_host: "vllm-headless.ns.svc.cluster.local",
+              pod_ip: "10.0.0.2",
+              pod_count: 3,
+              selection,
+            },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Pod")).toBeInTheDocument();
+    expect(screen.getByText(`10.0.0.2 · ${label} · 3 pods`)).toBeInTheDocument();
+  });
+
+  it("omits the Pod row when routing metadata is absent", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ metadata: { status: "success" } })} />);
+
+    expect(screen.queryByText("Pod")).not.toBeInTheDocument();
   });
 
   it("should display guardrail label when guardrail data exists", () => {

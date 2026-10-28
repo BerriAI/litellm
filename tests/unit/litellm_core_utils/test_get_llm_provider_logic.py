@@ -1,4 +1,8 @@
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Final
+
+import respx
 
 import asyncio, httpx, importlib, os
 import pytest
@@ -8,6 +12,8 @@ from litellm import CustomLLM
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
+    resolve_model_and_provider_for_metadata,
+    get_provider_affinity_header,
     inferred_provider,
     is_registered_custom_provider,
 )
@@ -706,3 +712,55 @@ class TestClaudeModelPatternMatching:
         set_fallback_generalizations([])
         with pytest.raises(litellm.BadRequestError):
             litellm.get_llm_provider(model="claude-opus-4-9")
+
+
+@pytest.mark.parametrize("prefix", ["openai", "anthropic", "custom_openai", "openai_like"])
+def test_opencode_affinity_resolution_preserves_existing_transport(prefix: str) -> None:
+    api_base: Final = "https://opencode.ai/zen/go/v1"
+    model, provider, _, destination = get_llm_provider(model=f"{prefix}/test-model", api_base=api_base)
+    assert (model, provider, destination) == ("test-model", prefix, api_base)
+    assert get_provider_affinity_header(destination) == "x-opencode-session"
+
+
+@pytest.fixture
+def chatgpt_login_tripwire(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
+    blocked: Final = tmp_path / "blocked"
+    blocked.write_text("ordinary file")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(blocked / "unused"))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    with respx.mock as transport:
+        yield
+        assert len(transport.calls) == 0
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected"),
+    [
+        ("chatgpt/gpt-5.4", None, ("gpt-5.4", "chatgpt")),
+        ("gpt-5.4", "chatgpt", ("gpt-5.4", "chatgpt")),
+        ("github_copilot/gpt-4o", None, ("gpt-4o", "github_copilot")),
+        ("openai/gpt-5.4", None, ("gpt-5.4", "openai")),
+    ],
+)
+def test_resolve_model_and_provider_for_metadata_never_logs_in(
+    chatgpt_login_tripwire: None, model: str, custom_llm_provider: str | None, expected: tuple[str, str]
+) -> None:
+    assert resolve_model_and_provider_for_metadata(model, custom_llm_provider) == expected
+
+
+def test_metadata_callers_never_log_in_for_a_declared_chatgpt_deployment(
+    chatgpt_login_tripwire: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
+    from litellm.proxy.spend_tracking.savings import _resolve_model
+    from litellm.router import Router
+    from litellm.types.router import LiteLLM_Params
+    from litellm.utils import supports_native_streaming
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    assert supports_native_streaming("chatgpt/gpt-5.4", None) is True
+    assert get_api_base("chatgpt/gpt-5.4", {"model": "chatgpt/gpt-5.4"}) == "https://chatgpt.com/backend-api/codex"
+    identity = _resolve_model("chatgpt/gpt-5.4", None)
+    assert identity is not None and identity.provider == "chatgpt"
+    assert Router._model_group_llm_provider(LiteLLM_Params(model="chatgpt/gpt-5.4")) == ("gpt-5.4", "chatgpt")

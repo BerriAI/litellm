@@ -16,7 +16,6 @@ from typing import (
     NamedTuple,
     Protocol,
     TypeAlias,
-    TypedDict,
     TypeVar,
     cast,  # noqa: TID251  # custom-logger and cold-storage payloads are untyped JSON
 )
@@ -24,7 +23,7 @@ from typing import (
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, assert_never
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -2721,7 +2720,7 @@ async def ui_view_spend_logs(
             end_date_obj = parse_date(end_date)
 
         # Build where conditions
-        where_conditions: Final[dict[str, Any]] = {}
+        where_conditions: Final[dict[str, object]] = {}
         if start_date_obj is not None and end_date_obj is not None:
             where_conditions["startTime"] = {
                 "gte": start_date_obj.isoformat(),  # Already in UTC, no need to add Z
@@ -2783,18 +2782,14 @@ async def ui_view_spend_logs(
             if len(metadata_filters) == 1:
                 where_conditions["metadata"] = metadata_filters[0]
             else:
-                where_conditions["AND"] = where_conditions.get("AND", []) + [
-                    {"metadata": filter_cond} for filter_cond in metadata_filters
-                ]
+                where_conditions["AND"] = [{"metadata": filter_cond} for filter_cond in metadata_filters]
         if end_user is not None:
             where_conditions["end_user"] = end_user
 
         if min_spend is not None or max_spend is not None:
-            where_conditions["spend"] = {}
-            if min_spend is not None:
-                where_conditions["spend"]["gte"] = min_spend
-            if max_spend is not None:
-                where_conditions["spend"]["lte"] = max_spend
+            where_conditions["spend"] = {
+                key: value for key, value in (("gte", min_spend), ("lte", max_spend)) if value is not None
+            }
         # A request_id lookup drops the date window, so a non-admin could otherwise
         # reach any single row by id; require they own one of the matches, mirroring
         # the detail endpoint, and keep the general scoping below so a colliding
@@ -3050,7 +3045,7 @@ async def ui_view_spend_logs(
         )
         sql_params.extend([page_size, skip])
 
-        data: Final = await prisma_client.db.query_raw(sql_query, *sql_params)
+        data: Final[Sequence[Mapping[str, object]]] = await _query_raw(prisma_client, sql_query, *sql_params)
 
         if request_id is not None and not is_v2 and not is_admin_view:
             await _assert_user_owns_fetched_spend_rows(
@@ -3069,7 +3064,7 @@ async def ui_view_spend_logs(
 
         return await _build_ui_spend_logs_response(
             prisma_client,
-            data,
+            list(data),
             total_records,
             page,
             page_size,

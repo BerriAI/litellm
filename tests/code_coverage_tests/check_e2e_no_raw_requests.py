@@ -25,7 +25,6 @@ ALLOWED_RAW_CLIENT_FILES = {
     "e2e/e2e_http.py": ("requests",),
     "e2e/conftest.py": ("requests",),
     "e2e/claude_code/pr_gate_version_resolver.py": ("urllib.request",),
-    "e2e/mcp/oauth_chat_client.py": ("httpx",),
 }
 
 EXCEPTION_ONLY_NAMES = frozenset({"RequestException", "ConnectionError", "Timeout", "HTTPError"})

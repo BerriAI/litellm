@@ -6,7 +6,6 @@ upstream's observation feed, so a cell asserts both what the caller got and what
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -140,33 +139,28 @@ def openai_error(message: str, param: str) -> JsonResponse:
 
 
 class Upstream:
-    """Reads the scripted upstream's destructive observation feed and keeps every record it drained."""
-
     def __init__(self, url: str) -> None:
         self.url = url.rstrip("/")
-        self.items: tuple[dict[str, JsonValue], ...] = ()
 
-    def drain(self) -> None:
+    def reset(self) -> None:
+        with httpx.Client(timeout=10, trust_env=False) as client:
+            client.delete(f"{self.url}/__observations").raise_for_status()
+
+    def observed(self) -> tuple[dict[str, JsonValue], ...]:
         with httpx.Client(timeout=10, trust_env=False) as client:
             payload: Final = JSON_OBJECT.validate_python(
                 client.get(f"{self.url}/__observations?include_method=true").json()
             )
         requests: Final = payload.get("requests")
         assert isinstance(requests, list)
-        self.items = (*self.items, *(object_value(item) for item in requests if isinstance(item, dict)))
+        return tuple(object_value(item) for item in requests if isinstance(item, dict))
 
     def calls(self, identity: str) -> tuple[dict[str, JsonValue], ...]:
-        self.drain()
         return tuple(
             item
-            for item in self.items
+            for item in self.observed()
             if f"/{identity}/" in str(item.get("path")) and not str(item.get("path", "")).endswith("/models")
         )
-
-
-def drain_rig_upstream() -> None:
-    """Drops every observation earlier cells left on the shared upstream, so a cell reads only its own calls."""
-    Upstream(os.environ["INTEGRATION_UPSTREAM_URL"]).drain()
 
 
 def assert_no_provider_call(gateway: Gateway, *identities: str) -> None:
@@ -248,7 +242,7 @@ def owned_gateway(
         gateway_from_environment() as gateway,
         owned_proxy_process(gateway, directory, environment or {}, config=path, workers=workers) as owned,
     ):
-        yield Gateway(owned.gateway.client, owned.gateway.key, gateway.upstream_url)
+        yield owned.gateway
 
 
 def stream_finished(endpoint: str, lines: Sequence[str]) -> bool:

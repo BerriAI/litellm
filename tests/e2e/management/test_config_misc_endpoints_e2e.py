@@ -31,7 +31,7 @@ import pytest
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
-from e2e_http import NoBody, Success, unwrap, unwrap_status
+from e2e_http import NoBody, Result, Success, UnknownApiError, unwrap, unwrap_status
 from e2e_metadata import Domain, Route, Subject, meta
 from lifecycle import ResourceManager
 from management_client import ManagementClient
@@ -141,10 +141,13 @@ class ComplianceResponse(BaseModel):
 # ---- fallback management ---------------------------------------------------
 
 
-class FallbackShape(BaseModel):
+class FallbackTarget(BaseModel):
     model: str
-    fallback_models: list[str]
     fallback_type: str
+
+
+class FallbackShape(FallbackTarget):
+    fallback_models: list[str]
 
 
 class FallbackCreateBody(FallbackShape):
@@ -161,6 +164,28 @@ class FallbackGetParams(BaseModel):
 
 class FallbackGetResponse(FallbackShape):
     pass
+
+
+class FallbackDeleteResponse(FallbackTarget):
+    message: str
+
+
+class RouterFallbackValues(BaseModel):
+    fallbacks: list[dict[str, list[str]]] | None = None
+
+
+class RouterFallbackOwnership(BaseModel):
+    current_values: RouterFallbackValues
+    source: dict[str, str]
+
+
+class ConfigOwnedDetail(BaseModel):
+    keys: list[str]
+    section: str
+
+
+class ConfigOwnedRejection(BaseModel):
+    detail: ConfigOwnedDetail
 
 
 # ---- jwt key mapping -------------------------------------------------------
@@ -365,20 +390,19 @@ class TestFallbackManagement:
     @pytest.mark.covers("mgmt.fallback_management.update.happy_path")
     @meta(Subject(domain=Domain.ROUTING))
     def test_create_persists_and_is_read_back(self, client: ManagementClient, resources: ResourceManager) -> None:
-        primary = f"e2e-fallback-primary-{unique_marker()}"
-        secondary = f"e2e-fallback-secondary-{unique_marker()}"
-        params = LiteLLMParamsBody(model="openai/gpt-5.5", api_key="e2e-dummy-key")
-        primary_id = client.proxy.create_model(primary, params)
-        resources.defer(lambda: client.proxy.delete_model(primary_id))
-        secondary_id = client.proxy.create_model(secondary, params)
-        resources.defer(lambda: client.proxy.delete_model(secondary_id))
-        resources.defer(lambda: self._delete_fallback(client, primary))
+        ownership = self._router_fallback_ownership(client)
+        assert ownership.source.get("context_window_fallbacks") != "config", (
+            "the proxy config sets router_settings.context_window_fallbacks, so /fallback cannot write it and this "
+            "round trip needs a fallback type the database owns"
+        )
+        primary, secondary = self._register_fallback_pair(client, resources)
+        resources.defer(lambda: self._delete_fallback(client, primary, "context_window"))
 
         created = unwrap(
             client.proxy.transport.post(
                 "/fallback",
                 headers=client.proxy.transport.master,
-                json=FallbackCreateBody(model=primary, fallback_models=[secondary], fallback_type="general"),
+                json=FallbackCreateBody(model=primary, fallback_models=[secondary], fallback_type="context_window"),
                 response_type=FallbackResponse,
             )
         )
@@ -388,13 +412,7 @@ class TestFallbackManagement:
         )
 
         def read_back() -> FallbackGetResponse | None:
-            result = client.proxy.transport.get(
-                f"/fallback/{primary}",
-                headers=client.proxy.transport.master,
-                params=FallbackGetParams(fallback_type="general"),
-                response_type=FallbackGetResponse,
-            )
-            match result:
+            match self._get_fallback(client, primary, "context_window"):
                 case Success(data=data) if secondary in data.fallback_models:
                     return data
                 case _:
@@ -405,14 +423,105 @@ class TestFallbackManagement:
             f"GET /fallback/{primary} reports fallbacks {got.fallback_models}, configured [{secondary!r}]"
         )
 
+        deleted = unwrap(self._delete_fallback(client, primary, "context_window"))
+        assert deleted.model == primary and deleted.fallback_type == "context_window", (
+            f"DELETE /fallback/{primary} answered for model={deleted.model!r} type={deleted.fallback_type!r}"
+        )
+
+        def gone() -> bool | None:
+            match self._get_fallback(client, primary, "context_window"):
+                case UnknownApiError(status_code=404):
+                    return True
+                case _:
+                    return None
+
+        _ = _poll(client, gone, f"GET /fallback/{primary} still reports a fallback after DELETE /fallback/{primary}")
+
+    @pytest.mark.covers("mgmt.fallback_management.update.config_owned_refused")
+    @meta(Subject(domain=Domain.ROUTING))
+    def test_write_to_config_owned_fallbacks_is_refused(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        before = self._router_fallback_ownership(client)
+        config_rules = before.current_values.fallbacks
+        assert before.source.get("fallbacks") == "config" and config_rules, (
+            "this test needs router_settings.fallbacks set in the proxy config, but /router/settings reports "
+            f"source={before.source.get('fallbacks')!r} value={config_rules}"
+        )
+        primary, secondary = self._register_fallback_pair(client, resources)
+        resources.defer(lambda: self._delete_fallback(client, primary, "general"))
+
+        result = client.proxy.transport.post(
+            "/fallback",
+            headers=client.proxy.transport.master,
+            json=FallbackCreateBody(model=primary, fallback_models=[secondary], fallback_type="general"),
+            response_type=FallbackResponse,
+        )
+        match result:
+            case UnknownApiError(status_code=400, body=body):
+                rejection = ConfigOwnedRejection.model_validate_json(body).detail
+            case _:
+                pytest.fail(f"/fallback accepted a write to the config-owned router_settings.fallbacks: {result}")
+        assert rejection.keys == ["fallbacks"] and rejection.section == "router_settings", (
+            f"/fallback refused the write naming keys={rejection.keys} section={rejection.section!r}, "
+            "expected router_settings.fallbacks"
+        )
+
+        after = self._router_fallback_ownership(client).current_values.fallbacks
+        assert after == config_rules, (
+            f"the refused write changed router_settings.fallbacks from {config_rules} to {after}"
+        )
+        match self._get_fallback(client, primary, "general"):
+            case UnknownApiError(status_code=404):
+                pass
+            case refused_rule:
+                pytest.fail(f"the refused rule for {primary} is served anyway: {refused_rule}")
+        config_model, config_targets = next(iter(config_rules[0].items()))
+        served = unwrap(self._get_fallback(client, config_model, "general"))
+        assert served.fallback_models == config_targets, (
+            f"GET /fallback/{config_model} reports {served.fallback_models}, "
+            f"the config file routes it to {config_targets}"
+        )
+
     @staticmethod
-    def _delete_fallback(client: ManagementClient, model: str) -> None:
-        _ = client.proxy.transport.delete(
+    def _register_fallback_pair(client: ManagementClient, resources: ResourceManager) -> tuple[str, str]:
+        primary = f"e2e-fallback-primary-{unique_marker()}"
+        secondary = f"e2e-fallback-secondary-{unique_marker()}"
+        params = LiteLLMParamsBody(model="openai/gpt-5.5", api_key="e2e-dummy-key")
+        primary_id = client.proxy.create_model(primary, params)
+        resources.defer(lambda: client.proxy.delete_model(primary_id))
+        secondary_id = client.proxy.create_model(secondary, params)
+        resources.defer(lambda: client.proxy.delete_model(secondary_id))
+        return primary, secondary
+
+    @staticmethod
+    def _router_fallback_ownership(client: ManagementClient) -> RouterFallbackOwnership:
+        return unwrap(
+            client.proxy.transport.get(
+                "/router/settings",
+                headers=client.proxy.transport.master,
+                params=NoBody(),
+                response_type=RouterFallbackOwnership,
+            )
+        )
+
+    @staticmethod
+    def _get_fallback(client: ManagementClient, model: str, fallback_type: str) -> Result[FallbackGetResponse]:
+        return client.proxy.transport.get(
+            f"/fallback/{model}",
+            headers=client.proxy.transport.master,
+            params=FallbackGetParams(fallback_type=fallback_type),
+            response_type=FallbackGetResponse,
+        )
+
+    @staticmethod
+    def _delete_fallback(client: ManagementClient, model: str, fallback_type: str) -> Result[FallbackDeleteResponse]:
+        return client.proxy.transport.delete(
             f"/fallback/{model}",
             headers=client.proxy.transport.master,
             json=NoBody(),
-            params=FallbackGetParams(fallback_type="general"),
-            response_type=NoBody,
+            params=FallbackGetParams(fallback_type=fallback_type),
+            response_type=FallbackDeleteResponse,
         )
 
 

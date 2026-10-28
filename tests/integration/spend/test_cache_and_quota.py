@@ -55,7 +55,7 @@ def test_generated_cache_sequences_preserve_content_usage_and_zero_hit_cost(gate
                 raise
 
         def perform_request(self, marker: int) -> None:
-            self.upstream.get("/__observations").raise_for_status()
+            self.upstream.delete("/__observations").raise_for_status()
             response: Final = gateway.request(
                 "POST",
                 "/v1/chat/completions",
@@ -129,7 +129,7 @@ def test_repeated_hits_keep_response_identity_and_create_distinct_zero_cost_rows
         model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
         key: Final = scenario.key(models=[model])
         prompt: Final = f"repeated cache {uuid.uuid4().hex}"
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         results: Final = tuple(
             gateway.post(
                 "/v1/chat/completions",
@@ -186,7 +186,7 @@ def test_key_budget_at_boundary_blocks_provider_then_explicit_reset_restores(gat
             seconds=70,
         )
         assert float(spent[0]["spend"]) == pytest.approx(0.06)
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         denied: Final = gateway.request(
             "POST",
             "/v1/chat/completions",
@@ -206,7 +206,7 @@ def test_key_budget_at_boundary_blocks_provider_then_explicit_reset_restores(gat
             lambda values: len(values) == 1 and float(values[0]["spend"]) >= 0.06,
             seconds=70,
         )
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         denied_again: Final = gateway.request(
             "POST",
             "/v1/chat/completions",
@@ -271,7 +271,7 @@ def test_scheduled_budget_reset_reconnects_after_db_transport_failure_and_unbloc
             seconds=70,
         )
         assert float(exhausted[0]["spend"]) == pytest.approx(0.06)
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         denied: Final = candidate.request(
             "POST",
             "/v1/chat/completions",
@@ -348,7 +348,7 @@ def test_repeated_count_tokens_on_budgeted_key_does_not_reserve_budget_or_block_
         )
         key: Final = scenario.key(models=[model], max_budget=0.1)
         digest: Final = sha256(key.encode()).hexdigest()
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         counts: Final = tuple(
             gateway.request(
                 "POST",
@@ -379,6 +379,7 @@ def test_repeated_count_tokens_on_budgeted_key_does_not_reserve_budget_or_block_
                 "api_key": "",
             }
         ] * 3, counted_requests
+        upstream.delete("/__observations").raise_for_status()
         completion_prompt: Final = f"after counting {uuid.uuid4().hex}"
         completion: Final = gateway.request(
             "POST",
@@ -438,7 +439,7 @@ def test_in_flight_count_tokens_does_not_reserve_key_budget_away_from_a_completi
             gateway.request, "POST", f"/v1beta/models/{counted}:countTokens", {"contents": contents}, key=key
         )
         assert counting_reached_provider.wait(timeout=30), "count tokens request never reached the provider"
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         prompt: Final = f"after count tokens {uuid.uuid4().hex}"
         completion: Final = gateway.request(
             "POST",
@@ -453,9 +454,11 @@ def test_in_flight_count_tokens_does_not_reserve_key_budget_away_from_a_completi
             [{"role": "user", "content": prompt}]
         ]
         assert count.status_code == 200, count.text
-        assert count.json() == {"totalTokens": 12, "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 12}]}, (
-            count.text
-        )
+        assert count.json() == {
+            "totalTokens": 12,
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 12}],
+            "litellm_count_source": "provider",
+        }, count.text
         provider_calls: Final = wire.drain()
         assert [(call.method, call.target) for call in provider_calls] == [
             ("POST", "/v1beta/models/gemini-3.8-flash:countTokens")
@@ -474,7 +477,7 @@ def test_different_system_messages_do_not_share_a_cached_response(gateway: Gatew
         prompt: Final = uuid.uuid4().hex
 
         def completion_id(system: str, expected_calls: int) -> str:
-            upstream.get("/__observations").raise_for_status()
+            upstream.delete("/__observations").raise_for_status()
             response: Final = gateway.request(
                 "POST",
                 "/v1/chat/completions",
