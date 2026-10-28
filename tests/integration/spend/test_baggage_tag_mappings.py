@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Generator, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
@@ -35,6 +35,8 @@ pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 PROXY_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 PRICED: Final[dict[str, JsonValue]] = {"input_cost_per_token": 0.01, "output_cost_per_token": 0.01}
 WORKER_PROBES: Final = 6
+VLLM_UPSTREAM_MODEL: Final = "baggage-model"
+PINNED_CONNECTION: Final = httpx.Limits(max_connections=1)
 JSON_LIST: Final = TypeAdapter(list[JsonValue])
 GUARDRAIL_VERDICT: Final = b'{"action":"GUARDRAIL_INTERVENED","texts":["masked baggage prompt"]}'
 GUARDRAIL_PATH: Final = "/beta/litellm_basic_guardrail_api"
@@ -208,7 +210,11 @@ def _mapped_models(marker: str, provider: Wire, upstream_url: str) -> list[JsonV
     pre_guarded: Final = _deployment(f"guarded-pre-{marker}", provider, tags=[f"guarded-{marker}:pre"])
     vllm: Final[dict[str, JsonValue]] = {
         "model_name": f"vllm-{marker}",
-        "litellm_params": {"model": "hosted_vllm/baggage-model", "api_base": provider.url, "api_key": "synthetic-vllm"},
+        "litellm_params": {
+            "model": f"hosted_vllm/{VLLM_UPSTREAM_MODEL}",
+            "api_base": provider.url,
+            "api_key": "synthetic-vllm",
+        },
     }
     return [_deployment(f"chat-{marker}", provider), guarded, pre_guarded, *routed, realtime, vllm]
 
@@ -728,12 +734,24 @@ def _passthrough_path(rig: Rig, scenario: Scenario, entrypoint: PassThrough) -> 
 
 def _passthrough_body(rig: Rig, entrypoint: PassThrough, text: str) -> dict[str, JsonValue]:
     model: Final = {"custom": rig.chat_model, "anthropic": "claude-sonnet-4-5", "vllm": f"vllm-{rig.marker}"}
-    return {
+    body: Final[dict[str, JsonValue]] = {
         "model": model[entrypoint],
         "max_tokens": 16,
         "messages": [{"role": "user", "content": text}],
-        "metadata": {"user_id": f"user-{text}"},
     }
+    match entrypoint:
+        case "vllm":
+            return {**body, "metadata": {"user_id": f"user-{text}"}}
+        case "custom" | "anthropic":
+            return body
+
+
+def _upstream_body(entrypoint: PassThrough, body: Mapping[str, JsonValue]) -> JsonValue:
+    match entrypoint:
+        case "vllm":
+            return {**body, "model": VLLM_UPSTREAM_MODEL}
+        case "custom" | "anthropic":
+            return dict(body)
 
 
 def _forwarded_bodies(rig: Rig) -> tuple[JsonValue, ...]:
@@ -762,7 +780,7 @@ def test_passthrough_forwards_the_client_body_unchanged_while_its_spend_row_carr
             "POST", path, body, key=key, headers={"baggage": f"entrypoint=a,tenant={tenant}"}
         )
         assert (plain.status_code, response.status_code) == (200, 200), (plain.text, response.text)
-        assert len(plain_forwarded) == 1, plain_forwarded
+        assert plain_forwarded == (_upstream_body(entrypoint, body),)
         assert _forwarded_bodies(optional) == plain_forwarded
         mapped_tags: Final = {optional.exact_tag, optional.tenant_tag(tenant)}
         assert _spend_tags(optional.proxy, key) == _spend_tags(optional.proxy, plain_key) | mapped_tags
@@ -777,8 +795,28 @@ def _general_settings_mappings(database_url: str) -> JsonValue:
     return object_value(rows[0]["param_value"]).get("request_tag_mappings") if rows else None
 
 
-def _worker_statuses(rig: Rig, key: str) -> tuple[int, ...]:
-    return tuple(_chat(rig, key, None, Connection="close").status_code for _ in range(WORKER_PROBES))
+def _serving_pid(proxy: Gateway) -> int:
+    response: Final = proxy.request("GET", "/health/integration-readiness")
+    return int(response.headers["x-integration-worker-pid"])
+
+
+def _status_on_one_worker(owned: OwnedProxy, rig: Rig, key: str) -> tuple[int, int] | None:
+    with httpx.Client(
+        base_url=str(owned.gateway.client.base_url), timeout=15, trust_env=False, limits=PINNED_CONNECTION
+    ) as client:
+        pinned: Final = replace(rig, proxy=replace(owned.gateway, client=client))
+        before: Final = _serving_pid(pinned.proxy)
+        status: Final = _chat(pinned, key, None).status_code
+        return (before, status) if _serving_pid(pinned.proxy) == before else None
+
+
+def _worker_statuses(owned: OwnedProxy, rig: Rig, key: str) -> frozenset[tuple[int, int]]:
+    def answers() -> frozenset[tuple[int, int]]:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            found: Final = tuple(pool.map(lambda _: _status_on_one_worker(owned, rig, key), range(8)))
+        return frozenset(answer for answer in found if answer is not None)
+
+    return eventually(answers, lambda found: frozenset(pid for pid, _ in found) >= owned.worker_pids(), seconds=30)
 
 
 def _mappings_on_a_worker(proxy: Gateway) -> tuple[int, JsonValue]:
@@ -835,7 +873,7 @@ def test_mappings_saved_through_the_settings_endpoint_apply_on_every_worker_and_
         saved: Final = save([rule])
         assert saved.status_code == 200, saved.text
         _mappings_settled_on_every_worker(owned, [rule])
-        assert _worker_statuses(rig, key) == (400,) * WORKER_PROBES
+        assert _worker_statuses(owned, rig, key) == frozenset((pid, 400) for pid in owned.worker_pids())
         tagged_key: Final = scenario.key()
         provider.drain()
         admitted: Final = _chat(rig, tagged_key, f"tenant={marker}")
@@ -850,7 +888,7 @@ def test_mappings_saved_through_the_settings_endpoint_apply_on_every_worker_and_
             database_url=database_url,
         )
         _mappings_settled_on_every_worker(owned, None)
-        assert _worker_statuses(rig, key) == (200,) * WORKER_PROBES
+        assert _worker_statuses(owned, rig, key) == frozenset((pid, 200) for pid in owned.worker_pids())
 
 
 def _rejected_client_tag(client_tag: RejectedClientTag, tag: str) -> tuple[Mapping[str, JsonValue], Mapping[str, str]]:
