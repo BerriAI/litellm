@@ -66,10 +66,6 @@ from .utils import (
 AllowedModelRegion: TypeAlias = Literal["eu", "us"]
 
 
-class SilentExperimentMarker(str, enum.Enum):
-    MIRRORED = "mirrored"
-
-
 class SilentExperimentFlag(TypedDict, total=False):
     is_silent_experiment: ReadOnly[bool]
 

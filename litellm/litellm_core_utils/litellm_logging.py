@@ -23,7 +23,7 @@ from httpx import Response, Timeout
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
-from litellm._internal_context import post_response_phase
+from litellm._internal_context import in_mirrored_call, post_response_phase
 from litellm._logging import (
     is_debugging_on,
     redact_string,
@@ -47,7 +47,6 @@ from litellm.constants import (
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     PROVIDER_REQUEST_ID_HEADERS,
     REDACTED_BY_LITELLM,
-    SILENT_EXPERIMENT_METADATA_KEY,
 )
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
@@ -163,7 +162,7 @@ from litellm.types.llms.openai import (
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.rerank import RerankResponse
-from litellm.types.router import RouterRateLimitError, SilentExperimentFlag, SilentExperimentMarker
+from litellm.types.router import RouterRateLimitError, SilentExperimentFlag
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
     CachingDetails,
@@ -317,7 +316,6 @@ _in_memory_loggers: Final[list[CustomLogger]] = []
 _STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(
     ("used_client_oauth_token", "usage_object", KUBERNETES_POD_ROUTING_KEY, "is_silent_experiment")
 )
-_SILENT_EXPERIMENT_BUCKETS: Final = ("metadata", "litellm_metadata")
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = (
     frozenset(StandardLoggingMetadata.__annotations__.keys()) - _STANDARD_LOGGING_METADATA_RESOLVED_KEYS
 )
@@ -810,7 +808,7 @@ class Logging(LiteLLMLoggingBaseClass):
             litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
 
         self.litellm_params = litellm_params
-        self.is_silent_experiment = False
+        self.is_silent_experiment: Final = in_mirrored_call()
 
         # Initialize cost breakdown field
         self.cost_breakdown: CostBreakdown | None = None
@@ -1126,7 +1124,6 @@ class Logging(LiteLLMLoggingBaseClass):
         if model is not None:
             self.model = model
         self.user = user
-        self.is_silent_experiment = self.is_silent_experiment or is_silent_experiment_call(litellm_params)
         self.litellm_params = {
             **self.litellm_params,
             **scrub_sensitive_keys_in_metadata(litellm_params),
@@ -7727,9 +7724,7 @@ def get_standard_logging_metadata(
     return clean_metadata
 
 
-def scrub_sensitive_keys_in_metadata(
-    litellm_params: dict[str, Any] | None,  # mutable-ok: the langfuse masking function is moved onto these params
-) -> dict[str, Any]:  # mutable-ok: loggers write into the returned params and their metadata
+def scrub_sensitive_keys_in_metadata(litellm_params: dict | None):
     if litellm_params is None:
         litellm_params = {}
 
@@ -7744,24 +7739,7 @@ def scrub_sensitive_keys_in_metadata(
             litellm_params["_langfuse_masking_function"] = masking_fn
         litellm_params["metadata"] = metadata
 
-    if not is_silent_experiment_call(litellm_params):
-        return litellm_params
-    return {
-        name: (
-            {key: value for key, value in bucket.items() if key != SILENT_EXPERIMENT_METADATA_KEY}
-            if name in _SILENT_EXPERIMENT_BUCKETS and _carries_silent_experiment_marker(bucket)
-            else bucket
-        )
-        for name, bucket in litellm_params.items()
-    }
-
-
-def _carries_silent_experiment_marker(bucket: object) -> bool:
-    return isinstance(bucket, dict) and bucket.get(SILENT_EXPERIMENT_METADATA_KEY) is SilentExperimentMarker.MIRRORED
-
-
-def is_silent_experiment_call(litellm_params: Mapping[str, object]) -> bool:
-    return any(_carries_silent_experiment_marker(litellm_params.get(name)) for name in _SILENT_EXPERIMENT_BUCKETS)
+    return litellm_params
 
 
 # integration helper function

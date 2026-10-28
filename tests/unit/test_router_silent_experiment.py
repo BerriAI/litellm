@@ -12,13 +12,11 @@ import pytest
 import respx
 
 import litellm
-from litellm.constants import SILENT_EXPERIMENT_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router import Router
 from litellm.router import _silent_experiment_kwargs_snapshot
 from litellm.router import _silent_experiment_targets
-from litellm.types.router import SilentExperimentMarker
 
 
 class _RecordingLogger(CustomLogger):
@@ -349,26 +347,27 @@ async def test_spend_rows_mark_only_the_mirrored_calls_when_the_caller_sends_lit
 
 
 @pytest.mark.asyncio
-async def test_logging_callbacks_never_receive_the_router_mirror_marker(recording_logger: _RecordingLogger) -> None:
-    router: Final = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
-    await router.acompletion(
-        model="primary-model",
-        messages=[{"role": "user", "content": "hi"}],
-        mock_response="pong",
-        litellm_metadata={"user_api_key": "test-key"},
+async def test_router_counts_a_mirrored_call_once_against_its_target_rate_limits(
+    recording_logger: _RecordingLogger,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake-key", "silent_model": "shadow-b"},
+            },
+            {
+                "model_name": "shadow-b",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "fake-key", "rpm": 100, "tpm": 100000},
+            },
+        ]
     )
-    await _wait_for_all_successes(recording_logger, expected=3)
+    await router.acompletion(model="primary-model", messages=[{"role": "user", "content": "hi"}], mock_response="pong")
+    await _wait_for_shadow_successes(recording_logger, expected=1)
+    await GLOBAL_LOGGING_WORKER.flush()
 
-    request_metadata_keys: Final = {
-        call["standard_logging_object"]["model_group"]: {
-            *call["litellm_params"]["metadata"],
-            *call["litellm_params"]["litellm_metadata"],
-        }
-        for call in recording_logger.success_kwargs
-    }
-    assert sorted(request_metadata_keys) == ["primary-model", "shadow-a", "shadow-b"]
-    assert all(SILENT_EXPERIMENT_METADATA_KEY not in keys for keys in request_metadata_keys.values())
-    assert all("is_silent_experiment" in request_metadata_keys[group] for group in ("shadow-a", "shadow-b"))
+    shadow_tokens: Final = recording_logger.shadow_successes()[0]["standard_logging_object"]["total_tokens"]
+    assert await router.get_model_group_usage("shadow-b") == (shadow_tokens, 1)
 
 
 @pytest.mark.asyncio
@@ -376,9 +375,7 @@ async def test_logging_callbacks_never_receive_the_router_mirror_marker(recordin
     ("bucket", "planted"),
     [
         ("metadata", {"is_silent_experiment": True}),
-        ("metadata", {SILENT_EXPERIMENT_METADATA_KEY: SilentExperimentMarker.MIRRORED.value}),
-        ("litellm_metadata", {SILENT_EXPERIMENT_METADATA_KEY: SilentExperimentMarker.MIRRORED.value}),
-        ("litellm_metadata", {SILENT_EXPERIMENT_METADATA_KEY: True}),
+        ("litellm_metadata", {"is_silent_experiment": True}),
     ],
 )
 async def test_a_caller_sent_silent_experiment_flag_does_not_mark_a_real_call_as_mirrored(

@@ -52,7 +52,7 @@ from typing_extensions import assert_never, overload
 import litellm
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
-from litellm._internal_context import service_target, with_service_target
+from litellm._internal_context import mirrored_call, service_target, with_service_target
 from litellm._logging import verbose_router_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import (
@@ -79,7 +79,6 @@ from litellm.constants import (
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
-    SILENT_EXPERIMENT_METADATA_KEY,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail, is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
@@ -424,7 +423,6 @@ from litellm.types.router import (
     RoutingPlugin,
     RoutingStrategy,
     SearchToolTypedDict,
-    SilentExperimentMarker,
     TaggedPreRoutingStrategy,
     holds_secret_pointer,
 )
@@ -3294,12 +3292,6 @@ class Router:
         silent_kwargs["metadata"].pop("litellm_parent_otel_span", None)
 
         silent_kwargs["metadata"]["is_silent_experiment"] = True
-        silent_kwargs["metadata"][SILENT_EXPERIMENT_METADATA_KEY] = SilentExperimentMarker.MIRRORED
-        if "litellm_metadata" in silent_kwargs and isinstance(silent_kwargs["litellm_metadata"], dict):
-            silent_kwargs["litellm_metadata"] = {
-                **silent_kwargs["litellm_metadata"],
-                SILENT_EXPERIMENT_METADATA_KEY: SilentExperimentMarker.MIRRORED,
-            }
 
         # Pop logging objects and call IDs to ensure a fresh logging context
         # This prevents collisions in the Proxy's database (spend_logs)
@@ -3316,16 +3308,17 @@ class Router:
         remaining_kwargs: Final = MappingProxyType(
             {key: value for key, value in silent_kwargs.items() if key != "stream"}
         )
-        response: Final = await self.acompletion(
-            model=silent_model,
-            messages=cast(list[AllMessageValues], messages),
-            stream=bool(silent_kwargs.get("stream", False)),
-            **remaining_kwargs,
-        )
-        if not isinstance(response, CustomStreamWrapper):
-            return
-        async for _ in response:
-            pass
+        with mirrored_call():
+            response: Final = await self.acompletion(
+                model=silent_model,
+                messages=cast(list[AllMessageValues], messages),
+                stream=bool(silent_kwargs.get("stream", False)),
+                **remaining_kwargs,
+            )
+            if not isinstance(response, CustomStreamWrapper):
+                return
+            async for _ in response:
+                pass
 
     def _silent_experiment_completion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
         """

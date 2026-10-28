@@ -30,7 +30,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS, SILENT_EXPERIMENT_METADATA_KEY
+from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -63,7 +63,6 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.types import utils as types_utils
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.router import SilentExperimentMarker
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -10439,9 +10438,8 @@ def test_init_kwargs_no_authenticated_identity_field_is_client_settable(mock_req
     assert survived == {}, f"client-supplied values survived for: {sorted(survived)}"
 
 
-@pytest.mark.parametrize("planted", [True, SilentExperimentMarker.MIRRORED.value])
 def test_init_kwargs_client_metadata_cannot_mark_a_pass_through_call_as_a_silent_experiment(
-    planted: object, mock_user_api_key_dict: UserAPIKeyAuth
+    mock_user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
@@ -10461,8 +10459,8 @@ def test_init_kwargs_client_metadata_cannot_mark_a_pass_through_call_as_a_silent
             function_id="test-function-id",
         ),
         _parsed_body={
-            "litellm_metadata": {SILENT_EXPERIMENT_METADATA_KEY: planted, "client_key": "kept"},
-            "metadata": {SILENT_EXPERIMENT_METADATA_KEY: planted},
+            "litellm_metadata": {"is_silent_experiment": True, "client_key": "kept"},
+            "metadata": {"is_silent_experiment": True},
         },
     )
 
