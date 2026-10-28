@@ -14,11 +14,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.types.utils import ImageResponse, ModelInfo
 
 _MEGAPIXEL_USAGE_HIDDEN_PARAM: Final = "megapixel_usage"
-_MEGAPIXEL_PRICE_KEYS: Final = (
-    "output_cost_per_first_megapixel",
-    "output_cost_per_megapixel",
-    "input_cost_per_megapixel",
-)
 
 
 class _MegapixelUsage(BaseModel):
@@ -26,6 +21,14 @@ class _MegapixelUsage(BaseModel):
 
     input_mp: float | None = Field(default=None, ge=0)
     output_mp: float = Field(gt=0)
+
+
+class _MegapixelPrices(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    output_cost_per_megapixel: float
+    output_cost_per_first_megapixel: float | None = None
+    input_cost_per_megapixel: float | None = None
 
 
 class _MeteredImageResponse(BaseModel):
@@ -46,21 +49,19 @@ def record_megapixel_usage(response: object, response_body: bytes | Mapping[str,
     set_hidden_param(response, _MEGAPIXEL_USAGE_HIDDEN_PARAM, usage.model_dump())
 
 
-def _megapixel_cost(prices: ModelInfo, image_response: ImageResponse) -> float | None:
-    output_rate: Final = get_cost_per_unit(prices, "output_cost_per_megapixel", default_value=None)
-    if output_rate is None:
-        return None
+def _megapixel_cost(model_info: ModelInfo, image_response: ImageResponse) -> float | None:
     try:
+        prices: Final = _MegapixelPrices.model_validate(model_info)
         usage: Final = _MegapixelUsage.model_validate(image_response.hidden_params.get(_MEGAPIXEL_USAGE_HIDDEN_PARAM))
     except ValidationError:
         return None
-    first_rate: Final = get_cost_per_unit(prices, "output_cost_per_first_megapixel", default_value=None)
-    input_rate: Final = get_cost_per_unit(prices, "input_cost_per_megapixel") or 0.0
+    first_rate: Final = prices.output_cost_per_first_megapixel
     images: Final = max(len(image_response.data or ()), 1)
     output_mp_per_image: Final = usage.output_mp / images
     return images * (
-        (output_rate if first_rate is None else first_rate) + output_rate * (math.ceil(output_mp_per_image) - 1)
-    ) + input_rate * math.ceil(usage.input_mp or 0)
+        (prices.output_cost_per_megapixel if first_rate is None else first_rate)
+        + prices.output_cost_per_megapixel * (math.ceil(output_mp_per_image) - 1)
+    ) + (prices.input_cost_per_megapixel or 0.0) * math.ceil(usage.input_mp or 0)
 
 
 def _input_cost_per_pixel(resolved: ModelInfo) -> float:
@@ -102,7 +103,7 @@ def cost_calculator(
             return token_based_cost
 
         bills_megapixels: Final = model_info is None or any(
-            model_info.get(key) is not None for key in _MEGAPIXEL_PRICE_KEYS
+            model_info.get(field) is not None for field in _MegapixelPrices.model_fields
         )
         megapixel_cost: Final = _megapixel_cost(_model_info, image_response) if bills_megapixels else None
         if megapixel_cost is not None:
