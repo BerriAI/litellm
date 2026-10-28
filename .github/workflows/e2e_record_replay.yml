@@ -66,7 +66,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra proxy
+          uv sync --frozen --group ci --group proxy-dev --extra proxy
 
       - name: Cache Prisma binaries
         uses: ./.github/actions/cache-prisma-binaries
@@ -164,7 +164,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra proxy
+          uv sync --frozen --group ci --group proxy-dev --extra proxy
 
       - name: Cache Prisma binaries
         uses: ./.github/actions/cache-prisma-binaries
