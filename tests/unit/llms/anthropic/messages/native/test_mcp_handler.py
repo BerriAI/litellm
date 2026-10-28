@@ -488,13 +488,16 @@ async def test_anthropic_messages_with_mcp_keeps_the_requests_parallel_slot_whil
             return rejected.status_code
         return 200
 
-    async def run_tool_after_the_first_round_logs(**_: object) -> list[dict[str, str]]:
+    async def log_the_requests_success() -> None:
         await limiter.async_log_success_event(
             kwargs={"litellm_call_id": "messages-owner", "stream": False},
             response_obj=None,
             start_time=None,
             end_time=datetime.now(),
         )
+
+    async def run_tool_after_the_first_round_logs(**_: object) -> list[dict[str, str]]:
+        await log_the_requests_success()
         assert await second_request_status() == 429, "A round logged while tools run must not free the request's slot"
         return [{"tool_call_id": "toolu_1", "result": "ok", "name": "get_weather"}]
 
@@ -530,3 +533,5 @@ async def test_anthropic_messages_with_mcp_keeps_the_requests_parallel_slot_whil
         )
 
     assert result == responses[1]
+    await log_the_requests_success()
+    assert await second_request_status() == 200, "The request's own log after its tools finish must free its slot"

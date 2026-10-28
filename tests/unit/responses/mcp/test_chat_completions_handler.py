@@ -26,6 +26,7 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import ModelResponse, StandardLoggingPayload
+from litellm.utils import CustomStreamWrapper
 
 
 @pytest.mark.asyncio
@@ -1714,8 +1715,26 @@ async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follo
     assert recorder.failed[0]["response_cost"] > 0
 
 
+async def _read_the_whole_stream(stream: CustomStreamWrapper) -> str:
+    return "".join([part.choices[0].delta.content or "" async for part in stream])
+
+
+async def _hang_up_after_the_first_follow_up_chunk(stream: CustomStreamWrapper) -> str:
+    parts: Final = stream.__aiter__()
+    read: Final = (await parts.__anext__(), await parts.__anext__())
+    await stream.aclose()
+    return "".join(part.choices[0].delta.content or "" for part in read)
+
+
 @pytest.mark.asyncio
-async def test_streamed_mcp_auto_exec_keeps_the_requests_parallel_slot_until_the_stream_ends(monkeypatch):
+@pytest.mark.parametrize(
+    ("end_stream", "expected_text"),
+    [(_read_the_whole_stream, "Sunny."), (_hang_up_after_the_first_follow_up_chunk, "Sunny")],
+    ids=["stream_ends", "client_hangs_up"],
+)
+async def test_streamed_mcp_auto_exec_keeps_the_requests_parallel_slot_until_the_stream_ends_or_closes(
+    monkeypatch, end_stream, expected_text
+):
     import contextvars
     from unittest.mock import MagicMock
 
@@ -1820,8 +1839,8 @@ async def test_streamed_mcp_auto_exec_keeps_the_requests_parallel_slot_until_the
         stream = await acompletion_with_mcp(
             model="gpt-x", messages=[{"role": "user", "content": "hi"}], tools=tools, stream=True
         )
-        streamed_text: Final = "".join([part.choices[0].delta.content or "" async for part in stream])
+        streamed_text: Final = await end_stream(stream)
 
-        assert await second_request_status() == 200, "The request's slot must be freed once its stream ends"
+        assert await second_request_status() == 200, "The request's slot must be freed once its stream ends or closes"
 
-    assert streamed_text == "Sunny."
+    assert streamed_text == expected_text

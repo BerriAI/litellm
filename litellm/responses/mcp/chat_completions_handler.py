@@ -338,11 +338,15 @@ async def acompletion_with_mcp(
                 try:
                     return await self._next_chunk()
                 except StopAsyncIteration:
-                    if self.holds_request_slot:
-                        from litellm.proxy.proxy_server import proxy_logging_obj
-
-                        await proxy_logging_obj.arelease_max_parallel_requests(self.user_api_key_auth)
+                    await self.release_held_request_slot()
                     raise
+
+            async def release_held_request_slot(self) -> None:
+                if not self.holds_request_slot:
+                    return
+                from litellm.proxy.proxy_server import proxy_logging_obj
+
+                await proxy_logging_obj.arelease_max_parallel_requests(self.user_api_key_auth)
 
             async def _next_chunk(self) -> ModelResponseStream:
                 # Phase 1: Collect and yield initial stream chunks
@@ -559,6 +563,10 @@ async def acompletion_with_mcp(
 
             def __aiter__(self):
                 return self._custom_iterator
+
+            async def aclose(self) -> None:
+                await self._custom_iterator.release_held_request_slot()
+                await super().aclose()
 
             def __iter__(self):
                 # For synchronous iteration, create a sync wrapper
