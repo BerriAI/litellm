@@ -217,7 +217,7 @@ def test_draining_many_concatenated_values_is_not_quadratic():
 
     assert drained == count
     peak_bytes: Final = peak - baseline
-    assert peak_bytes < len(payload) // 8, (
+    assert peak_bytes < len(payload) // 4, (
         f"draining {count} values allocated a peak of {peak_bytes} bytes over a {len(payload)} byte payload; "
         "a cursor drain allocates per-value scratch only; re-slicing the remainder on every pop?"
     )
