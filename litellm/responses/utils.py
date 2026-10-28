@@ -3,7 +3,8 @@ import os
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import reduce
-from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
+from types import MappingProxyType
+from typing import Any, Final, Optional, TypeVar, Union, cast, get_args, get_type_hints, overload
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypedDict as ExtraItemsTypedDict
@@ -1400,3 +1401,47 @@ def reasoning_with_summary_default(
         summary_alias if summary_alias is not None else opt_in_auto_reasoning_summary(model, custom_llm_provider)
     )
     return {**reasoning} if summary is None else {**reasoning, "summary": summary}
+
+
+_SUMMARY_VALUES: Final = frozenset((*get_args(ReasoningSummaryLevel), None))
+_OPENAI_REASONING_FIELD_VALUES: Final = MappingProxyType(
+    {
+        "summary": _SUMMARY_VALUES,
+        "generate_summary": _SUMMARY_VALUES,
+        "mode": frozenset(("standard", "pro")),
+        "context": frozenset(("auto", "current_turn", "all_turns")),
+    }
+)
+
+
+def _openai_accepts_reasoning_field(key: str, value: object) -> bool:
+    if key == "effort":
+        return True
+    allowed: Final = _OPENAI_REASONING_FIELD_VALUES.get(key)
+    return allowed is not None and isinstance(value, str | None) and value in allowed
+
+
+def openai_bridge_reasoning(
+    *,
+    requested: Mapping[str, object],
+    effort_kept: bool,
+    summary_alias: object,
+    model: str,
+    drop_params: bool,
+    additional_drop_params: Sequence[str],
+) -> Mapping[str, object] | None:
+    if "reasoning_effort" in additional_drop_params:
+        return None
+    validated: Final = requested if effort_kept else {key: value for key, value in requested.items() if key != "effort"}
+    if not validated and summary_alias is None:
+        return None
+    with_summary: Final = reasoning_with_summary_default(validated, summary_alias, model, "openai")
+    accepted: Final = (
+        {key: value for key, value in with_summary.items() if _openai_accepts_reasoning_field(key, value)}
+        if drop_params
+        else {**with_summary}
+    )
+    remaining: Final = as_str_mapping(
+        _apply_nested_drop_params({"reasoning_effort": accepted}, list(additional_drop_params)).get("reasoning_effort")
+    )
+    return remaining or None

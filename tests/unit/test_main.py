@@ -2214,14 +2214,23 @@ def test_openai_responses_bridge_sends_the_whole_reasoning_effort_dict(
 
 
 @pytest.mark.parametrize(
-    "reasoning_effort",
+    "reasoning_effort, summary_alias, expected_reasoning",
     [
-        {"effort": "minimal", "mode": "pro", "context": "current_turn"},
-        {"effort": "minimal", "mode": "pro", "summary": "auto"},
+        (
+            {"effort": "minimal", "mode": "pro", "context": "current_turn"},
+            {},
+            {"mode": "pro", "context": "current_turn"},
+        ),
+        ({"effort": "minimal", "mode": "pro", "summary": "auto"}, {}, {"mode": "pro", "summary": "auto"}),
+        ({"effort": "minimal", "mode": "pro"}, {"reasoning_summary": "auto"}, {"mode": "pro", "summary": "auto"}),
+        ({"effort": "minimal"}, {"reasoning_summary": "auto"}, {"summary": "auto"}),
+        ({"effort": "minimal"}, {}, None),
     ],
 )
-def test_openai_responses_bridge_keeps_a_dropped_reasoning_effort_dict_dropped(
+def test_openai_responses_bridge_drops_only_a_refused_effort_from_a_reasoning_effort_dict(
     reasoning_effort: dict[str, str],
+    summary_alias: dict[str, str],
+    expected_reasoning: dict[str, str] | None,
     openai_responses_route: respx.Route,
 ):
     litellm.completion(
@@ -2230,10 +2239,81 @@ def test_openai_responses_bridge_keeps_a_dropped_reasoning_effort_dict_dropped(
         reasoning_effort=reasoning_effort,
         drop_params=True,
         api_key="fake-key",
+        **summary_alias,
+    )
+
+    request_body: Final = json.loads(openai_responses_route.calls[0].request.content)
+    assert request_body.get("reasoning") == expected_reasoning
+
+
+def test_openai_responses_bridge_drops_a_reasoning_effort_dict_for_a_model_without_reasoning(
+    openai_responses_route: respx.Route,
+):
+    litellm.completion(
+        model="openai/responses/gpt-4.1",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "mode": "pro", "context": "current_turn"},
+        drop_params=True,
+        api_key="fake-key",
     )
 
     request_body: Final = json.loads(openai_responses_route.calls[0].request.content)
     assert "reasoning" not in request_body
+
+
+@pytest.mark.parametrize(
+    "drop_params, expected_reasoning",
+    [
+        (True, {"effort": "low", "context": "current_turn"}),
+        (False, {"effort": "low", "exclude": False, "mode": "turbo", "context": "current_turn"}),
+    ],
+)
+def test_openai_responses_bridge_drops_reasoning_fields_openai_refuses_only_under_drop_params(
+    drop_params: bool,
+    expected_reasoning: dict[str, object],
+    openai_responses_route: respx.Route,
+):
+    litellm.completion(
+        model="openai/responses/gpt-6.1-terra",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "exclude": False, "mode": "turbo", "context": "current_turn"},
+        drop_params=drop_params,
+        api_key="fake-key",
+    )
+
+    request_body: Final = json.loads(openai_responses_route.calls[0].request.content)
+    assert request_body["reasoning"] == expected_reasoning
+
+
+@pytest.mark.parametrize(
+    "additional_drop_params, summary_alias, expected_reasoning",
+    [
+        (["reasoning_effort.mode"], {}, {"effort": "low", "context": "current_turn"}),
+        (
+            ["reasoning_effort.summary"],
+            {"reasoning_summary": "auto"},
+            {"effort": "low", "mode": "pro", "context": "current_turn"},
+        ),
+        (["reasoning_effort"], {"reasoning_summary": "auto"}, None),
+    ],
+)
+def test_openai_responses_bridge_applies_additional_drop_params_to_a_reasoning_effort_dict(
+    additional_drop_params: list[str],
+    summary_alias: dict[str, str],
+    expected_reasoning: dict[str, str] | None,
+    openai_responses_route: respx.Route,
+):
+    litellm.completion(
+        model="openai/responses/gpt-6.1-terra",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "mode": "pro", "context": "current_turn"},
+        additional_drop_params=additional_drop_params,
+        api_key="fake-key",
+        **summary_alias,
+    )
+
+    request_body: Final = json.loads(openai_responses_route.calls[0].request.content)
+    assert request_body.get("reasoning") == expected_reasoning
 
 
 def test_openai_responses_bridge_gives_a_reasoning_effort_dict_the_auto_summary_a_string_gets(

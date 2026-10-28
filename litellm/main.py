@@ -6113,12 +6113,18 @@ def completion(
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
             if custom_llm_provider == "openai" and isinstance(resolved_reasoning_effort, dict):
-                if "reasoning_effort" in optional_params:
-                    from litellm.responses.utils import reasoning_with_summary_default
+                from litellm.responses.utils import openai_bridge_reasoning
 
-                    optional_params["reasoning_effort"] = reasoning_with_summary_default(
-                        resolved_reasoning_effort, rs_val, model, custom_llm_provider
-                    )
+                optional_params["reasoning_effort"] = openai_bridge_reasoning(
+                    requested=resolved_reasoning_effort,
+                    effort_kept="reasoning_effort" in optional_params,
+                    summary_alias=rs_val,
+                    model=model,
+                    drop_params=drop_unsupported_reasoning,
+                    additional_drop_params=_ADDITIONAL_DROP_PARAMS_ADAPTER.validate_python(
+                        routing_kwargs.get("additional_drop_params") or []
+                    ),
+                )
             elif isinstance(resolved_reasoning_effort, dict) and "summary" in resolved_reasoning_effort:
                 optional_params["reasoning_effort"] = resolved_reasoning_effort
             elif rs_val is not None:
