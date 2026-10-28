@@ -9,7 +9,9 @@ resolution (get_model_info) including the shipped rules in the bundled cost map.
 
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -23,7 +25,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     set_fallback_generalizations,
 )
 
-REPO_ROOT = Path(__file__).parents[3]
+REPO_ROOT: Final = Path(__file__).parents[3]
 
 
 @pytest.fixture
@@ -240,6 +242,18 @@ def test_malformed_rules_are_skipped_not_fatal(restore_generalizations):
     assert match_capability_generalizations("claude-opus-9-9") == {"good": True}
 
 
+def test_extends_does_not_inherit_the_named_rules_model_info(
+    restore_generalizations: Callable[[list | None], None],
+) -> None:
+    restore_generalizations(
+        [
+            {"name": "parent", "pattern": r"^zeta-only$", "model_info": {"supports_vision": True}},
+            {"name": "child", "pattern": r"^acme-", "extends": "parent", "model_info": {"supports_reasoning": True}},
+        ]
+    )
+    assert match_capability_generalizations("acme-1") == {"supports_reasoning": True}
+
+
 # --------------------------------------------------------------------------- #
 # End-to-end: provider routing + model-info resolution
 # --------------------------------------------------------------------------- #
@@ -373,8 +387,10 @@ def test_exact_entries_fill_only_missing_fields(restore_generalizations, monkeyp
     "cost_map_path",
     ["model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json"],
 )
-def test_every_shipped_rule_installs_without_a_skip_warning(restore_generalizations, warning_messages, cost_map_path):
-    rules = json.loads((REPO_ROOT / cost_map_path).read_text())["fallback_generalizations"]["rules"]
+def test_every_shipped_rule_installs_without_a_skip_warning(
+    restore_generalizations: Callable[[list | None], None], warning_messages: list[str], cost_map_path: str
+) -> None:
+    rules: Final = json.loads((REPO_ROOT / cost_map_path).read_text())["fallback_generalizations"]["rules"]
     restore_generalizations(rules)
     assert warning_messages == []
 
