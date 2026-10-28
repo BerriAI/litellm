@@ -42055,13 +42055,13 @@
         "mode": "embedding"
     },
     "mistral/mistral-large-4": {
-        "cache_read_input_token_cost": 1.4e-07,
-        "input_cost_per_token": 1.36e-06,
+        "cache_read_input_token_cost": 6.8e-08,
+        "input_cost_per_token": 6.8e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 1048576,
         "max_output_tokens": 1048576,
         "mode": "chat",
-        "output_cost_per_token": 4.18e-06,
+        "output_cost_per_token": 2.09e-06,
         "reasoning_effort_levels": [
             "none",
             "high"
@@ -42076,13 +42076,13 @@
         "supports_vision": true
     },
     "mistral/mistral-large-4-0": {
-        "cache_read_input_token_cost": 1.4e-07,
-        "input_cost_per_token": 1.36e-06,
+        "cache_read_input_token_cost": 6.8e-08,
+        "input_cost_per_token": 6.8e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 1048576,
         "max_output_tokens": 1048576,
         "mode": "chat",
-        "output_cost_per_token": 4.18e-06,
+        "output_cost_per_token": 2.09e-06,
         "reasoning_effort_levels": [
             "none",
             "high"

@@ -32,7 +32,9 @@ def test_metadata_and_backup(model):
     assert info["litellm_provider"] == "mistral"
     assert info["mode"] == "chat"
     assert info["max_input_tokens"] == 1048576
-    assert 0 < info["cache_read_input_token_cost"] < info["input_cost_per_token"] < info["output_cost_per_token"]
+    assert info["input_cost_per_token"] == 6.8e-07
+    assert info["output_cost_per_token"] == 2.09e-06
+    assert info["cache_read_input_token_cost"] == 6.8e-08
     assert info["reasoning_effort_levels"] == ["none", "high"]
     for capability in (
         "supports_vision",
@@ -57,16 +59,12 @@ def test_reasoning_effort(model, effort):
 
 @pytest.mark.parametrize("model", MODELS)
 def test_completion_cost(model):
-    info = litellm.get_model_info(model)
-    input_rate = info["input_cost_per_token"]
-    output_rate = info["output_cost_per_token"]
-    cache_read_rate = info["cache_read_input_token_cost"]
     uncached_response = litellm.ModelResponse(
         model=model.split("/", 1)[1],
         usage={"prompt_tokens": 1000, "completion_tokens": 100, "total_tokens": 1100},
     )
     assert litellm.completion_cost(completion_response=uncached_response, model=model) == pytest.approx(
-        1000 * input_rate + 100 * output_rate
+        1000 * 6.8e-07 + 100 * 2.09e-06
     )
     response = litellm.ModelResponse(
         model=model.split("/", 1)[1],
@@ -78,7 +76,7 @@ def test_completion_cost(model):
         },
     )
     assert litellm.completion_cost(completion_response=response, model=model) == pytest.approx(
-        400 * input_rate + 600 * cache_read_rate + 100 * output_rate
+        400 * 6.8e-07 + 600 * 6.8e-08 + 100 * 2.09e-06
     )
 
 
