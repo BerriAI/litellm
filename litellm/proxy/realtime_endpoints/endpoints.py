@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -250,12 +251,13 @@ def _encode_realtime_token_payload(
     team_id: str | None,
     expires_at: int | None,
     session_type: str = "realtime",
+    caller_auth: Mapping[str, object] | None = None,
 ) -> str:
     """
     Encode metadata with the upstream ephemeral key so /realtime/calls can
     route without requiring model as a query param.
     """
-    payload: Final[dict[str, str | int | None]] = {
+    payload: Final[Mapping[str, object]] = {
         "v": _REALTIME_TOKEN_VERSION,
         "ephemeral_key": ephemeral_key,
         "model_id": model_id,
@@ -263,8 +265,22 @@ def _encode_realtime_token_payload(
         "team_id": team_id or "",
         "expires_at": expires_at,
         "session_type": session_type,
+        **({} if caller_auth is None else {"caller_auth": caller_auth}),
     }
     return json.dumps(payload, separators=(",", ":"))
+
+
+def _caller_auth_for_token(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
+    return user_api_key_dict.model_dump(mode="json", exclude_none=True, exclude={"api_key", "parent_otel_span"})
+
+
+def _caller_auth_from_token(
+    decoded_payload: Mapping[str, object] | None, user_id: str | None, team_id: str | None
+) -> UserAPIKeyAuth:
+    caller_auth: Final = None if decoded_payload is None else as_str_mapping(decoded_payload.get("caller_auth"))
+    if caller_auth is None:
+        return UserAPIKeyAuth(user_id=user_id, team_id=team_id)
+    return UserAPIKeyAuth.model_validate({**caller_auth, "api_key": caller_auth.get("token")})
 
 
 def _header_value(headers: Mapping[str, str], name: str, default: str) -> str:
@@ -444,6 +460,7 @@ async def create_realtime_client_secret(
         team_id=getattr(user_api_key_dict, "team_id", None),
         expires_at=expires_at if isinstance(expires_at, int) else None,
         session_type=session_type,
+        caller_auth=_caller_auth_for_token(user_api_key_dict) if session_type == "translation" else None,
     )
     encrypted_token: Final[str] = encrypt_value_helper(token_payload)
     upstream_json["value"] = encrypted_token
@@ -562,12 +579,7 @@ async def proxy_realtime_calls(
         team_id = None
         session_type = "realtime"
 
-    # Build a minimal UserAPIKeyAuth with user/team IDs from the token
-    # so spend tracking and budget enforcement work correctly.
-    minimal_auth: Final = UserAPIKeyAuth(
-        user_id=user_id,
-        team_id=team_id,
-    )
+    token_caller_auth: Final = _caller_auth_from_token(decoded_payload, user_id, team_id)
 
     data: dict = {}
     try:
@@ -594,14 +606,14 @@ async def proxy_realtime_calls(
             data=data,
             request=request,
             general_settings=general_settings,
-            user_api_key_dict=minimal_auth,
+            user_api_key_dict=token_caller_auth,
             version=version,
             proxy_config=proxy_config,
         )
 
         call_type: Final = "arealtime_translation_calls" if is_translation_request else "arealtime_calls"
         data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=minimal_auth,
+            user_api_key_dict=token_caller_auth,
             data=data,
             call_type=call_type,
         )
@@ -618,7 +630,7 @@ async def proxy_realtime_calls(
 
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=minimal_auth,
+            user_api_key_dict=token_caller_auth,
             original_exception=e,
             request_data=data,
         )

@@ -28,7 +28,7 @@ from litellm.caching.caching import Cache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy import proxy_server
 from litellm.proxy.route_llm_request import route_request
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, GuardrailStreamScope
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 from litellm.types.utils import TranscriptionResponse
@@ -408,8 +408,10 @@ def test_streamed_transcription_returns_the_litellm_call_and_model_headers(
 
 
 class _TranscriptRedactor(CustomGuardrail):
-    def __init__(self) -> None:
-        super().__init__(guardrail_name="transcript-redactor", event_hook=GuardrailEventHooks.post_call)
+    def __init__(self, stream_scope: GuardrailStreamScope = "both") -> None:
+        super().__init__(
+            guardrail_name="transcript-redactor", event_hook=GuardrailEventHooks.post_call, stream_scope=stream_scope
+        )
 
     async def async_post_call_success_hook(
         self, data: dict[str, object], user_api_key_dict: object, response: object
@@ -485,6 +487,57 @@ def test_streamed_transcription_honors_a_deployment_post_call_guardrail(
     else:
         assert response.headers["content-type"].startswith("text/event-stream")
         assert '"text":"my pin is 1234"' in response.text
+
+
+@pytest.mark.usefixtures("patched_transcription_stream")
+@pytest.mark.parametrize(
+    "stream_scope,upstream_streamed,expected_text",
+    [("streaming", False, "[REDACTED]"), ("non_streaming", True, "my pin is 1234")],
+)
+def test_streamed_transcription_applies_a_deployment_guardrail_only_in_its_stream_scope(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    stream_scope: GuardrailStreamScope,
+    upstream_streamed: bool,
+    expected_text: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_TranscriptRedactor(stream_scope=stream_scope)])
+    upstream_route: Final = respx_mock.post("https://transcribe-upstream.example/v1/audio/transcriptions").mock(
+        side_effect=_streams_when_asked
+    )
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-transcribe",
+                    "litellm_params": {
+                        "model": "openai/gpt-transcribe",
+                        "api_key": "sk-test",
+                        "api_base": "https://transcribe-upstream.example/v1",
+                        "guardrails": ["transcript-redactor"],
+                    },
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "route_request", route_request)
+
+    with auth_as():
+        response: Final = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("sample.wav", b"audio", "audio/wav")},
+            data={"model": "gpt-transcribe", "stream": "true"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert (b'name="stream"' in upstream_route.calls.last.request.content) is upstream_streamed
+    assert _sse_events(response.text)[-1]["text"] == expected_text
 
 
 @pytest.mark.usefixtures("patched_transcription_stream")
@@ -738,13 +791,20 @@ def test_streamed_transcription_error_mid_stream_ends_with_an_error_event_and_ru
             data={"model": "gpt-transcribe", "stream": "true"},
         )
 
-    frames: Final = tuple(
-        json.loads(line.removeprefix("data: ")) for line in response.text.splitlines() if line.startswith("data: ")
+    data_lines: Final = tuple(
+        line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: ")
     )
+    frames: Final = tuple(json.loads(line) for line in data_lines[:-1])
     assert response.status_code == 200
     assert tuple(frame.get("delta") for frame in frames[:2]) == ("hello ", "world")
     assert len(frames) == 3
+    assert data_lines[-1] == "[DONE]"
     assert "upstream connection dropped" in frames[2]["error"]["message"]
     assert set(frames[2]["error"]) == {"message", "type", "param", "code"}
+    assert (frames[2]["error"]["type"], frames[2]["error"]["param"], frames[2]["error"]["code"]) == (
+        "internal_server_error",
+        None,
+        "500",
+    )
     failure_hook.assert_awaited_once()
-    assert isinstance(failure_hook.await_args.kwargs["original_exception"], httpx.ReadError)
+    assert isinstance(failure_hook.await_args.kwargs["original_exception"], litellm.APIConnectionError)

@@ -59,20 +59,3 @@ async def test_azure_sdp_exchange_targets_the_ga_v1_surface_with_the_ephemeral_k
     assert str(request.url) == "https://my.openai.azure.com/openai/v1/realtime/calls"
     assert request.headers.get("authorization") == "Bearer ek_upstream"
     assert "api-key" not in request.headers
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("api_base", (*_API_BASES, "https://my.openai.azure.com/openai/v1/"))
-async def test_azure_ga_transcription_session_normalizes_the_api_base(api_base: str) -> None:
-    azure: Final = _AzureThatRecordsTheRequest()
-    await litellm.acreate_realtime_transcription_session(
-        model="azure/transcription-deployment",
-        transcription_session={"input_audio_transcription": {"model": "transcription-deployment"}},
-        api_base=api_base,
-        api_key="azure-key",
-        api_version="v1",
-        client=azure.client(),
-    )
-    (request,) = azure.requests
-    assert str(request.url) == "https://my.openai.azure.com/openai/v1/realtime/transcription_sessions"
-    assert request.headers.get("api-key") == "azure-key"

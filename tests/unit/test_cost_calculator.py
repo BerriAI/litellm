@@ -7201,6 +7201,26 @@ def test_transcription_deployment_bills_seconds_only_without_a_declared_token_ra
     assert cost == pytest.approx(expected_cost)
 
 
+@pytest.mark.parametrize("model", ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"])
+def test_azure_transcription_without_usage_bills_the_measured_audio_like_openai(
+    _local_model_cost_map: None, model: str
+) -> None:
+    def cost_of_ten_seconds_without_usage(provider: str) -> float:
+        transcript: Final = TranscriptionResponse(text="Good")
+        transcript.set_audio_transcription_duration(10.0)
+        return completion_cost(
+            completion_response=transcript,
+            model=f"{provider}/{model}",
+            custom_llm_provider=provider,
+            call_type="atranscription",
+        )
+
+    openai_cost: Final = cost_of_ten_seconds_without_usage("openai")
+
+    assert openai_cost > 0
+    assert cost_of_ten_seconds_without_usage("azure") == pytest.approx(openai_cost)
+
+
 def test_gpt_image_2_azure_cost_tracking():
     azure_image_generation_response: Final = {
         "created": 1758585600,
@@ -10243,24 +10263,38 @@ def test_realtime_translation_duration_cost_ignores_malformed_provider_usage(
     assert output_invalid_cost == pytest.approx(2.0 * litellm.model_cost[model]["input_cost_per_second"])
 
 
-def _translation_session_cost(deployment_id: str) -> float:
+def _translation_session_cost(
+    deployment_id: str,
+    session_model: str | None = "gpt-realtime-translate",
+    model: str = "gpt-realtime-translate",
+    base_model: str | None = None,
+) -> float:
+    session_created: Final[OpenAIRealtimeStreamList] = (
+        [{"type": "session.created", "session": {"model": session_model}}] if session_model is not None else []
+    )
     one_minute_session: Final = LiteLLMRealtimeStreamLoggingObject(
         usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
         results=[
-            {"type": "session.created", "session": {"model": "gpt-realtime-translate"}},
+            *session_created,
             {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 60.0, "output_seconds": 60.0}},
         ],
     )
     return completion_cost(
         completion_response=one_minute_session,
-        model="gpt-realtime-translate",
+        model=model,
         call_type=CallTypes.arealtime.value,
         custom_llm_provider="openai",
         custom_pricing=True,
         router_model_id=deployment_id,
+        base_model=base_model,
     )
 
 
+@pytest.mark.parametrize("session_model", ["gpt-realtime-translate", None])
+@pytest.mark.parametrize(
+    "deployment_model,base_model",
+    [("gpt-realtime-translate", None), ("my-translator", "gpt-realtime-translate")],
+)
 @pytest.mark.parametrize(
     "deployment_id,deployment_rates,bills_public_input_rate",
     [
@@ -10273,7 +10307,43 @@ def test_realtime_translation_deployment_per_second_rates_fall_back_to_public_ra
     deployment_id: str,
     deployment_rates: Mapping[str, float],
     bills_public_input_rate: bool,
+    deployment_model: str,
+    base_model: str | None,
+    session_model: str | None,
 ) -> None:
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "translate",
+                "litellm_params": {
+                    "model": f"openai/{deployment_model}",
+                    "api_key": "sk-test",
+                    **deployment_rates,
+                },
+                "model_info": {"id": deployment_id, **({"base_model": base_model} if base_model else {})},
+            }
+        ]
+    )
+    public_input_rate: Final = litellm.model_cost["gpt-realtime-translate"]["input_cost_per_second"]
+
+    assert public_input_rate > 0
+    assert _translation_session_cost(
+        deployment_id, session_model=session_model, model=deployment_model, base_model=base_model
+    ) == pytest.approx(60 * 0.001 + (60 * public_input_rate if bills_public_input_rate else 0.0))
+
+
+def test_realtime_translation_rate_ignores_a_session_model_the_deployment_does_not_run(
+    _local_model_cost_map: None,
+) -> None:
+    litellm.register_model(
+        model_cost={
+            "translation-session-echo": {
+                "litellm_provider": "openai",
+                "mode": "realtime",
+                "input_cost_per_second": 0.5,
+            }
+        }
+    )
     litellm.Router(
         model_list=[
             {
@@ -10281,18 +10351,16 @@ def test_realtime_translation_deployment_per_second_rates_fall_back_to_public_ra
                 "litellm_params": {
                     "model": "openai/gpt-realtime-translate",
                     "api_key": "sk-test",
-                    **deployment_rates,
+                    "output_cost_per_second": 0.001,
                 },
-                "model_info": {"id": deployment_id},
+                "model_info": {"id": "translate-output-priced"},
             }
         ]
     )
-    public_input_rate: Final = litellm.model_cost["gpt-realtime-translate"]["input_cost_per_second"]
 
-    assert public_input_rate > 0
-    assert _translation_session_cost(deployment_id) == pytest.approx(
-        60 * 0.001 + (60 * public_input_rate if bills_public_input_rate else 0.0)
-    )
+    assert _translation_session_cost(
+        "translate-output-priced", session_model="translation-session-echo"
+    ) == pytest.approx(_translation_session_cost("translate-output-priced", session_model=None))
 
 
 def test_realtime_translation_deployment_without_per_second_rates_bills_public_rates(_local_model_cost_map) -> None:

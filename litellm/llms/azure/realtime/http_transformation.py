@@ -10,20 +10,17 @@ from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPC
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
-from .handler import azure_realtime_requires_ga
+
+def _azure_resource_base(api_base: str) -> str:
+    return api_base.rstrip("/").removesuffix("/v1").removesuffix("/openai")
 
 
 def _azure_realtime_v1_url(api_base: str, endpoint: str) -> str:
     """Azure serves WebRTC only on the GA v1 surface, which rejects any api-version query param."""
-    base: Final = api_base.rstrip("/").removesuffix("/v1").removesuffix("/openai")
-    return f"{base}/openai/v1/realtime/{endpoint}"
+    return f"{_azure_resource_base(api_base)}/openai/v1/realtime/{endpoint}"
 
 
 class AzureRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
-    @staticmethod
-    def _uses_ga_api(model: str, api_version: str | None) -> bool:
-        return api_version in ("preview", "latest", "v1") or azure_realtime_requires_ga(model)
-
     def get_api_base(self, api_base: str | None, **kwargs: object) -> str:
         return api_base or litellm.api_base or get_secret_str("AZURE_API_BASE") or ""
 
@@ -64,9 +61,7 @@ class AzureRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
         return _azure_realtime_v1_url(self.get_api_base(api_base), "calls")
 
     def get_transcription_session_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
-        base: Final = self.get_api_base(api_base)
-        if self._uses_ga_api(model, api_version):
-            return _azure_realtime_v1_url(base, "transcription_sessions")
+        base: Final = _azure_resource_base(self.get_api_base(api_base))
         version: Final = api_version or get_secret_str("AZURE_API_VERSION") or "2024-12-17"
         return f"{join_api_base(base, 'openai/realtime/transcription_sessions')}?api-version={version}"
 

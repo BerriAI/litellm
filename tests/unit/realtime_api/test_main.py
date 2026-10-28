@@ -925,6 +925,11 @@ _GA_DEFAULT_SESSIONS: Final = (
     pytest.param("gpt-realtime-2.1", "realtime", None, id="ga-only-model"),
     pytest.param("gpt-realtime-2", "realtime", None, id="ga-only-alias"),
     pytest.param("gpt-realtime-2-2026-05-06", "realtime", None, id="ga-only-snapshot"),
+    # Azure answers beta sessions on these with "The Realtime preview API is no longer available"
+    # (https://aka.ms/aoai/realtime-ga), checked live 2026-10-28
+    pytest.param("gpt-realtime", "realtime", None, id="beta-retired-gpt-realtime"),
+    pytest.param("gpt-realtime-mini", "realtime", None, id="beta-retired-gpt-realtime-mini"),
+    pytest.param("gpt-realtime-1.5", "realtime", None, id="beta-retired-gpt-realtime-1.5"),
     pytest.param("my-transcribe-deployment", "realtime", {"intent": "transcription"}, id="transcription-intent"),
     pytest.param("my-translate-deployment", "translation", None, id="translation-mode"),
 )
@@ -960,7 +965,7 @@ async def _azure_backend_url_dialed_for(websocket: _ClientWebSocketWithHeaders, 
     connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
     with patch("websockets.connect", connect):
         await realtime_main._arealtime.__wrapped__(
-            model="azure/gpt-realtime",
+            model="azure/my-realtime-deployment",
             websocket=websocket,
             api_base="https://my-endpoint.openai.azure.com",
             api_key="fake-key",
@@ -975,7 +980,7 @@ async def test_arealtime_azure_ga_client_without_beta_header_dials_the_ga_upstre
     monkeypatch.delenv("LITELLM_AZURE_REALTIME_PROTOCOL", raising=False)
     assert (
         await _azure_backend_url_dialed_for(_GA_CLIENT)
-        == "wss://my-endpoint.openai.azure.com/openai/v1/realtime?model=gpt-realtime"
+        == "wss://my-endpoint.openai.azure.com/openai/v1/realtime?model=my-realtime-deployment"
     )
 
 
@@ -983,7 +988,7 @@ async def test_arealtime_azure_ga_client_without_beta_header_dials_the_ga_upstre
 async def test_arealtime_azure_beta_header_client_keeps_the_beta_upstream(monkeypatch):
     monkeypatch.delenv("LITELLM_AZURE_REALTIME_PROTOCOL", raising=False)
     assert await _azure_backend_url_dialed_for(_BETA_CLIENT) == (
-        "wss://my-endpoint.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-realtime"
+        "wss://my-endpoint.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=my-realtime-deployment"
     )
 
 
@@ -991,7 +996,7 @@ async def test_arealtime_azure_beta_header_client_keeps_the_beta_upstream(monkey
 async def test_arealtime_azure_explicit_beta_protocol_wins_over_a_ga_client(monkeypatch):
     monkeypatch.delenv("LITELLM_AZURE_REALTIME_PROTOCOL", raising=False)
     assert await _azure_backend_url_dialed_for(_GA_CLIENT, realtime_protocol="beta") == (
-        "wss://my-endpoint.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-realtime"
+        "wss://my-endpoint.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=my-realtime-deployment"
     )
 
 
@@ -999,7 +1004,7 @@ async def test_arealtime_azure_explicit_beta_protocol_wins_over_a_ga_client(monk
 async def test_arealtime_azure_env_beta_protocol_wins_over_a_ga_client(monkeypatch):
     monkeypatch.setenv("LITELLM_AZURE_REALTIME_PROTOCOL", "beta")
     assert await _azure_backend_url_dialed_for(_GA_CLIENT) == (
-        "wss://my-endpoint.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-realtime"
+        "wss://my-endpoint.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=my-realtime-deployment"
     )
 
 
@@ -1174,26 +1179,6 @@ async def test_router_realtime_bridges_a_beta_client_to_ga_when_model_info_base_
         "wss://my-endpoint.openai.azure.com/openai/v1/realtime?model=my-realtime-deployment",
         _GA_SESSION_CREATED_BRIDGED_TO_BETA,
     )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("request_kwargs", _ROUTER_REQUEST_SHAPES)
-async def test_router_transcription_session_uses_the_ga_route_when_model_info_base_model_is_ga_only(
-    local_model_cost_map, request_kwargs: Mapping[str, object]
-) -> None:
-    router: Final = _router_with_an_azure_deployment_aliasing(
-        "azure/my-whisper-deployment", "azure/gpt-realtime-whisper"
-    )
-    gateway: Final = _GatewayThatRecordsTheUrl()
-
-    await router.acreate_realtime_transcription_session(
-        model="team-alias",
-        transcription_session={"input_audio_format": "pcm16"},
-        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
-        **request_kwargs,
-    )
-
-    assert gateway.url == "https://my-endpoint.openai.azure.com/openai/v1/realtime/transcription_sessions"
 
 
 async def _vertex_provider_config_for(monkeypatch, model: str, vertex_location: str | None):

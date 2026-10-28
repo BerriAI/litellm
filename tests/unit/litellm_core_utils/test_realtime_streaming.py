@@ -4935,6 +4935,114 @@ async def test_blocked_transcript_is_removed_from_the_conversation_before_the_re
 
 
 @pytest.mark.asyncio
+async def test_beta_client_bridged_to_a_ga_backend_sends_assistant_text_items_as_ga_output_text() -> None:
+    client_ws = MagicMock()
+    client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "The forecast is sunny"}],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "conversation.item.create",
+                    "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Thanks"}]},
+                }
+            ),
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = _mock_logging()
+    logging_obj.pre_call = MagicMock()
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, logging_obj, backend_uses_beta_protocol=False, bridges_beta_client_to_ga=True
+    )
+
+    await streaming.client_ack_messages()
+
+    sent_items: Final = [json.loads(call.args[0])["item"] for call in backend_ws.send.call_args_list]
+    assert [(item["role"], item["content"]) for item in sent_items] == [
+        ("assistant", [{"type": "output_text", "text": "The forecast is sunny"}]),
+        ("user", [{"type": "input_text", "text": "Thanks"}]),
+    ], (
+        "Beta and GA item content types, checked 2026-10-28: "
+        "https://github.com/openai/openai-python/blob/v2.33.0/src/openai/types/beta/realtime/conversation_item_content.py and "
+        "https://github.com/openai/openai-python/blob/v2.33.0/src/openai/types/realtime/realtime_conversation_item_assistant_message.py"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event_type", ("response.created", "response.done"))
+async def test_beta_client_bridged_to_a_ga_backend_receives_the_beta_response_shape(event_type: str) -> None:
+    client_ws = MagicMock()
+    client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": event_type,
+                    "event_id": "e1",
+                    "response": {
+                        "object": "realtime.response",
+                        "id": "resp_1",
+                        "status": "completed",
+                        "conversation_id": "conv_1",
+                        "output_modalities": ["audio"],
+                        "max_output_tokens": "inf",
+                        "audio": {"output": {"format": {"type": "audio/pcmu"}, "voice": "marin"}},
+                        "output": [
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"type": "output_audio", "transcript": "Sunny"}],
+                            }
+                        ],
+                    },
+                }
+            ).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, logging_obj, backend_uses_beta_protocol=False, bridges_beta_client_to_ga=True
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    sent: Final = json.loads(client_ws.send_text.call_args_list[0].args[0])
+    assert sent["type"] == event_type
+    assert sent["response"] == {
+        "object": "realtime.response",
+        "id": "resp_1",
+        "status": "completed",
+        "conversation_id": "conv_1",
+        "modalities": ["audio", "text"],
+        "max_output_tokens": "inf",
+        "output_audio_format": "g711_ulaw",
+        "voice": "marin",
+        "output": [{"type": "message", "role": "assistant", "content": [{"type": "audio", "transcript": "Sunny"}]}],
+    }, (
+        "Beta and GA response fields, checked 2026-10-28: "
+        "https://github.com/openai/openai-python/blob/v2.33.0/src/openai/types/beta/realtime/realtime_response.py and "
+        "https://github.com/openai/openai-python/blob/v2.33.0/src/openai/types/realtime/realtime_response.py"
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("drop_params", (False, True))
 async def test_beta_client_bridged_to_a_ga_backend_sends_ga_session_and_response_fields(drop_params: bool) -> None:
     client_ws = MagicMock()

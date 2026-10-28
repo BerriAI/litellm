@@ -548,7 +548,7 @@ async def acreate_realtime_transcription_session(
         logging_obj=litellm_logging_obj,
         timeout=timeout or request_timeout,
         provider_config=provider_config,
-        model=_deployment_base_model(kwargs, custom_llm_provider) or model_name,
+        model=model_name,
         extra_headers=resolved_extra_headers,
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,

@@ -199,6 +199,41 @@ def ga_session_to_beta(session: Mapping[str, object]) -> Mapping[str, object]:
     }
 
 
+_GA_ONLY_RESPONSE_FIELDS: Final = frozenset(("audio", "output_modalities"))
+_GA_TO_BETA_RESPONSE_FIELDS: Final[Mapping[str, str]] = MappingProxyType({"output_modalities": "modalities"})
+
+
+def ga_response_to_beta(response: Mapping[str, object]) -> Mapping[str, object]:
+    audio: Final = _mapping_field(response, "audio") or _EMPTY_SESSION
+    return {
+        **{key: value for key, value in response.items() if key not in _GA_ONLY_RESPONSE_FIELDS},
+        **_beta_session_fields(response, _GA_TO_BETA_RESPONSE_FIELDS),
+        **_beta_session_fields(_mapping_field(audio, "output") or _EMPTY_SESSION, _GA_TO_BETA_AUDIO_OUTPUT_FIELDS),
+    }
+
+
+_JSON_ARRAY: Final = TypeAdapter(tuple[object, ...])
+_GA_ASSISTANT_CONTENT_TYPE_BY_BETA_TYPE: Final[Mapping[str, str]] = MappingProxyType(
+    {"text": "output_text", "audio": "output_audio"}
+)
+
+
+def _ga_assistant_content_block(block: object) -> object:
+    content_block: Final = _json_object(block)
+    block_type: Final = None if content_block is None else content_block.get("type")
+    if content_block is None or not isinstance(block_type, str):
+        return block
+    ga_type: Final = _GA_ASSISTANT_CONTENT_TYPE_BY_BETA_TYPE.get(block_type)
+    return block if ga_type is None else {**content_block, "type": ga_type}
+
+
+def beta_item_to_ga(item: Mapping[str, object]) -> Mapping[str, object]:
+    content: Final = item.get("content")
+    if item.get("role") != "assistant" or not isinstance(content, list):
+        return item
+    return {**item, "content": [_ga_assistant_content_block(block) for block in _JSON_ARRAY.validate_python(content)]}
+
+
 def _guardrail_event_id() -> str:
     return f"{_GUARDRAIL_EVENT_ID_PREFIX}{uuid.uuid4().hex}"
 
@@ -469,6 +504,7 @@ class RealTimeStreaming:
     _MAX_BUFFERED_BYTES: int = 10 * 1024 * 1024  # 10 MB
 
     _SESSION_EVENT_TYPES = frozenset(["session.created", "session.updated"])
+    _RESPONSE_EVENT_TYPES: Final = frozenset(("response.created", "response.done"))
     _CLIENT_AUDIO_BUFFER_TYPES = frozenset(
         [
             "input_audio_buffer.append",
@@ -1166,10 +1202,16 @@ class RealTimeStreaming:
         return json.dumps(self._session_event_for_client(self._normalize_event_for_ga_client(event)))
 
     def _session_event_for_client(self, event: Mapping[str, object]) -> Mapping[str, object]:
-        if not self._bridges_beta_client_to_ga or event.get("type") not in self._SESSION_EVENT_TYPES:
+        if not self._bridges_beta_client_to_ga:
             return event
-        session: Final = _mapping_field(event, "session")
-        return event if session is None else {**event, "session": ga_session_to_beta(session)}
+        event_type: Final = event.get("type")
+        if event_type in self._SESSION_EVENT_TYPES:
+            session: Final = _mapping_field(event, "session")
+            return event if session is None else {**event, "session": ga_session_to_beta(session)}
+        if event_type in self._RESPONSE_EVENT_TYPES:
+            response: Final = _mapping_field(event, "response")
+            return event if response is None else {**event, "response": ga_response_to_beta(response)}
+        return event
 
     async def _send_event_to_client(self, event: object, event_str: str) -> bool:
         if self._should_drop_event_from_client(event):
@@ -2074,6 +2116,14 @@ class RealTimeStreaming:
                         msg_obj["response"] = self._remap_beta_response_to_ga(
                             beta_response, drop_temperature=self._drop_params
                         )
+                        message = json.dumps(msg_obj)
+
+                    if (
+                        msg_type == "conversation.item.create"
+                        and self._bridges_beta_client_to_ga
+                        and (beta_item := as_str_mapping(client_event.get("item"))) is not None
+                    ):
+                        msg_obj["item"] = beta_item_to_ga(beta_item)
                         message = json.dumps(msg_obj)
 
                     if msg_type == "session.update" and self._event_normalizer:

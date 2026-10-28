@@ -534,8 +534,11 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
+    error_status_code,
     headers_with_litellm_call_id,
     litellm_call_id_headers,
+    openai_error_param,
+    openai_error_type,
     with_litellm_call_id,
 )
 from litellm.proxy.common_utils.periodic_reload_schedule import (
@@ -10432,15 +10435,16 @@ def _make_keepalive_resolver(request_data: Mapping[str, object]) -> Callable[[ob
 
 
 def _sse_error_frame(client_error: Exception) -> str:
+    status_code: Final = error_status_code(client_error, 500)
     error_returned: Final = json.dumps(
         {
             "error": sse_error_payload(client_error)[1]
             if isinstance(client_error, HTTPException)
             else ProxyException(
                 message=getattr(client_error, "message", str(client_error)),
-                type=getattr(client_error, "type", "None"),
-                param=getattr(client_error, "param", "None"),
-                code=getattr(client_error, "status_code", 500),
+                type=openai_error_type(client_error, status_code),
+                param=openai_error_param(client_error),
+                code=status_code,
             ).to_dict()
         },
         default=str,
@@ -13577,6 +13581,7 @@ async def audio_transcriptions(
                         request_data=data,
                     )
                     yield _sse_error_frame(stream_error if replacement is None else replacement)
+                    yield TRANSCRIPTION_STREAM_DONE_FRAME
                 finally:
                     with anyio.CancelScope(shield=True):
                         close: Final = getattr(stream, "aclose", None) or getattr(stream, "close", None)

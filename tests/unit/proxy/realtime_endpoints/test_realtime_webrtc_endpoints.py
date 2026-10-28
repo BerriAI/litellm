@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from starlette.routing import Match
 
 import litellm
+from litellm.litellm_core_utils.realtime_streaming import TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE
 from litellm.proxy._lazy_features import LAZY_FEATURES, attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1211,6 +1212,86 @@ def test_translation_calls_aliases_route_translation_session(
         "type": "translation",
         "model": "gpt-realtime-translate",
     }
+
+
+@pytest.mark.parametrize(
+    ("disable_global_guardrails", "expected_status", "expected_body"),
+    [(True, 201, "v=0"), (False, 400, TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE)],
+)
+def test_translation_calls_honor_the_minting_keys_guardrail_opt_out(
+    proxy_app: FastAPI,
+    mock_route_request_client_secrets: object,
+    mock_add_litellm_data: AddLitellmDataToRequest,
+    mock_pre_call_hook: PreCallHook,
+    monkeypatch: pytest.MonkeyPatch,
+    disable_global_guardrails: bool,
+    expected_status: int,
+    expected_body: str,
+) -> None:
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy import proxy_server
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-realtime-translate",
+                    "litellm_params": {"model": "openai/gpt-realtime-translate", "api_key": "sk-upstream"},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [CustomGuardrail(guardrail_name="global-pre-call", event_hook=GuardrailEventHooks.pre_call, default_on=True)],
+    )
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user",
+        models=["gpt-realtime-translate"],
+        metadata={"disable_global_guardrails": disable_global_guardrails},
+    )
+    client: Final = TestClient(proxy_app, raise_server_exceptions=False)
+    try:
+        with (
+            patch(  # test-quality-ok: endpoint test stands in for the upstream client_secrets call
+                "litellm.proxy.proxy_server.route_request", side_effect=mock_route_request_client_secrets
+            ),
+            patch(  # test-quality-ok: endpoint test isolates request metadata enrichment while minting
+                "litellm.proxy.proxy_server.add_litellm_data_to_request",
+                side_effect=mock_add_litellm_data,
+            ),
+            patch(  # test-quality-ok: endpoint test isolates the process-wide proxy logger while minting
+                "litellm.proxy.proxy_server.proxy_logging_obj"
+            ) as logging,
+        ):
+            logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+            logging.post_call_failure_hook = AsyncMock()
+            minted: Final = client.post(
+                "/v1/realtime/translations/client_secrets",
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json={"model": "gpt-realtime-translate"},
+            )
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post("https://api.openai.com/v1/realtime/translations/calls").mock(
+            return_value=httpx.Response(201, content=b"v=0\r\n", headers={"content-type": "application/sdp"})
+        )
+        answered: Final = client.post(
+            "/v1/realtime/translations/calls",
+            headers={"Authorization": f"Bearer {minted.json()['value']}"},
+            content=b"v=0\r\n",
+        )
+
+    assert minted.status_code == 200
+    assert answered.status_code == expected_status
+    assert expected_body in answered.text
 
 
 @pytest.mark.parametrize(

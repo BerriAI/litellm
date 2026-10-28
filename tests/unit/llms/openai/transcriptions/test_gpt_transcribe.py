@@ -14,7 +14,10 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AsyncStream, AzureOpenAI, Open
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.audio_utils.transcription_streaming import wrap_transcription_stream
+from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
+    litellm_exception_mapper,
+    wrap_transcription_stream,
+)
 from litellm.llms.azure.audio_transcriptions import AzureAudioTranscription
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.transcriptions.gpt_transformation import (
@@ -92,7 +95,7 @@ def test_sync_transcription_stream_logs_final_text_and_usage_once() -> None:
         stream: Final = client.audio.transcriptions.create(
             model="gpt-transcribe", file=("sample.webm", b"audio"), stream=True
         )
-        wrapped: Final = wrap_transcription_stream(stream, logging_obj, datetime(2026, 1, 1))
+        wrapped: Final = wrap_transcription_stream(stream, logging_obj, datetime(2026, 1, 1), litellm_exception_mapper({}))
         received: Final = tuple(wrapped)
         wrapped.close()
 
@@ -156,7 +159,7 @@ async def test_openai_handler_returns_native_typed_stream():
     assert isinstance(stream, AsyncStream)
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.async_failure_handler = AsyncMock()
-    wrapped_stream = wrap_transcription_stream(stream, logging_obj, datetime.now())
+    wrapped_stream = wrap_transcription_stream(stream, logging_obj, datetime.now(), litellm_exception_mapper({}))
     received = [event async for event in wrapped_stream]
     await wrapped_stream.close()
     await openai_client.close()

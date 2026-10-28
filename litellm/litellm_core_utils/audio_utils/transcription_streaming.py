@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 import json
 import traceback
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from typing import Final, Protocol
 
 import anyio
@@ -15,6 +15,7 @@ from openai.types.audio import (
 )
 
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.exception_mapping_utils import exception_type, with_deployment_api_base
 from litellm.types.utils import TranscriptionResponse
 
 TRANSCRIPTION_RAN_UNSTREAMED: Final = "transcription_ran_unstreamed"
@@ -25,6 +26,28 @@ def transcription_stream_requested(value: object) -> bool:
 
 
 TRANSCRIPTION_STREAM_DONE_FRAME: Final = "data: [DONE]\n\n"
+
+TranscriptionStreamExceptionMapper = Callable[[Exception], Exception]
+
+
+def litellm_exception_mapper(call_details: Mapping[str, object]) -> TranscriptionStreamExceptionMapper:
+    model: Final = call_details.get("model")
+    custom_llm_provider: Final = call_details.get("custom_llm_provider")
+    extra_kwargs: Final = with_deployment_api_base(call_details.get("litellm_params"))
+
+    def map_exception(exception: Exception) -> Exception:
+        try:
+            mapped: Final[object] = exception_type(
+                model=model if isinstance(model, str) else None,
+                original_exception=exception,
+                custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+                extra_kwargs=extra_kwargs,
+            )
+        except Exception as mapped_exception:  # noqa: BLE001  # exception_type raises the mapped exception
+            return mapped_exception
+        return mapped if isinstance(mapped, Exception) else exception
+
+    return map_exception
 
 
 def guarded_transcription_events(response: TranscriptionResponse) -> tuple[str, ...]:
@@ -115,6 +138,7 @@ class LoggingTranscriptionStream(Stream[TranscriptionStreamEvent]):
         stream: Stream[TranscriptionStreamEvent],
         logging_obj: TranscriptionStreamLogging,
         start_time: datetime.datetime,
+        map_exception: TranscriptionStreamExceptionMapper,
     ) -> None:
         self.__dict__.update(stream.__dict__)
         self._hidden_params: dict[str, object] = {  # mutable-ok: ResponseMetadata fills in the call's metadata
@@ -122,6 +146,7 @@ class LoggingTranscriptionStream(Stream[TranscriptionStreamEvent]):
         }
         self._logging_obj = logging_obj
         self._start_time = start_time
+        self._map_exception = map_exception
         self._collector = _TranscriptionEventCollector(getattr(stream, "_litellm_audio_duration", None))
         self._finalized = False
         self._failed = False
@@ -137,9 +162,10 @@ class LoggingTranscriptionStream(Stream[TranscriptionStreamEvent]):
                 yield event
         except Exception as exception:
             self._failed = True
+            mapped_exception: Final = self._map_exception(exception)
             end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
-            self._logging_obj.failure_handler(exception, traceback.format_exc(), self._start_time, end_time)
-            raise
+            self._logging_obj.failure_handler(mapped_exception, traceback.format_exc(), self._start_time, end_time)
+            raise mapped_exception from exception
         finally:
             self._finalize()
 
@@ -170,6 +196,7 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
         stream: AsyncStream[TranscriptionStreamEvent],
         logging_obj: TranscriptionStreamLogging,
         start_time: datetime.datetime,
+        map_exception: TranscriptionStreamExceptionMapper,
     ) -> None:
         self.__dict__.update(stream.__dict__)
         self._hidden_params: dict[str, object] = {  # mutable-ok: ResponseMetadata fills in the call's metadata
@@ -177,6 +204,7 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
         }
         self._logging_obj = logging_obj
         self._start_time = start_time
+        self._map_exception = map_exception
         self._collector = _TranscriptionEventCollector(getattr(stream, "_litellm_audio_duration", None))
         self._finalized = False
         self._failed = False
@@ -192,15 +220,16 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
                 yield event
         except Exception as exception:
             self._failed = True
+            mapped_exception: Final = self._map_exception(exception)
             end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
-            self._logging_obj.failure_handler(exception, traceback.format_exc(), self._start_time, end_time)
+            self._logging_obj.failure_handler(mapped_exception, traceback.format_exc(), self._start_time, end_time)
             await self._logging_obj.async_failure_handler(
-                exception,
+                mapped_exception,
                 traceback.format_exc(),
                 self._start_time,
                 end_time,
             )
-            raise
+            raise mapped_exception from exception
         finally:
             await self._finalize()
 
@@ -237,7 +266,8 @@ def wrap_transcription_stream(
     stream: Stream[TranscriptionStreamEvent] | AsyncStream[TranscriptionStreamEvent],
     logging_obj: TranscriptionStreamLogging,
     start_time: datetime.datetime,
+    map_exception: TranscriptionStreamExceptionMapper,
 ) -> LoggingTranscriptionStream | LoggingAsyncTranscriptionStream:
     if isinstance(stream, AsyncStream):
-        return LoggingAsyncTranscriptionStream(stream, logging_obj, start_time)
-    return LoggingTranscriptionStream(stream, logging_obj, start_time)
+        return LoggingAsyncTranscriptionStream(stream, logging_obj, start_time, map_exception)
+    return LoggingTranscriptionStream(stream, logging_obj, start_time, map_exception)

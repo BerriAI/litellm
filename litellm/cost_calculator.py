@@ -2038,6 +2038,7 @@ def completion_cost(
                         litellm_logging_obj=litellm_logging_obj,
                         custom_pricing_model=selected_model if custom_pricing else None,
                         base_pricing_model=(selected_model if base_model is not None and not custom_pricing else None),
+                        deployment_models=(base_model, requested_model),
                     )
                 elif call_type == _MCP_CALL_TYPE:
                     from litellm.proxy.mcp_server.cost_calculator import (
@@ -3573,6 +3574,7 @@ def handle_realtime_stream_cost_calculation(
     litellm_logging_obj: LitellmLoggingObject | None = None,
     custom_pricing_model: str | None = None,
     base_pricing_model: str | None = None,
+    deployment_models: Sequence[str | None] = (),
 ) -> float:
     """
     Handles the cost calculation for realtime stream responses.
@@ -3621,7 +3623,8 @@ def handle_realtime_stream_cost_calculation(
         results=results,
         custom_llm_provider=custom_llm_provider,
         litellm_model_name=litellm_model_name,
-        potential_model_names=potential_model_names,
+        deployment_pricing_models=(custom_pricing_model, base_pricing_model, *deployment_models),
+        session_model=received_model,
     )
     live_lifecycle_event_types: Final = frozenset({"session.started", "session.usage.updated", "session.closed"})
     live_session_started: Final = any(result["type"] == "session.started" for result in results)
@@ -3733,23 +3736,37 @@ def _translation_session_seconds(results: OpenAIRealtimeStreamList) -> tuple[flo
     return float(input_seconds), float(output_seconds)
 
 
+def _translation_per_second_rates(
+    models: Sequence[str | None], custom_llm_provider: str
+) -> tuple[float | None, float | None]:
+    model_infos: Final = tuple(
+        _get_model_info_or_none(model, custom_llm_provider) for model in models if model is not None
+    )
+    return (
+        _first_declared_transcription_rate(("input_cost_per_second",), model_infos),
+        _first_declared_transcription_rate(("output_cost_per_second",), model_infos),
+    )
+
+
 def handle_realtime_translation_cost_calculation(
     results: OpenAIRealtimeStreamList,
     custom_llm_provider: str,
     litellm_model_name: str,
-    potential_model_names: Sequence[str | None] = (),
+    deployment_pricing_models: Sequence[str | None] = (),
+    session_model: str | None = None,
 ) -> float:
     input_seconds, output_seconds = _translation_session_seconds(results)
     if input_seconds <= 0 and output_seconds <= 0:
         return 0.0
-    model_infos: Final = tuple(
-        _get_model_info_or_none(model, custom_llm_provider)
-        for model in (*potential_model_names, litellm_model_name)
-        if model is not None
+    deployment_rates: Final = _translation_per_second_rates(
+        (*deployment_pricing_models, litellm_model_name), custom_llm_provider
     )
-    input_cost_per_second: Final = _transcription_rate(("input_cost_per_second",), *model_infos)
-    output_cost_per_second: Final = _transcription_rate(("output_cost_per_second",), *model_infos)
-    return input_seconds * input_cost_per_second + output_seconds * output_cost_per_second
+    input_rate, output_rate = (
+        deployment_rates
+        if any(rate is not None for rate in deployment_rates)
+        else _translation_per_second_rates((session_model,), custom_llm_provider)
+    )
+    return input_seconds * (input_rate or 0.0) + output_seconds * (output_rate or 0.0)
 
 
 def handle_realtime_transcription_cost_calculation(
@@ -3851,9 +3868,15 @@ def _declared_transcription_rate(info: ModelInfoBase | None, keys: tuple[_Transc
     )
 
 
-def _transcription_rate(keys: tuple[_TranscriptionRateKey, ...], *infos: ModelInfoBase | None) -> float:
+def _first_declared_transcription_rate(
+    keys: tuple[_TranscriptionRateKey, ...], infos: Sequence[ModelInfoBase | None]
+) -> float | None:
     rates: Final = (_declared_transcription_rate(info, keys) for info in infos)
-    return next((rate for rate in rates if rate is not None), 0.0)
+    return next((rate for rate in rates if rate is not None), None)
+
+
+def _transcription_rate(keys: tuple[_TranscriptionRateKey, ...], *infos: ModelInfoBase | None) -> float:
+    return _first_declared_transcription_rate(keys, infos) or 0.0
 
 
 def _transcription_usage_cost(

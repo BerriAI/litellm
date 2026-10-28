@@ -1013,8 +1013,22 @@ def _returns_requested_stream(kwargs: dict[str, object], call_type: CallTypes | 
     return _is_streaming_request(kwargs=kwargs, call_type=call_type)
 
 
-def _transcription_runs_unstreamed(call_type: str, call_kwargs: Mapping[str, object]) -> bool:
-    return call_type == CallTypes.atranscription.value and call_kwargs.get("stream") is False
+def _transcription_runs_unstreamed(
+    call_type: str, requested_kwargs: Mapping[str, object], call_kwargs: Mapping[str, object]
+) -> bool:
+    from litellm.litellm_core_utils.audio_utils.transcription_streaming import transcription_stream_requested
+
+    return (
+        call_type == CallTypes.atranscription.value
+        and transcription_stream_requested(requested_kwargs.get("stream"))
+        and call_kwargs.get("stream") is False
+    )
+
+
+def _guardrail_view_of_requested_stream(call_kwargs: Mapping[str, object]) -> dict[str, object]:
+    from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming
+
+    return guardrail_request_data_with_streaming(call_kwargs, is_streaming=True)
 
 
 def _marked_when_run_unstreamed(result: object, runs_unstreamed: bool) -> object:
@@ -1703,14 +1717,14 @@ def _unstreamed_when_post_call_guardrails_apply(
         or _deployment_provider(kwargs) not in (LlmProviders.OPENAI.value, LlmProviders.AZURE.value)
     ):
         return kwargs
-    unstreamed: Final = {**kwargs, "stream": False}
+    streamed_request: Final = _guardrail_view_of_requested_stream(kwargs)
     custom_guardrail_class: Final = _get_cached_custom_guardrail()
     if not any(
-        isinstance(callback, custom_guardrail_class) and callback.runs_post_call_deployment_hook(unstreamed)
+        isinstance(callback, custom_guardrail_class) and callback.runs_post_call_deployment_hook(streamed_request)
         for callback in litellm.callbacks
     ):
         return kwargs
-    return unstreamed
+    return {**kwargs, "stream": False}
 
 
 async def async_post_call_success_deployment_hook(
@@ -2067,10 +2081,13 @@ def client(original_function):
                 else:
                     if call_type == CallTypes.transcription.value and isinstance(result, openai.Stream):
                         from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
+                            litellm_exception_mapper,
                             wrap_transcription_stream,
                         )
 
-                        result = wrap_transcription_stream(result, logging_obj, start_time)
+                        result = wrap_transcription_stream(
+                            result, logging_obj, start_time, litellm_exception_mapper(logging_obj.model_call_details)
+                        )
                     # RETURN RESULT
                     update_response_metadata: _ResponseMetadataUpdater = litellm_utils.update_response_metadata
                     update_response_metadata(
@@ -2245,7 +2262,7 @@ def client(original_function):
 
             kwargs["litellm_logging_obj"] = logging_obj
             modified_kwargs: Final = await async_pre_call_deployment_hook(kwargs, call_type)
-            transcription_runs_unstreamed: Final = _transcription_runs_unstreamed(call_type, modified_kwargs)
+            transcription_runs_unstreamed: Final = _transcription_runs_unstreamed(call_type, kwargs, modified_kwargs)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
 
@@ -2377,10 +2394,13 @@ def client(original_function):
                 else:
                     if call_type == CallTypes.atranscription.value and isinstance(result, openai.AsyncStream):
                         from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
+                            litellm_exception_mapper,
                             wrap_transcription_stream,
                         )
 
-                        result = wrap_transcription_stream(result, logging_obj, start_time)
+                        result = wrap_transcription_stream(
+                            result, logging_obj, start_time, litellm_exception_mapper(logging_obj.model_call_details)
+                        )
                     _update_response_metadata(
                         result=result,
                         logging_obj=logging_obj,
@@ -2408,7 +2428,9 @@ def client(original_function):
             if _call_type_enum is not None:
                 result = _marked_when_run_unstreamed(
                     await async_post_call_success_deployment_hook(
-                        request_data=call_kwargs,
+                        request_data=_guardrail_view_of_requested_stream(call_kwargs)
+                        if transcription_runs_unstreamed
+                        else call_kwargs,
                         response=result,
                         call_type=_call_type_enum,
                     ),

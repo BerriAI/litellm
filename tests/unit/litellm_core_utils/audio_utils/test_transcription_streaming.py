@@ -6,9 +6,15 @@ import anyio
 import anyio.lowlevel
 import httpx
 import pytest
+import respx
 from openai import AsyncOpenAI
 
-from litellm.litellm_core_utils.audio_utils.transcription_streaming import wrap_transcription_stream
+import litellm
+from litellm import Router
+from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
+    litellm_exception_mapper,
+    wrap_transcription_stream,
+)
 from litellm.types.utils import TranscriptionResponse
 
 _STARTED_AT: Final = datetime.datetime(2026, 10, 28, 12, 0, 0)  # noqa: DTZ001  # callback timestamps use the legacy naive contract
@@ -18,6 +24,34 @@ class _FirstDeltaThenStall(httpx.AsyncByteStream):
     async def __aiter__(self) -> AsyncIterator[bytes]:
         yield b'data: {"type":"transcript.text.delta","delta":"Good"}\n\n'
         await anyio.sleep_forever()
+
+
+class _FirstDeltaThenFails(httpx.AsyncByteStream):
+    def __init__(self, failure: httpx.TransportError) -> None:
+        self._failure = failure
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b'data: {"type":"transcript.text.delta","delta":"Good"}\n\n'
+        raise self._failure
+
+
+def _transcription_router(failing_api_base: str, healthy_api_base: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "transcriber",
+                "litellm_params": {
+                    "model": "openai/gpt-transcribe",
+                    "api_key": "sk-test",
+                    "api_base": api_base,
+                    "order": order,
+                },
+            }
+            for order, api_base in ((1, failing_api_base), (2, healthy_api_base))
+        ],
+        allowed_fails=0,
+        cooldown_time=60,
+    )
 
 
 class _RecordingLogging:
@@ -76,10 +110,67 @@ async def test_a_stream_the_client_drops_mid_transcript_is_still_logged_as_a_suc
         model="gpt-transcribe", file=("sample.wav", b"audio"), stream=True
     )
     logging_obj: Final = _RecordingLogging()
-    wrapped: Final = wrap_transcription_stream(stream, logging_obj, _STARTED_AT)
+    wrapped: Final = wrap_transcription_stream(stream, logging_obj, _STARTED_AT, litellm_exception_mapper({}))
 
     with anyio.CancelScope() as client_connection:
         async for _ in wrapped:
             client_connection.cancel()
 
     assert [result.text for result in logging_obj.logged] == ["Good"]
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_whose_stream_times_out_mid_transcript_goes_into_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _transcription_router("https://stalls.example/v1", "https://healthy.example/v1")
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post("https://stalls.example/v1/audio/transcriptions").mock(
+            side_effect=lambda request: httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_FirstDeltaThenFails(httpx.ReadTimeout("read timed out")),
+            )
+        )
+        upstream.post("https://healthy.example/v1/audio/transcriptions").mock(
+            return_value=httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=b'data: {"type":"transcript.text.done","text":"Good morning"}\n\n',
+            )
+        )
+        stalled: Final = await router.atranscription(model="transcriber", file=("sample.wav", b"audio"), stream=True)
+        with pytest.raises(litellm.Timeout):
+            async for _ in stalled:
+                pass
+        await anyio.sleep(0.1)
+        retried: Final = await router.atranscription(model="transcriber", file=("sample.wav", b"audio"), stream=True)
+        events: Final = [event async for event in retried]
+
+    assert [getattr(event, "text", None) for event in events] == ["Good morning"]
+
+
+@pytest.mark.asyncio
+async def test_a_stream_the_upstream_drops_mid_transcript_raises_a_litellm_error_to_the_caller() -> None:
+    upstream: Final = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://upstream.example/v1",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    stream=_FirstDeltaThenFails(httpx.RemoteProtocolError("peer closed connection")),
+                )
+            )
+        ),
+    )
+    stream: Final = await litellm.atranscription(
+        model="openai/gpt-transcribe", file=("sample.wav", b"audio"), stream=True, client=upstream
+    )
+
+    with pytest.raises(litellm.APIConnectionError, match="peer closed connection"):
+        async for _ in stream:
+            pass
