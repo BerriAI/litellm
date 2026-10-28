@@ -5713,6 +5713,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if popped is not None:
                 await self.batch_enqueued_token_store.refund(reservation=popped, litellm_parent_otel_span=span)
 
+    def _mark_request_slot_reused_by_failed_tool_call(self, request_data: Mapping[str, object]) -> None:
+        request_stash: Final = get_request_stash()
+        if (
+            request_stash is not None
+            and request_stash.parallel_slot is not None
+            and request_data.get("call_type") == CallTypes.call_mcp_tool.value
+        ):
+            request_stash.parallel_slot_reused_at = self._get_current_time()
+
     @with_service_target("rate_limits")
     async def async_post_call_failure_hook(
         self,
@@ -5741,6 +5750,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         try:
             stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(request_data))
             if stash is None:
+                self._mark_request_slot_reused_by_failed_tool_call(request_data)
                 return
             await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
 

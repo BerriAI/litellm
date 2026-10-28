@@ -33,7 +33,7 @@ from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.mcp import MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.responses.main import OutputFunctionToolCall
-from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs, ModelResponse
 
 
 class _DummyMCPResult:
@@ -435,7 +435,9 @@ async def test_execute_tool_calls_reports_an_unmapped_tool_failure_under_the_too
     call_tool_mock.assert_not_awaited()
     post_call_failure_hook.assert_awaited_once()
     assert post_call_failure_hook.await_args is not None
-    assert post_call_failure_hook.await_args.kwargs["request_data"]["litellm_call_id"] == "cid_call-unmapped"
+    reported_request: Final = post_call_failure_hook.await_args.kwargs["request_data"]
+    assert reported_request["litellm_call_id"] == "cid_call-unmapped"
+    assert reported_request["call_type"] == CallTypes.call_mcp_tool.value
 
 
 @pytest.mark.asyncio

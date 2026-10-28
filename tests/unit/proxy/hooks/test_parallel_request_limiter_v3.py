@@ -4056,6 +4056,57 @@ async def test_failed_mcp_tool_call_keeps_its_requests_parallel_slot_and_reserva
 
 
 @pytest.mark.asyncio
+async def test_round_logged_before_a_tool_call_fails_unserved_keeps_the_requests_parallel_slot() -> None:
+    now: Final = datetime(2026, 10, 28, 12, 0, 0)
+    api_key: Final = hash_token("sk-messages-unserved-tool")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache), time_provider=lambda: now
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    owner_call_id: Final = "messages-unserved-tool-owner"
+
+    async def pre_call(data: dict[str, object]) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type=CallTypes.anthropic_messages.value,
+        )
+
+    async def log_round(ended_at: datetime) -> None:
+        await handler.async_log_success_event(
+            kwargs={"litellm_call_id": owner_call_id, "stream": False},
+            response_obj=None,
+            start_time=None,
+            end_time=ended_at,
+        )
+
+    async def next_request_status() -> int:
+        try:
+            await contextvars.Context().run(asyncio.create_task, pre_call({"model": "claude-x", "messages": []}))
+        except HTTPException as rejected:
+            return rejected.status_code
+        return 200
+
+    await pre_call(
+        {"model": "claude-x", "messages": [{"role": "user", "content": "hi"}], "litellm_call_id": owner_call_id}
+    )
+    await handler.async_post_call_failure_hook(
+        request_data={"call_type": CallTypes.call_mcp_tool.value, "litellm_call_id": f"{owner_call_id}_toolu_1"},
+        original_exception=KeyError("lookup_order"),
+        user_api_key_dict=user_api_key_dict,
+    )
+    await log_round(now - timedelta(milliseconds=1))
+
+    assert await next_request_status() == 429
+
+    await log_round(now + timedelta(milliseconds=1))
+
+    assert await next_request_status() == 200
+
+
+@pytest.mark.asyncio
 async def test_failed_pass_through_request_frees_its_slot_when_the_client_body_carries_a_litellm_call_id() -> None:
     api_key: Final = hash_token("sk-pass-through-client-call-id")
     local_cache: Final = DualCache()

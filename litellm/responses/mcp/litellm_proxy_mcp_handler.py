@@ -745,7 +745,10 @@ class LiteLLM_Proxy_MCP_Handler:
                 tool_logging_call_id = (
                     f"{litellm_call_id}_{tool_call_id or uuid.uuid4()}" if litellm_call_id else str(uuid.uuid4())
                 )
-                logging_request_data = {"litellm_call_id": tool_logging_call_id}
+                logging_request_data = {
+                    "call_type": CallTypes.call_mcp_tool.value,
+                    "litellm_call_id": tool_logging_call_id,
+                }
 
                 if not tool_name:
                     verbose_logger.warning("Tool call missing name: %s", tool_call)

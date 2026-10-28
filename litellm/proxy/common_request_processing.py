@@ -2305,6 +2305,7 @@ class ProxyBaseLLMRequestProcessing:
         rate_limited_model: str | None = None,
         skip_guardrails: bool = False,
         logging_auth: UserAPIKeyAuth | None = None,
+        litellm_call_id: str | None = None,
     ) -> tuple[dict, LiteLLMLoggingObj]:
         start_time: Final = datetime.now()  # start before calling guardrail hooks
 
@@ -2435,9 +2436,9 @@ class ProxyBaseLLMRequestProcessing:
 
         aliased_model: Final = self.data.get("model")
 
-        litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
-        self.data["litellm_call_id"] = litellm_call_id
-        bind_telemetry_call_id(litellm_call_id)
+        call_id: Final = litellm_call_id or resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+        self.data["litellm_call_id"] = call_id
+        bind_telemetry_call_id(call_id)
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,
@@ -2583,6 +2584,7 @@ class ProxyBaseLLMRequestProcessing:
             else None
         )
         pristine: Final = independent_snapshot(self.data) if configured_fallbacks else None
+        litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
 
         try:
             return await self.common_processing_pre_call_logic(
@@ -2600,6 +2602,7 @@ class ProxyBaseLLMRequestProcessing:
                 model=model,
                 route_type=route_type,
                 llm_router=llm_router,
+                litellm_call_id=litellm_call_id,
             )
         except ProxyRateLimitError as original_exc:
             rate_limited_data: Final = self.data
@@ -2656,6 +2659,7 @@ class ProxyBaseLLMRequestProcessing:
                             route_type=route_type,
                             llm_router=llm_router,
                             rate_limited_model=original_model,
+                            litellm_call_id=litellm_call_id,
                         )
                     except ProxyRateLimitError as fallback_exc:
                         if is_hard_per_model_limit(fallback_exc):
