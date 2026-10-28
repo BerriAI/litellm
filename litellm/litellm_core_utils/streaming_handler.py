@@ -2782,9 +2782,13 @@ def _apply_copilot_cache_counts(returned_usage: Usage, latest_usage_chunk: Usage
         details.cache_write_tokens = cache_write
     returned_usage.prompt_tokens_details = details  # rebind-ok: attaches copilot cache counts to the aggregated usage
     if cache_read and getattr(returned_usage, "cache_read_input_tokens", None) is None:
-        returned_usage.cache_read_input_tokens = cache_read  # rebind-ok: attaches copilot cache counts to the aggregated usage
+        returned_usage.cache_read_input_tokens = (  # rebind-ok: attaches copilot cache counts to the aggregated usage
+            cache_read
+        )
     if cache_write and getattr(returned_usage, "cache_creation_input_tokens", None) is None:
-        returned_usage.cache_creation_input_tokens = cache_write  # rebind-ok: attaches copilot cache counts to the aggregated usage
+        returned_usage.cache_creation_input_tokens = (  # rebind-ok: attaches copilot cache counts to the aggregated usage
+            cache_write
+        )
 
 
 def generic_chunk_has_all_required_fields(chunk: dict) -> bool:
