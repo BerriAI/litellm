@@ -660,6 +660,8 @@ This covers:
 
 We welcome contributions to LiteLLM! Whether you're fixing bugs, adding features, or improving documentation, we appreciate your help.
 
+Our contributor program, [LiteLLM OSS Champions](https://www.litellm.ai/champions), gives contributors a dedicated Slack channel with our team, a voice in the roadmap, and exclusive swag at 5, 20, and 50+ merged PRs.
+
 ## Quick Start for Contributors
 
 This requires uv to be installed.
