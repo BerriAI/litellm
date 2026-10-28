@@ -284,10 +284,23 @@ class NeuralTrustGuardrail(CustomGuardrail):
         # therefore cannot reduce leakage: each one re-sends the entire reply for another
         # evaluate (a 400-chunk reply at the default sampling_rate of 5 costs 81 calls) and buys
         # only an earlier stream abort on a blocking verdict, which saves upstream generation
-        # rather than protecting the client. One end-of-stream scan is the honest cost here.
-        # Set streaming_end_of_stream_only to False in guardrail_config to restore sampled
+        # rather than protecting the client.
+        #
+        # Asking for a single end-of-stream scan directly would be unsafe: incremental_diff falls
+        # back to block_only on surfaces other than OpenAI chat completions, and there chunks are
+        # released as they arrive, so dropping the sampled rounds would let a whole reply reach
+        # the client before a block verdict exists. Requesting buffering instead gets the same
+        # single evaluate without that hole -- the unified iterator derives end_of_stream_only
+        # from it and withholds chunks on the fallback routes until the verdict settles. Buffered
+        # replay releases the original chunks, so a block or ask still stops delivery while a
+        # transform rewrite is dropped, which is the documented fallback behaviour either way.
+        #
+        # The engine disables buffering for guardrails that set mask_response_content=True; this
+        # guardrail does not, and turning it on would reopen the fallback hole above.
+        #
+        # Set streaming_buffer_until_moderated to False in guardrail_config to restore sampled
         # rounds when ending a blocked stream early matters more than the evaluate volume.
-        self.streaming_end_of_stream_only: bool = self.streaming_transform_mode == "incremental_diff"
+        self.streaming_buffer_until_moderated: bool = self.streaming_transform_mode == "incremental_diff"
         initializer_adapter: Final[TypeAdapter[_GuardrailInitializer]] = TypeAdapter(_GuardrailInitializer)
         initialize: Final = initializer_adapter.validate_python(vars(CustomGuardrail)["__init__"])
         initialize(self, guardrail_name, self.get_supported_event_hooks(), event_hook, bool(default_on))

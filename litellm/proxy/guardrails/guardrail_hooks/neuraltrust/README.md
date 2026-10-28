@@ -75,8 +75,15 @@ sampled rounds. Because the whole reply is withheld until the end anyway, a samp
 reaching the client; it only re-sends the reply for another evaluate, so a 400-chunk reply at the default
 `streaming_sampling_rate` of 5 would cost 81 calls instead of 1.
 
+It asks the framework to buffer rather than to skip the sampled rounds outright. The two differ on the fallback
+routes below: skipping the rounds there would release chunks as they arrive with no verdict yet, so a client could
+read a whole reply that TrustGuard later marks `block`. Buffering withholds them until the verdict settles, and
+the unified iterator derives the single end-of-stream scan from it. Buffered replay releases the original chunks,
+so a `block` or `ask` still stops delivery while a `transform` rewrite is dropped — the same fallback behaviour
+documented below.
+
 The trade-off is that a blocking verdict is reached only once the model has finished generating, so a blocked
-stream is no longer aborted early. Nothing is delivered either way. Set `streaming_end_of_stream_only: false`
+stream is no longer aborted early. Nothing is delivered either way. Set `streaming_buffer_until_moderated: false`
 under `guardrail_config` to restore sampled rounds where cutting off a blocked generation matters more than the
 evaluate volume.
 
