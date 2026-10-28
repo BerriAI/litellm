@@ -111,7 +111,7 @@ def test_regression_proxy_ollama_deployment_timeout_cuts_a_held_read(
 def test_guard_proxy_keyless_ollama_embedding_sends_no_authorization(gateway: Gateway) -> None:
     texts: Final = _texts(2)
     with wire_server(_embeddings) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=f"ollama/{_MODEL}", api_base=f"{wire.url}/")
+        model: Final = scenario.model(model=f"ollama/{_MODEL}", api_base=f"{wire.url}/", api_key=None)
         response: Final = gateway.request("POST", "/v1/embeddings", {"model": model, "input": texts})
         request: Final = _only(wire)
     assert response.status_code == 200, response.text
