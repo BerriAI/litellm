@@ -50,7 +50,10 @@ from litellm.proxy.common_utils.openai_error_payload import (
 )
 from litellm.proxy.common_utils.token_count_log import rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
-from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
+from litellm.proxy.litellm_pre_call_utils import (
+    forwarded_anthropic_oauth_token,
+    should_auto_drop_params_for_agentic_cli,
+)
 from litellm.router import Router
 
 router: Final = APIRouter()
@@ -420,6 +423,7 @@ async def count_tokens(
             call_endpoint=True,
             messages_format="anthropic",
             litellm_call_id=litellm_call_id,
+            client_oauth_token=forwarded_anthropic_oauth_token(request.headers),
             **_count_tokens_body_options(data, auto_drop_params),
         )
     except HTTPException as e:
