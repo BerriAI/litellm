@@ -22,25 +22,25 @@ use rmcp::{
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
-use crate::{ConnectError, Limits, NativeGateway, Registry, Server, ServerInfo};
+use crate::{ConfigFault, ConnectError, Limits, NativeGateway, Registry, Server, ServerInfo};
 
 pub struct ConfiguredGateway {
     pub operations: Arc<NativeGateway>,
     services: Vec<RunningService<RoleClient, ()>>,
 }
 
-fn invalid(server: &str, message: impl Into<String>) -> ConnectError {
+fn invalid(server: &str, fault: ConfigFault) -> ConnectError {
     ConnectError::Configuration {
         server: server.into(),
-        message: message.into(),
+        fault,
     }
 }
 
 fn timeout(name: &str, config: &McpServer) -> Result<Duration, ConnectError> {
     let duration = Duration::try_from_secs_f64(config.timeout.unwrap_or(30.0))
-        .map_err(|_| invalid(name, "timeout must be finite and positive"))?;
+        .map_err(|source| invalid(name, ConfigFault::InvalidTimeout(source)))?;
     if duration.is_zero() {
-        return Err(invalid(name, "timeout must be positive"));
+        return Err(invalid(name, ConfigFault::ZeroTimeout));
     }
     Ok(duration)
 }
@@ -75,27 +75,24 @@ fn validate(name: &str, config: &McpServer) -> Result<(), ConnectError> {
             .as_ref()
             .is_some_and(|alias| alias.trim().is_empty())
     {
-        return Err(invalid(name, "server identifiers must not be blank"));
+        return Err(invalid(name, ConfigFault::BlankIdentifier));
     }
     if let Some(field) = config.unsupported.keys().next() {
         return Err(invalid(
             name,
-            format!("setting '{field}' is not supported by the Rust MCP host"),
+            ConfigFault::UnsupportedSetting(field.clone()),
         ));
     }
     if config
         .max_concurrent_requests
         .is_some_and(|limit| limit == 0 || limit > tokio::sync::Semaphore::MAX_PERMITS)
     {
-        return Err(invalid(name, "max_concurrent_requests is out of range"));
+        return Err(invalid(name, ConfigFault::ConcurrencyOutOfRange));
     }
     if config.mcp_info.contains_key("protocol_version")
         || config.mcp_info.contains_key("mcp_server_cost_info")
     {
-        return Err(invalid(
-            name,
-            "mcp_info protocol and cost settings are not supported",
-        ));
+        return Err(invalid(name, ConfigFault::UnsupportedMcpInfo));
     }
     if !matches!(
         config.auth_type,
@@ -108,17 +105,11 @@ fn validate(name: &str, config: &McpServer) -> Result<(), ConnectError> {
                 | McpAuth::Token
         )
     ) {
-        return Err(invalid(
-            name,
-            "configured upstream auth mode is not supported by the Rust MCP host",
-        ));
+        return Err(invalid(name, ConfigFault::UnsupportedAuth));
     }
     match config.transport {
         McpTransport::Sse => {
-            return Err(invalid(
-                name,
-                "legacy SSE upstreams are not supported by the pinned SDK; use transport: http",
-            ));
+            return Err(invalid(name, ConfigFault::SseTransport));
         }
         McpTransport::Http => {
             if config.url.is_none()
@@ -126,10 +117,7 @@ fn validate(name: &str, config: &McpServer) -> Result<(), ConnectError> {
                 || !config.args.is_empty()
                 || !config.env.is_empty()
             {
-                return Err(invalid(
-                    name,
-                    "HTTP transport requires url and does not accept command, args or env",
-                ));
+                return Err(invalid(name, ConfigFault::HttpShape));
             }
         }
         McpTransport::Stdio => {
@@ -139,53 +127,49 @@ fn validate(name: &str, config: &McpServer) -> Result<(), ConnectError> {
                 .is_none_or(|command| command.trim().is_empty())
                 || config.url.is_some()
             {
-                return Err(invalid(
-                    name,
-                    "stdio transport requires command and does not accept url",
-                ));
+                return Err(invalid(name, ConfigFault::StdioShape));
             }
             if config.authentication_token.is_some()
                 || !config.static_headers.is_empty()
                 || config.upstream_token_header.is_some()
                 || !matches!(config.auth_type, None | Some(McpAuth::None))
             {
-                return Err(invalid(
-                    name,
-                    "stdio credentials must be supplied through env",
-                ));
+                return Err(invalid(name, ConfigFault::StdioCredentials));
             }
         }
     }
     if matches!(config.auth_type, None | Some(McpAuth::None)) {
         if config.authentication_token.is_some() || config.upstream_token_header.is_some() {
-            return Err(invalid(
-                name,
-                "authentication_token and upstream_token_header require an auth_type",
-            ));
+            return Err(invalid(name, ConfigFault::TokenWithoutAuth));
         }
     } else if config.authentication_token.is_none() {
-        return Err(invalid(
-            name,
-            "configured auth_type requires authentication_token",
-        ));
+        return Err(invalid(name, ConfigFault::AuthWithoutToken));
     }
     Ok(())
 }
 
-async fn resolve(value: &SecretValue, secrets: &dyn SecretSource) -> Result<String, ConnectError> {
+async fn resolve(
+    name: &str,
+    value: &SecretValue,
+    secrets: &dyn SecretSource,
+) -> Result<String, ConnectError> {
     match value.expose().strip_prefix("os.environ/") {
         Some(key) => secrets
             .get_secret_str(key)
             .await?
             .map(|secret| secret.expose().to_owned())
-            .ok_or_else(|| invalid("configuration", "referenced secret is unavailable")),
+            .ok_or_else(|| invalid(name, ConfigFault::MissingSecret)),
         None => Ok(value.expose().to_owned()),
     }
 }
 
-fn header(name: &str, value: &str) -> Result<(HeaderName, HeaderValue), ConnectError> {
+fn header(
+    server: &str,
+    name: &str,
+    value: &str,
+) -> Result<(HeaderName, HeaderValue), ConnectError> {
     let key = HeaderName::try_from(name)
-        .map_err(|_| invalid("configuration", "invalid upstream header name"))?;
+        .map_err(|source| invalid(server, ConfigFault::HeaderName(source)))?;
     if matches!(
         key.as_str(),
         "host"
@@ -198,13 +182,10 @@ fn header(name: &str, value: &str) -> Result<(HeaderName, HeaderValue), ConnectE
             | "mcp-protocol-version"
             | "last-event-id"
     ) {
-        return Err(invalid(
-            "configuration",
-            "upstream header conflicts with HTTP framing",
-        ));
+        return Err(invalid(server, ConfigFault::FramingHeader));
     }
     let mut value = HeaderValue::try_from(value)
-        .map_err(|_| invalid("configuration", "invalid upstream header value"))?;
+        .map_err(|source| invalid(server, ConfigFault::HeaderValue(source)))?;
     value.set_sensitive(true);
     Ok((key, value))
 }
@@ -231,21 +212,19 @@ fn basic(value: &str) -> String {
 }
 
 async fn headers(
+    name: &str,
     config: &McpServer,
     secrets: &dyn SecretSource,
 ) -> Result<HashMap<HeaderName, HeaderValue>, ConnectError> {
-    let entries = try_join_all(
-        config
-            .static_headers
-            .iter()
-            .map(|(key, value)| async move { header(key, &resolve(value, secrets).await?) }),
-    )
+    let entries = try_join_all(config.static_headers.iter().map(|(key, value)| async move {
+        header(name, key, &resolve(name, value, secrets).await?)
+    }))
     .await?;
     let auth = match (&config.authentication_token, config.auth_type) {
         (Some(token), Some(kind)) => {
-            let token = resolve(token, secrets).await?;
+            let token = resolve(name, token, secrets).await?;
             if token.trim().is_empty() {
-                return Err(invalid("configuration", "upstream credential is empty"));
+                return Err(invalid(name, ConfigFault::EmptyCredential));
             }
             let (slot, value) = match kind {
                 McpAuth::ApiKey => ("x-api-key", token),
@@ -253,9 +232,10 @@ async fn headers(
                 McpAuth::Token => ("authorization", scheme(&token, "token")),
                 McpAuth::Basic => ("authorization", basic(&token)),
                 McpAuth::Authorization => ("authorization", token),
-                _ => return Err(invalid("configuration", "unsupported credential mode")),
+                _ => return Err(invalid(name, ConfigFault::UnsupportedAuth)),
             };
             Some(header(
+                name,
                 config.upstream_token_header.as_deref().unwrap_or(slot),
                 &value,
             )?)
@@ -349,36 +329,34 @@ async fn connect_service<C: StreamableHttpClient>(
             let configured = config
                 .url
                 .as_ref()
-                .ok_or_else(|| invalid(name, "HTTP transport requires url"))?;
-            let url = resolve(configured, secrets).await?;
-            let parsed = url::Url::parse(&url).map_err(|_| invalid(name, "invalid HTTP URL"))?;
+                .ok_or_else(|| invalid(name, ConfigFault::HttpShape))?;
+            let url = resolve(name, configured, secrets).await?;
+            let parsed = url::Url::parse(&url)
+                .map_err(|source| invalid(name, ConfigFault::InvalidUrl(source)))?;
             if !matches!(parsed.scheme(), "http" | "https")
                 || parsed.host_str().is_none()
                 || !parsed.username().is_empty()
                 || parsed.password().is_some()
                 || parsed.fragment().is_some()
             {
-                return Err(invalid(
-                    name,
-                    "HTTP URL must use http or https without user credentials or fragments",
-                ));
+                return Err(invalid(name, ConfigFault::UrlShape));
             }
             let transport = StreamableHttpClientTransport::with_client(
                 client,
                 StreamableHttpClientTransportConfig::with_uri(url)
-                    .custom_headers(headers(config, secrets).await?),
+                    .custom_headers(headers(name, config, secrets).await?),
             );
             ().serve_with_ct(transport, shutdown).await
         }
         McpTransport::Stdio => {
             let environment = try_join_all(config.env.iter().map(|(key, value)| async move {
-                Ok::<_, ConnectError>((key, resolve(value, secrets).await?))
+                Ok::<_, ConnectError>((key, resolve(name, value, secrets).await?))
             }))
             .await?;
             let program = config
                 .command
                 .as_deref()
-                .ok_or_else(|| invalid(name, "stdio requires command"))?;
+                .ok_or_else(|| invalid(name, ConfigFault::StdioShape))?;
             let mut command = tokio::process::Command::new(program);
             command
                 .args(&config.args)
@@ -387,7 +365,7 @@ async fn connect_service<C: StreamableHttpClient>(
             ().serve_with_ct(TokioChildProcess::new(command)?, shutdown)
                 .await
         }
-        McpTransport::Sse => return Err(invalid(name, "unsupported transport")),
+        McpTransport::Sse => return Err(invalid(name, ConfigFault::SseTransport)),
     };
     initialized.map_err(|source| ConnectError::Initialize {
         server: name.into(),
@@ -452,7 +430,7 @@ mod tests {
             "mcp_servers:\n  test:\n    auth_type: {mode}\n    authentication_token: '{token}'\n"
         ))
         .unwrap();
-        let built = headers(&config.mcp_servers["test"], &Secrets)
+        let built = headers("test", &config.mcp_servers["test"], &Secrets)
             .await
             .unwrap();
         let key = HeaderName::try_from(slot).unwrap();
@@ -464,7 +442,7 @@ mod tests {
     #[tokio::test]
     async fn explicit_credential_slot_overrides_static_header() {
         let config = litellm_config::Config::from_yaml("mcp_servers: {test: {auth_type: api_key, authentication_token: os.environ/KEY, upstream_token_header: x-custom, static_headers: {X-Custom: old, x-extra: extra}}}").unwrap();
-        let built = headers(&config.mcp_servers["test"], &Secrets)
+        let built = headers("test", &config.mcp_servers["test"], &Secrets)
             .await
             .unwrap();
         assert_eq!(

@@ -5,7 +5,6 @@ import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Final
 
 import httpx
@@ -14,6 +13,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.single_flight import single_flight_lru_cache
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -27,7 +27,7 @@ _PARSED_LITERAL: Final = TypeAdapter(object)
 _SECRET_MANAGER_CLIENT: Final = TypeAdapter(object)
 
 
-@lru_cache(maxsize=128)
+@single_flight_lru_cache
 def _cached_azure_oidc_token_provider(audience: str) -> Callable[[], str]:
     return get_azure_ad_token_provider(azure_scope=audience)
 
