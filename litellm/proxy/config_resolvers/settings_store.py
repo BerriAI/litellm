@@ -92,7 +92,7 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         self._clear_runtime_keys(changed)
 
     def unmanaged_db_keys(self) -> tuple[str, ...]:
-        return tuple(sorted(self._unmanaged_db_keys))
+        return tuple(sorted(key for key in self._unmanaged_db_keys if not self.owned_by_config(key)))
 
     def _db_manages(self, row: DbRow, key: str) -> bool:
         return row != self._section or self._managed_db_keys is None or key in self._managed_db_keys
