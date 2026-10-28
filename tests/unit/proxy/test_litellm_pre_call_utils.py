@@ -5976,7 +5976,9 @@ def test_clean_headers_strips_x_api_key_when_byok_disabled():
     ],
     ids=["oauth-beside-proxy-key", "oauth-used-as-proxy-key", "non-oauth-authorization", "no-authorization"],
 )
-def test_forwarded_anthropic_oauth_token_follows_chats_forwarding_rule(headers, expected_token):
+def test_forwarded_anthropic_oauth_token_follows_chats_forwarding_rule(
+    headers: dict[str, str], expected_token: str | None
+) -> None:
     assert forwarded_anthropic_oauth_token(Headers(headers)) == expected_token
 
 

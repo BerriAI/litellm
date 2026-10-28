@@ -231,8 +231,12 @@ class TestCountTokensUsesWorkloadIdentity:
         ids=["keyless-deployment-uses-the-callers-token", "deployment-key-wins-over-the-callers-token"],
     )
     async def test_a_callers_subscription_token_counts_only_when_no_key_is_configured(
-        self, monkeypatch, httpx_transport_clients, deployment_key, expected_credentials
-    ):
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        httpx_transport_clients: None,
+        deployment_key: str | None,
+        expected_credentials: dict[str, str | None],
+    ) -> None:
         for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
             monkeypatch.delenv(name, raising=False)
         monkeypatch.setattr(litellm, "anthropic_key", None)
