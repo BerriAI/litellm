@@ -7,7 +7,7 @@ hunk counts when it adds or removes a line inside the `model LiteLLM_SpendLogs {
 hunk counts when an added line names the table. Without such a hunk it passes at once, otherwise it passes
 only once the owner's latest review on the pull request is an approval that still covers every spend-log line
 in the head (approvals survive pushes, so a later commit may not add spend-log lines the owner never saw).
-The workflow re-runs on every review.
+Reviews do not trigger the workflow, so the check is re-run by hand after approving.
 """
 
 from __future__ import annotations
@@ -218,7 +218,7 @@ def main(argv: Sequence[str]) -> int:
         else f"LiteLLM_SpendLogs lines changed after @{args.approver} approved {approval.commit_id}, "
         f"a new approving review is needed:\n"
     )
-    sys.stdout.write(f"{reason}{listed}The check re-runs when a review is submitted.\n")
+    sys.stdout.write(f"{reason}{listed}After approving, re-run this job.\n")
     return 1
 
 
