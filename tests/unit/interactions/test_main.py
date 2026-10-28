@@ -260,6 +260,65 @@ class TestGoogleInteractionsCreate:
             "environment": "remote",
         }
 
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_create_keeps_positional_response_settings_in_place(self, respx_mock: MockRouter) -> None:
+        route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            return_value=httpx.Response(200, json={"id": "interaction-model", "status": "completed"})
+        )
+
+        interactions.create(
+            "gemini/gemini-2.5-flash",
+            None,
+            "Describe a cat.",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            ["TEXT"],
+            api_key="gemini-offline",
+        )
+
+        assert json.loads(route.calls.last.request.content) == {
+            "model": "gemini-2.5-flash",
+            "input": "Describe a cat.",
+            "response_modalities": ["TEXT"],
+        }
+
+    @pytest.mark.parametrize(
+        ("target", "expected_target"),
+        [
+            pytest.param({"model": "gemini/gemini-2.5-flash"}, {"model": "gemini-2.5-flash"}, id="model-drops-it"),
+            pytest.param(
+                {"agent": "antigravity-preview-09-2026"},
+                {
+                    "agent": "antigravity-preview-09-2026",
+                    "agent_config": {"type": "antigravity", "model": "gemini-3.8-flash"},
+                },
+                id="agent-keeps-it",
+            ),
+        ],
+    )
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_create_with_drop_params_drops_agent_config_only_for_model_interactions(
+        self, respx_mock: MockRouter, target: Mapping[str, str], expected_target: Mapping[str, object]
+    ) -> None:
+        route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            return_value=httpx.Response(200, json={"id": "interaction-drop", "status": "completed"})
+        )
+
+        interactions.create(
+            **target,
+            agent_config={"type": "antigravity", "model": "gemini-3.8-flash"},
+            input="Say hi in one word.",
+            drop_params=True,
+            api_key="gemini-offline",
+        )
+
+        assert json.loads(route.calls.last.request.content) == {**expected_target, "input": "Say hi in one word."}
+
     @pytest.mark.parametrize(
         ("model", "api_key", "url", "expected_body", "sse_body", "expected_chunks"),
         [

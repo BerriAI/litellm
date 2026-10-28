@@ -34,6 +34,7 @@ import contextvars
 from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
@@ -42,6 +43,7 @@ from pydantic import ValidationError
 import litellm
 from litellm.interactions.agents.http_handler import agents_http_handler
 from litellm.interactions.agents.utils import get_provider_agents_api_config
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.agents import (
     AgentCreateRequest,
@@ -126,6 +128,42 @@ def _required_agent_id(id: str | None, name: str | None, llm_provider: str) -> s
 # ================================================================== #
 
 
+_CREATE_FIELD_SHAPES: Final = MappingProxyType(
+    {
+        "id": "a string",
+        "base_agent": "a string",
+        "agent_config": "an object",
+        "system_instruction": "a string",
+        "base_environment": "an environment id string or an object",
+        "description": "a string",
+        "tools": "a list of objects",
+    }
+)
+
+
+def _invalid_create_fields_message(invalid_fields: frozenset[str], instruction_field: str) -> str:
+    caller_names: Final = MappingProxyType({"system_instruction": instruction_field})
+    problems: Final = "; ".join(
+        f"'{caller_names.get(field, field)}' must be {_CREATE_FIELD_SHAPES[field]}" for field in sorted(invalid_fields)
+    )
+    drop_hint: Final = "" if "id" in invalid_fields else " Set drop_params to drop invalid optional fields."
+    return f"Invalid agent create request: {problems}.{drop_hint}"
+
+
+def _validated_create_request(
+    fields: Mapping[str, object], drop_invalid_fields: bool, instruction_field: str
+) -> AgentCreateRequest | _InvalidAgentRequest:
+    try:
+        return AgentCreateRequest.model_validate(fields)
+    except ValidationError as e:
+        invalid_fields: Final = frozenset(str(error["loc"][0]) for error in e.errors())
+        if drop_invalid_fields and "id" not in invalid_fields:
+            return AgentCreateRequest.model_validate(
+                {field: value for field, value in fields.items() if field not in invalid_fields}
+            )
+        return _InvalidAgentRequest(_invalid_create_fields_message(invalid_fields, instruction_field))
+
+
 def _create_request_or_error(
     id: str | None,
     name: str | None,
@@ -136,6 +174,7 @@ def _create_request_or_error(
     base_environment: InteractionEnvironment | None,
     description: str | None,
     tools: Sequence[Mapping[str, object]] | None,
+    drop_invalid_fields: bool,
 ) -> AgentCreateRequest | _InvalidAgentRequest:
     agent_id: Final = _agent_id_or_error(id, name)
     if isinstance(agent_id, _InvalidAgentRequest):
@@ -145,18 +184,22 @@ def _create_request_or_error(
     )
     if instruction_conflict is not None:
         return _InvalidAgentRequest(instruction_conflict)
-    try:
-        return AgentCreateRequest(
-            id=agent_id,
-            base_agent=base_agent,
-            agent_config=agent_config,
-            system_instruction=system_instruction if system_instruction is not None else instructions,
-            base_environment=base_environment,
-            description=description,
-            tools=tools,
-        )
-    except ValidationError as e:
-        return _InvalidAgentRequest(str(e))
+    sent_only_instructions: Final = system_instruction is None and instructions is not None
+    return _validated_create_request(
+        MappingProxyType(
+            {
+                "id": agent_id,
+                "base_agent": base_agent,
+                "agent_config": agent_config,
+                "system_instruction": instructions if sent_only_instructions else system_instruction,
+                "base_environment": base_environment,
+                "description": description,
+                "tools": tools,
+            }
+        ),
+        drop_invalid_fields,
+        "instructions" if sent_only_instructions else "system_instruction",
+    )
 
 
 @client
@@ -266,6 +309,7 @@ def create(
             base_environment=base_environment,
             description=description,
             tools=tools,
+            drop_invalid_fields=drops_unsupported_params(kwargs.get("drop_params")),
         )
         if isinstance(create_request, _InvalidAgentRequest):
             raise litellm.BadRequestError(

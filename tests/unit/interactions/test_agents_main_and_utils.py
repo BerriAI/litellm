@@ -444,6 +444,50 @@ class TestCreateRequestBody:
         assert exc_info.value.status_code == 400
         assert not respx_mock.calls
 
+    def test_create_with_drop_params_drops_only_the_invalid_optional_fields(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(
+            return_value=httpx.Response(200, json={"id": "slides"})
+        )
+
+        create(
+            id="slides",
+            agent_config="antigravity",
+            tools="code_execution",
+            instructions="Make slides.",
+            drop_params=True,
+            api_key="AIza-test",
+        )
+
+        assert _sent_json(route) == {"id": "slides", "system_instruction": "Make slides."}
+
+    @pytest.mark.parametrize(
+        ("fields", "expected_message"),
+        [
+            pytest.param(
+                {"id": "slides", "instructions": 5, "tools": "code_execution"},
+                "Invalid agent create request: 'instructions' must be a string; 'tools' must be a list of objects."
+                " Set drop_params to drop invalid optional fields.",
+                id="names-the-alias-the-caller-sent",
+            ),
+            pytest.param(
+                {"id": 7, "agent_config": "antigravity", "drop_params": True},
+                "Invalid agent create request: 'agent_config' must be an object; 'id' must be a string.",
+                id="invalid-id-is-never-dropped",
+            ),
+        ],
+    )
+    def test_create_rejects_invalid_fields_by_the_names_the_caller_sent(
+        self, respx_mock: respx.MockRouter, fields: Mapping[str, object], expected_message: str
+    ) -> None:
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            create(**fields, api_key="AIza-test")
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.message.endswith(expected_message)
+        assert not respx_mock.calls
+
     @pytest.mark.asyncio
     async def test_acreate_sends_every_current_field_verbatim(
         self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch

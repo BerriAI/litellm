@@ -15,7 +15,7 @@ import httpx
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, process_response_headers
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
@@ -199,8 +199,13 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             "response_modalities",
             "previous_interaction_id",
         ]
+        dropped_keys: Final = (
+            frozenset({"agent_config"})
+            if model and drops_unsupported_params(litellm_params.get("drop_params"))
+            else frozenset()
+        )
         for key in optional_keys:
-            if optional_params.get(key) is not None:
+            if key not in dropped_keys and optional_params.get(key) is not None:
                 request_body[key] = optional_params[key]
 
         # response_mime_type is removed — fold it into response_format.

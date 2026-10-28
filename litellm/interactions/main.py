@@ -88,7 +88,6 @@ async def acreate(
     background: bool | None = None,
     # Agent execution environment ("remote", env id, or remote config object)
     environment: InteractionEnvironment | None = None,
-    agent_config: Mapping[str, object] | None = None,
     # Response format
     response_modalities: list[str] | None = None,
     response_format: Mapping[str, object] | None = None,
@@ -101,6 +100,8 @@ async def acreate(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM params
     custom_llm_provider: str | None = None,
+    *,
+    agent_config: Mapping[str, object] | None = None,
     **kwargs,
 ) -> InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]:
     """
@@ -216,7 +217,6 @@ def create(
     background: bool | None = None,
     # Agent execution environment ("remote", env id, or remote config object)
     environment: InteractionEnvironment | None = None,
-    agent_config: Mapping[str, object] | None = None,
     # Response format
     response_modalities: list[str] | None = None,
     response_format: Mapping[str, object] | None = None,
@@ -229,6 +229,8 @@ def create(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM params
     custom_llm_provider: str | None = None,
+    *,
+    agent_config: Mapping[str, object] | None = None,
     **kwargs,
 ) -> (
     InteractionsAPIResponse
