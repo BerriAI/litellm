@@ -64,7 +64,7 @@ impl<S: CacheCodec, D: DiskStore, A: ValueAdapter> DiskCache<S, D, A> {
     {
         tokio::task::spawn_blocking(move || operation(&store))
             .await
-            .map_err(|_| Error::Unavailable)?
+            .map_err(Error::unavailable)?
     }
 }
 
@@ -162,7 +162,7 @@ impl<S: CacheCodec, D: DiskStore, A: ValueAdapter> BatchCache for DiskCache<S, D
             .map(|key| match self.get_cache(key, context) {
                 Ok(Some(value)) => Ok(BatchEntry::Hit(value)),
                 Ok(None) => Ok(BatchEntry::Miss),
-                Err(Error::InvalidEntry) => Ok(BatchEntry::Invalid),
+                Err(Error::InvalidEntry(_)) => Ok(BatchEntry::Invalid),
                 Err(error) => Err(error),
             })
             .collect()
@@ -186,7 +186,7 @@ impl<S: CacheCodec, D: DiskStore, A: ValueAdapter> BatchCache for DiskCache<S, D
                 Some(value) => match self.decode_stored(value) {
                     Ok(Some(value)) => Ok(BatchEntry::Hit(value)),
                     Ok(None) => Ok(BatchEntry::Miss),
-                    Err(Error::InvalidEntry) => Ok(BatchEntry::Invalid),
+                    Err(Error::InvalidEntry(_)) => Ok(BatchEntry::Invalid),
                     Err(error) => Err(error),
                 },
             })
@@ -272,7 +272,7 @@ fn increment<A: ValueAdapter, D: DiskStore>(
         Ok((stored, ttl.map(|ttl| unix_now() + ttl.as_secs_f64())))
     };
     store.update(key, unix_now(), &mut apply)?;
-    result.ok_or(Error::InvalidEntry)
+    result.ok_or(Error::InvalidEntry(None))
 }
 
 fn unix_now() -> f64 {

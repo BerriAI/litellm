@@ -15,13 +15,13 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 use litellm_auth_types::AwsParams;
 
-use super::Error;
 use super::constants::{
     AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION_NAME, AWS_ROLE_ARN,
     AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN,
     AWS_SIGNED_HEADER_NAMES, AWS_STS_ENDPOINT, AWS_WEB_IDENTITY_TOKEN, AWS_WEB_IDENTITY_TOKEN_FILE,
     DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX, SIGV4_COMPUTED_HEADER_NAMES,
 };
+use crate::error::{CredentialFlow, Error, SigningStage};
 
 const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
 const AMBIENT_CREDENTIALS_TTL: Duration = Duration::from_secs(600);
@@ -271,7 +271,7 @@ impl AwsAuthService {
                 provider
                     .provide_credentials()
                     .await
-                    .map_err(|error| Error::AwsProfile(error.to_string()))
+                    .map_err(Error::credentials(CredentialFlow::Profile))
             }
             AwsAuthFlow::AssumeRole { role, session_name } => {
                 if is_already_running_as_role(&role, &resolved).await? {
@@ -287,7 +287,7 @@ impl AwsAuthService {
                     let credentials = provider
                         .provide_credentials()
                         .await
-                        .map_err(|error| Error::AwsDefaultChain(error.to_string()))?;
+                        .map_err(Error::credentials(CredentialFlow::DefaultChain))?;
                     self.set_cached_credentials(
                         key,
                         credentials.clone(),
@@ -327,7 +327,7 @@ impl AwsAuthService {
                 provider
                     .provide_credentials()
                     .await
-                    .map_err(|error| Error::AwsAssumeRole(error.to_string()))
+                    .map_err(Error::credentials(CredentialFlow::AssumeRole))
             }
             AwsAuthFlow::WebIdentity {
                 token,
@@ -350,12 +350,14 @@ impl AwsAuthService {
                     .web_identity_token(token)
                     .send()
                     .await
-                    .map_err(|error| Error::AwsWebIdentity(error.to_string()))?;
+                    .map_err(Error::credentials(CredentialFlow::WebIdentity))?;
                 let credentials = response
                     .credentials()
-                    .ok_or(Error::AwsMissingWebIdentityCredentials)?;
-                let expiration = SystemTime::try_from(*credentials.expiration())
-                    .map_err(|error| Error::AwsWebIdentityExpiration(error.to_string()))?;
+                    .ok_or(Error::MissingWebIdentityCredentials)?;
+                let expiration =
+                    SystemTime::try_from(*credentials.expiration()).map_err(|source| {
+                        Error::WebIdentityExpiration(litellm_error::Source::new(source))
+                    })?;
                 Ok(Credentials::new(
                     credentials.access_key_id(),
                     credentials.secret_access_key(),
@@ -376,7 +378,7 @@ impl AwsAuthService {
                 let credentials = provider
                     .provide_credentials()
                     .await
-                    .map_err(|error| Error::AwsDefaultChain(error.to_string()))?;
+                    .map_err(Error::credentials(CredentialFlow::DefaultChain))?;
                 self.set_cached_credentials(
                     key,
                     credentials.clone(),
@@ -480,14 +482,16 @@ pub fn sign_headers(
         .settings(SigningSettings::default())
         .build()
         .map(SigningParams::from)
-        .map_err(|error| Error::AwsSigningParameters(error.to_string()))?;
+        .map_err(Error::signing(SigningStage::Parameters))?;
     let header_refs = headers
         .iter()
         .map(|(name, value)| {
             value
                 .to_str()
                 .map(|value| (name.as_str(), value))
-                .map_err(|_| Error::AwsSignableRequest(format!("{name} is not visible ASCII")))
+                .map_err(|_| Error::NonAsciiHeader {
+                    name: name.to_string(),
+                })
         })
         .collect::<Result<Vec<_>, _>>()?;
     let request = SignableRequest::new(
@@ -496,23 +500,20 @@ pub fn sign_headers(
         header_refs.into_iter(),
         SignableBody::Bytes(body),
     )
-    .map_err(|error| Error::AwsSignableRequest(error.to_string()))?;
+    .map_err(Error::signing(SigningStage::Request))?;
     let (instructions, _) = sign(request, &params)
-        .map_err(|error| Error::AwsSigning(error.to_string()))?
+        .map_err(Error::signing(SigningStage::Signature))?
         .into_parts();
     instructions
         .headers()
         .map(|(name, value)| {
-            HeaderName::from_bytes(name.as_bytes())
-                .map_err(|error| error.to_string())
-                .and_then(|name| {
-                    HeaderValue::from_str(value)
-                        .map(|value| (name, value))
-                        .map_err(|error| error.to_string())
-                })
+            let name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(Error::signing(SigningStage::Output))?;
+            let value =
+                HeaderValue::from_str(value).map_err(Error::signing(SigningStage::Output))?;
+            Ok((name, value))
         })
-        .collect::<Result<HeaderMap, _>>()
-        .map_err(Error::AwsSigning)
+        .collect()
 }
 
 /// Model-id and region parsing shared by every Bedrock route.
@@ -1079,6 +1080,55 @@ mod tests {
         )
         .expect("signature");
         assert!(!signed.contains_key("X-Amz-Security-Token"));
+    }
+
+    #[test]
+    fn a_header_value_outside_visible_ascii_is_named_instead_of_signed() {
+        let (url, body, mut headers) = parity_inputs();
+        headers.insert("x-amz-meta-note", HeaderValue::from_str("café").unwrap());
+        let credentials = Credentials::new("AKIDEXAMPLE", "secret", None, None, "test");
+
+        let error = sign_headers(
+            "POST",
+            &url,
+            &body,
+            &headers,
+            SigningScope {
+                region: "us-east-1",
+                service: BEDROCK_SERVICE,
+                credentials: &credentials,
+                time: UNIX_EPOCH,
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            Error::NonAsciiHeader {
+                name: "x-amz-meta-note".into()
+            }
+        );
+    }
+
+    #[test]
+    fn the_shared_auth_error_nests_the_aws_failure_and_its_cause() {
+        let cause = std::io::Error::new(std::io::ErrorKind::NotFound, "profile not found");
+        let error =
+            litellm_auth_types::Error::from(Error::credentials(CredentialFlow::Profile)(cause));
+
+        assert!(matches!(
+            litellm_error::find::<Error>(&error),
+            Some(Error::Credentials {
+                flow: CredentialFlow::Profile,
+                ..
+            })
+        ));
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(
+            report.contains("could not load AWS profile credentials"),
+            "{report}"
+        );
+        assert_eq!(report.matches("profile not found").count(), 1, "{report}");
     }
 
     #[ignore]

@@ -1,9 +1,6 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError, mime::Mime};
-use litellm_http::{
-    media::{DownloadPolicy, Error as MediaError, MediaFetcher},
-    transport::Error as TransportError,
-};
+use litellm_http::media::{DownloadPolicy, MediaFetcher};
 use reqwest::Url;
 
 use crate::base_llm::ocr::{
@@ -61,9 +58,7 @@ pub async fn inline_remote_document(
         validate_inline_document(&document)?;
         return Ok(document);
     }
-    let url = Url::parse(source).map_err(|_| Error::RequestField {
-        path: "document URL".into(),
-    })?;
+    let url = Url::parse(source).map_err(|error| Error::request_field("document URL", error))?;
     let downloaded = fetcher
         .fetch(
             url,
@@ -74,7 +69,7 @@ pub async fn inline_remote_document(
             },
         )
         .await
-        .map_err(map_media_error)?;
+        .map_err(Error::DocumentDownload)?;
     let result = document.with_source(format!(
         "data:{};base64,{}",
         downloaded.content_type,
@@ -82,28 +77,6 @@ pub async fn inline_remote_document(
     ));
     validate_inline_document(&result)?;
     Ok(result)
-}
-
-fn map_media_error(error: MediaError) -> Error {
-    match error {
-        MediaError::BlockedUrl => Error::BlockedDocumentUrl,
-        MediaError::DownloadDisabled => Error::DownloadDisabled,
-        MediaError::DownloadTooLarge => Error::DownloadTooLarge,
-        MediaError::TooManyRedirects => Error::TooManyRedirects,
-        MediaError::MissingRedirectLocation => Error::MissingRedirectLocation,
-        MediaError::InvalidRedirect => Error::InvalidRedirect,
-        MediaError::Http(status) => TransportError::Http {
-            status,
-            body: "OCR document download failed".into(),
-        }
-        .into(),
-        MediaError::Timeout => TransportError::Http {
-            status: 408,
-            body: "OCR document download timed out".into(),
-        }
-        .into(),
-        MediaError::Transport(error) => error.into(),
-    }
 }
 
 #[cfg(test)]
@@ -119,20 +92,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn decodes_data_urls_and_limits_decoded_size() {
-        for (source, expected) in [
-            ("data:application/pdf;base64,YWJj", b"abc".as_slice()),
-            ("DATA:application/pdf;BASE64,YWI", b"ab".as_slice()),
-            ("data:,a%20b%00%FF", b"a b\0\xff".as_slice()),
-        ] {
-            let inline = InlineDocument::parse(source).unwrap().unwrap();
-            assert_eq!(inline.decode(expected.len()).unwrap(), expected);
-            assert!(matches!(
-                inline.decode(expected.len() - 1),
-                Err(Error::InlineDocumentTooLarge)
-            ));
-        }
+    #[rstest::rstest]
+    #[case::base64("data:application/pdf;base64,YWJj", b"abc")]
+    #[case::uppercase_unpadded("DATA:application/pdf;BASE64,YWI", b"ab")]
+    #[case::percent_encoded("data:,a%20b%00%FF", b"a b\0\xff")]
+    fn decodes_data_urls_and_limits_decoded_size(#[case] source: &str, #[case] expected: &[u8]) {
+        let inline = InlineDocument::parse(source).unwrap().unwrap();
+        assert_eq!(inline.decode(expected.len()).unwrap(), expected);
+        assert!(matches!(
+            inline.decode(expected.len() - 1),
+            Err(Error::InlineDocumentTooLarge)
+        ));
     }
 
     #[test]
@@ -150,15 +120,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rejects_invalid_inline_documents() {
-        for source in [
-            "https://example.com/document.pdf",
-            "data:application/pdf;base64",
-            "data:application/pdf;base64,INVALID!",
-        ] {
-            assert!(validate_inline_document(&document(source)).is_err());
-        }
+    #[rstest::rstest]
+    #[case::remote("https://example.com/document.pdf")]
+    #[case::no_payload("data:application/pdf;base64")]
+    #[case::invalid_base64("data:application/pdf;base64,INVALID!")]
+    fn rejects_invalid_inline_documents(#[case] source: &str) {
+        assert!(validate_inline_document(&document(source)).is_err());
     }
 
     #[tokio::test]

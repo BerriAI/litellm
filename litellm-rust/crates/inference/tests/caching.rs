@@ -417,7 +417,7 @@ impl litellm_cache::BaseCache for UnavailableCache {
         _: &str,
         _: &Self::Context,
     ) -> Result<Option<Self::Value>, litellm_cache::Error> {
-        Err(litellm_cache::Error::Unavailable)
+        Err(litellm_cache::Error::Unavailable(None))
     }
 
     fn set_cache(
@@ -426,7 +426,7 @@ impl litellm_cache::BaseCache for UnavailableCache {
         _: Self::Value,
         _: &Self::Context,
     ) -> Result<(), litellm_cache::Error> {
-        Err(litellm_cache::Error::Unavailable)
+        Err(litellm_cache::Error::Unavailable(None))
     }
 }
 

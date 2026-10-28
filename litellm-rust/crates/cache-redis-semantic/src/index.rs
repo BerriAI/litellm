@@ -40,10 +40,10 @@ impl Index {
             Some(false) => self.isolated(connection, dims)?,
             None => match create_index(connection, &self.name, dims) {
                 Ok(()) => self.name.clone(),
-                Err(_) => match index_compatible(connection, &self.name, dims)? {
+                Err(error) => match index_compatible(connection, &self.name, dims)? {
                     Some(true) => self.name.clone(),
                     Some(false) => self.isolated(connection, dims)?,
-                    None => return Err(Error::Unavailable),
+                    None => return Err(error),
                 },
             },
         };
@@ -59,7 +59,7 @@ impl Index {
                 redis::cmd("FT.DROPINDEX")
                     .arg(&name)
                     .query::<()>(connection)
-                    .map_err(|_| Error::Unavailable)?;
+                    .map_err(Error::unavailable)?;
                 create_index(connection, &name, dims)?;
                 Ok(name)
             }
@@ -109,7 +109,7 @@ fn create_index(connection: &mut ConnectionRef<'_>, name: &str, dims: usize) -> 
         .arg("SEPARATOR")
         .arg(",")
         .query::<()>(connection)
-        .map_err(|_| Error::Unavailable)
+        .map_err(Error::unavailable)
 }
 
 fn index_compatible(
@@ -123,14 +123,18 @@ fn index_compatible(
     {
         Ok(info) => info,
         Err(error) if unknown_index(&error) => return Ok(None),
-        Err(_) => return Err(Error::Unavailable),
+        Err(error) => return Err(Error::unavailable(error)),
     };
     Ok(Some(schema_compatible(&info, dims)))
 }
 
 fn unknown_index(error: &redis::RedisError) -> bool {
-    let message = error.to_string().to_lowercase();
-    message.contains("unknown") && message.contains("index")
+    error
+        .code()
+        .is_some_and(|code| code.eq_ignore_ascii_case("unknown"))
+        && error
+            .detail()
+            .is_some_and(|detail| detail.to_ascii_lowercase().starts_with("index"))
 }
 
 struct Attribute {

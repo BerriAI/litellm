@@ -46,9 +46,9 @@ pub fn read_path_document(path: &Path, mime_type: Option<&str>) -> Result<OcrDoc
             file.take(OCR_INLINE_MAX_BYTES as u64 + 1)
                 .read_to_end(&mut bytes)
         })
-        .map_err(|source| Error::FileRead {
+        .map_err(|cause| Error::FileRead {
             path: path.to_owned(),
-            source: std::sync::Arc::new(source),
+            cause: std::sync::Arc::new(cause),
         })?;
     let name = path.file_name().map(|name| name.to_string_lossy());
     encode_file_document(&bytes, name.as_deref(), mime_type)
@@ -202,7 +202,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
 
         let missing = dir.join("missing.pdf");
-        let Err(super::Error::FileRead { path, source, .. }) =
+        let Err(super::Error::FileRead { path, cause, .. }) =
             prepare_document(OcrDocumentInput::Path {
                 path: missing.clone(),
                 mime_type: None,
@@ -211,7 +211,7 @@ mod tests {
             panic!("missing paths must surface a file read error");
         };
         assert_eq!(path, missing);
-        assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(cause.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]
@@ -243,15 +243,16 @@ mod tests {
     }
 
     #[test]
-    fn file_encoding_rejects_empty_bytes_and_invalid_explicit_mime() {
+    fn file_encoding_rejects_empty_bytes() {
         assert!(encode_file_document(b"", None, None).is_err());
-        for mime in [
-            "text/plain;bad",
-            "text/plain/extra",
-            " text/plain",
-            "text/plain\n",
-        ] {
-            assert!(encode_file_document(b"abc", None, Some(mime)).is_err());
-        }
+    }
+
+    #[rstest]
+    #[case::bad_parameter("text/plain;bad")]
+    #[case::extra_segment("text/plain/extra")]
+    #[case::leading_space(" text/plain")]
+    #[case::trailing_newline("text/plain\n")]
+    fn file_encoding_rejects_an_invalid_explicit_mime(#[case] mime: &str) {
+        assert!(encode_file_document(b"abc", None, Some(mime)).is_err());
     }
 }

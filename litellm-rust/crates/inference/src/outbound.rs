@@ -13,10 +13,10 @@ use serde_json::Value;
 pub async fn send(
     request: reqwest::Request,
     client: &litellm_http::Client,
-) -> Result<reqwest::Response, reqwest::Error> {
-    client.execute(request).await.inspect(|response| {
-        tracing::Span::current().record("status", response.status().as_u16());
-    })
+) -> Result<reqwest::Response, litellm_http::Error> {
+    let response = client.execute(request).await?;
+    tracing::Span::current().record("status", response.status().as_u16());
+    Ok(response)
 }
 
 /// Header credentials are already in `headers`; SigV4 is applied here, over the

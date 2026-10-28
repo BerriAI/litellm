@@ -17,74 +17,81 @@ fn resolver(value: Option<&str>) -> SecretResolver {
 }
 
 #[rstest::rstest]
-#[case::environment(false)]
-#[case::manager(true)]
+#[case::capitalized_true("True", Some(true))]
+#[case::padded_false(" FALSE ", Some(false))]
+#[case::empty("", None)]
+#[case::parenthesized("(True)", None)]
+#[case::json("{\"key\":1}", None)]
 #[tokio::test]
-async fn native_reads_preserve_strings_and_report_conversion_errors(#[case] managed: bool) {
-    for raw in ["True", " FALSE ", "", "(True)", "{\"key\":1}"] {
-        let state = if managed {
-            SecretManagerState::new(
-                SecretManager::External(Arc::new(FixedManager::custom(Ok(Some(Secret::String(
-                    SecretValue::new(raw),
-                )))))),
-                KeyManagementSettings::default(),
-            )
-        } else {
-            SecretManagerState::default()
-        };
-        let resolver = SecretResolver::new(
-            Arc::new(state),
-            Arc::new(move |_: &str| Some(raw.to_owned())),
-            OidcResolver::new(litellm_http::Client::for_test()),
-        );
-        assert_eq!(
-            resolver
-                .get_secret_str("key", None)
-                .await
-                .unwrap()
-                .unwrap()
-                .expose(),
-            raw
-        );
-        assert_eq!(
-            resolver.get_secret("key", None).await.unwrap(),
-            Some(Secret::String(SecretValue::new(raw)))
-        );
-        if raw == "True" || raw == " FALSE " {
-            assert_eq!(
-                resolver.get_secret_bool("key", None).await.unwrap(),
-                Some(raw == "True")
-            );
-        } else {
-            assert!(matches!(
-                resolver.get_secret_bool("key", None).await,
-                Err(Error::TypeMismatch {
-                    expected: "boolean"
-                })
-            ));
-        }
+async fn native_reads_preserve_strings_and_report_conversion_errors(
+    #[case] raw: &'static str,
+    #[case] boolean: Option<bool>,
+    #[values(false, true)] managed: bool,
+) {
+    let state = if managed {
+        SecretManagerState::new(
+            SecretManager::External(Arc::new(FixedManager::custom(Ok(Some(Secret::String(
+                SecretValue::new(raw),
+            )))))),
+            KeyManagementSettings::default(),
+        )
+    } else {
+        SecretManagerState::default()
+    };
+    let resolver = SecretResolver::new(
+        Arc::new(state),
+        Arc::new(move |_: &str| Some(raw.to_owned())),
+        OidcResolver::new(litellm_http::Client::for_test()),
+    );
+    assert_eq!(
+        resolver
+            .get_secret_str("key", None)
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        raw
+    );
+    assert_eq!(
+        resolver.get_secret("key", None).await.unwrap(),
+        Some(Secret::String(SecretValue::new(raw)))
+    );
+    match boolean {
+        Some(expected) => assert_eq!(
+            resolver.get_secret_bool("key", None).await.unwrap(),
+            Some(expected)
+        ),
+        None => assert!(matches!(
+            resolver.get_secret_bool("key", None).await,
+            Err(Error::TypeMismatch {
+                expected: "boolean"
+            })
+        )),
     }
 }
 
+#[rstest::rstest]
+#[case::absent(Ok(None))]
+#[case::failed(Err(()))]
 #[tokio::test]
-async fn native_defaults_apply_to_absence_but_never_hide_provider_failures() {
-    for reply in [Ok(None), Err(())] {
-        let resolver = SecretResolver::new(
-            Arc::new(SecretManagerState::new(
-                SecretManager::External(Arc::new(FixedManager::custom(reply.clone()))),
-                KeyManagementSettings::default(),
-            )),
-            Arc::new(|_: &str| None),
-            OidcResolver::new(litellm_http::Client::for_test()),
-        );
-        let result = resolver
-            .get_secret_str("key", Some(SecretValue::new("default")))
-            .await;
-        match reply {
-            Ok(None) => assert_eq!(result.unwrap().unwrap().expose(), "default"),
-            Err(()) => assert!(matches!(result, Err(Error::MissingCiphertext))),
-            Ok(Some(_)) => unreachable!(),
-        }
+async fn native_defaults_apply_to_absence_but_never_hide_provider_failures(
+    #[case] reply: Result<Option<Secret>, ()>,
+) {
+    let resolver = SecretResolver::new(
+        Arc::new(SecretManagerState::new(
+            SecretManager::External(Arc::new(FixedManager::custom(reply.clone()))),
+            KeyManagementSettings::default(),
+        )),
+        Arc::new(|_: &str| None),
+        OidcResolver::new(litellm_http::Client::for_test()),
+    );
+    let result = resolver
+        .get_secret_str("key", Some(SecretValue::new("default")))
+        .await;
+    match reply {
+        Ok(None) => assert_eq!(result.unwrap().unwrap().expose(), "default"),
+        Err(()) => assert!(matches!(result, Err(Error::MissingCiphertext))),
+        Ok(Some(_)) => unreachable!(),
     }
 }
 
