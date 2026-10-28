@@ -6,19 +6,17 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import Final, cast
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import respx
 from httpx import Response
 from mcp.types import Tool as MCPTool
-from unittest.mock import AsyncMock, patch
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.types.utils import ModelResponse, StandardLoggingPayload
-
 from litellm.responses.mcp import chat_completions_handler
 from litellm.responses.mcp.chat_completions_handler import (
     acompletion_with_mcp,
@@ -27,6 +25,7 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.utils import ModelResponse, StandardLoggingPayload
 
 
 @pytest.mark.asyncio
@@ -181,15 +180,16 @@ async def test_acompletion_with_mcp_passes_mcp_server_auth_headers_to_process_to
 
 @pytest.mark.asyncio
 async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
-    from litellm.utils import CustomStreamWrapper
+    from unittest.mock import MagicMock
+
     from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
         ModelResponseStream,
         StreamingChoices,
-        Delta,
-        ChatCompletionDeltaToolCall,
-        Function,
     )
-    from unittest.mock import MagicMock
+    from litellm.utils import CustomStreamWrapper
 
     tools = [{"type": "function", "function": {"name": "tool"}}]
 
@@ -432,9 +432,9 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
     Test that acompletion_with_mcp adds MCP metadata to CustomStreamWrapper
     and it appears in the final chunk's delta.provider_specific_fields.
     """
-    from litellm.utils import CustomStreamWrapper
-    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+    from litellm.utils import CustomStreamWrapper
 
     tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
     openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
@@ -588,8 +588,8 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
     Test that acompletion_with_mcp makes the initial LLM call with streaming=True
     when stream=True is requested, instead of making a non-streaming call first.
     """
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
     from litellm.utils import CustomStreamWrapper
-    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
 
     tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
     openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
@@ -762,14 +762,14 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
     - mcp_list_tools should be in the first chunk
     - mcp_tool_calls and mcp_call_results should be in the final chunk of initial response
     """
-    from litellm.utils import CustomStreamWrapper
     from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
         ModelResponseStream,
         StreamingChoices,
-        Delta,
-        ChatCompletionDeltaToolCall,
-        Function,
     )
+    from litellm.utils import CustomStreamWrapper
 
     tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
     openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
@@ -1083,7 +1083,7 @@ async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatc
     )
     monkeypatch.setattr(mcp_handler_module, "function_setup", mock_function_setup)
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.call_tool",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager.call_tool",
         mock_call_tool,
     )
 
@@ -1366,7 +1366,7 @@ async def test_acompletion_with_mcp_streaming_drains_inner_stream_after_exhausti
 @pytest.mark.asyncio
 @respx.mock
 async def test_acompletion_with_mcp_forwards_unserved_external_mcp_tool_to_the_provider(monkeypatch):
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
     zapier_tool = {"type": "mcp", "server_label": "zapier", "server_url": "https://mcp.zapier.com/api/mcp/mcp"}
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", types.SimpleNamespace(prisma_client=None))
@@ -1405,14 +1405,15 @@ async def test_acompletion_with_mcp_forwards_unserved_external_mcp_tool_to_the_p
 @pytest.mark.parametrize("selection_source", ["metadata", "litellm_metadata", "body"])
 @pytest.mark.parametrize("logging_failure", [False, True])
 async def test_request_selected_mcp_guardrail_blocks_before_upstream(monkeypatch, selected, stream, selection_source, logging_failure):
-    from litellm.exceptions import GuardrailRaisedException
     from mcp.types import Tool
+
     from litellm.caching.caching import DualCache
+    from litellm.exceptions import GuardrailRaisedException
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.proxy import proxy_server
-    from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_ObjectPermissionTable
-    from litellm.proxy._experimental.mcp_server import mcp_server_manager, server, tool_registry
-    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+    from litellm.proxy.mcp_server import mcp_server_manager, server, tool_registry
+    from litellm.proxy.mcp_server.faults.list_outcomes import AggregateToolListing
     from litellm.proxy.utils import ProxyLogging
     from litellm.types.guardrails import GuardrailEventHooks
     from litellm.types.mcp_server.mcp_server_manager import MCPServer

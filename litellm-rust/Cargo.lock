@@ -877,6 +877,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "backon"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cffb0e931875b666fc4fcb20fee52e9bbd1ef836fd9e9e04ec21555f9f85f7ef"
+dependencies = [
+ "fastrand",
+]
+
+[[package]]
 name = "base16ct"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1248,7 +1257,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfc320937d09e6de266b31b9afb480f197d7a861be86be7cb2ea7e5d1bfffc5e"
 dependencies = [
  "bytes",
+ "futures-core",
  "memchr",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -3643,6 +3656,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-circuit-breaker"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "rstest",
+]
+
+[[package]]
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
@@ -3655,6 +3676,8 @@ dependencies = [
  "strum",
  "tempfile",
  "thiserror 2.0.19",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3695,8 +3718,15 @@ dependencies = [
 name = "litellm-db"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "macro_rules_attribute",
+ "rstest",
  "serde",
+ "serde_json",
  "sqlx",
+ "strum",
+ "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]
@@ -3736,6 +3766,7 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "litellm-auth-types",
+ "litellm-circuit-breaker",
  "litellm-config",
  "litellm-gateway-auth",
  "litellm-gateway-inference",
@@ -3744,6 +3775,8 @@ dependencies = [
  "litellm-http",
  "litellm-inference",
  "litellm-llms",
+ "litellm-redis-client",
+ "litellm-redis-testing",
  "litellm-secrets",
  "litellm-tracing",
  "rstest",
@@ -4273,6 +4306,28 @@ dependencies = [
  "serde-pickle",
  "serde_json",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "litellm-redis-client"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-circuit-breaker",
+ "litellm-redis-testing",
+ "redis",
+ "rstest",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "litellm-redis-testing"
+version = "0.1.0"
+dependencies = [
+ "testcontainers-modules",
+ "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]
@@ -5750,22 +5805,34 @@ dependencies = [
 
 [[package]]
 name = "redis"
-version = "1.7.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2acbc41a996f7652b2ddd9dfd98cc4ff602cfd742ae35382f07f608405ab50ed"
+checksum = "7acd809e80afa754c63f586955699d8990efe1c4b6613183ee5f027a11fbc8b5"
 dependencies = [
+ "arc-swap",
  "arcstr",
+ "async-lock",
+ "backon",
+ "bytes",
+ "cfg-if",
  "combine",
  "crc16",
+ "futures-channel",
+ "futures-util",
  "itoa",
+ "log",
  "num-bigint 0.5.1",
  "percent-encoding",
+ "pin-project-lite",
  "rand 0.10.2",
  "rustls 0.23.42",
  "rustls-native-certs",
  "ryu",
  "sha1_smol",
  "socket2 0.6.5",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "tokio-util",
  "url",
  "xxhash-rust",
 ]
@@ -8202,18 +8269,18 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.9"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+checksum = "e49d0e65abc00c142e8f9428da991da9f1a250c39be97459901eb12b9b49f62a"
 dependencies = [
  "rustls-pki-types",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "f5f280bbb2b287bc8e7de7e3852945a0ff50d1bbcb5ed42b6c7a568c546df171"
 dependencies = [
  "rustls-pki-types",
 ]

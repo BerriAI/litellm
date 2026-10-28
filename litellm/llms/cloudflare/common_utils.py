@@ -3,6 +3,7 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import (
     get_secret_str,
     normalize_nonempty_secret_str,
@@ -34,10 +35,10 @@ def workers_ai_request_model(model: str) -> str:
 def workers_ai_run_url(api_base: str, model: str) -> str:
     normalized_api_base: Final = api_base.rstrip("/")
     if normalized_api_base.endswith("/ai/v1"):
-        return f"{normalized_api_base.removesuffix('/ai/v1')}/ai/run/{model}"
+        return join_api_base(normalized_api_base.removesuffix("/ai/v1"), f"ai/run/{model}")
     if normalized_api_base.endswith("/ai/run"):
         return f"{normalized_api_base}/{model}"
-    return f"{normalized_api_base}/ai/run/{model}"
+    return join_api_base(normalized_api_base, f"ai/run/{model}")
 
 
 def unwrap_workers_ai_result(payload: object) -> object:

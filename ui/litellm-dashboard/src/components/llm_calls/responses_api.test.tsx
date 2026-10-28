@@ -3,6 +3,7 @@ import openai from "openai";
 import { makeOpenAIResponsesRequest } from "./responses_api";
 import { MessageType } from "../chat_ui/types";
 import type { TokenUsage } from "../chat_ui/ResponseMetrics";
+import type { MCPEvent } from "../mcp_tools/types";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "https://backend.example.com"),
@@ -77,6 +78,74 @@ describe("responses_api", () => {
       { signal: undefined },
     );
     expect(mockUpdateTextUI).toHaveBeenCalledWith("assistant", "Hi", "gpt-4");
+  });
+
+  it("replays completed MCP calls and results in conversation order without partial or discovery events", async () => {
+    const item = {
+      type: "mcp_call",
+      id: "mcp-inventory",
+      name: "lookup_inventory",
+      arguments: '{"location":"warehouse"}',
+      output: '{"quantity":17}',
+    };
+    const events: MCPEvent[] = [
+      { type: "response.output_item.done", item: { type: "mcp_list_tools", tools: [] } },
+      { type: "response.output_item.added", item },
+      { type: "response.mcp_call.in_progress", item_id: item.id },
+      { type: "response.output_item.done", item },
+      {
+        type: "response.output_item.done",
+        item_id: "mcp-empty",
+        item: { ...item, id: undefined, output: "" },
+      },
+      { type: "response.output_item.done", item: { ...item, id: undefined } },
+      { type: "response.output_item.done", item: { ...item, name: undefined } },
+      { type: "response.output_item.done", item: { ...item, arguments: undefined } },
+      { type: "response.output_item.done", item: { ...item, output: undefined } },
+    ];
+    const originalEvents = structuredClone(events);
+    const history = [
+      { role: "user", content: "Check inventory", mcpEvents: events },
+      { role: "assistant", content: "Lookup completed", mcpEvents: events },
+      { role: "user", content: "What was the quantity?" },
+    ];
+
+    await makeOpenAIResponsesRequest(history, mockUpdateTextUI, "model", "test-token");
+
+    expect(mockResponsesCreate.mock.calls[0][0].input).toEqual([
+      { role: "user", content: "Check inventory", type: "message" },
+      { type: "function_call", call_id: item.id, name: item.name, arguments: item.arguments },
+      { type: "function_call_output", call_id: item.id, output: item.output },
+      { type: "function_call", call_id: "mcp-empty", name: item.name, arguments: item.arguments },
+      { type: "function_call_output", call_id: "mcp-empty", output: "" },
+      { role: "assistant", content: "Lookup completed", type: "message" },
+      { role: "user", content: "What was the quantity?", type: "message" },
+    ]);
+    expect(events).toEqual(originalEvents);
+  });
+
+  it("replays an MCP-only assistant turn without an empty message", async () => {
+    const history = [
+      {
+        role: "assistant",
+        content: "",
+        mcpEvents: [
+          {
+            type: "response.output_item.done",
+            item: { type: "mcp_call", id: "mcp-only", name: "lookup", arguments: "{}", output: "17" },
+          },
+        ],
+      },
+      { role: "user", content: "What was the quantity?" },
+    ];
+
+    await makeOpenAIResponsesRequest(history, mockUpdateTextUI, "model", "test-token");
+
+    expect(mockResponsesCreate.mock.calls[0][0].input).toEqual([
+      { type: "function_call", call_id: "mcp-only", name: "lookup", arguments: "{}" },
+      { type: "function_call_output", call_id: "mcp-only", output: "17" },
+      { role: "user", content: "What was the quantity?", type: "message" },
+    ]);
   });
 
   it("should send a non-streaming request and render the whole output at once when streaming is disabled", async () => {
