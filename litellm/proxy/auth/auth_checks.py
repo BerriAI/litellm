@@ -46,6 +46,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
     MODEL_LIST_ROUTES,
@@ -165,6 +166,7 @@ from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
 from litellm.utils import get_utc_datetime
+from litellm.vector_stores.vector_store_registry import listed_vector_store_ids, vector_store_ids_in_tool
 
 from .auth_checks_organization import (
     add_team_org_context_to_request_body,
@@ -1505,6 +1507,7 @@ async def common_checks(
             valid_token=valid_token,
             user_object=user_object,
             deny_by_default=_vector_store_deny_by_default(_typed_request_body(general_settings)),
+            llm_router=llm_router,
         )
 
     # 12. [OPTIONAL] Tool allowlist - key/team allowed_tools (no DB in hot path)
@@ -7976,6 +7979,42 @@ def _strict_requested_vector_store_ids(request_body: Mapping[str, object]) -> tu
     )
 
 
+def _top_level_vector_store_ids(
+    vector_store_ids: object, drop_policies: Callable[[], tuple[DropPolicy, ...]]
+) -> tuple[str, ...]:
+    listed: Final = listed_vector_store_ids(vector_store_ids)
+    if vector_store_ids is None or vector_store_ids == [*listed]:
+        return listed
+    if any(policy.drops("vector_store_ids") for policy in drop_policies()):
+        return listed
+    raise _malformed_vector_store_ids()
+
+
+def _legacy_requested_vector_store_ids(
+    request_body: Mapping[str, object], drop_policies: Callable[[], tuple[DropPolicy, ...]]
+) -> tuple[str, ...]:
+    """
+    Reads tools the way VectorStoreRegistry does and leaves a malformed tool to the proxy's tool
+    validation. A top-level vector_store_ids that is not a list of strings is a 400 unless a drop policy
+    the request can resolve to drops it, and then only the string entries of a list name stores, as in
+    registry retrieval.
+    """
+    return tuple(
+        chain(
+            _top_level_vector_store_ids(request_body.get("vector_store_ids"), drop_policies),
+            chain.from_iterable(vector_store_ids_in_tool(tool) for tool in _tools(request_body.get("tools"))),
+        )
+    )
+
+
+def _request_drop_policies(
+    request_body: Mapping[str, object], llm_router: Router | None, valid_token: UserAPIKeyAuth | None
+) -> tuple[DropPolicy, ...]:
+    from litellm.proxy.common_request_processing import counted_drop_policies
+
+    return counted_drop_policies(request_body, llm_router, valid_token.team_id if valid_token is not None else None)
+
+
 def _require_vector_store_grant(
     object_type: GrantLayer,
     vector_store_ids_to_run: Sequence[str],
@@ -8023,6 +8062,7 @@ async def vector_store_access_check(
     *,
     user_object: LiteLLM_UserTable | None = None,
     deny_by_default: bool = False,
+    llm_router: Router | None = None,
 ):
     """
     Checks whether the caller may use every vector store the request names.
@@ -8032,7 +8072,11 @@ async def vector_store_access_check(
     `object_permission.vector_stores`.
 
     Both modes read the same request fields, with or without a vector store registry, and answer 400
-    when a `vector_store_ids` field is not a list of strings.
+    when the top-level `vector_store_ids` is not a list of strings. Legacy mode skips that value
+    instead when the request, `litellm_settings`, the router defaults or a deployment of the requested
+    model drops it (`drop_params`, or `additional_drop_params` naming it), the same settings the proxy's
+    tool validation reads, and reads tools the way the registry does, where strict mode answers 400 on a
+    malformed one.
 
     With `deny_by_default=False` (legacy), a key or team only restricts access when its list is
     nonempty.
@@ -8050,8 +8094,8 @@ async def vector_store_access_check(
     rescue nor restrict a key or team request.
 
     Raises ProxyException (401, `{key,team,user}_vector_store_access_denied`) on the first identity
-    that does not grant a requested store, and ProxyException (400, `invalid_request_error`) when a
-    `vector_store_ids` field is not a list of strings.
+    that does not grant a requested store, and ProxyException (400, `invalid_request_error`) on a
+    malformed `vector_store_ids` the request does not drop.
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -8063,7 +8107,13 @@ async def vector_store_access_check(
         return True
 
     typed_request_body: Final = _typed_request_body(request_body)
-    requested_ids: Final = _strict_requested_vector_store_ids(typed_request_body)
+    requested_ids: Final = (
+        _strict_requested_vector_store_ids(typed_request_body)
+        if deny_by_default
+        else _legacy_requested_vector_store_ids(
+            typed_request_body, lambda: _request_drop_policies(typed_request_body, llm_router, valid_token)
+        )
+    )
     rag_vector_store_id: Final = _get_rag_query_vector_store_id(typed_request_body)
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
     vector_store_ids_to_run: Final = tuple(dict.fromkeys((*requested_ids, *rag_ids)))
