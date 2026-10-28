@@ -3,10 +3,10 @@ use litellm_auth_gcp::{
     VertexConfig, get_vertex_ai_location, get_vertex_ai_project,
     get_vertex_ai_project_from_credentials, secret_names,
 };
-use litellm_http::request::has_header;
+use litellm_http::request::{has_header, without_headers};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesTool, OutputConfig},
-    providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet},
+    providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, VERSION_HEADER},
     recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
@@ -133,7 +133,10 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
-        merge_beta_headers(headers, vertex_feature_betas(request))
+        merge_beta_headers(
+            without_headers(headers, &[VERSION_HEADER]),
+            vertex_feature_betas(request),
+        )
     }
 
     /// Vertex addresses the model in the URL and rejects it in the body.
@@ -468,6 +471,28 @@ mod tests {
         assert_eq!(
             VERTEX_ANTHROPIC_MESSAGES_CONFIG.default_headers(),
             &[("content-type", "application/json")]
+        );
+    }
+
+    #[rstest]
+    #[case::sdk_spelling("anthropic-version")]
+    #[case::any_case("Anthropic-Version")]
+    fn a_forwarded_anthropic_version_never_reaches_vertex(#[case] name: &str) {
+        let request: MessagesRequest = serde_json::from_value(json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        .unwrap();
+        assert_eq!(
+            VERTEX_ANTHROPIC_MESSAGES_CONFIG.request_headers(
+                vec![
+                    (name.to_string(), "2026-10-21".to_string()),
+                    ("x-request-id".to_string(), "req-1".to_string()),
+                ],
+                &request,
+            ),
+            vec![("x-request-id".to_string(), "req-1".to_string())]
         );
     }
 

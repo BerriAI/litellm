@@ -6,12 +6,14 @@ from datetime import datetime, timedelta
 from queue import SimpleQueue
 from threading import get_ident
 from typing import Final
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import requests
 import responses
 
+import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
@@ -92,6 +94,55 @@ async def test_messages_auth_load_and_refresh_leave_the_event_loop(stream: bool,
     assert isinstance(beta_header, str)
     assert set(beta_header.split(",")) == {"retained-beta", ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value}
     assert headers == {"Authorization": "Bearer incoming", "anthropic-beta": "retained-beta", "x-request-id": "req-1"}
+
+
+@pytest.mark.parametrize("version_header", ("anthropic-version", "Anthropic-Version"))
+@pytest.mark.asyncio
+async def test_caller_anthropic_version_header_never_reaches_vertex(version_header: str) -> None:
+    """Vertex reads the API version from the body and answers 400 when a forwarded header names another one,
+    which anthropic SDK 2.x always sends."""
+    vertex_response: Final = MagicMock()
+    vertex_response.json.return_value = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hi"}],
+        "model": "claude-sonnet-5",
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
+    client: Final = MagicMock(spec=AsyncHTTPHandler)
+    client.post = AsyncMock(return_value=vertex_response)
+
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as oauth:
+        oauth.add(responses.POST, "https://oauth2.googleapis.com/token", json={"access_token": "vertex-token", "expires_in": 3600})
+        await litellm.anthropic.messages.acreate(
+            model="vertex_ai/claude-sonnet-5",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=16,
+            vertex_ai_project="version-project",
+            vertex_ai_location="global",
+            vertex_credentials=json.dumps(
+                {
+                    "type": "authorized_user",
+                    "client_id": "version-header-client",
+                    "client_secret": "synthetic-secret",
+                    "refresh_token": "synthetic-refresh",
+                }
+            ),
+            client=client,
+            provider_specific_header={
+                "custom_llm_provider": "vertex_ai",
+                "extra_headers": {version_header: "2026-10-21", "x-request-id": "req-1"},
+            },
+        )
+
+    sent: Final = client.post.call_args.kwargs
+    sent_header_names: Final = {name.lower() for name in sent["headers"]}
+    assert "anthropic-version" not in sent_header_names
+    assert sent["headers"]["x-request-id"] == "req-1"
+    assert json.loads(sent["data"])["anthropic_version"] == "vertex-2023-10-16"
 
 
 def test_validate_environment_uses_vertex_ai_location():

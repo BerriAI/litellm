@@ -17,6 +17,8 @@ from litellm.types.router import GenericLiteLLMParams
 from ....vertex_llm_base import VertexBase
 from ..output_params_utils import sanitize_vertex_anthropic_output_params
 
+_VERSION_HEADER_VERTEX_READS_FROM_BODY: Final = "anthropic-version"
+
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
     @property
@@ -110,7 +112,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         vertex_ai_location: str | None,
     ) -> tuple[dict[str, str], str | None]:  # mutable-ok: the caller consumes request headers
         # Router shallow-copies litellm_params, so headers may be shared between requests.
-        request_headers: Final = dict(headers)
+        request_headers: Final = {
+            name: value for name, value in headers.items() if name.lower() != _VERSION_HEADER_VERTEX_READS_FROM_BODY
+        }
         request_headers["Authorization"] = f"Bearer {access_token}"
 
         api_base = self.get_complete_vertex_url(
