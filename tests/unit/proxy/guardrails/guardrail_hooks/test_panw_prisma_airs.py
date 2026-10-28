@@ -3243,7 +3243,7 @@ class TestPanwAirsMcpToolEventScan:
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+                "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager"
             ) as mock_manager,
             patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
         ):

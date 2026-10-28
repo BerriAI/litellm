@@ -2769,15 +2769,22 @@ async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typ
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "case", ["allowed", "credential-free", "missing", "blocked", "key", "budget", "team", "not-router"]
+    "case",
+    ["allowed", "credential-free", "team-admin-environment", "missing", "blocked", "key", "budget", "team", "not-router"],
 )
 async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch: pytest.MonkeyPatch, case: str) -> None:
     router: Final = RecordingRouter("SIMPLE")
     stored_key: Final = "synthetic-server-jev-key"
+    monkeypatch.setenv("SAVED_JEV_KEY", stored_key)
+    monkeypatch.setenv("SAVED_JEV_BASE", "https://saved-jev.test")
     stored_config: Final = {
         "classifier_type": "jev",
         "tiers": TIERS,
-        "jev_classifier_config": {"api_key": stored_key, "api_base": "https://saved-jev.test"},
+        "jev_classifier_config": (
+            {"api_key": "os.environ/SAVED_JEV_KEY", "api_base": "os.environ/SAVED_JEV_BASE"}
+            if case == "team-admin-environment"
+            else {"api_key": stored_key, "api_base": "https://saved-jev.test"}
+        ),
     }
     router.add_deployment(
         Deployment.model_validate(
@@ -2790,7 +2797,10 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
                 "model_info": {
                     "id": "saved-jev-id",
                     "blocked": case == "blocked",
-                    "team_id": "owner-team" if case == "team" else None,
+                    "team_id": (
+                        "owner-team" if case == "team"
+                        else "admin-preview-team" if case == "team-admin-environment" else None
+                    ),
                 },
             }
         )
@@ -2799,6 +2809,8 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
     actor: Final = (
         _configure_member_preview(monkeypatch)
         if case == "team"
+        else _configure_team_admin_preview(monkeypatch)
+        if case == "team-admin-environment"
         else UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             api_key="sk-probe",
@@ -2812,12 +2824,17 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
         {
             "prompt": "what is 2+2",
             "saved_model_id": "missing-id" if case == "missing" else "saved-jev-id",
-            "team_id": "member-preview-team" if case == "team" else None,
+            "team_id": (
+                "member-preview-team" if case == "team"
+                else "admin-preview-team" if case == "team-admin-environment" else None
+            ),
         },
         classifier_type="jev",
         jev_classifier_config=(
             {"model": "jev-latest", "timeout_ms": 3000}
             if case == "credential-free"
+            else {"api_key": "os.environ/IGNORED_BROWSER_KEY", "api_base": "https://browser-override.test"}
+            if case == "team-admin-environment"
             else {"api_key": "masked-key", "api_base": "https://browser-override.test"}
         ),
     )
@@ -2856,7 +2873,7 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
             assert result.routed_model == "cheap-model"
             assert evaluation.calls.last.request.headers["authorization"] == f"Bearer {stored_key}"
             assert stored_key not in result.model_dump_json()
-        assert evaluation.call_count == (1 if case in ("allowed", "credential-free") else 0)
+        assert evaluation.call_count == (1 if case in ("allowed", "credential-free", "team-admin-environment") else 0)
         assert router.recorded_calls == []
         await handler.client.aclose()
 
@@ -3376,6 +3393,54 @@ async def test_validate_config_gates_like_the_write_it_rehearses(monkeypatch: py
             UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-other", user_id="someone-else"),
         )
     assert not_their_team.value.status_code == 403
+
+
+def _configure_team_admin_preview(monkeypatch: pytest.MonkeyPatch) -> UserAPIKeyAuth:
+    from litellm.proxy._types import LiteLLM_TeamTable
+
+    team: Final = LiteLLM_TeamTable(
+        team_id="admin-preview-team",
+        models=["saved-jev", "typesafe/jev-latest", *[TIERS[name][0] for name in TIERS]],
+        members_with_roles=[{"role": "admin", "user_id": "preview-admin"}],
+    )
+    database: Final = MagicMock()
+    database.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="preview-admin", api_key="sk-preview")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("field", ["api_key", "api_base"])
+async def test_team_admin_cannot_preview_or_validate_environment_references(
+    monkeypatch: pytest.MonkeyPatch, legacy: bool, field: str
+) -> None:
+    from litellm.types.management_endpoints.auto_router_endpoints import ComplexityRouterConfigValidationRequest
+
+    actor: Final = _configure_team_admin_preview(monkeypatch)
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+    config: Final = {
+        "tiers": TIERS,
+        "classifier_type": "jev" if legacy else "oss_classifier",
+        "jev_classifier_config" if legacy else "opensource_classifier_config": {
+            "api_key": "caller-key", "api_base": "https://denied-jev.test", field: "os.environ/PRIVATE_JEV_VALUE",
+        },
+    }
+    validation: Final = ComplexityRouterConfigValidationRequest(
+        team_id="admin-preview-team", complexity_router_config=config
+    )
+    with pytest.raises(HTTPException) as denied_validation:
+        await auto_router_endpoints.validate_complexity_router_config(validation, actor)
+    assert denied_validation.value.status_code == 403
+    with respx.mock(assert_all_called=False) as http, pytest.raises(HTTPException) as denied_preview:
+        await preview_auto_router_routing(
+            _request_from({"prompt": "what is 2+2", "team_id": "admin-preview-team"}, **config),
+            actor,
+            ROUTING_HTTP_REQUEST,
+        )
+    assert denied_preview.value.status_code == 403
+    assert len(http.calls) == 0
 
 
 def _configure_member_preview(monkeypatch: pytest.MonkeyPatch, *, allowed: bool = True) -> UserAPIKeyAuth:

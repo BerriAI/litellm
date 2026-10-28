@@ -109,7 +109,7 @@ where
             .request_reply(|reply| {
                 HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply })
             })
-            .await
+            .await?
     }
 
     async fn after_provider_response(&self, raw: RawResponse) -> Result<(), P::Error> {
@@ -117,7 +117,7 @@ where
             .request_reply(|reply| {
                 HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply })
             })
-            .await
+            .await?
     }
 }
 
