@@ -1,10 +1,11 @@
 import json
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypeVar, cast
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm import verbose_logger
 from litellm.exceptions import BadRequestError
@@ -16,6 +17,8 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
+    ChatCompletionFileObject,
+    ChatCompletionFileObjectFile,
     ChatCompletionImageObject,
     ChatCompletionSystemMessage,
     ChatCompletionTextObject,
@@ -63,18 +66,25 @@ class _GenAIPart(TypedDict, total=False):
 class _GenAIFunctionResponse(TypedDict, total=False):
     name: ReadOnly[str]
     response: ReadOnly[object]
+    parts: ReadOnly[object]
 
 
 class _GenAIRequestFunctionCall(TypedDict, total=False):
     name: ReadOnly[str]
-    args: ReadOnly[Mapping[str, object]]
+    args: ReadOnly[object]
 
 
-class _GenAIContentPart(TypedDict, total=False):
-    text: ReadOnly[str]
-    inline_data: ReadOnly[Mapping[str, str]]
-    functionResponse: ReadOnly[_GenAIFunctionResponse]
-    functionCall: ReadOnly[_GenAIRequestFunctionCall]
+class _GenAIInlineData(TypedDict, total=False):
+    data: Required[ReadOnly[str]]
+    mime_type: ReadOnly[str]
+    mimeType: ReadOnly[str]
+
+
+class _GenAIFileData(TypedDict, total=False):
+    file_uri: ReadOnly[str]
+    fileUri: ReadOnly[str]
+    mime_type: ReadOnly[str]
+    mimeType: ReadOnly[str]
 
 
 class _GenAIFunctionDeclaration(TypedDict, total=False):
@@ -109,6 +119,12 @@ _GEMINI_ONLY_SCHEMA_KEYS: Final = frozenset({"propertyOrdering", "property_order
 _CONFIG_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT_SCHEMA: Final = TypeAdapter(dict[str, JsonValue])
 _Validated: Final = TypeVar("_Validated")
+_GENAI_CONTENT_PARTS: Final = TypeAdapter(Sequence[object])
+_GENAI_INLINE_DATA: Final = TypeAdapter(_GenAIInlineData)
+_GENAI_FILE_DATA: Final = TypeAdapter(_GenAIFileData)
+_GENAI_FUNCTION_RESPONSE: Final = TypeAdapter(_GenAIFunctionResponse)
+_GENAI_FUNCTION_CALL: Final = TypeAdapter(_GenAIRequestFunctionCall)
+_GenAIMessagePart: TypeAlias = ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionFileObject
 
 
 def _first_present(config: Mapping[str, object], keys: Sequence[str]) -> object | None:
@@ -143,6 +159,123 @@ def _deployment_supports_response_format(model: str, custom_llm_provider: str | 
         return True
     supported_params: Final = get_supported_openai_params(model=provider_model, custom_llm_provider=provider)
     return supported_params is None or "response_format" in supported_params
+
+
+def _genai_media_part(part: Mapping[str, object]) -> ChatCompletionImageObject | ChatCompletionFileObject | None:
+    inline: Final = _validated(_GENAI_INLINE_DATA, part.get("inline_data")) or _validated(
+        _GENAI_INLINE_DATA, part.get("inlineData")
+    )
+    file: Final = _validated(_GENAI_FILE_DATA, part.get("file_data")) or _validated(
+        _GENAI_FILE_DATA, part.get("fileData")
+    )
+    media: Final = inline if inline is not None else file
+    if media is None:
+        return None
+    mime: Final = media.get("mime_type") or media.get("mimeType") or ("image/jpeg" if inline is not None else None)
+    file_uri: Final = (file.get("file_uri") or file.get("fileUri") or "") if file is not None else ""
+    source: Final = f"data:{mime};base64,{inline['data']}" if inline is not None else file_uri
+    if not source:
+        return None
+    if mime is not None and mime.lower().startswith("image/"):
+        return ChatCompletionImageObject(type="image_url", image_url={"url": source, "format": mime})
+    file_payload: Final[ChatCompletionFileObjectFile] = (
+        ChatCompletionFileObjectFile(file_data=source, format=mime)
+        if inline is not None and mime is not None
+        else ChatCompletionFileObjectFile(file_id=source, format=mime)
+        if mime is not None
+        else ChatCompletionFileObjectFile(file_id=source)
+    )
+    return ChatCompletionFileObject(type="file", file=file_payload)
+
+
+def _genai_message_part(part: object) -> _GenAIMessagePart | None:
+    if isinstance(part, str):
+        return ChatCompletionTextObject(type="text", text=part)
+    fields: Final = _validated(_CONFIG_FIELDS, part)
+    if fields is None:
+        return None
+    text: Final = fields.get("text")
+    return ChatCompletionTextObject(type="text", text=text) if isinstance(text, str) else _genai_media_part(fields)
+
+
+def _genai_message_parts(parts: object) -> tuple[_GenAIMessagePart, ...]:
+    items: Final = _validated(_GENAI_CONTENT_PARTS, parts) or ()
+    return tuple(converted for part in items if (converted := _genai_message_part(part)) is not None)
+
+
+def _genai_tool_response(part: object) -> ChatCompletionToolMessage | None:
+    fields: Final = _validated(_CONFIG_FIELDS, part)
+    if fields is None:
+        return None
+    response: Final = _validated(_GENAI_FUNCTION_RESPONSE, fields.get("functionResponse")) or _validated(
+        _GENAI_FUNCTION_RESPONSE, fields.get("function_response")
+    )
+    if response is None:
+        return None
+    result: Final = json.dumps(response.get("response", {}))
+    media_fields: Final = (
+        part_fields
+        for part in (_validated(_GENAI_CONTENT_PARTS, response.get("parts", ())) or ())
+        if (part_fields := _validated(_CONFIG_FIELDS, part)) is not None
+    )
+    media: Final = tuple(converted for fields in media_fields if (converted := _genai_media_part(fields)) is not None)
+    return ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id=f"call_{response.get('name', 'unknown')}",
+        content=[ChatCompletionTextObject(type="text", text=result), *media] if media else result,
+    )
+
+
+def _genai_tool_call(part: object) -> ChatCompletionAssistantToolCall | None:
+    fields: Final = _validated(_CONFIG_FIELDS, part)
+    if fields is None:
+        return None
+    call: Final = _validated(_GENAI_FUNCTION_CALL, fields.get("functionCall")) or _validated(
+        _GENAI_FUNCTION_CALL, fields.get("function_call")
+    )
+    if call is None:
+        return None
+    return ChatCompletionAssistantToolCall(
+        id=f"call_{call.get('name', 'unknown')}",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(
+            name=call.get("name", ""), arguments=json.dumps(call.get("args", {}))
+        ),
+    )
+
+
+def _genai_content_messages(content: object) -> tuple[AllMessageValues, ...]:
+    fields: Final = _validated(_CONFIG_FIELDS, content)
+    if fields is None:
+        return ()
+    parts: Final = _validated(_GENAI_CONTENT_PARTS, fields.get("parts", ())) or ()
+    converted: Final = _genai_message_parts(parts)
+    role: Final = fields.get("role", "user")
+    if role == "user":
+        user_message: Final = (
+            (
+                ChatCompletionUserMessage(
+                    role="user",
+                    content=converted[0]["text"]
+                    if len(converted) == 1 and converted[0]["type"] == "text"
+                    else list(converted),
+                ),
+            )
+            if converted
+            else ()
+        )
+        responses: Final = tuple(response for part in parts if (response := _genai_tool_response(part)) is not None)
+        return (*user_message, *responses)
+    if role != "model":
+        return ()
+    text: Final = "".join(part["text"] for part in converted if part["type"] == "text")
+    calls: Final = [call for part in parts if (call := _genai_tool_call(part)) is not None]
+    assistant_content: Final = list(converted) if any(part["type"] != "text" for part in converted) else text or None
+    return (
+        ChatCompletionAssistantMessage(role="assistant", content=assistant_content, tool_calls=calls)
+        if calls
+        else ChatCompletionAssistantMessage(role="assistant", content=assistant_content),
+    )
 
 
 class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
@@ -490,119 +623,17 @@ class GoogleGenAIAdapter:
 
     def _transform_contents_to_messages(
         self,
-        contents: list[dict[str, Any]],
+        contents: Sequence[object],
         system_instruction: _GenAISystemInstruction | None = None,
     ) -> list[AllMessageValues]:
         """Transform Google GenAI contents to OpenAI messages format"""
-        messages: Final[list[AllMessageValues]] = []
-
-        # Handle system instruction
-        if system_instruction:
-            system_parts: Final[Sequence[Mapping[str, str]]] = system_instruction.get("parts", [])
-            if system_parts and "text" in system_parts[0]:
-                messages.append(ChatCompletionSystemMessage(role="system", content=system_parts[0]["text"]))
-
-        for content in contents:
-            role = content.get("role", "user")
-            parts: Sequence[_GenAIContentPart | str | None] = content.get("parts", [])
-
-            if role == "user":
-                # Handle user messages with potential function responses
-                content_parts: list[ChatCompletionTextObject | ChatCompletionImageObject] = []
-                tool_messages: list[ChatCompletionToolMessage] = []
-
-                for part in parts:
-                    if isinstance(part, dict):
-                        if "text" in part:
-                            content_parts.append(
-                                cast(
-                                    ChatCompletionTextObject,
-                                    {"type": "text", "text": part["text"]},
-                                )
-                            )
-                        elif "inline_data" in part:
-                            # Handle Base64 image data
-                            inline_data = part["inline_data"]
-                            mime_type = inline_data.get("mime_type", "image/jpeg")
-                            data = inline_data.get("data", "")
-                            content_parts.append(
-                                cast(
-                                    ChatCompletionImageObject,
-                                    {
-                                        "type": "image_url",
-                                        "image_url": {"url": f"data:{mime_type};base64,{data}"},
-                                    },
-                                )
-                            )
-                        elif "functionResponse" in part:
-                            # Transform function response to tool message
-                            func_response = part["functionResponse"]
-                            tool_message = ChatCompletionToolMessage(
-                                role="tool",
-                                tool_call_id=f"call_{func_response.get('name', 'unknown')}",
-                                content=json.dumps(func_response.get("response", {})),
-                            )
-                            tool_messages.append(tool_message)
-                    elif isinstance(part, str):
-                        content_parts.append(cast(ChatCompletionTextObject, {"type": "text", "text": part}))
-
-                # Add user message if there's content
-                if content_parts:
-                    # If only one text part, use simple string format for backward compatibility
-                    if (
-                        len(content_parts) == 1
-                        and isinstance(content_parts[0], dict)
-                        and content_parts[0].get("type") == "text"
-                    ):
-                        text_part = cast(ChatCompletionTextObject, content_parts[0])
-                        messages.append(ChatCompletionUserMessage(role="user", content=text_part["text"]))
-                    else:
-                        # Use multimodal format (array of content parts)
-                        messages.append(ChatCompletionUserMessage(role="user", content=content_parts))
-
-                # Add tool messages
-                messages.extend(tool_messages)
-
-            elif role == "model":
-                # Handle assistant messages with potential function calls
-                combined_text = ""
-                tool_calls: list[ChatCompletionAssistantToolCall] = []
-
-                for part in parts:
-                    if isinstance(part, dict):
-                        if "text" in part:
-                            combined_text += part["text"]
-                        elif "functionCall" in part:
-                            # Transform function call to tool call
-                            func_call = part["functionCall"]
-                            tool_call = ChatCompletionAssistantToolCall(
-                                id=f"call_{func_call.get('name', 'unknown')}",
-                                type="function",
-                                function=ChatCompletionToolCallFunctionChunk(
-                                    name=func_call.get("name", ""),
-                                    arguments=json.dumps(func_call.get("args", {})),
-                                ),
-                            )
-                            tool_calls.append(tool_call)
-                    elif isinstance(part, str):
-                        combined_text += part
-
-                # Create assistant message
-                if tool_calls:
-                    assistant_message = ChatCompletionAssistantMessage(
-                        role="assistant",
-                        content=combined_text if combined_text else None,
-                        tool_calls=tool_calls,
-                    )
-                else:
-                    assistant_message = ChatCompletionAssistantMessage(
-                        role="assistant",
-                        content=combined_text if combined_text else None,
-                    )
-
-                messages.append(assistant_message)
-
-        return messages
+        system_parts: Final = system_instruction.get("parts", ()) if system_instruction else ()
+        system_messages: Final = (
+            (ChatCompletionSystemMessage(role="system", content=system_parts[0]["text"]),)
+            if system_parts and "text" in system_parts[0]
+            else ()
+        )
+        return [*system_messages, *chain.from_iterable(_genai_content_messages(content) for content in contents)]
 
     def translate_completion_to_generate_content(
         self,

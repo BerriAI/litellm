@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.llms.openai.chat.gpt_5_transformation import (
+from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     is_gpt_reasoning_series_name,
     unsupported_reasoning_effort_message,
 )
@@ -291,7 +291,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         level the row cannot gate because the same model takes it here and refuses it on chat.
         Azure overrides this so a bare deployment name reads the azure/ entry.
         """
-        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+        from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 
         return OpenAIGPT5Config.row_disables_reasoning_effort_level(model, level)
 
@@ -305,7 +305,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         copy of the rule here is what let this surface keep forwarding temperature after the
         chat surface stopped.
         """
-        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+        from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 
         return OpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
@@ -499,8 +499,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
-        final_request_params: Final = dict(
-            ResponsesAPIRequestParams(model=model, input=replay_safe_input, **response_api_optional_request_params)
+        final_request_params: Final = cast(  # cast-ok: typed dict spread is inferred as Unknown by basedpyright
+            dict[str, object],
+            {
+                "model": model,
+                "input": replay_safe_input,
+                **response_api_optional_request_params,
+            },
         )
 
         return final_request_params
@@ -1209,8 +1214,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
-        data: Final = dict(
-            ResponsesAPIRequestParams(model=model, input=replay_safe_input, **response_api_optional_request_params)
+        data: Final = cast(  # cast-ok: typed dict spread is inferred as Unknown by basedpyright
+            dict[str, object],
+            {
+                "model": model,
+                "input": replay_safe_input,
+                **response_api_optional_request_params,
+            },
         )
 
         return url, data

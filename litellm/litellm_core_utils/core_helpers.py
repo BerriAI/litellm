@@ -5,10 +5,11 @@ import logging
 import re
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypeIs  # noqa: TID251  # narrows a duck-typed value to the Protocol its caller reads
 
 import litellm
 from litellm._logging import verbose_logger
@@ -58,6 +59,13 @@ def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None
 
 
+def decoded_json_object(value: object) -> Mapping[str, object]:
+    mapping: Final = as_str_mapping(value)
+    if mapping is not None:
+        return mapping
+    raise AttributeError(f"{type(value).__name__!r} object has no attribute 'get'", name="get", obj=value)
+
+
 @runtime_checkable
 class _SupportsIter(Protocol):
     def __iter__(self) -> Iterator[object]: ...
@@ -70,6 +78,24 @@ class _SupportsGetItem(Protocol):
 
 def attribute_or_none(source: object, name: str) -> object:
     return getattr(source, name, None)
+
+
+_Shape: Final = TypeVar("_Shape")
+
+
+def has_attributes(
+    value: object,
+    shape: type[_Shape],
+    *names: str,
+) -> TypeIs[_Shape]:  # guard-ok: hasattr sees what __getattr__ serves, which Protocol isinstance skips on 3.12+
+    return all(hasattr(value, name) for name in names)
+
+
+def require_attributes(value: object, shape: type[_Shape], *names: str) -> _Shape:
+    if has_attributes(value, shape, *names):
+        return value
+    missing: Final = next(name for name in names if not hasattr(value, name))
+    raise AttributeError(f"'{type(value).__name__}' object has no attribute '{missing}'", name=missing, obj=value)
 
 
 def iter_items(value: object) -> Iterable[object]:
@@ -634,11 +660,14 @@ def preserve_upstream_non_openai_attributes(
         for key in candidate_keys
     )
     if all(value is None or isinstance(value, (str, int, float, bool)) for _, value in candidate_values):
-        for key, value in candidate_values:
-            setattr(model_response, key, value)
+        _assign_attributes(model_response, candidate_values)
         return
-    for key, value in original_chunk.model_dump(include=frozenset(candidate_keys)).items():
-        setattr(model_response, key, value)
+    _assign_attributes(model_response, original_chunk.model_dump(include=frozenset(candidate_keys)).items())
+
+
+def _assign_attributes(target: object, values: Iterable[tuple[str, object]]) -> None:
+    for key, value in values:
+        setattr(target, key, value)
 
 
 def safe_deep_copy(data):
@@ -764,6 +793,10 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
         Filtered data structure with Exception and callable objects removed, or None if the
         entire input was an Exception or callable
     """
+    return _filter_exceptions_from_params(data, max_depth)
+
+
+def _filter_exceptions_from_params(data: object, max_depth: int) -> object:
     if max_depth <= 0:
         return data
 
@@ -785,7 +818,7 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
             if isinstance(v, Exception) or (callable(v) and not isinstance(v, type)):
                 continue
             try:
-                filtered = filter_exceptions_from_params(v, max_depth - 1)
+                filtered = _filter_exceptions_from_params(v, max_depth - 1)
                 if filtered is not None:
                     result[k] = filtered
             except Exception:
@@ -799,7 +832,7 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
             if isinstance(item, Exception) or (callable(item) and not isinstance(item, type)):
                 continue
             try:
-                filtered = filter_exceptions_from_params(item, max_depth - 1)
+                filtered = _filter_exceptions_from_params(item, max_depth - 1)
                 if filtered is not None:
                     result_list.append(filtered)
             except Exception:
@@ -893,6 +926,71 @@ class _CarriesHiddenParams(Protocol):
 
     @hidden_params.setter
     def hidden_params(self, hidden_params: dict[str, object]) -> None: ...  # mutable-ok: API requires mutation
+
+
+_USAGE_BLOCK_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _usage_field(usage: object, name: str) -> object:
+    if isinstance(usage, Mapping):
+        return _USAGE_BLOCK_ADAPTER.validate_python(usage).get(name)
+    return getattr(usage, name, None)
+
+
+def _cost_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def _reported_cost_value(value: object) -> float | None:
+    """A reported cost is a number, or a breakdown whose total lives under ``total_cost``."""
+    raw: Final[object] = value
+    if isinstance(value, Mapping):
+        return _cost_number(_usage_field(raw, "total_cost"))
+    return _cost_number(value)
+
+
+def response_cost_in_hidden_params(response: _CarriesHiddenParams) -> float | None:
+    additional_headers: Final[object] = response.hidden_params.get("additional_headers")
+    if not isinstance(additional_headers, Mapping):
+        return None
+    return _cost_number(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
+
+
+def override_stamped_response_cost(response: _CarriesHiddenParams, cost: float) -> None:
+    """Replace the cost an earlier builder stamped so every reader of the hidden params agrees with the header."""
+    set_response_cost_in_hidden_params(response, cost)
+    hidden_params: Final = response.hidden_params
+    hidden_params["response_cost"] = cost
+
+
+def chunk_usage(chunk: object) -> object:
+    """Stream chunks reach the builders both as mappings and as ModelResponseStream objects."""
+    if isinstance(chunk, Mapping):
+        return _USAGE_BLOCK_ADAPTER.validate_python(chunk).get("usage")
+    return getattr(chunk, "usage", None)
+
+
+_MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})
+
+
+def native_messages_reported_cost(usage: object, custom_llm_provider: object) -> float | None:
+    """Only a Messages upstream known to price its own responses is trusted, every other one keeps the price map."""
+    if not isinstance(custom_llm_provider, str) or custom_llm_provider not in _MESSAGES_REPORTED_COST_PROVIDERS:
+        return None
+    return provider_reported_usage_cost(usage, custom_llm_provider)
+
+
+def provider_reported_usage_cost(usage: object, custom_llm_provider: str | None) -> float | None:
+    """The request cost a provider states on its usage block, as a number or a breakdown with ``total_cost``.
+
+    OpenCode Go reports the model's list price (peak hours and long-context tiers included) under
+    ``usage.opencode.list_cost``, while its ``usage.cost`` is what hit the prepaid balance, 0 inside the plan.
+    """
+    if custom_llm_provider == "opencode_go":
+        return _reported_cost_value(_usage_field(_usage_field(usage, "opencode"), "list_cost"))
+    return _reported_cost_value(_usage_field(usage, "cost"))
 
 
 def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: float | None) -> None:
