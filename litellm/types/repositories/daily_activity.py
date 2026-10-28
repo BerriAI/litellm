@@ -172,6 +172,7 @@ class EntityRollupRow(RollupMetricsRow):
 class GuardrailSpendRow:
     date: str
     guardrail_id: str
+    guardrail_name: str
     api_key: str
     spend: float
 

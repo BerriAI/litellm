@@ -78,10 +78,17 @@ class GuardrailKeyMetric(LiteLLMBaseModel):
     metadata: KeyMetadata
 
 
+class GuardrailMetadata(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    guardrail_name: str
+
+
 class GuardrailMetric(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     metrics: GuardrailSpendMetrics
+    metadata: GuardrailMetadata
     api_key_breakdown: Mapping[str, GuardrailKeyMetric] = Field(default_factory=dict)
 
 

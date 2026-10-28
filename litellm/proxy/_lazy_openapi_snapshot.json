@@ -3825,6 +3825,19 @@
           "title": "GuardrailKeyMetric",
           "type": "object"
         },
+        "GuardrailMetadata": {
+          "properties": {
+            "guardrail_name": {
+              "title": "Guardrail Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "guardrail_name"
+          ],
+          "title": "GuardrailMetadata",
+          "type": "object"
+        },
         "GuardrailMetric": {
           "properties": {
             "api_key_breakdown": {
@@ -3834,12 +3847,16 @@
               "title": "Api Key Breakdown",
               "type": "object"
             },
+            "metadata": {
+              "$ref": "#/components/schemas/GuardrailMetadata"
+            },
             "metrics": {
               "$ref": "#/components/schemas/GuardrailSpendMetrics"
             }
           },
           "required": [
-            "metrics"
+            "metrics",
+            "metadata"
           ],
           "title": "GuardrailMetric",
           "type": "object"

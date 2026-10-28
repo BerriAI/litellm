@@ -30,6 +30,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
     GroupedData,
     GuardrailKeyMetric,
+    GuardrailMetadata,
     GuardrailMetric,
     GuardrailSpendMetrics,
     KeyMetadata,
@@ -1021,6 +1022,7 @@ def _fold_entity_rollups_sync(
 def _guardrail_metric(day: DailySpendData, rows: Sequence[GuardrailSpendRow]) -> GuardrailMetric:
     return GuardrailMetric(
         metrics=GuardrailSpendMetrics(spend=sum(row.spend for row in rows)),
+        metadata=GuardrailMetadata(guardrail_name=rows[0].guardrail_name),
         api_key_breakdown={
             row.api_key: GuardrailKeyMetric(
                 metrics=GuardrailSpendMetrics(spend=row.spend), metadata=day.breakdown.api_keys[row.api_key].metadata

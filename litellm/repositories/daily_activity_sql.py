@@ -265,14 +265,16 @@ def build_guardrail_spend_sql(scope: DailyActivityScope) -> SqlQuery:
     pg_table: Final = PRISMA_TO_PG_TABLE[scope.table]
     where_clause, where_params = build_where_clause(scope)
     sql: Final = f"""
-        SELECT g.date, g.guardrail_id, g.api_key, COALESCE(SUM(g.cost), 0)::float AS spend
+        SELECT g.date, g.guardrail_id, COALESCE(t.guardrail_name, g.guardrail_id) AS guardrail_name, g.api_key,
+               COALESCE(SUM(g.cost), 0)::float AS spend
         FROM "LiteLLM_DailyGuardrailUsageUnits" g
+        LEFT JOIN "LiteLLM_GuardrailsTable" t ON t.guardrail_id = g.guardrail_id
         WHERE g.date >= $1 AND g.date <= $2
           AND EXISTS (
               SELECT 1 FROM "{pg_table}"
               WHERE {where_clause} AND "{pg_table}".date = g.date AND "{pg_table}".api_key = g.api_key
           )
-        GROUP BY g.date, g.guardrail_id, g.api_key
+        GROUP BY g.date, g.guardrail_id, t.guardrail_name, g.api_key
     """
     return SqlQuery(sql=sql, params=where_params)
 

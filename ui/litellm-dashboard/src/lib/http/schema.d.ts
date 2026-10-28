@@ -33231,12 +33231,18 @@ export interface components {
             metadata: components["schemas"]["KeyMetadata"];
             metrics: components["schemas"]["GuardrailSpendMetrics"];
         };
+        /** GuardrailMetadata */
+        GuardrailMetadata: {
+            /** Guardrail Name */
+            guardrail_name: string;
+        };
         /** GuardrailMetric */
         GuardrailMetric: {
             /** Api Key Breakdown */
             api_key_breakdown?: {
                 [key: string]: components["schemas"]["GuardrailKeyMetric"];
             };
+            metadata: components["schemas"]["GuardrailMetadata"];
             metrics: components["schemas"]["GuardrailSpendMetrics"];
         };
         /** GuardrailSpendMetrics */

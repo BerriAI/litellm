@@ -387,6 +387,7 @@ TEAM_RESOLVER = EntityScopeResolver(
     query=_team_query,
     resolve=_resolve_team,
     include_entity_breakdown=True,
+    include_guardrail_breakdown=True,
     operation_names=MappingProxyType(
         {
             "aggregated": "get_team_daily_activity_aggregated",
@@ -425,6 +426,7 @@ ORGANIZATION_RESOLVER = EntityScopeResolver(
     query=_organization_query,
     resolve=_resolve_organization,
     include_entity_breakdown=True,
+    include_guardrail_breakdown=True,
     operation_names=MappingProxyType(
         {
             "aggregated": "get_organization_daily_activity_aggregated",

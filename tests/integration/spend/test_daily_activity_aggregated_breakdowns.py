@@ -306,6 +306,7 @@ async def test_get_daily_activity_aggregated_breaks_down_guardrail_spend(gateway
         api_keys: Final = object_value(everyone["api_keys"])
         assert object_value(everyone["guardrails"])["topic-filter"] == {
             "metrics": {"spend": pytest.approx(0.01)},
+            "metadata": {"guardrail_name": "topic-filter"},
             "api_key_breakdown": {
                 "key-a": {
                     "metrics": {"spend": pytest.approx(0.01)},
@@ -328,3 +329,70 @@ async def test_get_daily_activity_aggregated_breaks_down_guardrail_spend(gateway
     finally:
         _clean(day)
         write_rows('DELETE FROM "LiteLLM_DailyGuardrailUsageUnits" WHERE date = %s', (day,))
+
+
+def _entity_breakdown(gateway: Gateway, url: str, day: str, **params: str) -> dict[str, JsonValue]:
+    response: Final = gateway.request("GET", url, params={"start_date": day, "end_date": day, **params})
+    assert response.status_code == 200, response.text
+    results: Final = _RESULTS.validate_python(object_value(response.json())["results"])
+    assert len(results) == 1
+    return object_value(object_value(results[0])["breakdown"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "table", "entity_column", "filter_param"),
+    [
+        ("/team/daily/activity/aggregated", "LiteLLM_DailyTeamSpend", "team_id", "team_ids"),
+        (
+            "/organization/daily/activity/aggregated",
+            "LiteLLM_DailyOrganizationSpend",
+            "organization_id",
+            "organization_ids",
+        ),
+    ],
+)
+async def test_team_and_organization_activity_break_down_guardrail_spend_by_name(
+    gateway: Gateway, url: str, table: str, entity_column: str, filter_param: str
+) -> None:
+    day: Final = _unique_day()
+    db_guardrail_id: Final = str(uuid.uuid4())
+    db_guardrail_name: Final = f"pii-filter-{db_guardrail_id[:8]}"
+    for entity_id, api_key, spend in (("entity-a", "key-a", 1.0), ("entity-b", "key-b", 2.0)):
+        write_rows(
+            f'INSERT INTO "{table}" (id, {entity_column}, date, api_key, model, spend, api_requests,'
+            " successful_requests, updated_at) VALUES (%s, %s, %s, %s, 'gpt-5', %s, 1, 1, now())",
+            (_row_id(), entity_id, day, api_key, str(spend)),
+        )
+    write_rows(
+        'INSERT INTO "LiteLLM_GuardrailsTable" (guardrail_id, guardrail_name, litellm_params, updated_at)'
+        " VALUES (%s, %s, '{}', now())",
+        (db_guardrail_id, db_guardrail_name),
+    )
+    _seed_guardrail_units(
+        day,
+        [
+            (db_guardrail_id, "key-a", "contentPolicyUnits", 0.10),
+            (db_guardrail_id, "key-b", "contentPolicyUnits", 0.20),
+            ("config-topic-filter", "key-a", "topicPolicyUnits", 0.05),
+            (db_guardrail_id, "orphan-key", "contentPolicyUnits", 9.0),
+        ],
+    )
+    try:
+        everyone: Final = _entity_breakdown(gateway, url, day)
+        assert _guardrail_spend(everyone) == {
+            db_guardrail_id: (pytest.approx(0.30), {"key-a": pytest.approx(0.10), "key-b": pytest.approx(0.20)}),
+            "config-topic-filter": (pytest.approx(0.05), {"key-a": pytest.approx(0.05)}),
+        }
+        guardrails: Final = object_value(everyone["guardrails"])
+        assert object_value(guardrails[db_guardrail_id])["metadata"] == {"guardrail_name": db_guardrail_name}
+        assert object_value(guardrails["config-topic-filter"])["metadata"] == {"guardrail_name": "config-topic-filter"}
+
+        assert _guardrail_spend(_entity_breakdown(gateway, url, day, **{filter_param: "entity-a"})) == {
+            db_guardrail_id: (pytest.approx(0.10), {"key-a": pytest.approx(0.10)}),
+            "config-topic-filter": (pytest.approx(0.05), {"key-a": pytest.approx(0.05)}),
+        }
+    finally:
+        write_rows(f'DELETE FROM "{table}" WHERE date = %s', (day,))
+        write_rows('DELETE FROM "LiteLLM_DailyGuardrailUsageUnits" WHERE date = %s', (day,))
+        write_rows('DELETE FROM "LiteLLM_GuardrailsTable" WHERE guardrail_id = %s', (db_guardrail_id,))
