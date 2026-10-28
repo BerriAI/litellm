@@ -50,6 +50,7 @@ from litellm.proxy.common_request_processing import (
     _has_attribute_error_in_chain,
     include_guardrail_response_requested,
     is_azure_model_router_request,
+    RESPONSES_LATE_SSE_FRAMING,
     open_sse_before_first_byte,
     resolve_litellm_call_id,
     ttft_keepalive_interval,
@@ -2160,6 +2161,18 @@ class TestCommonRequestProcessingHelpers:
         assert "error" in body
         assert body["error"]["code"] == 403
         assert body["error"]["message"] == "forbidden"
+
+    async def test_a_responses_stream_whose_first_event_is_a_named_error_answers_as_json(self):
+        error: Final = {"type": "guardrail_error", "code": "400", "message": "blocked", "param": None}
+
+        async def responses_stream():
+            yield f"event: error\ndata: {json.dumps({'type': 'error', 'sequence_number': 0, 'error': error})}\n\n"
+
+        response: Final = await create_response(responses_stream(), "text/event-stream", {})
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 400
+        assert json.loads(response.body) == {"error": error}
 
     async def test_create_streaming_response_first_chunk_not_error(self):
         async def mock_generator():
@@ -10376,6 +10389,43 @@ async def test_ttft_keepalive_relays_a_late_non_streaming_body_as_an_sse_frame()
     assert collected[0] == TTFT_PING
     assert json.loads(collected[-2].decode().removeprefix("data: ").strip()) == {"error": {"message": "bad request"}}
     assert collected[-1] == b"data: [DONE]\n\n"
+
+
+async def _slow_rate_limit_failure():
+    await asyncio.sleep(0.2)
+    raise HTTPException(status_code=429, detail="rate limited")
+
+
+async def _slow_guardrail_block_body():
+    await asyncio.sleep(0.2)
+    return JSONResponse(status_code=400, content={"error": {"message": "blocked", "type": "guardrail_error", "code": "400"}})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "produce,expected_code,expected_message",
+    [
+        (_slow_rate_limit_failure, "rate_limit_exceeded", "rate limited"),
+        (_slow_guardrail_block_body, "invalid_request_error", "blocked"),
+    ],
+)
+async def test_ttft_keepalive_ends_a_late_responses_failure_with_response_failed_and_no_done(
+    produce, expected_code, expected_message
+):
+    response: Final = await open_sse_before_first_byte(
+        produce(), ping_interval_seconds=0.05, late_framing=RESPONSES_LATE_SSE_FRAMING
+    )
+    collected: Final = await _drain(response)
+
+    assert collected[0] == TTFT_PING
+    assert b"data: [DONE]\n\n" not in collected
+    event_line, data_line = collected[-1].decode().strip().split("\n")
+    failed: Final = json.loads(data_line.removeprefix("data: "))
+    assert event_line == "event: response.failed"
+    assert failed["type"] == "response.failed"
+    assert failed["response"]["status"] == "failed"
+    assert failed["response"]["error"]["code"] == expected_code
+    assert expected_message in failed["response"]["error"]["message"]
 
 
 @pytest.mark.asyncio

@@ -10620,7 +10620,7 @@ async def async_data_generator(
 
         if error_message is not None:
             yield error_message
-        # OpenAI-compatible streams terminate with data: [DONE]; Google GenAI (?alt=sse) does not.
+        # Chat Completions streams terminate with data: [DONE]; Responses and Google GenAI (?alt=sse) streams do not.
         if ends_with_openai_done:
             yield _OPENAI_STREAM_DONE_FRAME
     except (asyncio.CancelledError, GeneratorExit):

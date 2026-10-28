@@ -4,6 +4,7 @@ import json
 import logging
 import math
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from itertools import chain
@@ -114,6 +115,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_param,
     openai_error_type,
 )
+from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING_BYTES,
     SSE_STREAM_START_TAIL,
@@ -907,11 +909,18 @@ async def _enforce_guardrail_added_tag_budgets(
         ) from e
 
 
+def _sse_data_payload(event_line: str | bytes) -> str | None:
+    text: Final = event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
+    return next(
+        (line.removeprefix("data: ").strip() for line in text.splitlines() if line.startswith("data: ")),
+        None,
+    )
+
+
 async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
     """Parses an event line and returns an error code if present, else None."""
-    event_line = event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
-    if event_line.startswith("data: "):
-        json_str: Final = event_line[len("data: ") :].strip()
+    json_str: Final = _sse_data_payload(event_line)
+    if json_str is not None:
         if not json_str or json_str == "[DONE]":  # handle empty data or [DONE] message
             return None
         try:
@@ -952,8 +961,6 @@ def _extract_error_from_sse_chunk(event_line: str | bytes) -> dict:
     Returns:
         Error dictionary in OpenAI API format
     """
-    event_line = event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
-
     # Default error format
     default_error: Final = {
         "message": "Unknown error",
@@ -962,8 +969,8 @@ def _extract_error_from_sse_chunk(event_line: str | bytes) -> dict:
         "code": "500",
     }
 
-    if event_line.startswith("data: "):
-        json_str: Final = event_line[len("data: ") :].strip()
+    json_str: Final = _sse_data_payload(event_line)
+    if json_str is not None:
         if not json_str or json_str == "[DONE]":
             return default_error
 
@@ -1171,6 +1178,39 @@ def _sse_error_frames(error_obj: Mapping[str, object]) -> tuple[str, str]:
     return f"data: {json.dumps({'error': error_obj}, default=str)}\n\n", "data: [DONE]\n\n"
 
 
+@dataclass(frozen=True, slots=True)
+class LateSseFraming:
+    """How a response the keepalive already opened ends once its upstream fails late."""
+
+    failure: Callable[[Exception], tuple[str, ...]]
+    body: Callable[[Response], tuple[bytes, ...]]
+
+
+def _openai_late_failure_frames(exc: Exception) -> tuple[str, ...]:
+    _, error_obj = sse_error_payload(exc)
+    return _sse_error_frames(error_obj)
+
+
+def _openai_late_body_frames(produced: Response) -> tuple[bytes, ...]:
+    return b"data: " + (bytes(produced.body) or b"{}") + b"\n\n", b"data: [DONE]\n\n"
+
+
+def _responses_late_failure_frames(exc: Exception) -> tuple[str, ...]:
+    frame: Final = ResponsesStreamErrorState().format_failure(exc)
+    return () if frame is None else (frame,)
+
+
+def _responses_late_body_frames(produced: Response) -> tuple[bytes, ...]:
+    frame: Final = ResponsesStreamErrorState().format_error_body(bytes(produced.body), produced.status_code)
+    return () if frame is None else (frame.encode(),)
+
+
+OPENAI_LATE_SSE_FRAMING: Final = LateSseFraming(failure=_openai_late_failure_frames, body=_openai_late_body_frames)
+RESPONSES_LATE_SSE_FRAMING: Final = LateSseFraming(
+    failure=_responses_late_failure_frames, body=_responses_late_body_frames
+)
+
+
 def _sse_stream_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     """`headers` plus the two that stop reverse proxies from buffering SSE (issue #28384)."""
     return MappingProxyType({**headers, **_TTFT_KEEPALIVE_HEADERS})
@@ -1371,13 +1411,13 @@ async def _aclose_late_response(produced: Response) -> None:
             verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
 
 
-async def _relay_late_response(produced: Response) -> AsyncGenerator[bytes, None]:
+async def _relay_late_response(produced: Response, framing: LateSseFraming) -> AsyncGenerator[bytes, None]:
     """Replay a Response that was built after a keepalive had already opened the wire."""
     if not isinstance(produced, StreamingResponse):
         # The status line is already on the wire, so a non-streaming body, an error
         # body included, can only reach the client as an SSE frame.
-        yield b"data: " + (bytes(produced.body) or b"{}") + b"\n\n"
-        yield b"data: [DONE]\n\n"
+        for frame in framing.body(produced):
+            yield frame
         return
 
     try:
@@ -1419,6 +1459,7 @@ async def open_sse_before_first_byte(
     ping_interval_seconds: float | str | None,
     media_type: str = "text/event-stream",
     on_late_failure: Callable[[Exception], Awaitable[HTTPException | None]] | None = None,
+    late_framing: LateSseFraming = OPENAI_LATE_SSE_FRAMING,
 ) -> _LateResponseT | StreamingResponse:
     """Write SSE keepalive comments while the upstream LLM call is still in flight.
 
@@ -1464,11 +1505,10 @@ async def open_sse_before_first_byte(
                 # would never fire and the failure would go unaudited. The hook
                 # also gets to sanitize what reaches the client, by returning or
                 # raising a replacement, so its answer decides the frame.
-                _, error_obj = sse_error_payload(await _sanitized_late_failure(exc, on_late_failure))
-                for frame in _sse_error_frames(error_obj):
+                for frame in late_framing.failure(await _sanitized_late_failure(exc, on_late_failure)):
                     yield frame.encode()
                 return
-            async for chunk in _relay_late_response(produced):
+            async for chunk in _relay_late_response(produced, late_framing):
                 yield chunk
         finally:
             if not produce_task.done():
@@ -2812,6 +2852,7 @@ class ProxyBaseLLMRequestProcessing:
         is_streaming_request: bool | None = False,
         contents: list[object] | None = None,
         skip_pre_call_logic: bool = False,
+        late_framing: LateSseFraming = OPENAI_LATE_SSE_FRAMING,
     ) -> object:
         """Run the request, sending SSE keepalives while the upstream is still silent.
 
@@ -2855,6 +2896,7 @@ class ProxyBaseLLMRequestProcessing:
             ),
             ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
             on_late_failure=_audit_late_failure,
+            late_framing=late_framing,
         )
 
     async def _process_llm_request(

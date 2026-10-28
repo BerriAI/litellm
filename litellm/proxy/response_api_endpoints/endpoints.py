@@ -52,6 +52,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket,
 )
 from litellm.proxy.common_request_processing import (
+    RESPONSES_LATE_SSE_FRAMING,
     ProxyBaseLLMRequestProcessing,
     cost_headers,
     create_response,
@@ -435,6 +436,7 @@ async def responses_api(
                 if requests_background(_PROXY_SERVER_REQUEST_ADAPTER.validate_python(data))
                 else native_data_generator
             ),
+            late_framing=RESPONSES_LATE_SSE_FRAMING,
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,

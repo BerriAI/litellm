@@ -57,6 +57,12 @@ class _FailureDetails(LiteLLMBaseModel):
         return cls.model_validate({field: getattr(exception, field, None) for field in cls.model_fields})
 
 
+class _ErrorBody(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    error: _FailureDetails = _FailureDetails()
+
+
 def _original_failure(exception: Exception) -> Exception:
     current = exception  # rebind-ok: the recursion gate requires iterative wrapper traversal
     while isinstance(current, MidStreamFallbackError) and current.original_exception is not None:
@@ -137,10 +143,16 @@ class ResponsesStreamErrorState:
         return prefix.encode("utf-8") + frame if isinstance(frame, bytes) else prefix + frame
 
     def format_failure(self, exception: Exception) -> str | None:
+        original: Final = _original_failure(exception)
+        return self._format_failed(_failure_details(original), str(original))
+
+    def format_error_body(self, body: bytes, status_code: int) -> str | None:
+        error: Final = _ErrorBody.model_validate_json(body or b"{}").error
+        return self._format_failed(error.model_copy(update={"status_code": status_code}), body.decode())
+
+    def _format_failed(self, details: _FailureDetails, fallback_message: str) -> str | None:
         if self.terminal_emitted:
             return None
-        original: Final = _original_failure(exception)
-        details: Final = _failure_details(original)
         response: Final = ResponsesAPIResponse.model_validate(
             MappingProxyType(
                 {
@@ -153,7 +165,7 @@ class ResponsesStreamErrorState:
                     "error": MappingProxyType(
                         {
                             "code": _response_error_code(details),
-                            "message": redact_internal_details_from_client_message(details.message or str(original)),
+                            "message": redact_internal_details_from_client_message(details.message or fallback_message),
                         }
                     ),
                 }

@@ -3783,7 +3783,7 @@ class TestBuildBlockSseChunks:
     def _payloads(self, chunks):
         import json
 
-        payloads = [
+        payloads: Final = [
             json.loads(next(line[6:] for line in chunk.decode().splitlines() if line.startswith("data: ")))
             for chunk in chunks
         ]
