@@ -8,6 +8,7 @@ import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
 
 vi.mock("../../../networking", () => ({
   getCallbacksCall: vi.fn(),
+  getRouterSettingsCall: vi.fn(),
   setCallbacksCall: vi.fn(),
 }));
 
@@ -57,7 +58,7 @@ vi.mock("../../../common_components/DeleteResourceModal", () => ({
 
 vi.mock("./AddFallbacks", () => ({
   __esModule: true,
-  default: ({ value, onChange }: any) => {
+  default: ({ value, onChange, disabledReason }: any) => {
     const handleClick = async () => {
       if (onChange) {
         try {
@@ -69,7 +70,7 @@ vi.mock("./AddFallbacks", () => ({
       }
     };
     return (
-      <button onClick={handleClick} data-testid="add-fallbacks-button">
+      <button onClick={handleClick} data-testid="add-fallbacks-button" disabled={Boolean(disabledReason)}>
         Add Fallbacks
       </button>
     );
@@ -107,6 +108,7 @@ describe("Fallbacks", () => {
     vi.mocked(networkingModule.getCallbacksCall).mockResolvedValue({
       router_settings: mockRouterSettings,
     });
+    vi.mocked(networkingModule.getRouterSettingsCall).mockResolvedValue({ source: { fallbacks: "db" } });
     vi.mocked(networkingModule.setCallbacksCall).mockResolvedValue(undefined);
     vi.mocked(fetchModelsModule.fetchAvailableModels).mockResolvedValue([
       { model_group: "gpt-4", mode: "chat" },
@@ -172,6 +174,67 @@ describe("Fallbacks", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Configure Model Fallbacks")).toBeInTheDocument();
+    });
+  });
+
+  describe("when the router settings source cannot be loaded", () => {
+    beforeEach(() => {
+      vi.mocked(networkingModule.getRouterSettingsCall).mockRejectedValue(new Error("500 Internal Server Error"));
+    });
+
+    it("keeps add, edit and delete grayed out instead of guessing the list is editable", async () => {
+      renderWithQueryClient(<Fallbacks {...defaultProps} />);
+
+      expect((await screen.findAllByText("gpt-4")).length).toBeGreaterThan(0);
+      expect(screen.getByTestId("add-fallbacks-button")).toBeDisabled();
+      for (const button of screen.getAllByTestId("edit-fallback-button")) {
+        expect(button).toHaveAttribute("aria-disabled", "true");
+      }
+      for (const button of screen.getAllByTestId("delete-fallback-button")) {
+        expect(button).toHaveAttribute("aria-disabled", "true");
+      }
+      expect(screen.queryByTestId("config-owned-badge")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("when config.yaml owns fallbacks", () => {
+    beforeEach(() => {
+      vi.mocked(networkingModule.getRouterSettingsCall).mockResolvedValue({ source: { fallbacks: "config" } });
+    });
+
+    it("shows the config rules but grays out add, edit and delete", async () => {
+      renderWithQueryClient(<Fallbacks {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("config-owned-badge")).toBeInTheDocument();
+      });
+      expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+      expect(screen.getByTestId("add-fallbacks-button")).toBeDisabled();
+      for (const button of screen.getAllByTestId("edit-fallback-button")) {
+        expect(button).toHaveAttribute("aria-disabled", "true");
+      }
+      for (const button of screen.getAllByTestId("delete-fallback-button")) {
+        expect(button).toHaveAttribute("aria-disabled", "true");
+      }
+    });
+
+    it("does not open the edit or delete modals from click or keyboard", async () => {
+      const user = userEvent.setup();
+      renderWithQueryClient(<Fallbacks {...defaultProps} />);
+      await waitFor(() => {
+        expect(screen.getByTestId("config-owned-badge")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getAllByTestId("delete-fallback-button")[0]);
+      screen.getAllByTestId("delete-fallback-button")[0].focus();
+      await user.keyboard("{Enter}");
+      expect(screen.queryByTestId("delete-modal")).not.toBeInTheDocument();
+
+      await user.click(screen.getAllByTestId("edit-fallback-button")[0]);
+      screen.getAllByTestId("edit-fallback-button")[0].focus();
+      await user.keyboard("{Enter}");
+      expect(screen.queryByText("Configure Model Fallbacks")).not.toBeInTheDocument();
+      expect(networkingModule.setCallbacksCall).not.toHaveBeenCalled();
     });
   });
 

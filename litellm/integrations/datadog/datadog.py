@@ -66,7 +66,7 @@ from ..additional_logging_utils import AdditionalLoggingUtils
 if TYPE_CHECKING:
     from fastapi import HTTPException
 
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class _DatadogLoggingKwargs(TypedDict, total=False):

@@ -189,11 +189,11 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
         if not direct_mcp_servers and not mcp_access_groups:
             return None  # Both empty → no restrictions
 
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )
 
-        access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(mcp_access_groups)
+        access_group_servers: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups(mcp_access_groups)
 
         return list(set(direct_mcp_servers + access_group_servers))
 

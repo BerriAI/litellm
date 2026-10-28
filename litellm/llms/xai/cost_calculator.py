@@ -49,6 +49,19 @@ def _cost_reported_by_xai(usage: "Usage") -> float | None:
     return float(reported_cost)
 
 
+def _split_reported_cost(model: str, usage: Usage, reported_cost: float) -> tuple[float, float]:
+    """xAI reports one total, so attribute it to input and output in the ratio our own token math gives."""
+    try:
+        priced_input, priced_output = _token_math_cost_per_token(model, usage)
+    except Exception:  # noqa: BLE001  # generic_cost_per_token raises bare Exception for unmapped models
+        return 0.0, reported_cost
+    priced_total: Final = priced_input + priced_output
+    if priced_total <= 0:
+        return 0.0, reported_cost
+    input_cost: Final = reported_cost * priced_input / priced_total
+    return input_cost, reported_cost - input_cost
+
+
 def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     """
     Calculates the cost per token for a given XAI model, prompt tokens, and completion tokens.
@@ -63,8 +76,11 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     """
     reported_cost: Final = _cost_reported_by_xai(usage)
     if reported_cost is not None:
-        return 0.0, reported_cost
+        return _split_reported_cost(model, usage, reported_cost)
+    return _token_math_cost_per_token(model, usage)
 
+
+def _token_math_cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     # XAI-specific completion cost: completion is billed as visible + reasoning
     # tokens. Detect when the transformation layer already folded them so we
     # don't double-count; fall back to raw xAI shape for callers that bypass
@@ -104,12 +120,11 @@ def _web_search_cost_per_call_from_model_info(model_info: "ModelInfo") -> float:
     search_costs: Final = model_info.get("search_context_cost_per_query")
     if not isinstance(search_costs, Mapping):
         return _DEFAULT_WEB_SEARCH_COST_PER_CALL
-    for key in (
-        "search_context_size_medium",
-        "search_context_size_low",
-        "search_context_size_high",
+    for value in (
+        search_costs.get("search_context_size_medium"),
+        search_costs.get("search_context_size_low"),
+        search_costs.get("search_context_size_high"),
     ):
-        value = search_costs.get(key)
         if value is None:
             continue
         try:

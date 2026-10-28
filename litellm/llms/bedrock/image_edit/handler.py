@@ -10,10 +10,12 @@ import json
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.bedrock.image_edit.amazon_nova_canvas_image_edit_transformation import (
     BedrockAmazonNovaCanvasImageEditConfig,
 )
@@ -27,6 +29,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_httpx_client,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.bedrock import BearerPreparedRequest
 from litellm.types.utils import ImageResponse
 
 from ..base_aws_llm import BaseAWSLLM, bedrock_bearer_token
@@ -37,6 +40,8 @@ if TYPE_CHECKING:
 else:
     AWSPreparedRequest = Any
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 class BedrockImageEditPreparedRequest(LiteLLMBaseModel):
     """
@@ -44,7 +49,7 @@ class BedrockImageEditPreparedRequest(LiteLLMBaseModel):
     """
 
     endpoint_url: str
-    prepped: AWSPreparedRequest
+    prepped: AWSPreparedRequest | BearerPreparedRequest
     body: bytes
     data: dict
 
@@ -225,7 +230,7 @@ class BedrockImageEdit(BaseAWSLLM):
             aws_bedrock_runtime_endpoint=boto3_credentials_info.aws_bedrock_runtime_endpoint,
             aws_region_name=boto3_credentials_info.aws_region_name,
         )
-        proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
+        proxy_endpoint_url = join_api_base(proxy_endpoint_url, f"model/{modelId}/invoke")
         data: Final = self._get_request_body(
             model=model,
             image=image,
@@ -315,7 +320,7 @@ class BedrockImageEdit(BaseAWSLLM):
                 additional_args={"complete_input_dict": data},
             )
         verbose_logger.debug("raw model_response: %s", response.text)
-        response_dict: Final = response.json()
+        response_dict: Final = _DECODED_JSON.validate_python(response.json())
         if response_dict is None:
             raise ValueError("Error in response object format, got None")
 

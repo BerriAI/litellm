@@ -243,7 +243,7 @@ async def _choose_cached_model(
     from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.prompt_cache_prediction import has_request_transforms
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # use the configured proxy limiter's shared capacity owner
+        PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # use the configured proxy limiter's shared capacity owner
     )
     from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 
@@ -289,7 +289,7 @@ async def _choose_cached_model(
     if body is None:
         return None
     limiter: Final = proxy_server.proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
-    if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
+    if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
         return None
 
     def counter_for_model(model_name: str) -> TokenCounter:

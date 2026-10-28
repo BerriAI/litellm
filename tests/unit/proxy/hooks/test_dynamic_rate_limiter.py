@@ -5,9 +5,9 @@ import asyncio, importlib, litellm, os, pytest
 
 from litellm.caching.caching import DualCache
 from litellm.proxy.hooks.dynamic_rate_limiter import(
-    _PROXY_DynamicRateLimitHandler as DynamicRateLimitHandler,
+    PROXY_DynamicRateLimitHandler as DynamicRateLimitHandler,
     DynamicRateLimiterCache,
-    _PROXY_DynamicRateLimitHandler,
+    PROXY_DynamicRateLimitHandler,
 )
 from litellm.types.utils import HiddenParams, ModelResponse
 from litellm import DualCache as DualCache_dynamic_rate, Router
@@ -46,7 +46,7 @@ async def test_minute_rollover_between_sadd_and_get_reads_empty_window():
 
 @pytest.mark.asyncio
 async def test_handler_threads_time_fn_to_internal_cache():
-    handler = _PROXY_DynamicRateLimitHandler(
+    handler = PROXY_DynamicRateLimitHandler(
         internal_usage_cache=DualCache(),
         time_fn=lambda: datetime(2024, 1, 1, 10, 30, 0, tzinfo=timezone.utc),
     )
@@ -66,7 +66,7 @@ async def test_success_hook_updates_existing_hidden_params_storage() -> None:
             }
         ]
     )
-    handler: Final = _PROXY_DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    handler: Final = PROXY_DynamicRateLimitHandler(internal_usage_cache=DualCache())
     handler.update_variables(llm_router=router)
     response: Final = ModelResponse()
     hidden_params: Final = HiddenParams(model_id=model_id)

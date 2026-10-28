@@ -1,19 +1,16 @@
-"""
-Integration tests for Volcengine embedding following LiteLLM testing patterns
-Based on the BaseLLMEmbeddingTest framework
-"""
+"""Tests for Volcengine embedding."""
 
 from unittest.mock import MagicMock, patch
 import pytest
 
 # Add parent directory to path for imports
 
-from tests.llm_translation.base_embedding_unit_tests import BaseLLMEmbeddingTest
 import litellm
 from litellm.types.utils import EmbeddingResponse
+from litellm.llms.volcengine.embedding.transformation import VolcEngineEmbeddingConfig
 
 
-class TestVolcEngineEmbedding(BaseLLMEmbeddingTest):
+class TestVolcEngineEmbedding:
     """Test Volcengine embedding integration following LiteLLM patterns"""
 
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
@@ -261,3 +258,21 @@ def test_volcengine_embedding_with_multiple_inputs():
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/ark",
+        "https://gateway.example.com/ark/",
+        "https://gateway.example.com/ark/api/v3",
+        "https://gateway.example.com/ark/api/v3/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str) -> None:
+    assert (
+        VolcEngineEmbeddingConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="doubao-embedding", optional_params={}, litellm_params={}
+        )
+        == "https://gateway.example.com/ark/api/v3/embeddings"
+    )

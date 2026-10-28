@@ -5,13 +5,17 @@ Handler for transforming responses api requests to litellm.completion requests
 from collections.abc import Coroutine, Mapping
 from typing import Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm.responses.additional_tools import hoist_additional_tools
+from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
+    with_compaction_items_as_params,
 )
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
@@ -21,10 +25,15 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import ModelResponse
 
+_REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
 
 class LiteLLMCompletionTransformationHandler:
     def response_api_handler(
         self,
+        previous_response_client_ids: tuple[str, ...] = (),
+        /,
+        *,
         model: str,
         input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
@@ -57,6 +66,7 @@ class LiteLLMCompletionTransformationHandler:
 
         if _is_async:
             return self.async_response_api_handler(
+                previous_response_client_ids,
                 litellm_completion_request=litellm_completion_request,
                 request_input=bridged_input,
                 responses_api_request=bridged_request,
@@ -96,6 +106,9 @@ class LiteLLMCompletionTransformationHandler:
 
     async def async_response_api_handler(
         self,
+        previous_response_client_ids: tuple[str, ...] = (),
+        /,
+        *,
         litellm_completion_request: dict,
         request_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
@@ -106,6 +119,10 @@ class LiteLLMCompletionTransformationHandler:
             litellm_completion_request = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
                 previous_response_id=previous_response_id,
                 litellm_completion_request=litellm_completion_request,
+                instructions=responses_api_request.get("instructions"),
+                request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+                previous_response_client_ids=previous_response_client_ids,
+                input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(request_input)),
             )
 
         acompletion_args: Final = {}
@@ -116,7 +133,6 @@ class LiteLLMCompletionTransformationHandler:
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
             **acompletion_args,
         )
-
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (
                 LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(

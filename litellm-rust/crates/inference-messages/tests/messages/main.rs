@@ -5,7 +5,7 @@ use std::{
 
 use litellm_http::{HttpSettings, Resolution};
 use litellm_inference_messages::{
-    Error, MessagesCall, MessagesShaping,
+    Error, MessagesCall, MessagesSettings, MessagesShaping,
     route::{Messages, MessagesMachine, MessagesOutput},
 };
 use litellm_inference_testing::RecordingSecrets;
@@ -24,6 +24,7 @@ mod request;
 mod response;
 mod secrets;
 mod stream;
+mod tencent;
 
 const MODEL: &str = "claude-sonnet-4-5";
 
@@ -81,6 +82,7 @@ fn call() -> MessagesCall {
         api_key: None,
         api_base: None,
         custom_llm_provider: Some("anthropic".into()),
+        litellm_params: Default::default(),
         extra_headers: None,
         provider_specific_header: None,
         timeout: Some(Duration::from_secs(5)),
@@ -142,7 +144,7 @@ impl LocalMessagesHost {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .take()
-            .ok_or_else(|| Error::InvalidRequest("messages request was already projected".into()))
+            .ok_or(litellm_llms::Error::MissingField("messages request").into())
     }
     pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, ()> {
         litellm_host_native::in_process::Host {

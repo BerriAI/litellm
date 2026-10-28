@@ -41,7 +41,7 @@ impl BaseOcrConfig for TextractAnalyzeDocumentConfig {
     type Environment = TextractEnvironment;
 
     fn secret_names(&self) -> Vec<&'static str> {
-        litellm_auth_aws::constants::SECRET_NAMES.to_vec()
+        litellm_auth::AwsParams::secret_names().to_vec()
     }
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
@@ -123,7 +123,7 @@ impl BaseOcrConfig for TextractAnalyzeDocumentConfig {
         &self,
         error_message: String,
         status_code: u16,
-        headers: Vec<(String, String)>,
+        headers: reqwest::header::HeaderMap,
     ) -> Error {
         error_class(error_message, status_code, headers)
     }

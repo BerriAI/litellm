@@ -16,6 +16,7 @@ The mechanism works without any cache and supports two encoding strategies:
 """
 
 import time
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -2060,6 +2061,71 @@ async def test_real_router_selection_keeps_origin_reasoning_and_strips_foreign_o
 
 
 @pytest.mark.asyncio
+async def test_affinity_pin_yields_to_the_fallback_hops_target_order_and_strips_the_origins_reasoning():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {
+                    "model": "openai/gpt-6-astra",
+                    "api_base": "https://api.openai.com/v1",
+                    "api_key": "key-openai",
+                    "order": 1,
+                },
+                "model_info": {"id": "dep-openai"},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {
+                    "model": "bedrock_mantle/openai.gpt-6-astra",
+                    "api_base": "https://bedrock-mantle.us-east-1.api.aws",
+                    "api_key": "key-mantle",
+                    "order": 2,
+                },
+                "model_info": {"id": "dep-mantle"},
+            },
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    openai_wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-openai", "dep-openai")
+
+    def history() -> list:
+        return [
+            {"type": "message", "role": "user", "content": "first question"},
+            {
+                "type": "reasoning",
+                "encrypted_content": openai_wrapped,
+                "summary": [{"type": "summary_text", "text": "openai summary"}],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "first answer"}]},
+            {"type": "message", "role": "user", "content": "second question"},
+        ]
+
+    try:
+        first_attempt = {"input": history(), "store": False}
+        pinned = await router.async_get_available_deployment(
+            model="gpt-6-astra", request_kwargs=first_attempt, input=first_attempt["input"]
+        )
+        assert pinned["model_info"]["id"] == "dep-openai"
+        assert first_attempt["input"] == history()
+
+        hop = {"input": history(), "store": False, "_target_order": 2, "fallback_depth": 1}
+        hop_deployment = await router.async_get_available_deployment(
+            model="gpt-6-astra", request_kwargs=hop, input=hop["input"]
+        )
+        assert hop_deployment["model_info"]["id"] == "dep-mantle"
+        assert hop["input"] == [
+            {"type": "message", "role": "user", "content": "first question"},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "openai summary"}]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "first answer"}]},
+            {"type": "message", "role": "user", "content": "second question"},
+        ]
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
 async def test_affinity_keeps_mixed_origins_on_the_same_encryption_boundary():
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
@@ -2268,6 +2334,56 @@ async def test_affinity_strips_unknown_origins_but_leaves_unmarked_encrypted_con
             "encrypted_content": "raw-encrypted-content",
             "summary": [{"type": "summary_text", "text": "unmarked content"}],
         },
+    ]
+
+
+def _router_without_the_origin():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {
+                    "model": "openai/gpt-6-astra",
+                    "api_base": "https://api.openai.com/v1",
+                    "api_key": "openai-key",
+                },
+                "model_info": {"id": "target-order-2"},
+            }
+        ],
+        num_retries=0,
+    )
+
+
+@pytest.mark.parametrize("router", [None, _router_without_the_origin()], ids=["no router", "origin removed"])
+@pytest.mark.parametrize(
+    "unmarked_origin", ["origin-removed", None], ids=["failed deployment named", "failed deployment unknown"]
+)
+def test_hop_strip_drops_unmarked_reasoning_whose_origin_cannot_be_resolved(router, unmarked_origin):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    request_input = [
+        {"type": "message", "role": "user", "content": "What is 17*23?"},
+        {
+            "type": "reasoning",
+            "id": "rs_unmarked",
+            "encrypted_content": "gAAAAA-minted-by-a-removed-deployment",
+            "summary": [{"type": "summary_text", "text": "multiply 17 by 23"}],
+        },
+    ]
+    target = {
+        "model_info": {"id": "target-order-2"},
+        "litellm_params": {"api_base": "https://api.openai.com/v1", "api_key": "openai-key"},
+    }
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        router, request_input, None, (target,), unmarked_origin=unmarked_origin
+    )
+
+    assert request_input == [
+        {"type": "message", "role": "user", "content": "What is 17*23?"},
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "multiply 17 by 23"}]},
     ]
 
 
@@ -2491,3 +2607,111 @@ async def test_affinity_strips_for_team_and_pattern_routes():
 
     assert result is sibling_pool
     assert not request_kwargs["input"][1].get("encrypted_content")
+
+
+def _region_deployment(region: str) -> dict[str, object]:
+    return {
+        "model_name": "gpt-5.4",
+        "litellm_params": {
+            "model": "openai/gpt-5.4",
+            "api_base": f"https://{region}.example.com/v1",
+            "api_key": f"key-{region}",
+        },
+        "model_info": {"id": region},
+    }
+
+
+def _reasoning_input_minted_by(origin: str) -> list[dict[str, object]]:
+    return [
+        {
+            "type": "reasoning",
+            "id": ResponsesAPIRequestUtils._build_encrypted_item_id(origin, "rs_test"),
+            "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-blob", origin),
+            "summary": [{"type": "summary_text", "text": "scattering"}],
+        },
+        {"role": "user", "content": "and sunsets?"},
+    ]
+
+
+def _previous_response_id_from(origin: str) -> str:
+    return ResponsesAPIRequestUtils._build_responses_api_response_id("openai", origin, "resp_test")
+
+
+_ORIGIN_FAILED_THIS_REQUEST: Final = pytest.mark.parametrize(
+    "failed_in_request",
+    [{"_excluded_deployment_ids": ["region-a"]}, {"_retry_skipped_deployment_ids": ("region-a",)}],
+)
+
+
+@pytest.mark.asyncio
+@_ORIGIN_FAILED_THIS_REQUEST
+@pytest.mark.parametrize("continuing", [{}, {"previous_response_id": _previous_response_id_from("region-b")}])
+async def test_affinity_strips_and_dispatches_when_origin_already_failed_this_request(
+    failed_in_request: dict[str, object], continuing: dict[str, object]
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    router: Final = litellm.Router(model_list=[_region_deployment("region-a"), _region_deployment("region-b")])
+    group: Final = router.model_list
+    reasoning_input: Final = _reasoning_input_minted_by("region-a")
+
+    result: Final = await EncryptedContentAffinityCheck(router=router).async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=group,
+        messages=None,
+        request_kwargs={"litellm_metadata": {}, "input": reasoning_input, **failed_in_request, **continuing},
+    )
+
+    assert result is group
+    assert reasoning_input[0] == {"type": "reasoning", "summary": [{"type": "summary_text", "text": "scattering"}]}
+
+
+@pytest.mark.asyncio
+@_ORIGIN_FAILED_THIS_REQUEST
+async def test_affinity_keeps_origin_and_reasoning_when_previous_response_id_binds_the_failed_origin(
+    failed_in_request: dict[str, object],
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    pool: Final = (_region_deployment("region-a"), _region_deployment("region-b"))
+    reasoning_input: Final = _reasoning_input_minted_by("region-a")
+    original_reasoning: Final = dict(reasoning_input[0])
+
+    assert await EncryptedContentAffinityCheck(router=litellm.Router(model_list=list(pool))).async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=list(pool),
+        messages=None,
+        request_kwargs={
+            "litellm_metadata": {},
+            "input": reasoning_input,
+            "previous_response_id": _previous_response_id_from("region-a"),
+            **failed_in_request,
+        },
+    ) == [pool[0]]
+    assert reasoning_input[0] == original_reasoning
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("regions", [("region-a",), ("region-a", "region-b")])
+async def test_affinity_keeps_reasoning_when_every_deployment_already_refused_the_request(regions: tuple[str, ...]):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    router: Final = litellm.Router(model_list=[_region_deployment(region) for region in regions])
+    reasoning_input: Final = _reasoning_input_minted_by("region-a")
+    original_reasoning: Final = dict(reasoning_input[0])
+
+    result: Final = await EncryptedContentAffinityCheck(router=router).async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=router.model_list,
+        messages=None,
+        request_kwargs={"litellm_metadata": {}, "input": reasoning_input, "_retry_skipped_deployment_ids": regions},
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in result] == ["region-a"]
+    assert reasoning_input[0] == original_reasoning

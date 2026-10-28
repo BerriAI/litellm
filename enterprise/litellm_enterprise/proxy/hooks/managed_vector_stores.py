@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.proxy.utils import PrismaClient as _PrismaClient
 
-    Span = Union[_Span, Any]
+    Span = _Span
     InternalUsageCache = _InternalUsageCache
     PrismaClient = _PrismaClient
 else:
@@ -38,7 +38,7 @@ else:
     PrismaClient = Any
 
 
-class PROXY_LiteLLMManagedVectorStores(
+class _PROXY_LiteLLMManagedVectorStores(
     CustomLogger, BaseManagedResource[VectorStoreCreateResponse]
 ):
     """
@@ -107,7 +107,7 @@ class PROXY_LiteLLMManagedVectorStores(
         llm_router: Router,
         model: str,
         request_data: dict[str, object] | VectorStoreCreateOptionalRequestParams,
-        litellm_parent_otel_span: Span,
+        litellm_parent_otel_span: Span | None,
     ) -> VectorStoreCreateResponse:
         """
         Create a vector store for a specific model.
@@ -134,7 +134,7 @@ class PROXY_LiteLLMManagedVectorStores(
         create_request: VectorStoreCreateOptionalRequestParams,
         llm_router: Router,
         target_model_names_list: List[str],
-        litellm_parent_otel_span: Span,
+        litellm_parent_otel_span: Span | None,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> VectorStoreCreateResponse:
         """
@@ -462,4 +462,4 @@ class PROXY_LiteLLMManagedVectorStores(
             parent_otel_span=parent_otel_span,
             resource_id_key="vector_store_id",
         )
-_PROXY_LiteLLMManagedVectorStores = PROXY_LiteLLMManagedVectorStores
+PROXY_LiteLLMManagedVectorStores = _PROXY_LiteLLMManagedVectorStores

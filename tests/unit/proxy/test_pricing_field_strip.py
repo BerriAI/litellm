@@ -22,9 +22,9 @@ from litellm.proxy.litellm_pre_call_utils import (
     _CLIENT_PRICING_METADATA_FIELDS,
     _strip_client_pricing_overrides,
     add_litellm_data_to_request,
+    strip_client_guardrail_information,
 )
 from litellm.types.utils import CustomPricingLiteLLMParams
-
 
 
 def _make_request_mock() -> Request:
@@ -58,9 +58,7 @@ class TestStripClientPricingOverrides:
         # The strip set is built from the model so additions are picked up
         # automatically — this test guards against the model and the strip
         # set drifting apart if someone replaces the auto-derivation later.
-        assert _CLIENT_PRICING_CONTROL_FIELDS == frozenset(
-            CustomPricingLiteLLMParams.model_fields.keys()
-        )
+        assert _CLIENT_PRICING_CONTROL_FIELDS >= frozenset(CustomPricingLiteLLMParams.model_fields.keys())
         # Sanity: the obvious top-level pricing fields are in the set.
         for field in (
             "input_cost_per_token",
@@ -82,6 +80,22 @@ class TestStripClientPricingOverrides:
         _strip_client_pricing_overrides(data)
         assert data == {
             "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+    def test_root_base_model_dropped(self):
+        # ``base_model`` picks the cost-map entry a spend row is priced with
+        # (success rows via the standard logging payload, billed failure rows
+        # via the failure lift), so a caller naming a cheaper model lowers
+        # their own recorded spend.
+        data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "base_model": "gpt-4o-mini",
+        }
+        _strip_client_pricing_overrides(data)
+        assert data == {
+            "model": "gpt-4o",
             "messages": [{"role": "user", "content": "hi"}],
         }
 
@@ -120,7 +134,7 @@ class TestStripClientPricingOverrides:
                 "standard_logging_guardrail_information": [{"guardrail_cost": 5.0}],
             },
         }
-        _strip_client_pricing_overrides(data)
+        strip_client_guardrail_information(data)
         assert data["metadata"] == {"user_session": "keep-me"}
         assert data["litellm_metadata"] == {}
 
@@ -151,7 +165,6 @@ class TestStripClientPricingOverrides:
 
     def test_metadata_field_set_contains_model_info(self):
         assert "model_info" in _CLIENT_PRICING_METADATA_FIELDS
-        assert "standard_logging_guardrail_information" in _CLIENT_PRICING_METADATA_FIELDS
 
     def test_strip_emits_debug_log_listing_dropped_fields(self, caplog):
         # Operators need a paper trail so they can diagnose why a previously
@@ -184,9 +197,7 @@ class TestStripClientPricingOverrides:
         verbose_proxy_logger.setLevel(logging.DEBUG)
         with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
             _strip_client_pricing_overrides({"model": "gpt-4", "temperature": 0.7})
-        assert not any(
-            "pricing" in record.getMessage().lower() for record in caplog.records
-        )
+        assert not any("pricing" in record.getMessage().lower() for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -209,6 +220,26 @@ async def test_add_litellm_data_to_request_strips_root_pricing_fields():
 
     assert "input_cost_per_token" not in updated
     assert "output_cost_per_token" not in updated
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_preserves_caller_streaming_request():
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "is_streaming_request": True,
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_request_mock(),
+        user_api_key_dict=_user_api_key_auth(),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["is_streaming_request"] is True
 
 
 @pytest.mark.asyncio
@@ -265,6 +296,7 @@ async def test_add_litellm_data_to_request_skips_strip_with_key_opt_in():
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "hi"}],
         "input_cost_per_token": 0.0001,
+        "base_model": "gpt-4o-mini",
         "metadata": {"model_info": {"output_cost_per_token": 0.0002}},
     }
 
@@ -280,6 +312,34 @@ async def test_add_litellm_data_to_request_skips_strip_with_key_opt_in():
 
     assert updated["input_cost_per_token"] == 0.0001
     assert updated["metadata"]["model_info"] == {"output_cost_per_token": 0.0002}
+    assert updated["base_model"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opt_in_field", ["metadata", "team_metadata"])
+async def test_add_litellm_data_to_request_strips_guardrail_information_despite_pricing_opt_in(opt_in_field):
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "input_cost_per_token": 0.0001,
+        "metadata": {
+            "user_session": "keep-me",
+            "standard_logging_guardrail_information": [{"guardrail_name": "forged", "guardrail_cost": 5.0}],
+        },
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_request_mock(),
+        user_api_key_dict=_user_api_key_auth(**{opt_in_field: {"allow_client_pricing_override": True}}),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["input_cost_per_token"] == 0.0001
+    assert updated["metadata"]["user_session"] == "keep-me"
+    assert "standard_logging_guardrail_information" not in updated["metadata"]
 
 
 @pytest.mark.asyncio
@@ -318,9 +378,7 @@ async def test_add_litellm_data_to_request_skips_strip_with_team_opt_in():
         "input_cost_per_token": 0.0001,
     }
 
-    user_auth = _user_api_key_auth(
-        team_metadata={"allow_client_pricing_override": True}
-    )
+    user_auth = _user_api_key_auth(team_metadata={"allow_client_pricing_override": True})
     updated = await add_litellm_data_to_request(
         data=data,
         request=_make_request_mock(),

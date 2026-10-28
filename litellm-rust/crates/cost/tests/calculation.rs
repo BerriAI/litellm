@@ -1,5 +1,5 @@
 use litellm_cost::{
-    OffPeakRates, Pricing, PricingError, PromptConvention, Rate, Rates, Request, ServiceTier,
+    Error, OffPeakRates, Pricing, PromptConvention, Rate, Rates, Request, ServiceTier,
     ThresholdPolicy, ThresholdRates, TierRates, Usage, calculate, compile,
 };
 use rstest::rstest;
@@ -132,7 +132,7 @@ fn split_writes_and_invalid_accounting() {
     };
     assert_eq!(
         calculate(&pricing(standard), &overlapping),
-        Err(PricingError::CacheExceedsPrompt)
+        Err(Error::CacheExceedsPrompt)
     );
     let incomplete = Request {
         usage: Usage {
@@ -143,7 +143,7 @@ fn split_writes_and_invalid_accounting() {
     };
     assert_eq!(
         calculate(&pricing(standard), &incomplete),
-        Err(PricingError::InvalidCacheWriteDetails)
+        Err(Error::InvalidCacheWriteDetails)
     );
 }
 
@@ -297,10 +297,10 @@ fn compile_rejects_ambiguous_rates() {
     };
     assert_eq!(
         compile(&specification).err(),
-        Some(PricingError::DuplicateThreshold)
+        Some(Error::DuplicateThreshold)
     );
     let invalid = pricing(rates(Rate::Value(f64::NAN), Rate::Value(1.0)));
-    assert_eq!(compile(&invalid).err(), Some(PricingError::InvalidRate));
+    assert_eq!(compile(&invalid).err(), Some(Error::InvalidRate));
 }
 
 #[test]
@@ -326,7 +326,7 @@ fn off_peak_is_one_non_wrapping_utc_window() {
     };
     assert_eq!(
         calculate(&specification, &base),
-        Err(PricingError::InvalidBillingTime)
+        Err(Error::InvalidBillingTime)
     );
     assert_eq!(calculate(&specification, &start).unwrap().input(), 100.0);
     assert_eq!(calculate(&specification, &end).unwrap().input(), 200.0);
@@ -347,11 +347,11 @@ fn missing_rates_and_free_rates_remain_distinct() {
     };
     assert_eq!(
         calculate(&pricing(Rates::EMPTY), &empty),
-        Err(PricingError::MissingInputRate)
+        Err(Error::MissingInputRate)
     );
     assert_eq!(
         calculate(&pricing(rates(Rate::Value(0.0), Rate::Missing)), &empty),
-        Err(PricingError::MissingOutputRate)
+        Err(Error::MissingOutputRate)
     );
     assert_eq!(
         calculate(&pricing(rates(Rate::Value(0.0), Rate::Value(0.0))), &empty)
@@ -481,7 +481,7 @@ fn regional_multiplier_applies_after_input_components_are_summed() {
     };
     assert_eq!(
         calculate(&pricing(standard), &invalid),
-        Err(PricingError::InvalidRegionMultiplier)
+        Err(Error::InvalidRegionMultiplier)
     );
 }
 
@@ -531,5 +531,5 @@ fn compilation_sorts_thresholds_and_rejects_duplicate_tiers() {
         thresholds: &[],
         ..specification
     };
-    assert_eq!(compile(&invalid).err(), Some(PricingError::DuplicateTier));
+    assert_eq!(compile(&invalid).err(), Some(Error::DuplicateTier));
 }

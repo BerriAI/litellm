@@ -37,6 +37,8 @@ non-content-policy error, regardless of whether `fallbacks` is set.
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
 
 import litellm
@@ -311,6 +313,29 @@ async def test_flag_on_shows_deployment_timeout_debug(monkeypatch: pytest.Monkey
         )
     msg = excinfo.value.message
     assert "Deployment Info: request_timeout:" in msg, msg
+
+
+@pytest.mark.asyncio
+async def test_flag_on_deployment_timeout_debug_names_stream_timeout(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": _INTERNAL_MODEL_GROUP_NAME,
+                "litellm_params": {"model": "gpt-4o", "api_key": "key", "stream_timeout": 7},
+            },
+        ],
+        num_retries=0,
+    )
+    with pytest.raises(litellm.Timeout) as excinfo:
+        await router.acompletion(
+            model=_INTERNAL_MODEL_GROUP_NAME,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            mock_timeout=True,
+            timeout=0.001,
+        )
+    assert "\nstream_timeout: 7" in excinfo.value.message, excinfo.value.message
 
 
 # --- Site 3: ContentPolicyViolationError fallback hint (no fallback set) ----
