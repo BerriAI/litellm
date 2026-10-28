@@ -12,7 +12,7 @@ from typing_extensions import ReadOnly, TypedDict, override
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import ImageResponse
+from litellm.types.utils import FileTypes, ImageResponse
 
 _PNG_SIGNATURE: Final = b"\x89PNG\r\n\x1a\n"
 _FIRST_IMAGE: Final = _PNG_SIGNATURE + b"first-reference-image"
@@ -71,6 +71,20 @@ def _multipart_image_parts(request: httpx.Request) -> tuple[bytes, ...]:
     boundary: Final = request.headers["content-type"].split("boundary=", 1)[1].encode()
     parts: Final = body.split(b"--" + boundary)
     return tuple(part.split(b"\r\n\r\n", 1)[1].removesuffix(b"\r\n") for part in parts if b'name="image[]"' in part)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("image", (None, []), ids=("none", "empty-list"))
+async def test_bfl_image_edit_missing_image_returns_bad_request(image: list[FileTypes] | None) -> None:
+    with pytest.raises(litellm.BadRequestError, match="No image provided") as exc_info:
+        await litellm.aimage_edit(
+            model="black_forest_labs/flux-kontext-pro",
+            prompt="make it blue",
+            image=image,
+            api_key="fake-key",
+        )
+
+    assert exc_info.value.status_code == 400
 
 
 def test_openai_image_edit_sync_accepts_bytesio_images(respx_mock: respx.MockRouter, httpx_transport: None) -> None:
