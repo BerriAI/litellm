@@ -1415,24 +1415,34 @@ def _openai_model_info(model: str) -> ModelInfo | None:
     return None if isinstance(model_info, ModelInfoLookupMiss) else model_info
 
 
-def _openai_reasoning_field_values(model: str) -> Mapping[str, frozenset[str | None]]:
+def _declared_values(values: Sequence[str] | None) -> frozenset[str | None] | None:
+    return None if values is None else frozenset(values)
+
+
+def _openai_reasoning_field_values(model: str) -> Mapping[str, frozenset[str | None] | None]:
     model_info: Final = _openai_model_info(model)
+    if model_info is None:
+        return MappingProxyType({"summary": _SUMMARY_VALUES, "mode": None, "context": None})
+    if not model_info.get("supports_reasoning"):
+        return MappingProxyType({})
     return MappingProxyType(
         {
             "summary": _SUMMARY_VALUES,
-            "mode": frozenset(model_info.get("reasoning_modes") or ()) if model_info is not None else frozenset(),
-            "context": frozenset(model_info.get("reasoning_contexts") or ()) if model_info is not None else frozenset(),
+            "mode": _declared_values(model_info.get("reasoning_modes")),
+            "context": _declared_values(model_info.get("reasoning_contexts")),
         }
     )
 
 
 def _openai_accepts_reasoning_field(
-    key: str, value: object, values_by_field: Mapping[str, frozenset[str | None]]
+    key: str, value: object, values_by_field: Mapping[str, frozenset[str | None] | None]
 ) -> bool:
     if key == "effort":
         return True
-    allowed: Final = values_by_field.get(key)
-    return allowed is not None and isinstance(value, str | None) and value in allowed
+    if key not in values_by_field:
+        return False
+    allowed: Final = values_by_field[key]
+    return allowed is None or (isinstance(value, str | None) and value in allowed)
 
 
 def _openai_accepted_reasoning(reasoning: Mapping[str, object], model: str) -> Mapping[str, object]:
@@ -1457,17 +1467,17 @@ def openai_bridge_reasoning(
     drop_params: bool,
     additional_drop_params: object,
 ) -> Mapping[str, object] | None:
-    if not effort_kept:
+    drop_paths: Final = _additional_drop_paths(additional_drop_params)
+    if "reasoning_effort" in drop_paths:
         return None
-    with_summary: Final = reasoning_with_summary_default(requested, summary_alias, model, "openai")
+    kept: Final = requested if effort_kept else {key: value for key, value in requested.items() if key != "effort"}
+    with_summary: Final = reasoning_with_summary_default(kept, summary_alias, model, "openai")
     accepted: Final = (
         _openai_accepted_reasoning(with_summary, model)
         if drop_params and OpenAIGPTConfig.is_openai_catalog_model(model)
         else {**with_summary}
     )
     remaining: Final = as_str_mapping(
-        _apply_nested_drop_params(
-            {"reasoning_effort": accepted}, list(_additional_drop_paths(additional_drop_params))
-        ).get("reasoning_effort")
+        _apply_nested_drop_params({"reasoning_effort": accepted}, list(drop_paths)).get("reasoning_effort")
     )
     return remaining or None

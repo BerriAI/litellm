@@ -2217,16 +2217,21 @@ def test_openai_responses_bridge_sends_the_whole_reasoning_effort_dict(
 
 
 @pytest.mark.parametrize(
-    "reasoning_effort, summary_alias",
+    "reasoning_effort, summary_alias, expected_reasoning",
     [
-        ({"effort": "minimal", "mode": "pro", "context": "current_turn"}, {}),
-        ({"effort": "minimal", "mode": "pro", "summary": "auto"}, {}),
-        ({"effort": "minimal", "mode": "pro"}, {"reasoning_summary": "auto"}),
+        (
+            {"effort": "minimal", "mode": "pro", "context": "current_turn"},
+            {},
+            {"mode": "pro", "context": "current_turn"},
+        ),
+        ({"effort": "minimal", "mode": "pro", "summary": "auto"}, {}, {"mode": "pro", "summary": "auto"}),
+        ({"effort": "minimal", "mode": "pro"}, {"reasoning_summary": "auto"}, {"mode": "pro", "summary": "auto"}),
     ],
 )
-def test_openai_responses_bridge_sends_no_reasoning_when_drop_params_drops_a_refused_effort(
+def test_openai_responses_bridge_drops_only_a_refused_effort_under_drop_params(
     reasoning_effort: dict[str, str],
     summary_alias: dict[str, str],
+    expected_reasoning: dict[str, str],
     openai_responses_route: respx.Route,
 ):
     litellm.completion(
@@ -2239,7 +2244,7 @@ def test_openai_responses_bridge_sends_no_reasoning_when_drop_params_drops_a_ref
     )
 
     request_body: Final = json.loads(openai_responses_route.calls[0].request.content)
-    assert "reasoning" not in request_body
+    assert request_body["reasoning"] == expected_reasoning
 
 
 def test_openai_responses_bridge_drops_a_reasoning_effort_dict_for_a_model_without_reasoning(
@@ -2309,7 +2314,8 @@ def test_openai_responses_bridge_drops_reasoning_fields_openai_refuses_only_unde
             True,
             {"effort": "low", "mode": "pro", "context": "all_turns"},
         ),
-        ({}, True, {"effort": "low"}),
+        ({}, True, {"effort": "low", "mode": "pro", "context": "all_turns"}),
+        ({"reasoning_modes": ["standard"]}, True, {"effort": "low", "context": "all_turns"}),
         (
             {"reasoning_modes": ["standard"], "reasoning_contexts": ["auto", "current_turn"]},
             False,
@@ -2349,7 +2355,7 @@ def test_openai_responses_bridge_drops_a_mode_or_context_the_model_does_not_list
     assert request_body["reasoning"] == expected_reasoning
 
 
-def test_openai_responses_bridge_drops_mode_and_context_under_drop_params_for_a_catalog_model_with_no_cost_entry(
+def test_openai_responses_bridge_forwards_mode_and_context_under_drop_params_for_a_catalog_model_with_no_cost_entry(
     openai_responses_route: respx.Route,
 ):
     litellm.open_ai_chat_completion_models.add("unpriced-reasoning-model")
@@ -2357,13 +2363,13 @@ def test_openai_responses_bridge_drops_mode_and_context_under_drop_params_for_a_
     litellm.completion(
         model="openai/responses/unpriced-reasoning-model",
         messages=[{"role": "user", "content": "hello"}],
-        reasoning_effort={"effort": "low", "mode": "pro", "context": "all_turns"},
+        reasoning_effort={"effort": "low", "mode": "pro", "context": "all_turns", "generate_summary": "auto"},
         drop_params=True,
         api_key="fake-key",
     )
 
     request_body: Final = json.loads(openai_responses_route.calls[0].request.content)
-    assert request_body["reasoning"] == {"effort": "low"}
+    assert request_body["reasoning"] == {"effort": "low", "mode": "pro", "context": "all_turns"}
 
 
 def test_openai_responses_bridge_forwards_a_reasoning_effort_dict_whole_for_a_model_outside_the_openai_catalog(
