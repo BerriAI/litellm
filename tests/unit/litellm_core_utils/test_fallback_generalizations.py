@@ -242,16 +242,35 @@ def test_malformed_rules_are_skipped_not_fatal(restore_generalizations):
     assert match_capability_generalizations("claude-opus-9-9") == {"good": True}
 
 
-def test_extends_does_not_inherit_the_named_rules_model_info(
-    restore_generalizations: Callable[[list | None], None],
-) -> None:
-    restore_generalizations(
+@pytest.mark.parametrize(
+    "rules",
+    [
+        [
+            {
+                "name": "stale-rule",
+                "pattern": r"^acme-",
+                "model_info": {"litellm_provider": "anthropic", "supports_vision": True},
+            }
+        ],
         [
             {"name": "parent", "pattern": r"^zeta-only$", "model_info": {"supports_vision": True}},
-            {"name": "child", "pattern": r"^acme-", "extends": "parent", "model_info": {"supports_reasoning": True}},
-        ]
-    )
-    assert match_capability_generalizations("acme-1") == {"supports_reasoning": True}
+            {
+                "name": "stale-rule",
+                "pattern": r"^acme-",
+                "extends": "parent",
+                "model_info": {"supports_reasoning": True},
+            },
+        ],
+    ],
+    ids=["provider-mixed-with-capabilities", "extends"],
+)
+def test_old_format_rule_is_skipped_with_a_warning_pointing_at_a_current_cost_map(
+    restore_generalizations: Callable[[list | None], None], warning_messages: list[str], rules: list[dict]
+) -> None:
+    restore_generalizations(rules)
+    assert any("stale-rule" in m and "LITELLM_MODEL_COST_MAP_URL" in m for m in warning_messages)
+    assert match_routing_generalization("acme-1") is None
+    assert match_capability_generalizations("acme-1") is None
 
 
 # --------------------------------------------------------------------------- #

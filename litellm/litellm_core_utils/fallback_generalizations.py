@@ -21,7 +21,9 @@ as if no rules existed.
 
 A rule whose ``model_info`` carries ``litellm_provider`` alongside any other key,
 or carries it as a non-string, is neither kind: it is warned about and skipped
-rather than raising, since released proxies fetch this JSON remotely.
+rather than raising, since released proxies fetch this JSON remotely. A rule
+carrying ``extends`` is skipped the same way. Mixed rules and ``extends`` are the
+old rule format, so their warning points the operator at a current cost map.
 
 Rules are only consulted after exact and case-insensitive lookups miss, so an
 exact cost-map entry always takes precedence over any rule.
@@ -55,6 +57,7 @@ PATTERN_FIELD: Final = "pattern"
 MODEL_INFO_FIELD: Final = "model_info"
 PROVIDER_KEY: Final = "litellm_provider"
 FILL_MISSING_FOR_PROVIDERS_FIELD: Final = "fill_missing_for_providers"
+EXTENDS_FIELD: Final = "extends"
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,18 +92,31 @@ def _parse_fill_missing_for_providers(rule: Mapping[str, object], pattern_label:
     return frozenset(raw_fill_missing_for_providers)
 
 
+def _warn_old_format_rule(rule_label: str, reason: str) -> None:
+    verbose_logger.warning(
+        "LiteLLM: skipping fallback generalization rule %s, written in the old cost map rule format (%s). "
+        "Point LITELLM_MODEL_COST_MAP_URL at a current cost map.",
+        rule_label,
+        reason,
+    )
+
+
 def _compile_rule(rule: object) -> _CompiledRule | None:
     if not isinstance(rule, dict):
         return None
     pattern: Final = rule.get(PATTERN_FIELD)
     model_info: Final = rule.get(MODEL_INFO_FIELD)
+    rule_label: Final = f"{rule.get(NAME_FIELD, pattern)}"
     if not isinstance(pattern, str) or not isinstance(model_info, dict):
         verbose_logger.warning(
             "LiteLLM: skipping malformed fallback generalization rule %s (needs string '%s' and dict '%s').",
-            rule.get(NAME_FIELD, pattern),
+            rule_label,
             PATTERN_FIELD,
             MODEL_INFO_FIELD,
         )
+        return None
+    if EXTENDS_FIELD in rule:
+        _warn_old_format_rule(rule_label, f"'{EXTENDS_FIELD}' is no longer supported")
         return None
     try:
         compiled: Final = re.compile(pattern, re.IGNORECASE)
@@ -121,13 +137,15 @@ def _compile_rule(rule: object) -> _CompiledRule | None:
             fill_missing_for_providers=fill_missing_for_providers,
         )
     provider: Final = model_info[PROVIDER_KEY]
-    if not isinstance(provider, str) or len(model_info) != 1:
+    if not isinstance(provider, str):
         verbose_logger.warning(
-            "LiteLLM: skipping invalid fallback generalization rule %s: a string '%s' must be the only key in '%s'.",
-            rule.get(NAME_FIELD, pattern),
+            "LiteLLM: skipping malformed fallback generalization rule %s ('%s' must be a string).",
+            rule_label,
             PROVIDER_KEY,
-            MODEL_INFO_FIELD,
         )
+        return None
+    if len(model_info) != 1:
+        _warn_old_format_rule(rule_label, f"'{PROVIDER_KEY}' must be the only key in '{MODEL_INFO_FIELD}'")
         return None
     return _RoutingRule(pattern=compiled, provider=provider)
 
