@@ -4679,8 +4679,9 @@ def test_fast_mode_parameter_mapping():
     assert result["speed"] == "fast"
 
 
-def test_anthropic_drop_params_strips_speed_for_unsupported_models():
-    """``drop_params=True`` strips unsupported ``speed`` for non-Opus models."""
+@pytest.mark.parametrize("model", ["claude-sonnet-4-6", "claude-opus-4-7"])
+def test_anthropic_drop_params_strips_speed_for_unsupported_models(model):
+    """``drop_params=True`` strips ``speed`` for models without fast mode."""
     config = AnthropicConfig()
     messages = [{"role": "user", "content": "Hello"}]
 
@@ -4688,7 +4689,7 @@ def test_anthropic_drop_params_strips_speed_for_unsupported_models():
     litellm.drop_params = True
     try:
         result = config.transform_request(
-            model="claude-sonnet-4-6",
+            model=model,
             messages=messages,
             optional_params={"speed": "fast", "max_tokens": 1024},
             litellm_params={},
