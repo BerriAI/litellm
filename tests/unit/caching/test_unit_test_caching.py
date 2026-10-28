@@ -8,6 +8,7 @@ load_dotenv()
 import asyncio
 import hashlib
 import random
+from typing import Final
 
 import pytest
 
@@ -279,8 +280,8 @@ def test_get_model_param_value_reads_model_group_from_litellm_metadata():
 
 
 def test_get_model_param_value_prefers_the_router_group_over_a_caller_model_group():
-    cache = Cache()
-    request = {"model": "openai/gpt-5.6", "input": "search this text"}
+    cache: Final = Cache()
+    request: Final = {"model": "openai/gpt-5.6", "input": "search this text"}
 
     assert (
         cache._get_model_param_value(
@@ -306,6 +307,20 @@ def test_get_model_param_value_prefers_the_router_group_over_a_caller_model_grou
         )
         == "group-a"
     )
+
+
+@pytest.mark.parametrize("planted", [["sales-premium"], [("sales", "sales-premium")]], ids=["string", "tuple"])
+def test_get_model_param_value_reads_caching_groups_only_beside_the_router_group(planted: list):
+    cache: Final = Cache()
+    request: Final = {
+        "model": "openai/gpt-5.6",
+        "input": "search this text",
+        "litellm_metadata": {"model_group": "sales", "caching_groups": None},
+        "metadata": {"caching_groups": planted},
+    }
+
+    assert cache._get_model_param_value(request) == "sales"
+
 
 def test_preset_cache_key():
     """

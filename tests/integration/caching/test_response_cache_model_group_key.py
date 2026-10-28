@@ -38,32 +38,32 @@ from tests.integration.caching.response_cache_case import (
     scripted,
 )
 
-Ask: TypeAlias = Callable[[Gateway, str, str, Mapping[str, str]], str]
+Ask: TypeAlias = Callable[[Gateway, str, str, Mapping[str, JsonValue]], str]
 
 
 def _root(gateway: Gateway) -> str:
     return str(gateway.client.base_url).rstrip("/")
 
 
-def _metadata(metadata: Mapping[str, str]) -> dict[str, JsonValue] | None:
+def _metadata(metadata: Mapping[str, JsonValue]) -> dict[str, JsonValue] | None:
     return {"metadata": dict(metadata)} if metadata else None
 
 
-def _chat(gateway: Gateway, model: str, text: str, metadata: Mapping[str, str]) -> str:
+def _chat(gateway: Gateway, model: str, text: str, metadata: Mapping[str, JsonValue]) -> str:
     with OpenAI(base_url=f"{_root(gateway)}/v1", api_key=gateway.key, max_retries=0) as client:
         return client.chat.completions.create(
             model=model, messages=[{"role": "user", "content": text}], extra_body=_metadata(metadata)
         ).id
 
 
-def _responses(gateway: Gateway, model: str, text: str, metadata: Mapping[str, str]) -> str:
+def _responses(gateway: Gateway, model: str, text: str, metadata: Mapping[str, JsonValue]) -> str:
     with OpenAI(base_url=f"{_root(gateway)}/v1", api_key=gateway.key, max_retries=0) as client:
         identity: Final = client.responses.create(model=model, input=text, extra_body=_metadata(metadata)).output[0].id
     assert identity is not None
     return identity
 
 
-def _messages(gateway: Gateway, model: str, text: str, metadata: Mapping[str, str]) -> str:
+def _messages(gateway: Gateway, model: str, text: str, metadata: Mapping[str, JsonValue]) -> str:
     with Anthropic(base_url=_root(gateway), api_key=gateway.key, max_retries=0) as client:
         return client.messages.create(
             model=model,
@@ -88,15 +88,15 @@ class Group:
 
 
 ENDPOINTS: Final = {
-    "chat_completions": Endpoint(CHAT_MODEL, "openai/gpt-4o", CHAT, _chat),
-    "responses": Endpoint(CHAT_MODEL, "openai/gpt-4o", RESPONSE, _responses),
-    "messages": Endpoint(MESSAGES_MODEL, "anthropic/claude-sonnet-4-5", MESSAGE, _messages),
+    "chat_completions": Endpoint(CHAT_MODEL, "openai/gpt-5.6", CHAT, _chat),
+    "responses": Endpoint(CHAT_MODEL, "openai/gpt-5.6", RESPONSE, _responses),
+    "messages": Endpoint(MESSAGES_MODEL, "anthropic/claude-sonnet-5-5", MESSAGE, _messages),
 }
 
 
-def _group(scenario: Scenario, endpoint: Endpoint) -> Group:
+def _group(scenario: Scenario, endpoint: Endpoint, name: str | None = None) -> Group:
     handle: Final = scripted(scenario, json_response(endpoint.answer))
-    return Group(scenario.model(model=endpoint.provider_model, api_base=handle.api_base()), handle)
+    return Group(scenario.model(name=name, model=endpoint.provider_model, api_base=handle.api_base()), handle)
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS.values(), ids=ENDPOINTS.keys())
@@ -118,17 +118,24 @@ def test_identical_requests_to_two_groups_on_one_model_each_reach_their_own_depl
         assert upstream.calls(first.upstream.scenario_id) == 1
 
 
+PLANTS: Final[Mapping[str, Callable[[str], Mapping[str, JsonValue]]]] = {
+    "model_group": lambda target: {"model_group": target},
+    "caching_groups": lambda target: {"caching_groups": [target]},
+}
+
+
+@pytest.mark.parametrize("plant", PLANTS.values(), ids=PLANTS.keys())
 @pytest.mark.parametrize("endpoint", ENDPOINTS.values(), ids=ENDPOINTS.keys())
 def test_a_caller_naming_another_group_in_metadata_never_fills_that_groups_entry(
-    gateway: Gateway, endpoint: Endpoint
+    gateway: Gateway, endpoint: Endpoint, plant: Callable[[str], Mapping[str, JsonValue]]
 ) -> None:
     upstream: Final = Upstream(gateway.upstream_url)
     store: Final = redis_store()
     text: Final = prompt()
     with gateway.scenario() as scenario:
-        target: Final = _group(scenario, endpoint)
         caller: Final = _group(scenario, endpoint)
-        planted: Final = endpoint.ask(gateway, caller.name, text, {"model_group": target.name})
+        target: Final = _group(scenario, endpoint, name=f"{caller.name}-premium")
+        planted: Final = endpoint.ask(gateway, caller.name, text, plant(target.name))
         assert upstream.calls(caller.upstream.scenario_id) == 1
         await_entry(store, planted)
         answered: Final = endpoint.ask(gateway, target.name, text, {})

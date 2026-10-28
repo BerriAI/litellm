@@ -461,16 +461,14 @@ class Cache:
             litellm_params.get("litellm_metadata") or {},
             litellm_params.get("metadata") or {},
         )
-        model_group: Final[str | None] = next(
-            (source["model_group"] for source in metadata_sources if source.get("model_group")), None
-        )
-        caching_group: Final = next(
-            (group for source in metadata_sources if (group := self._get_caching_group(source, model_group))), None
-        )
-        model_id_suffix: Final = (
-            f" model_id: {kwargs['model_id']}" if "model_id" in kwargs and kwargs["model_id"] is not None else ""
-        )
-        return caching_group or model_group or f"{kwargs['model']}{model_id_suffix}"
+        model_group_source: Final = next((source for source in metadata_sources if source.get("model_group")), None)
+        if model_group_source is None:
+            model_id_suffix: Final = (
+                f" model_id: {kwargs['model_id']}" if "model_id" in kwargs and kwargs["model_id"] is not None else ""
+            )
+            return f"{kwargs['model']}{model_id_suffix}"
+        model_group: Final[str] = model_group_source["model_group"]
+        return self._get_caching_group(model_group_source, model_group) or model_group
 
     def _get_caching_group(self, metadata: dict, model_group: str | None) -> str | None:
         caching_groups: Final[list | None] = metadata.get("caching_groups", [])
