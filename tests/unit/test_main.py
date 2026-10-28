@@ -5041,6 +5041,28 @@ def test_stream_chunk_builder_keeps_provider_reported_usage_cost():
     assert response._hidden_params["response_cost"] == pytest.approx(0.5)
 
 
+@pytest.mark.parametrize("reported_cost", [float("nan"), float("inf")])
+def test_stream_chunk_builder_bills_the_token_price_when_the_provider_cost_is_not_finite(reported_cost: float):
+    usage_chunk: Final = _stream_builder_text_chunk("gpt-4o", "")
+    usage_chunk.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15, cost=reported_cost)
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello "),
+        _stream_builder_text_chunk("gpt-4o", "world.", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=_stream_builder_logging_obj()
+    )
+
+    assert response is not None
+    prompt_cost, completion_cost = litellm.cost_per_token(model="gpt-4o", usage_object=response.usage)
+    token_price: Final = prompt_cost + completion_cost
+    assert token_price > 0
+    assert getattr(response.usage, "cost", None) == pytest.approx(token_price)
+    assert response._hidden_params["response_cost"] == pytest.approx(token_price)
+
+
 def test_stream_chunk_builder_prices_alias_from_openai_sdk_usage_chunk():
     from openai.types.completion_usage import CompletionUsage
 

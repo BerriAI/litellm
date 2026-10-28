@@ -1,4 +1,5 @@
 import json
+import math
 from collections.abc import Callable
 from typing import Any, Final
 
@@ -14,6 +15,10 @@ def strip_null_bytes(value: str) -> str:
     return value.replace("\x00", "")
 
 
+def _finite_or_none(value: float | None) -> float | None:
+    return None if isinstance(value, float) and not math.isfinite(value) else value
+
+
 def safe_json_structure(
     data: object,
     max_depth: int = DEFAULT_MAX_RECURSE_DEPTH,
@@ -23,7 +28,8 @@ def safe_json_structure(
     """
     Rebuild data out of JSON-native pieces while detecting circular references.
     If a circular reference is detected then a marker string is returned.
-    NUL bytes are stripped from strings to prevent PostgreSQL 22P05 errors.
+    NUL bytes are stripped from strings to prevent PostgreSQL 22P05 errors, and NaN and
+    infinite floats become null, since JSON has no token for them and jsonb rejects them.
 
     value_transform, when given, is applied to every string leaf (and to the
     str() fallback for non-serializable objects) with the mapping key the leaf
@@ -43,7 +49,7 @@ def safe_json_structure(
             cleaned = obj.replace("\x00", "") if "\x00" in obj else obj
             return _transform(key, cleaned)
         if isinstance(obj, (int, float, bool, type(None))):
-            return obj
+            return _finite_or_none(obj)
         # Check for circular reference.
         if id(obj) in seen:
             return "CircularReference Detected"

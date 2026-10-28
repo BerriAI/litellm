@@ -12,7 +12,7 @@ from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
+from litellm.litellm_core_utils.core_helpers import chunk_usage, finite_cost, provider_reported_usage_cost
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import BEDROCK_TRACE_FIELDS, object_items, object_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -1375,9 +1375,9 @@ def _stream_builder_response_cost(
             for chunk in reversed(chunks)
         )
         return next((cost for cost in reported if cost is not None), None)
-    usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
-    if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(logging_obj):
-        return float(usage_cost)
+    usage_cost: Final = finite_cost(getattr(getattr(response, "usage", None), "cost", None))
+    if usage_cost is not None and not _reported_cost_is_priced_by_calculator(logging_obj):
+        return usage_cost
     if logging_obj is not None:
         return None
     provider_hint: Final = response._hidden_params.get(  # pyright: ignore[reportPrivateUsage]  # no public accessor
@@ -1424,7 +1424,7 @@ def _set_stream_builder_response_cost(
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     if logging_obj is None:
         return
-    if isinstance(getattr(usage, "cost", None), (int, float)):
+    if finite_cost(getattr(usage, "cost", None)) is not None:
         return
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
     if not isinstance(computed_cost, (int, float)) or computed_cost <= 0:

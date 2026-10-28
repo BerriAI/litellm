@@ -2226,6 +2226,67 @@ async def test_shutdown_drain_finishes_the_rollups_update_database_started():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("response_cost", [float("nan"), float("inf"), float("-inf")])
+async def test_update_database_records_a_non_finite_response_cost_as_zero(response_cost: float) -> None:
+    db_writer: Final = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    prisma: Final = MagicMock()
+    prisma.get_request_status = MagicMock(return_value="success")
+    fake_payload: Final = {
+        "request_id": "req-non-finite-cost",
+        "api_key": "hashed-key",
+        "user": "test-user",
+        "team_id": "test-team",
+        "agent_id": None,
+        "startTime": "2026-01-01T00:00:00",
+        "endTime": "2026-01-01T00:00:01",
+        "model": "gpt-4o-mini",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4o-mini",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "spend": response_cost,
+        "metadata": '{"usage_object": {}}',
+    }
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", False),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch("litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload", return_value=fake_payload),
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id="test-team",
+            org_id=None,
+            kwargs={"model": "gpt-4o-mini", "custom_llm_provider": "openai"},
+            completion_response=MagicMock(),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=response_cost,
+        )
+        await drain_logging_tasks()
+
+    assert db_writer._insert_spend_log_to_db.call_args.kwargs["payload"]["spend"] == 0
+    spend: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert spend["key_list_transactions"] == {"test-token": 0}
+    assert spend["team_list_transactions"] == {"test-team": 0}
+    daily_user: Final = (
+        await db_writer.daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+    )
+    daily_team: Final = (
+        await db_writer.daily_team_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+    )
+    assert daily_user is not None and daily_team is not None
+    (user_row,) = daily_user.values()
+    (team_row,) = daily_team.values()
+    assert (user_row["api_requests"], user_row["spend"]) == (1, 0)
+    assert (team_row["api_requests"], team_row["spend"]) == (1, 0)
+
+
+@pytest.mark.asyncio
 async def test_shutdown_drain_waits_for_an_in_flight_rollup_enqueue():
     """
     Regression for LIT-6027. A rollup enqueue that is still in flight when the shutdown drain

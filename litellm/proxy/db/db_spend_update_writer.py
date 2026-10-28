@@ -34,6 +34,7 @@ from litellm.constants import (
     DB_SPEND_UPDATE_JOB_NAME,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
+from litellm.litellm_core_utils.core_helpers import finite_cost
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
@@ -647,7 +648,14 @@ class DBSpendUpdateWriter:
                 end_time=end_time,
                 llm_router=llm_router,
             )
-            payload["spend"] = response_cost or 0.0
+            billable_cost: Final = finite_cost(response_cost)
+            if response_cost is not None and billable_cost is None:
+                verbose_proxy_logger.warning(
+                    "Spend tracking - recording a non-finite response_cost=%s as 0 for request_id=%s",
+                    response_cost,
+                    payload["request_id"],
+                )
+            payload["spend"] = billable_cost or 0.0
             if isinstance(payload["startTime"], datetime):
                 payload["startTime"] = payload["startTime"].isoformat()
             if isinstance(payload["endTime"], datetime):
@@ -689,7 +697,7 @@ class DBSpendUpdateWriter:
             spawn_logging_task(
                 asyncio.get_running_loop(),
                 self._batch_database_updates(
-                    response_cost=response_cost,
+                    response_cost=billable_cost,
                     user_id=user_id,
                     hashed_token=hashed_token,
                     team_id=team_id,

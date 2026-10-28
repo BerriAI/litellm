@@ -75,6 +75,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     is_classifier_call,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    finite_cost,
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
     native_messages_reported_cost,
@@ -7449,7 +7450,15 @@ def get_standard_logging_object_payload(
         )
         custom_pricing: Final = False if spilled_over else logging_obj.custom_pricing_for(init_response_obj)
         raw_response_cost: Final = kwargs.get("response_cost")
-        llm_response_cost: Final[float] = raw_response_cost or 0.0
+        numeric_response_cost: Final = raw_response_cost if isinstance(raw_response_cost, int | float) else None
+        priced_response_cost: Final = finite_cost(numeric_response_cost)
+        if numeric_response_cost is not None and priced_response_cost is None:
+            verbose_logger.warning(
+                "Logging a non-finite response_cost=%s as 0 for litellm_call_id=%s",
+                numeric_response_cost,
+                logging_obj.litellm_call_id,
+            )
+        llm_response_cost: Final[float] = priced_response_cost or 0.0
         guardrail_cost: Final = guardrail_information_cost(metadata.get("standard_logging_guardrail_information"))
         response_cost: Final[float] = llm_response_cost + guardrail_cost
 

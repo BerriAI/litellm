@@ -2,6 +2,7 @@
 ## Helper utilities
 import copy
 import logging
+import math
 import re
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from types import MappingProxyType
@@ -937,8 +938,8 @@ def _usage_field(usage: object, name: str) -> object:
     return getattr(usage, name, None)
 
 
-def _cost_number(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
+def finite_cost(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
         return None
     return float(value)
 
@@ -947,15 +948,15 @@ def _reported_cost_value(value: object) -> float | None:
     """A reported cost is a number, or a breakdown whose total lives under ``total_cost``."""
     raw: Final[object] = value
     if isinstance(value, Mapping):
-        return _cost_number(_usage_field(raw, "total_cost"))
-    return _cost_number(value)
+        return finite_cost(_usage_field(raw, "total_cost"))
+    return finite_cost(value)
 
 
 def response_cost_in_hidden_params(response: _CarriesHiddenParams) -> float | None:
     additional_headers: Final[object] = response.hidden_params.get("additional_headers")
     if not isinstance(additional_headers, Mapping):
         return None
-    return _cost_number(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
+    return finite_cost(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
 
 
 def override_stamped_response_cost(response: _CarriesHiddenParams, cost: float) -> None:

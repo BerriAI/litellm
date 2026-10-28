@@ -6112,6 +6112,28 @@ def test_standard_logging_payload_resolves_kubernetes_pod_routing_from_metadata_
     assert payload["metadata"][KUBERNETES_POD_ROUTING_KEY] == expected
 
 
+@pytest.mark.parametrize("response_cost", [float("nan"), float("inf"), float("-inf")])
+def test_get_standard_logging_object_payload_logs_a_non_finite_response_cost_as_zero(
+    logging_obj: LitellmLogging, response_cost: float
+) -> None:
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now: Final = datetime(2026, 1, 1)
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={"model": "gpt-4o", "messages": [], "litellm_params": {}, "response_cost": response_cost},
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["response_cost"] == 0
+
+
 def test_get_standard_logging_object_payload_carries_matched_access_groups(logging_obj):
     """Access groups stamped at auth time reach the logging payload, so integrations see what a request billed."""
     from datetime import datetime

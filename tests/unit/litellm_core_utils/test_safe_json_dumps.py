@@ -169,6 +169,16 @@ def test_null_byte_stripped_in_fallback_str():
     assert json.loads(out)["obj"] == "objrepr"
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_floats_are_written_as_json_null(value: float) -> None:
+    out = safe_dumps({"cost_breakdown": {"total_cost": value, "output_cost": 0.006}, "costs": [value]})
+
+    assert json.loads(out, parse_constant=lambda token: pytest.fail(f"non-JSON token {token}")) == {
+        "cost_breakdown": {"total_cost": None, "output_cost": 0.006},
+        "costs": [None],
+    }
+
+
 def test_clean_strings_are_not_run_through_replace():
     """Regression for LIT-3910.
 

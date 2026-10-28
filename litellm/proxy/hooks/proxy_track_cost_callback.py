@@ -16,6 +16,7 @@ from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED, BILLE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     budget_reservation_from_metadata,
+    finite_cost,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
     get_parent_otel_span_from_kwargs,
@@ -627,7 +628,7 @@ class _ProxyDBLogger(CustomLogger):
             raw_cost: Final = _str_keyed_fields(
                 sl_object if sl_object is not None else kwargs  # pyright: ignore[reportUnknownArgumentType]  # untyped success-callback payload
             ).get("response_cost")
-            priced_cost: Final = raw_cost if isinstance(raw_cost, (int, float)) else None
+            priced_cost: Final = finite_cost(raw_cost)
             response_cost: Final = (
                 await apply_search_free_tier(
                     kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped success-callback payload
