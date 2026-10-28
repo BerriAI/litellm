@@ -571,26 +571,22 @@ async def test_message_history_reconstructs_every_turn_of_the_session_in_order()
 
 @pytest.mark.asyncio
 async def test_message_history_skips_the_turns_the_provider_rejected():
-    """
-    A turn the provider 400'd still lands in the spend logs with status "failure". Replaying it
-    would send the rejected request again on every later retry from the same previous_response_id.
-    """
-    session_id = "5c5f9a3e-1c86-4c0e-9d7c-0a54b8a0f2f1"
-    answered_request_id = "chatcmpl-1111"
-    rejected_request_id = "chatcmpl-2222"
-    answered_turn = {
+    session_id: Final = "5c5f9a3e-1c86-4c0e-9d7c-0a54b8a0f2f1"
+    answered_request_id: Final = "chatcmpl-1111"
+    rejected_request_id: Final = "chatcmpl-2222"
+    answered_turn: Final = {
         **_spend_log(answered_request_id, session_id, "What is the weather in Paris?", "Checking."),
         "status": "success",
     }
-    rejected_turn = {
+    rejected_turn: Final = {
         **_spend_log(rejected_request_id, session_id, "Never mind. Just say hello", ""),
         "status": "failure",
         "response": {},
     }
-    fake_prisma_client = _FakePrismaClient(results=[[answered_turn, rejected_turn]])
+    fake_prisma_client: Final = _FakePrismaClient(results=[[answered_turn, rejected_turn]])
 
     with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
-        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+        result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
             answered_request_id
         )
 
