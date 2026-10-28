@@ -299,7 +299,7 @@ where
                     facts,
                 }))
                 .await?;
-                reply.send(());
+                reply.send(Ok(()));
                 Ok(())
             }
             HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply }) => {
@@ -307,7 +307,7 @@ where
                     ExecutionEvent::ProviderResponseReceived { raw: &raw },
                 ))
                 .await?;
-                reply.send(());
+                reply.send(Ok(()));
                 Ok(())
             }
             HostRequest::Stream(StreamDelivery::Open(head, reply)) => {

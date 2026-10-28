@@ -66,11 +66,10 @@ where
                 MachineStep::Suspended(request) => request,
             };
             let answered = match request {
-                HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => self
-                    .interceptors
-                    .result_ready(facts)
-                    .await
-                    .map(|()| reply.send(())),
+                HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => {
+                    reply.send(self.interceptors.result_ready(facts).await);
+                    Ok(())
+                }
                 HostRequest::HostCall(call) => self.services.handle_host_call(call).await,
                 HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
                     wire,
@@ -82,10 +81,8 @@ where
                     .await
                     .map(|wire| reply.send(wire)),
                 HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply }) => {
-                    self.interceptors
-                        .after_provider_response(raw)
-                        .await
-                        .map(|()| reply.send(()))
+                    reply.send(self.interceptors.after_provider_response(raw).await);
+                    Ok(())
                 }
                 HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
                     self.demand = Some(reply);

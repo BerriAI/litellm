@@ -1,3 +1,4 @@
+use litellm_core_utils::decline::Decline;
 use std::convert::Infallible;
 
 use crate::routes::inference::InferenceHost;
@@ -44,9 +45,9 @@ impl PythonBinding for ChatCompletionsPythonHost {
             .get("stream")
             .is_some_and(|value| value == &serde_json::Value::Bool(true))
         {
-            return Err(InvokeError::Native(Error::Unsupported(
+            return Err(InvokeError::Native(Error::Declined(Decline::new(
                 "native Python chat_completions streaming",
-            )));
+            ))));
         }
         Ok(call)
     }

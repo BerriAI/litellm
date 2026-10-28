@@ -41,11 +41,10 @@ async fn drive_until(
             Err(error) => break Err(error),
         };
         let answer = match op {
-            HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => host
-                .result_ready(facts)
-                .await
-                .map(|()| reply.send(()))
-                .map_err(HostFailure::Error),
+            HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => {
+                reply.send(host.result_ready(facts).await);
+                Ok(())
+            }
             HostRequest::Stream(stream) => match stream {
                 litellm_host::protocol::StreamDelivery::Open(head, _) => match head {},
                 litellm_host::protocol::StreamDelivery::Chunk(chunk, _) => match chunk {},
@@ -64,10 +63,8 @@ async fn drive_until(
             }
             HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply }) => {
                 ops.push("response");
-                host.after_provider_response(raw)
-                    .await
-                    .map(|()| reply.send(()))
-                    .map_err(HostFailure::Error)
+                reply.send(host.after_provider_response(raw).await);
+                Ok(())
             }
         };
         if let Err(failure) = answer {
@@ -85,10 +82,10 @@ async fn drive_until_notified(machine: &mut OcrMachine, host: &LocalOcrHost, sto
                 _ = stop.notified() => break,
                 step = machine.resume() => {
                     match step.unwrap() {
-                        MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::ResultReady { reply, .. })) => reply.send(()),
+                        MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::ResultReady { reply, .. })) => reply.send(Ok(())),
                         MachineStep::Suspended(HostRequest::HostCall(op)) => host.handle_host_call(op).await.unwrap(),
                         MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::BeforeProviderRequest { wire, reply, .. })) => reply.send(*wire),
-                        MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::AfterProviderResponse { reply, .. })) => reply.send(()),
+                        MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::AfterProviderResponse { reply, .. })) => reply.send(Ok(())),
                         MachineStep::Suspended(HostRequest::Stream(stream)) => match stream {
                             litellm_host::protocol::StreamDelivery::Open(head, _) => match head {},
                             litellm_host::protocol::StreamDelivery::Chunk(chunk, _) => match chunk {},

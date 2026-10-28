@@ -15,14 +15,14 @@ pub trait Protocol: Send + Sync + 'static {
 
 pub enum HostRequest<P: Protocol> {
     HostCall(P::HostCall),
-    Intercept(InterceptRequest),
+    Intercept(InterceptRequest<P::Error>),
     Stream(StreamDelivery<P>),
 }
 
-pub enum InterceptRequest {
+pub enum InterceptRequest<E> {
     ResultReady {
         facts: crate::interceptors::ExecutionFacts,
-        reply: Reply<()>,
+        reply: Reply<Result<(), E>>,
     },
     BeforeProviderRequest {
         wire: Box<WireRequest>,
@@ -31,7 +31,7 @@ pub enum InterceptRequest {
     },
     AfterProviderResponse {
         raw: RawResponse,
-        reply: Reply<()>,
+        reply: Reply<Result<(), E>>,
     },
 }
 

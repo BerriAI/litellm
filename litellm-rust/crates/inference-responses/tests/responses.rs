@@ -103,10 +103,7 @@ async fn unsupported_providers_fail_before_transport(
         )
         .await;
 
-    assert!(matches!(
-        result,
-        Err(Error::Unsupported("native HTTP responses provider"))
-    ));
+    assert!(matches!(result, Err(ref error) if error.declined().is_some()));
     assert!(received(&upstream).await.is_empty());
 }
 

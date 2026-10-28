@@ -63,7 +63,7 @@ pub(super) fn resolve_request(
         ));
     }
     if let Some(reason) = config.unsupported_reason(&messages, &call.optional_params) {
-        return Err(Error::Unsupported(reason.0));
+        return Err(Error::Declined(reason));
     }
     Ok(ResolvedChatCompletionsRequest {
         messages,

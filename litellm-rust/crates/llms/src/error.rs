@@ -1,3 +1,4 @@
+use litellm_core_utils::decline::Decline;
 use litellm_error::Source;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -13,8 +14,8 @@ pub enum Error {
     InvalidRequest(#[source] ErrorDetail),
     #[error("invalid response")]
     InvalidResponse(#[source] ErrorDetail),
-    #[error("unsupported: {0}")]
-    Unsupported(&'static str),
+    #[error(transparent)]
+    Declined(Decline),
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
     #[error(transparent)]
@@ -24,13 +25,10 @@ pub enum Error {
 impl Error {
     pub fn is_request(&self) -> bool {
         match self {
-            Self::InvalidType { .. }
-            | Self::MissingField(_)
-            | Self::InvalidRequest(_)
-            | Self::Unsupported(_) => true,
+            Self::InvalidType { .. } | Self::MissingField(_) | Self::InvalidRequest(_) => true,
             Self::Auth(error) => error.is_request(),
             Self::Http(error) => error.is_request(),
-            Self::InvalidResponse(_) => false,
+            Self::InvalidResponse(_) | Self::Declined(_) => false,
         }
     }
 
@@ -41,7 +39,7 @@ impl Error {
             Self::InvalidType { .. }
             | Self::MissingField(_)
             | Self::InvalidRequest(_)
-            | Self::Unsupported(_)
+            | Self::Declined(_)
             | Self::Auth(_) => false,
         }
     }
@@ -53,7 +51,7 @@ impl Error {
             | Self::MissingField(_)
             | Self::InvalidRequest(_)
             | Self::InvalidResponse(_)
-            | Self::Unsupported(_)
+            | Self::Declined(_)
             | Self::Http(_) => false,
         }
     }
@@ -67,8 +65,8 @@ impl Error {
             Self::InvalidType { .. }
             | Self::MissingField(_)
             | Self::InvalidRequest(_)
-            | Self::InvalidResponse(_)
-            | Self::Unsupported(_) => true,
+            | Self::InvalidResponse(_) => true,
+            Self::Declined(_) => false,
         }
     }
 
@@ -78,7 +76,19 @@ impl Error {
         match self {
             Self::InvalidRequest(detail) => Some(detail),
             Self::InvalidType { .. } | Self::MissingField(_) => Some(self),
-            Self::InvalidResponse(_) | Self::Unsupported(_) | Self::Auth(_) | Self::Http(_) => None,
+            Self::InvalidResponse(_) | Self::Declined(_) | Self::Auth(_) | Self::Http(_) => None,
+        }
+    }
+
+    pub fn declined(&self) -> Option<&Decline> {
+        match self {
+            Self::Declined(decline) => Some(decline),
+            Self::InvalidType { .. }
+            | Self::MissingField(_)
+            | Self::InvalidRequest(_)
+            | Self::InvalidResponse(_)
+            | Self::Auth(_)
+            | Self::Http(_) => None,
         }
     }
 
@@ -89,7 +99,7 @@ impl Error {
             | Self::MissingField(_)
             | Self::InvalidRequest(_)
             | Self::InvalidResponse(_)
-            | Self::Unsupported(_)
+            | Self::Declined(_)
             | Self::Auth(_) => None,
         }
     }
@@ -154,6 +164,8 @@ pub enum ErrorDetail {
     MissingApiBase,
     #[error("the host call raised an exception")]
     HostCall,
+    #[error("{0} is not handled by the rust path")]
+    Unhandled(&'static str),
     #[error("invalid {subject} on line {line}")]
     InvalidLine {
         subject: &'static str,

@@ -23,6 +23,7 @@ description: Define, wrap, convert, classify, report or test Rust error types in
   - Classification states facts. Retry and fallback policy lives with the caller that knows idempotency
 - [boundaries](references/boundaries.md)
   - An error becomes text for someone else only in one mapping function per error type, in the gateway crates, the Python bridge and host-python. The inference gateway and the bridge decide by the same predicates
+  - A failure before the provider was called is a decline. Both ask `declined()` first and hand it back to the host unchanged
 - [gateway](references/gateway.md)
   - One `Error` with `IntoResponse` per gateway crate that serves a router. Every failure flows through the same `From` chain, is classified once in `status()` and rendered by surface and framing
 - [pyo3](references/pyo3.md)

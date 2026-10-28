@@ -128,29 +128,10 @@ pub(super) async fn execute(
             config
                 .transform_response(provider.model, ProviderChatResponseData { body })
                 .map_err(Error::from)
-                .map_err(as_response_error)
+                .map_err(Error::after_send)
         },
     )
     .await
-}
-
-/// Re-tag an error raised while normalizing a response the provider already
-/// returned.
-///
-/// A config reports the same variants on either side of the call: a missing
-/// field or an unsupported block can mean "this request cannot be translated"
-/// before the request is sent and "this response cannot be normalized" here. Only the
-/// second kind has already been billed, and a host that keeps a reference
-/// implementation must not retry those, so collapse them to one variant that
-/// can only mean the provider was already called.
-pub(super) fn as_response_error(err: Error) -> Error {
-    if err.is_response() || err.upstream_response().is_some() {
-        return err;
-    }
-    Error::invalid_response(litellm_llms::ErrorDetail::invalid(
-        "chat completions response",
-        err,
-    ))
 }
 
 #[cfg(test)]
@@ -312,41 +293,5 @@ mod tests {
             "{error:?}"
         );
         assert!(interceptors.raw.into_inner().unwrap().is_empty());
-    }
-
-    #[rstest::rstest]
-    #[case::missing_field(litellm_llms::Error::MissingField("usage").into())]
-    #[case::unsupported(Error::Unsupported("non-text response content block"))]
-    #[case::invalid_request(Error::invalid_request(litellm_llms::ErrorDetail::Expected {
-        subject: "whatever",
-        expected: "anything else",
-    }))]
-    #[case::auth(Error::Auth(litellm_auth::Error::InvalidHeader))]
-    fn response_errors_collapse_to_a_fault_that_can_only_mean_already_sent(
-        #[case] original: Error,
-    ) {
-        let collapsed = as_response_error(original);
-        assert!(collapsed.is_response(), "{collapsed:?}");
-        assert!(!collapsed.is_request(), "{collapsed:?}");
-        assert!(!collapsed.is_unsupported(), "{collapsed:?}");
-    }
-
-    #[rstest::rstest]
-    fn a_response_fault_is_not_wrapped_twice() {
-        let original = Error::invalid_response(litellm_llms::ErrorDetail::MissingField {
-            subject: "response",
-            field: "usage",
-        });
-        let report = litellm_error::Report::new(&as_response_error(original)).to_string();
-        assert!(!report.contains("chat completions response"), "{report}");
-    }
-
-    #[test]
-    fn a_provider_answer_keeps_its_status_and_body() {
-        let upstream = Error::from(litellm_http::Error::upstream(429, "slow down".into()));
-        assert_eq!(
-            as_response_error(upstream).upstream_response(),
-            Some((429, "slow down"))
-        );
     }
 }

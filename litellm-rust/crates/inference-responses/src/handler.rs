@@ -134,6 +134,7 @@ pub(super) async fn execute(
                 .transform_response_api_response(value)
                 .map(ResponsesOutput::Complete)
                 .map_err(Error::from)
+                .map_err(Error::after_send)
         },
     )
     .await
