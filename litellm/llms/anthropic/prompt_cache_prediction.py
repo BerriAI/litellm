@@ -24,11 +24,11 @@ from litellm.llms.anthropic.common_utils import (
 )
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
-from litellm.llms.anthropic.pass_through.messages.utils import AnthropicMessagesRequestUtils, prepare_native_messages
+from litellm.llms.anthropic.messages.native.utils import AnthropicMessagesRequestUtils, prepare_native_messages
 from litellm.router_utils.baseline_request import (
     BASELINE_PARAMETERS,
     capture_baseline_parameters,

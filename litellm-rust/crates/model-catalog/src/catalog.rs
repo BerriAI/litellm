@@ -20,11 +20,15 @@ pub struct IntegrityLimits {
     pub min_reference_ratio: f64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AliasIssue {
+    #[error("model {model:?} has aliases that are not an array")]
     InvalidList { model: String },
+    #[error("model {model:?} has an alias that is not a string")]
     InvalidName { model: String },
+    #[error("alias {alias:?} of model {model:?} is already a model name")]
     CanonicalCollision { model: String, alias: String },
+    #[error("alias {alias:?} of model {model:?} is already an alias of another model")]
     AliasCollision { model: String, alias: String },
 }
 

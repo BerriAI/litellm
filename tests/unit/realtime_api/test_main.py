@@ -528,6 +528,29 @@ async def test_bearer_health_check_sends_stored_credential_as_bearer_token(
 
 
 @pytest.mark.asyncio
+async def test_bearer_health_check_sends_the_secret_behind_an_oidc_credential(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    token: Final = tmp_path / "token"
+    token.write_text("sk-from-token-file")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="voice-sa", credential_values={"api_key": f"oidc/file/{token}"}, credential_info={})],
+    )
+    connect: Final = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gpt-realtime",
+            custom_llm_provider="openai",
+            api_key=None,
+            model_params={"model": "openai/gpt-realtime", "litellm_credential_name": "voice-sa"},
+        )
+    assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer sk-from-token-file"}
+
+
+@pytest.mark.asyncio
 async def test_azure_health_check_probes_ga_transcription_url_for_transcription_model(local_model_cost_map):
     """Regression for LIT-6240: transcription-only models (mode audio_transcription
     in the cost map) are GA-only and 400 on the beta path, so the health probe

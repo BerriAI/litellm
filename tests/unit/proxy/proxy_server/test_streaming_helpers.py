@@ -2322,6 +2322,7 @@ async def _queue_streaming(monkeypatch, interval, delay=0.3, fails_with=None):
 
     router = MagicMock()
     router.get_model_list.return_value = []
+    router.split_request_priority.return_value = (0, {})
 
     async def _schedule_after_the_scheduler_queue_drains(**kwargs):
         await asyncio.sleep(delay)

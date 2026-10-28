@@ -32,12 +32,14 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
+from litellm.caching.dual_cache import DualCache
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
-from litellm.litellm_core_utils.tool_fields import first_validation_error
+from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, first_validation_error
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
     build_blocked_response,
@@ -54,6 +56,7 @@ from litellm.proxy.common_request_processing import (
     cost_headers,
     create_response,
     resolve_counted_tool_fields,
+    resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.error_body_call_id import error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -67,6 +70,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_type_for_status,
 )
+from litellm.proxy.common_utils.token_count_log import rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
@@ -78,7 +82,9 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     request_tags_from_request_data,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
-from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.proxy.utils import count_request_input_tokens, handle_exception_on_proxy
+from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
+from litellm.responses.litellm_completion_transformation.count_request import MODEL_FILE_ID_MAPPING_FIELD
 from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -89,10 +95,9 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.token_count import TokenCountSourceFields
-from litellm.types.utils import TokenCountResponse
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, TokenCountResponse
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.utils import ProxyLogging
 
 router: Final = APIRouter()
@@ -530,6 +535,14 @@ async def cursor_model_list(
     return await model_list(user_api_key_dict=user_api_key_dict)
 
 
+def _dispatched_prompt_token_counter(logging_obj: LiteLLMLoggingObj) -> Callable[[], int]:
+    return lambda: count_request_input_tokens(
+        model=str(logging_obj.model_call_details.get("model") or ""),
+        request_input=messages_since_newest_compaction(logging_obj.model_call_details.get("messages")),
+        system_input=None,
+    )
+
+
 @router.post(
     "/cursor/chat/completions",
     dependencies=[
@@ -654,6 +667,11 @@ async def cursor_chat_completions(
                 model=request_data.get("model", ""),
                 custom_llm_provider=None,
                 logging_obj=logging_obj,
+                count_prompt_tokens=(
+                    _dispatched_prompt_token_counter(logging_obj)
+                    if isinstance(logging_obj, LiteLLMLoggingObj)
+                    else None
+                ),
             )
             # Use async_data_generator to format as SSE
             return async_data_generator(
@@ -661,6 +679,7 @@ async def cursor_chat_completions(
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
                 request=request,
+                dispatched_call_type=processor.route_type,
             )
         # Otherwise, use the default generator
         return async_data_generator(
@@ -668,6 +687,7 @@ async def cursor_chat_completions(
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
             request=request,
+            dispatched_call_type=processor.route_type,
         )
 
     try:
@@ -1388,13 +1408,20 @@ class _TokenCountPayload(TypedDict):
 
 
 class _TokenCounter(Protocol):
-    def __call__(self, request: TokenCountRequest, call_endpoint: bool) -> Awaitable[TokenCountResponse]: ...
+    def __call__(
+        self,
+        *,
+        request: TokenCountRequest,
+        call_endpoint: bool,
+        responses_request: Mapping[str, object] | None,
+        litellm_call_id: str | None,
+    ) -> Awaitable[TokenCountResponse]: ...
 
 
 def _proxy_token_counter() -> _TokenCounter:
-    from litellm.proxy.proxy_server import token_counter
+    from litellm.proxy.proxy_server import count_request_tokens
 
-    return token_counter
+    return count_request_tokens
 
 
 _token_counter_dep: Final = Depends(_proxy_token_counter)
@@ -1407,6 +1434,67 @@ def _proxy_llm_router() -> Router | None:
 
 
 _llm_router_dep: Final = Depends(_proxy_llm_router)
+
+
+def _proxy_response_id_security() -> ResponsesIDSecurity | None:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    security_hook: Final = proxy_logging_obj.get_proxy_hook("responses_id_security")
+    return security_hook if isinstance(security_hook, ResponsesIDSecurity) else None
+
+
+_response_id_security_dep: Final = Depends(_proxy_response_id_security)
+
+
+class _ManagedFileAccess(Protocol):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: Literal["aresponses"],
+    ) -> object: ...
+
+
+def _proxy_managed_files_hook() -> _ManagedFileAccess | None:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    return proxy_logging_obj.get_proxy_hook("managed_files")
+
+
+_managed_files_hook_dep: Final = Depends(_proxy_managed_files_hook)
+
+
+async def _with_managed_file_id_mapping(
+    data: Mapping[str, object], managed_files: _ManagedFileAccess | None, user_api_key_dict: UserAPIKeyAuth
+) -> Mapping[str, object]:
+    caller_fields: Final = {name: value for name, value in data.items() if name != MODEL_FILE_ID_MAPPING_FIELD}
+    if managed_files is None:
+        return caller_fields
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    hooked: Final = dict(caller_fields)
+    try:
+        await managed_files.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=user_api_key_cache, data=hooked, call_type="aresponses"
+        )
+    except HTTPException as e:
+        raise ProxyException(message=str(e.detail), type="permission_error", param=None, code=e.status_code) from e
+    mapping: Final = hooked.get(MODEL_FILE_ID_MAPPING_FIELD)
+    return caller_fields if mapping is None else {**caller_fields, MODEL_FILE_ID_MAPPING_FIELD: mapping}
+
+
+def _with_authorized_previous_response(
+    data: Mapping[str, object], security: ResponsesIDSecurity | None, user_api_key_dict: UserAPIKeyAuth
+) -> Mapping[str, object]:
+    previous_response_id: Final = data.get("previous_response_id")
+    if security is None or not isinstance(previous_response_id, str) or not previous_response_id:
+        return data
+    try:
+        authorized_id: Final = security.authorize_response_id(previous_response_id, user_api_key_dict)
+    except HTTPException as e:
+        raise ProxyException(message=str(e.detail), type="permission_error", param=None, code=e.status_code) from e
+    return {**data, "previous_response_id": authorized_id, ADDRESSED_RESPONSE_ID_FIELD: previous_response_id}
 
 
 def _responses_invalid_request_response(message: str, param: str | None, code: str | None) -> JSONResponse:
@@ -1520,6 +1608,7 @@ def _responses_input_as_token_count_messages(
     transformed: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
         input=input_value,
         responses_api_request=request_params,
+        only_since_compaction=True,
     )
     return tuple(
         message if isinstance(message, dict) else message.model_dump(exclude_none=True) for message in transformed
@@ -1546,6 +1635,8 @@ async def responses_input_tokens(
     token_counter: _TokenCounter = _token_counter_dep,
     llm_router: Router | None = _llm_router_dep,
     user_api_key_dict: UserAPIKeyAuth = _user_api_key_auth_dep,
+    response_id_security: ResponsesIDSecurity | None = _response_id_security_dep,
+    managed_files: _ManagedFileAccess | None = _managed_files_hook_dep,
 ):
     """
     Count the input tokens of a Responses API request without calling the model.
@@ -1564,26 +1655,35 @@ async def responses_input_tokens(
 
     Returns: `{"object": "response.input_tokens", "input_tokens": <count>}`
     """
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     data: Final = await read_request_body(request=request)
     model_name: Final = data.get("model")
     input_value: Final = data.get("input")
     if not isinstance(model_name, str) or not model_name:
-        return _missing_responses_param_response("model")
+        return rejected_token_count(_missing_responses_param_response("model"), litellm_call_id, None)
     if input_value is None:
-        return _missing_responses_param_response("input")
+        return rejected_token_count(_missing_responses_param_response("input"), litellm_call_id, model_name)
     if isinstance(input_value, (str, list)) and not input_value:
-        return _responses_invalid_request_response(
-            message="""One of "input" or "previous_response_id" or 'prompt' or 'conversation' must be provided.""",
-            param=None,
-            code="missing_required_parameter",
+        return rejected_token_count(
+            _responses_invalid_request_response(
+                message="""One of "input" or "previous_response_id" or 'prompt' or 'conversation' must be provided.""",
+                param=None,
+                code="missing_required_parameter",
+            ),
+            litellm_call_id,
+            model_name,
         )
 
     counted_fields: Final = {
-        name: data[name] for name in ("model", "tools", "drop_params", "additional_drop_params") if name in data
+        name: data[name] for name in ("model", "drop_params", "additional_drop_params", *TOOL_FIELDS) if name in data
     }
     token_fields: Final = resolve_counted_tool_fields(counted_fields, llm_router, user_api_key_dict.team_id)
     if isinstance(token_fields, ProxyException):
-        return _responses_invalid_request_response(message=token_fields.message, param=token_fields.param, code=None)
+        return rejected_token_count(
+            _responses_invalid_request_response(message=token_fields.message, param=token_fields.param, code=None),
+            litellm_call_id,
+            model_name,
+        )
 
     try:
         payload: Final[_TokenCountPayload] = {
@@ -1596,16 +1696,45 @@ async def responses_input_tokens(
         }
         token_request: Final = TokenCountRequest.model_validate(payload)
     except ValidationError as e:
-        return _responses_invalid_request_response(
-            message=first_validation_error(e), param=str(e.errors(include_url=False)[0]["loc"][0]), code=None
+        return rejected_token_count(
+            _responses_invalid_request_response(
+                message=first_validation_error(e), param=str(e.errors(include_url=False)[0]["loc"][0]), code=None
+            ),
+            litellm_call_id,
+            model_name,
         )
     except Exception as e:
-        return _responses_invalid_request_response(
-            message=f"Invalid request for token counting: {e}", param=None, code=None
+        return rejected_token_count(
+            _responses_invalid_request_response(
+                message=f"Invalid request for token counting: {e}", param=None, code=None
+            ),
+            litellm_call_id,
+            model_name,
         )
 
+    request_fields: Final = _PROXY_SERVER_REQUEST_ADAPTER.validate_python(data)
     try:
-        token_response: Final = await token_counter(request=token_request, call_endpoint=True)
+        responses_request: Final = await _with_managed_file_id_mapping(
+            _with_authorized_previous_response(
+                {
+                    **{name: value for name, value in request_fields.items() if name not in counted_fields},
+                    **token_fields,
+                },
+                response_id_security,
+                user_api_key_dict,
+            ),
+            managed_files,
+            user_api_key_dict,
+        )
+    except ProxyException as e:
+        raise rejected_token_count(e, litellm_call_id, model_name)
+    try:
+        token_response: Final = await token_counter(
+            request=token_request,
+            call_endpoint=True,
+            responses_request=responses_request,
+            litellm_call_id=litellm_call_id,
+        )
     except ProxyException as e:
         if e.type != _PROVIDER_COUNT_ERROR_TYPE:
             raise
@@ -2020,7 +2149,7 @@ def _without_untrusted_metadata(key: str, value: object) -> object:
         if not name.startswith("user_api_key_")
         and name not in _UNTRUSTED_METADATA_CONTROL_FIELDS
         and name not in _CLIENT_PRICING_METADATA_FIELDS
-        and name not in ("headers", "pii_tokens", *_CLIENT_GUARDRAIL_SELECTORS)
+        and name not in ("headers", "pii_tokens", _GUARDRAIL_INFORMATION_KEY, *_CLIENT_GUARDRAIL_SELECTORS)
     }
 
 

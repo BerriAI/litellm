@@ -158,6 +158,14 @@ def declared_authenticating_provider(model: str | None, custom_llm_provider: str
     return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
 
 
+def resolve_model_and_provider_for_metadata(model: str, custom_llm_provider: str | None = None) -> tuple[str, str]:
+    declared: Final = declared_authenticating_provider(model, custom_llm_provider)
+    if declared is not None:
+        return model.removeprefix(f"{declared}/"), declared
+    resolved_model, resolved_provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    return resolved_model, resolved_provider
+
+
 def inferred_provider(model: str | None) -> str | None:
     if not model:
         return None
@@ -842,7 +850,9 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
             custom_llm_provider,
-        ) = litellm.ChatGPTConfig().get_openai_compatible_provider_info(model, api_base, api_key, custom_llm_provider)
+        ) = litellm.ChatGPTConfig().get_openai_compatible_provider_info(
+            model, api_base, api_key, custom_llm_provider, litellm_params
+        )
     elif custom_llm_provider == "novita":
         api_base = api_base or get_secret("NOVITA_API_BASE") or "https://api.novita.ai/v3/openai"
         dynamic_api_key = api_key or get_secret_str("NOVITA_API_KEY")
@@ -902,6 +912,10 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.MorphChatConfig().get_openai_compatible_provider_info(api_base, api_key)
+    elif custom_llm_provider == "opencode_go":
+        from litellm.llms.opencode.common_utils import go_api_base, go_api_key
+
+        return model, custom_llm_provider, go_api_key(api_key), go_api_base(api_base, model)
     elif custom_llm_provider == "lambda_ai":
         (
             api_base,
@@ -972,3 +986,9 @@ def _get_openai_compatible_provider_info(
     if dynamic_api_key is None and api_key is not None:
         dynamic_api_key = api_key
     return model, custom_llm_provider, dynamic_api_key, api_base
+
+
+def get_provider_affinity_header(api_base: str | None) -> str | None:
+    from litellm.llms.opencode.transformation import OpenCodeProviderAdapter
+
+    return OpenCodeProviderAdapter().get_provider_affinity_header(api_base)

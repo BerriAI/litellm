@@ -22,7 +22,8 @@ from botocore.credentials import Credentials
 
 import litellm
 from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
-from litellm.llms.bedrock.files.transformation import BedrockJsonlFilesTransformation
+from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.files.transformation import BedrockFilesConfig, BedrockJsonlFilesTransformation
 from tests.unit.proxy.conftest import httpx_transport
 
 
@@ -36,9 +37,6 @@ class TestBedrockFilesTransformation:
         Validates that the transformation correctly converts OpenAI batch completion
         format to Bedrock's expected batch format with proper recordId and modelInput structure.
         """
-        # Initialize the transformation class
-        transformation = BedrockJsonlFilesTransformation()
-
         # Load input JSONL file
         input_file_path = os.path.join(
             os.path.dirname(__file__), "input_batch_completions.jsonl"
@@ -52,8 +50,8 @@ class TestBedrockFilesTransformation:
                     openai_jsonl_content.append(json.loads(line))
 
         # Transform the content
-        bedrock_jsonl_content = transformation._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-            openai_jsonl_content=openai_jsonl_content
+        bedrock_jsonl_content: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            openai_jsonl_content
         )
 
         # Basic validation
@@ -408,9 +406,9 @@ class TestBedrockFilesTransformation:
     def test_batch_object_name_sanitizes_model_path(self):
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
-        config = BedrockFilesConfig()
-        object_name = config._get_s3_object_name_from_batch_jsonl(
-            [{"body": {"model": "bedrock/../../secret:model"}}]
+        object_name: Final = BedrockFilesConfig().get_object_name(
+            {"content": json.dumps({"body": {"model": "bedrock/../../secret:model"}}).encode(), "filename": "b.jsonl"},
+            purpose="batch",
         )
 
         assert object_name.startswith("litellm-bedrock-files-")
@@ -4376,3 +4374,205 @@ async def test_async_create_file(
         "s3://litellm-proxy-941277531214/litellm-bedrock-files-"
     )
     assert file_obj.filename.endswith(".jsonl")
+
+
+_VALID_BATCH_LINE: Final = json.dumps(
+    {
+        "custom_id": "req-1",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "bedrock/amazon.nova-pro-v1:0",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 10,
+        },
+    }
+)
+_MALFORMED_BATCH_JSONL: Final = f"{_VALID_BATCH_LINE}\n\n{{not json\n".encode()
+
+
+class TestMalformedBatchJsonl:
+    """A malformed line in a batch input file is the client's mistake, so it must come back as a 400 that names the
+    line, not escape as a JSONDecodeError the proxy reports as a 500 (#45060)."""
+
+    def test_create_file_request_rejects_a_malformed_line_with_a_400(self):
+        from litellm.llms.bedrock.common_utils import BedrockError
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        with pytest.raises(BedrockError) as exc_info:
+            BedrockFilesConfig().transform_create_file_request(
+                model="amazon.nova-pro-v1:0",
+                create_file_data={
+                    "file": ("batch.jsonl", _MALFORMED_BATCH_JSONL, "application/jsonl"),
+                    "purpose": "batch",
+                },
+                optional_params={
+                    "aws_access_key_id": "test-key-id",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-west-2",
+                },
+                litellm_params={"s3_bucket_name": "litellm-batch-bucket"},
+            )
+        assert exc_info.value.status_code == 400
+        assert "line 3" in exc_info.value.message
+
+    def test_file_content_conversion_rejects_a_malformed_line_with_a_400(self):
+        from litellm.llms.bedrock.common_utils import BedrockError
+
+        with pytest.raises(BedrockError) as exc_info:
+            BedrockJsonlFilesTransformation().transform_openai_file_content_to_bedrock_file_content(
+                _MALFORMED_BATCH_JSONL
+            )
+        assert exc_info.value.status_code == 400
+        assert "line 3" in exc_info.value.message
+
+    @pytest.mark.parametrize("content_type", ["application/jsonl", "application/x-jsonl"])
+    @pytest.mark.parametrize(
+        "file_content",
+        [_MALFORMED_BATCH_JSONL, f"{_VALID_BATCH_LINE}\n\n[1, 2]\n".encode()],
+        ids=["invalid-json", "array-line"],
+    )
+    def test_create_file_rejects_a_malformed_line_before_uploading(self, content_type: str, file_content: bytes):
+        """application/x-jsonl is not on the batch MIME allowlist, so the upload skips conversion for it; the line
+        check must still run so the broken file is rejected instead of landing in S3 unchanged."""
+        from litellm.llms.bedrock.common_utils import BedrockError
+
+        with respx.mock as router:
+            any_request: Final = router.route()
+            with pytest.raises(BedrockError) as exc_info:
+                litellm.create_file(
+                    file=("batch.jsonl", file_content, content_type),
+                    purpose="batch",
+                    custom_llm_provider="bedrock",
+                    model="bedrock/amazon.nova-pro-v1:0",
+                    s3_bucket_name="litellm-batch-bucket",
+                    aws_region_name="us-west-2",
+                    aws_access_key_id="test-key-id",
+                    aws_secret_access_key="test-secret",
+                )
+        assert exc_info.value.status_code == 400
+        assert "line 3" in exc_info.value.message
+        assert not any_request.called
+
+
+_VALID_BATCH_RECORD: Final = json.loads(_VALID_BATCH_LINE)
+
+
+def _batch_line(body: object) -> str:
+    return json.dumps({**_VALID_BATCH_RECORD, "body": body})
+
+
+def _batch_line_with_body(field: str, value: object) -> str:
+    return _batch_line({**_VALID_BATCH_RECORD["body"], field: value})
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("file_content", "expected_message"),
+    [
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n[1, 2]\n".encode(), "Batch input file line 2 is not a JSON object", id="array-line"
+        ),
+        pytest.param(
+            f"[1, 2]\n{_VALID_BATCH_LINE}\n".encode(), "Batch input file line 1 is not a JSON object", id="array-first"
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_batch_line(None)}\n".encode(),
+            "Batch input file line 2 has a body that is missing or not a JSON object",
+            id="null-body",
+        ),
+        pytest.param(
+            f"{_batch_line('hello')}\n".encode(),
+            "Batch input file line 1 has a body that is missing or not a JSON object",
+            id="string-body",
+        ),
+        pytest.param(
+            f"{_batch_line_with_body('model', 123)}\n".encode(),
+            "Batch input file line 1 has a body.model that is not a string",
+            id="int-model",
+        ),
+        pytest.param(
+            f"{_batch_line_with_body('model', None)}\n".encode(),
+            "Batch input file line 1 has a body.model that is not a string",
+            id="null-model",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_batch_line_with_body('messages', 'hi')}\n".encode(),
+            "Batch input file line 2 could not be converted to a Bedrock batch record",
+            id="string-messages",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{'[' * 1_000_000}{']' * 1_000_000}\n".encode(),
+            "Batch input file line 2 could not be parsed",
+            id="deep-nesting",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n".encode() + b'{"custom_id": "\xff"}\n',
+            "Batch input file line 2 is not valid UTF-8",
+            id="non-utf8",
+        ),
+    ],
+)
+async def test_create_file_rejects_a_malformed_batch_line_with_a_400_before_uploading(
+    respx_mock: respx.MockRouter, file_content: bytes, expected_message: str
+) -> None:
+    put_route: Final = respx_mock.put(url__regex=r"https://s3\..+").respond(status_code=200)
+
+    with pytest.raises(BedrockError) as exc_info:
+        await litellm.acreate_file(
+            file=("batch.jsonl", file_content, "application/jsonl"),
+            purpose="batch",
+            custom_llm_provider="bedrock",
+            s3_bucket_name="litellm-batch-bucket",
+            aws_region_name="us-west-2",
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.message.startswith(expected_message)
+    assert not put_route.called
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
+async def test_create_file_accepts_a_batch_file_with_a_utf8_byte_order_mark(respx_mock: respx.MockRouter) -> None:
+    put_route: Final = respx_mock.put(url__regex=r"https://s3\..+").respond(status_code=200)
+
+    await litellm.acreate_file(
+        file=("batch.jsonl", f"\ufeff{_VALID_BATCH_LINE}\n".encode(), "application/jsonl"),
+        purpose="batch",
+        custom_llm_provider="bedrock",
+        s3_bucket_name="litellm-batch-bucket",
+        aws_region_name="us-west-2",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+    )
+
+    uploaded_record: Final = json.loads(put_route.calls.last.request.content)
+    assert uploaded_record["recordId"] == _VALID_BATCH_RECORD["custom_id"]
+    assert "/litellm-bedrock-files-amazon.nova-pro-v1-0-" in str(put_route.calls.last.request.url)
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
+async def test_create_file_uploads_a_bedrock_format_batch_file_unchanged_when_its_mime_type_skips_conversion(
+    respx_mock: respx.MockRouter,
+) -> None:
+    put_route: Final = respx_mock.put(url__regex=r"https://s3\..+").respond(status_code=200)
+    bedrock_line: Final = json.dumps(
+        {"recordId": "req-1", "modelInput": {"messages": [{"role": "user", "content": [{"text": "Hello"}]}]}}
+    )
+
+    await litellm.acreate_file(
+        file=("batch.jsonl", f"{bedrock_line}\n".encode(), "application/x-jsonl"),
+        purpose="batch",
+        custom_llm_provider="bedrock",
+        s3_bucket_name="litellm-batch-bucket",
+        aws_region_name="us-west-2",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+    )
+
+    assert put_route.calls.last.request.content == f"{bedrock_line}\n".encode()

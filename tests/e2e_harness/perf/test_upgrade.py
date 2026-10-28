@@ -7,7 +7,14 @@ import pytest
 from cases.small_bodies_5rps import CASE
 from memory_readings import RssCapture, RssReading
 from setup.observe import Observation, evaluate
-from setup.upgrade import MAX_TRAFFIC_SECONDS, UpgradeMonitor, matched_response_ids, postgres_failures, upgrade_case
+from setup.upgrade import (
+    MAX_TRAFFIC_SECONDS,
+    UpgradeMonitor,
+    matched_response_ids,
+    postgres_failures,
+    upgrade_case,
+    upgrade_properties,
+)
 from setup.upgrade_worker import UpgradeState
 from setup.wire import PlanProgress, WireRecord, response_id
 
@@ -295,22 +302,33 @@ def test_invalid_200_is_not_an_allowed_non_200(failed: WireRecord) -> None:
         _ = Probe().monitor().poll((failed,))
 
 
+def _ceiling(metric: str, percentile: int | None = None) -> float:
+    return next(
+        limit.max
+        for limit in upgrade_case().limits
+        if limit.metric == metric and limit.percentile == percentile and limit.max is not None
+    )
+
+
 @pytest.mark.parametrize(
-    "failures,overhead,ttft,growth,expected",
+    "over,expected",
     [
-        (3, 0.29, 3.7, 100, ()),
-        (4, 0.29, 3.7, 100, ("unexpected_status_count",)),
-        (3, 0.30, 3.7, 100, ("gateway_added_seconds percentile 50",)),
-        (3, 0.29, 3.8, 100, ("time_to_first_token_seconds percentile 99",)),
-        (3, 0.29, 3.7, 101, ("memory_growth_megabytes",)),
+        ("", ()),
+        ("unexpected_status_count", ("unexpected_status_count",)),
+        ("gateway_added_seconds", ("gateway_added_seconds percentile 50",)),
+        ("time_to_first_token_seconds", ("time_to_first_token_seconds percentile 99",)),
+        ("memory_growth_megabytes", ("memory_growth_megabytes",)),
     ],
 )
 def test_upgrade_verdict_uses_regular_limits_without_cpu_or_datastore_samples(
-    failures: int, overhead: float, ttft: float, growth: float, expected: tuple[str, ...]
+    over: str, expected: tuple[str, ...]
 ) -> None:
-    nonstream: Final = tuple(
-        record(i).model_copy(update={"total_s": overhead, "mock_delay_s": 0}) for i in range(100)
-    )
+    """Each sample sits exactly on the case's ceiling, so only the one nudged past it goes over."""
+    failures: Final = int(_ceiling("unexpected_status_count")) + (over == "unexpected_status_count")
+    overhead: Final = _ceiling("gateway_added_seconds", 50) * (1.01 if over == "gateway_added_seconds" else 1)
+    ttft: Final = _ceiling("time_to_first_token_seconds", 99) * (1.01 if over == "time_to_first_token_seconds" else 1)
+    growth: Final = _ceiling("memory_growth_megabytes") + (over == "memory_growth_megabytes")
+    nonstream: Final = tuple(record(i).model_copy(update={"total_s": overhead, "mock_delay_s": 0}) for i in range(100))
     stream: Final = record(100).model_copy(update={"stream": True, "first_token_s": ttft})
     observed: Final = Observation(
         records=(*nonstream, stream, *(failed_record(i) for i in range(101, 101 + failures))),
@@ -323,3 +341,35 @@ def test_upgrade_verdict_uses_regular_limits_without_cpu_or_datastore_samples(
     rows, exceeded = evaluate(upgrade_case(), observed)
     assert tuple(row.label for row in rows if row.over or row.missing) == expected
     assert len(exceeded) == len(expected)
+
+
+def test_upgrade_properties_carry_the_upgrade_timings_and_what_the_monitor_saw() -> None:
+    state: Final = UpgradeState(
+        phase="complete",
+        started_at=0,
+        schema_seconds=12.5,
+        index_seconds=240.25,
+        required_indexes=("idx_a", "idx_b"),
+        required_migrations=("20260101_a",),
+        pending_indexes=("idx_b",),
+        baseline_rows={},
+    )
+    monitor: Final = UpgradeMonitor(
+        state=lambda: state,
+        check_metrics=lambda: None,
+        read_activity=lambda: ([], 0),
+        read_persisted=lambda records: frozenset(),
+        start_indexes=lambda: None,
+    )
+    monitor.overlap_writes = 37
+    monitor.max_lock_waiters = 3
+    monitor.pending = (record(0), record(1))
+
+    assert dict(upgrade_properties(state, monitor)) == {
+        "perf_upgrade_schema_seconds": 12.5,
+        "perf_upgrade_index_seconds": 240.25,
+        "perf_upgrade_overlap_writes": 37,
+        "perf_upgrade_max_lock_waiters": 3,
+        "perf_upgrade_pending_indexes": 1,
+        "perf_upgrade_unmatched_requests": 2,
+    }
