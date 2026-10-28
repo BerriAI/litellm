@@ -14,6 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.env_utils import get_env_float
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -170,7 +171,7 @@ LOCAL_OIDC_SECRET_PREFIXES: Final = ("oidc/file/", "oidc/env/")
 GOOGLE_OIDC_SECRET_PREFIX: Final = "oidc/google/"
 API_KEY_OIDC_SECRET_PREFIXES: Final = (*LOCAL_OIDC_SECRET_PREFIXES, GOOGLE_OIDC_SECRET_PREFIX)
 _GOOGLE_METADATA_DEFAULT_HOST: Final = "metadata.google.internal"
-_GOOGLE_METADATA_DEFAULT_TIMEOUT_SECONDS: Final = "3"
+_GOOGLE_METADATA_DEFAULT_TIMEOUT_SECONDS: Final = 3.0
 _GOOGLE_TOKEN_UNAVAILABLE: Final = "the metadata server did not return an ID token"
 
 
@@ -180,7 +181,8 @@ def _google_metadata_identity_url() -> str:
 
 
 def _google_metadata_timeout() -> float:
-    return float(os.getenv("GCE_METADATA_TIMEOUT") or _GOOGLE_METADATA_DEFAULT_TIMEOUT_SECONDS)
+    seconds: Final = get_env_float("GCE_METADATA_TIMEOUT", _GOOGLE_METADATA_DEFAULT_TIMEOUT_SECONDS)
+    return seconds if seconds > 0 else _GOOGLE_METADATA_DEFAULT_TIMEOUT_SECONDS
 
 
 class GoogleMetadataStatusError(ValueError):

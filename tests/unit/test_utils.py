@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import queue
-import socket
 import threading
 import time
 import uuid
@@ -7576,30 +7575,66 @@ async def test_an_oidc_google_api_key_token_cached_when_the_call_starts_is_sent_
 
 
 @pytest.mark.asyncio
-async def test_a_hung_metadata_server_fails_an_oidc_google_api_key_call_with_a_503_and_leaves_the_default_executor_free(
+async def test_a_pending_oidc_google_metadata_fetch_leaves_the_default_executor_free(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     _, reference = _google_reference()
     monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
-    monkeypatch.setenv("GCE_METADATA_TIMEOUT", "1")
     loop: Final = asyncio.get_running_loop()
     loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    fetch_started: Final[queue.SimpleQueue[int]] = queue.SimpleQueue()
+    release: Final = threading.Event()
 
-    with socket.create_server(("127.0.0.1", 0)) as never_answering, respx.mock(assert_all_called=False) as upstream:
-        monkeypatch.setenv("GCE_METADATA_HOST", f"127.0.0.1:{never_answering.getsockname()[1]}")
-        upstream.route(host="127.0.0.1").pass_through()
+    def pending_metadata(_request: httpx.Request) -> httpx.Response:
+        fetch_started.put(threading.get_ident())
+        release.wait(timeout=30)
+        return httpx.Response(500, text="metadata server unavailable")
+
+    with ThreadPoolExecutor(max_workers=1) as observer, respx.mock(assert_all_called=False) as upstream:
+        upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=pending_metadata)
         chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
         call: Final = asyncio.ensure_future(_ping_vllm_through("async", "vllm-sa"))
-        await asyncio.sleep(0.2)
-        other_work: Final = await asyncio.wait_for(loop.run_in_executor(None, lambda: "done"), timeout=0.5)
+        try:
+            await asyncio.wait_for(loop.run_in_executor(observer, fetch_started.get), timeout=30)
+            other_work: Final = await asyncio.wait_for(loop.run_in_executor(None, lambda: "done"), timeout=30)
+        finally:
+            release.set()
         with pytest.raises(litellm.ServiceUnavailableError) as excinfo:
-            await asyncio.wait_for(call, timeout=10)
+            await call
 
     assert other_work == "done"
     assert excinfo.value.status_code == 503
-    assert "the metadata server did not return an ID token" in excinfo.value.message
     assert chat.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("configured", "bound"),
+    [(None, 3.0), ("1.5", 1.5), ("three seconds", 3.0), ("0", 3.0), ("-2", 3.0)],
+    ids=["unset", "configured", "malformed", "zero", "negative"],
+)
+def test_oidc_google_api_key_metadata_fetch_waits_at_most_gce_metadata_timeout_seconds(
+    monkeypatch: pytest.MonkeyPatch, configured: str | None, bound: float
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    if configured is None:
+        monkeypatch.delenv("GCE_METADATA_TIMEOUT", raising=False)
+    else:
+        monkeypatch.setenv("GCE_METADATA_TIMEOUT", configured)
+    monkeypatch.setattr(time, "time", lambda: _CLOCK_START)
+    audience, reference = _google_reference()
+    monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
+    token: Final = _google_id_token(audience, _CLOCK_START)
+
+    with respx.mock(assert_all_called=True) as upstream:
+        metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).respond(200, text=token)
+        chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
+        litellm.completion(model=_VLLM_MODEL, messages=_PING, litellm_credential_name="vllm-sa")
+        sent: Final = chat.calls.last.request.headers["Authorization"]
+        waits: Final = metadata.calls.last.request.extensions["timeout"]
+
+    assert sent == f"Bearer {token}"
+    assert waits == {"connect": bound, "read": bound, "write": bound, "pool": bound}
 
 
 def test_an_oidc_google_api_key_sent_with_the_call_goes_upstream_as_written_without_a_metadata_fetch() -> None:

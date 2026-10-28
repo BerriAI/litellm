@@ -14741,6 +14741,13 @@ async def _with_resolved_api_key(litellm_params: object) -> Mapping[str, object]
             param="model",
             code=401,
         ) from e
+    except litellm.ServiceUnavailableError as e:
+        raise ProxyException(
+            message=e.message,
+            type="service_unavailable",
+            param="model",
+            code=503,
+        ) from e
 
 
 async def _with_resolved_credentials(deployment: Mapping[str, object] | None) -> dict[str, object] | None:

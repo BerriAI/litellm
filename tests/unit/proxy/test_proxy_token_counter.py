@@ -280,6 +280,39 @@ async def test_token_counter_reads_an_oidc_api_key_only_when_it_calls_the_provid
 
 
 @pytest.mark.asyncio
+async def test_token_counter_answers_503_when_the_metadata_server_behind_an_oidc_google_api_key_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    audience: Final = f"https://count.test/{uuid.uuid4().hex}"
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "claude",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": f"oidc/google/{audience}"},
+                }
+            ]
+        ),
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.get(url__regex=r"/computeMetadata/v1/instance/service-accounts/default/identity").respond(
+            500, text="metadata server unavailable"
+        )
+        with pytest.raises(ProxyException) as excinfo:
+            await token_counter(
+                request=TokenCountRequest(model="claude", messages=[{"role": "user", "content": "hello"}]),
+                call_endpoint=True,
+            )
+
+    assert excinfo.value.code == "503"
+    assert "oidc/google secret reference could not be resolved" in excinfo.value.message
+    assert audience.removeprefix("https://") not in excinfo.value.message
+
+
+@pytest.mark.asyncio
 async def test_native_openai_responses_count_sends_the_token_an_oidc_api_key_points_to(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

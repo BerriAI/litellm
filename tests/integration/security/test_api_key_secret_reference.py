@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -58,6 +59,7 @@ _GOOGLE_AUDIENCES: Final = MappingProxyType(
     }
 )
 _UNAVAILABLE_AUDIENCE: Final = "https://vllm-unavailable.example.test"
+_HUNG_AUDIENCE: Final = "https://vllm-hung.example.test"
 _IDENTITY_PATH: Final = "/computeMetadata/v1/instance/service-accounts/default/identity"
 _RUN_SECRETS_TOKEN: Final = "/run/secrets/wif-absent-token"
 _SOURCES: Final = ("config_credential", "config_inline", "db_credential", "db_inline")
@@ -152,6 +154,8 @@ def _metadata_server(google: _Google) -> Callable[[Request], Reply]:
             return Reply(status=404, body=b"not found", content_type="text/plain")
         if audience == _UNAVAILABLE_AUDIENCE:
             return Reply(status=503, body=b"metadata server unavailable", content_type="text/plain")
+        if audience == _HUNG_AUDIENCE:
+            return Reply(chunks=(b"never sent",), gate_before_first=threading.Event(), content_type="text/plain")
         return Reply(body=google.token(audience).encode(), content_type="text/plain")
 
     return respond
@@ -287,6 +291,14 @@ def _config(directory: Path, secrets: _Secrets, provider: str) -> Path:
                 {"model": _GOOGLE_MODEL, "api_key": _google_reference(_UNAVAILABLE_AUDIENCE), "api_base": provider},
             ),
             _deployment(
+                "wif-google-unavailable-count",
+                {"model": _CHAT_MODEL, "api_key": _google_reference(_UNAVAILABLE_AUDIENCE), "api_base": provider},
+            ),
+            _deployment(
+                "wif-google-hung",
+                {"model": _GOOGLE_MODEL, "api_key": _google_reference(_HUNG_AUDIENCE), "api_base": provider},
+            ),
+            _deployment(
                 "wif-mistral-passthrough",
                 {
                     "model": "mistral/mistral-small-latest",
@@ -420,6 +432,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
                 **secrets.overrides(),
                 "MISTRAL_API_BASE": provider_wire.url,
                 "GCE_METADATA_HOST": httpx.URL(metadata_wire.url).netloc.decode(),
+                "GCE_METADATA_TIMEOUT": "1",
             },
             config=_config(directory, secrets, provider_base),
             workers=2,
@@ -845,6 +858,28 @@ def test_google_reference_fails_closed_when_the_metadata_server_fails(rig: _Rig)
     assert "oidc/google secret reference could not be resolved" in response.text, response.text
     assert _UNAVAILABLE_AUDIENCE.removeprefix("https://") not in response.text, response.text
     assert _UNAVAILABLE_AUDIENCE in _asked_audiences(rig)
+
+
+def test_google_reference_answers_503_when_the_metadata_server_never_finishes_its_reply(rig: _Rig) -> None:
+    marker: Final = _marker()
+    response: Final = _chat(rig.owned.gateway, "wif-google-hung", marker)
+    reached: Final = _carrying(rig.provider.requests(), marker)
+    assert (response.status_code, reached) == (503, ()), (response.text, _bearers(reached))
+    assert "the metadata server did not return an ID token" in response.text, response.text
+    assert _HUNG_AUDIENCE in _asked_audiences(rig)
+
+
+def test_input_token_count_answers_503_when_the_metadata_server_fails(rig: _Rig) -> None:
+    marker: Final = _marker()
+    response: Final = rig.owned.gateway.request(
+        "POST",
+        "/v1/responses/input_tokens",
+        {"model": "wif-google-unavailable-count", "input": f"say {marker}"},
+        headers=_CLOSE,
+    )
+    reached: Final = _carrying(rig.provider.requests(), marker)
+    assert (response.status_code, reached) == (503, ()), (response.text, _bearers(reached))
+    assert "oidc/google secret reference could not be resolved" in response.text, response.text
 
 
 def _side_call(rig: _Rig, seam: str, marker: str) -> tuple[httpx.Response, Callable[[Request], bool]]:
