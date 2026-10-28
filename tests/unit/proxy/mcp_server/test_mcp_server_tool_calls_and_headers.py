@@ -8569,9 +8569,8 @@ async def test_execute_mcp_tool_hands_hooks_nothing_for_a_never_listed_operation
 
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hooks_no_description():
-    """The listing tools/call runs on its own when this worker does not yet expose the tool is never served
-    to the caller, so it leaves the caller's listed slot empty and the pre-call hooks still get name and
-    arguments only, as on main."""
+    """Without catalog guardrails, an implicit routing lookup leaves the caller's listed slot empty,
+    so pre-call hooks get only the name and arguments."""
     manager = mcp_operations.global_mcp_server_manager
     server = _never_listed_passthrough_server()
     manager.registry[server.server_id] = server
@@ -8579,8 +8578,10 @@ async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hoo
     upstream = AsyncMock()
     upstream.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
     proxy_logging = _mock_mcp_proxy_logging()
+    proxy_logging.has_pre_call_guardrails.return_value = False
     proxy_logging.create_mcp_request_object_from_kwargs = MagicMock(return_value={})
     proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+    proxy_logging.convert_mcp_to_llm_format = MagicMock(return_value={})
     proxy_logging.pre_call_hook = AsyncMock(return_value={})
     proxy_logging.during_call_hook = AsyncMock(return_value=None)
     fetch_tools = AsyncMock(

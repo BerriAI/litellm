@@ -2380,6 +2380,10 @@ async def _execute_mcp_tool(
             ),
             incoming_bearer_token=incoming_bearer_token,
             guardrail_auth=effective_guardrail_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            client_ip=client_ip,
         )
         # `pre_call_tool_check` may return guardrail-modified
         # arguments; honor them on the local path too.
@@ -2522,6 +2526,10 @@ async def _execute_mcp_tool(
                 ),
                 incoming_bearer_token=incoming_bearer_token,
                 guardrail_auth=effective_guardrail_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                client_ip=client_ip,
             )
             if "arguments" in hook_result:
                 arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
