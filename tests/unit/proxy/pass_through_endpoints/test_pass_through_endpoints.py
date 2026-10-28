@@ -7970,6 +7970,93 @@ async def test_vertex_live_full_path_is_not_granted_by_a_group_named_after_it_th
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "setup_model",
+    [VERTEX_LIVE_FULL_PATH.format(model=VERTEX_LIVE_GROUP), "openai-native-audio"],
+    ids=["full-path", "group-name"],
+)
+async def test_vertex_live_setup_frame_is_not_granted_by_a_group_another_provider_serves(setup_model: str):
+    """Every Live session runs on the proxy's Vertex credentials, so a group another provider serves under the
+    same model id must not open the Vertex model"""
+    llm_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai-native-audio",
+                "litellm_params": {"model": f"openai/{VERTEX_LIVE_GROUP}", "api_base": "https://openai-compatible"},
+            },
+        ]
+    )
+
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame(setup_model)],
+        UserAPIKeyAuth(token="hashed", models=["openai-native-audio"]),
+        llm_router=llm_router,
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    assert _policy_close_reason(websocket) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("custom_llm_provider", "reaches_vertex"), [("vertex_ai", True), ("openai", False)])
+async def test_vertex_live_full_path_is_authorized_only_by_a_group_whose_custom_provider_is_vertex(
+    custom_llm_provider: str, reaches_vertex: bool
+):
+    llm_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "native-audio",
+                "litellm_params": {
+                    "model": VERTEX_LIVE_GROUP,
+                    "custom_llm_provider": custom_llm_provider,
+                    "api_base": "https://openai-compatible",
+                },
+            },
+        ]
+    )
+
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame(VERTEX_LIVE_FULL_PATH.format(model=VERTEX_LIVE_GROUP))],
+        UserAPIKeyAuth(token="hashed", models=["native-audio"]),
+        llm_router=llm_router,
+    )
+
+    assert upstream_ws.send.await_count == (1 if reaches_vertex else 0)
+    assert (_policy_close_reason(websocket) is None) is reaches_vertex
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("valid_token", "reaches_vertex"),
+    [
+        (UserAPIKeyAuth(token="hashed", models=[]), True),
+        (UserAPIKeyAuth(token="hashed", models=["gemini-3-pro-live"]), False),
+    ],
+    ids=["unrestricted-key", "limited-key"],
+)
+async def test_vertex_live_full_path_whose_every_name_is_taken_by_another_model_refuses_only_limited_keys(
+    valid_token: UserAPIKeyAuth, reaches_vertex: bool
+):
+    """Groups holding both the bare and the ``vertex_ai/`` id for another model leave no name a key could hold,
+    which says nothing about a key that may call any model"""
+    llm_router = litellm.Router(
+        model_list=[
+            {"model_name": "gemini-3-pro-live", "litellm_params": {"model": "vertex_ai/gemini-live-2.5-flash"}},
+            {"model_name": "vertex_ai/gemini-3-pro-live", "litellm_params": {"model": "vertex_ai/gemini-live-2.5-flash"}},
+        ]
+    )
+
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame(VERTEX_LIVE_FULL_PATH.format(model="gemini-3-pro-live"))],
+        valid_token,
+        llm_router=llm_router,
+    )
+
+    assert upstream_ws.send.await_count == (1 if reaches_vertex else 0)
+    assert (_policy_close_reason(websocket) is None) is reaches_vertex
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "valid_token",
     [
         UserAPIKeyAuth(
