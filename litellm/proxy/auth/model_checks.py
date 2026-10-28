@@ -30,6 +30,8 @@ _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
 _MODEL_LISTING_POOL: Final = ThreadPoolExecutor(thread_name_prefix="litellm-model-listing")
 
+_PROVIDERS_LISTED_ONLY_THROUGH_A_DEPLOYMENT: Final = frozenset({LlmProviders.OPENROUTER.value})
+
 _Listed: Final = TypeVar("_Listed")
 
 
@@ -495,6 +497,20 @@ def get_known_models_from_wildcard(
     return list(dict.fromkeys(suffix_appended_wildcard_models))
 
 
+@functools.lru_cache(maxsize=256)
+def _wildcard_name_regex(name_pattern: str) -> re.Pattern[str]:
+    return re.compile(PatternMatchRouter().pattern_to_regex(name_pattern))
+
+
+def _routed_deployment_model(name_pattern: str, listed_name: str, deployment_model: str) -> str:
+    name_match: Final = _wildcard_name_regex(name_pattern).match(listed_name)
+    if name_match is None:
+        return listed_name
+    return PatternMatchRouter.set_deployment_model_name(
+        matched_pattern=name_match, litellm_deployment_litellm_model=deployment_model
+    )
+
+
 def expand_wildcard_deployments_for_model_info(
     deployments: list[dict[str, object]],
     llm_router: Router | None = None,
@@ -546,10 +562,16 @@ def expand_wildcard_deployments_for_model_info(
             row["model_name"] = name
             params = row.get("litellm_params")
             if isinstance(params, dict):
-                params["model"] = name
+                params["model"] = _routed_deployment_model(model_name, name, litellm_model)
             expanded.append(row)
 
     return expanded
+
+
+def _known_models_without_a_deployment(wildcard_model: str) -> Sequence[str]:
+    if wildcard_model.partition("/")[0] in _PROVIDERS_LISTED_ONLY_THROUGH_A_DEPLOYMENT:
+        return ()
+    return get_known_models_from_wildcard(wildcard_model=wildcard_model, litellm_params=None)
 
 
 def _get_wildcard_models(
@@ -582,7 +604,7 @@ def _get_wildcard_models(
                         )
                     )
             else:
-                all_wildcard_models.extend(get_known_models_from_wildcard(wildcard_model=model, litellm_params=None))
+                all_wildcard_models.extend(_known_models_without_a_deployment(model))
 
     for model in models_to_remove:
         unique_models.remove(model)

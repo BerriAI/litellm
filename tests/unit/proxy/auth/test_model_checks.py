@@ -1186,6 +1186,35 @@ def test_openrouter_wildcard_lists_the_live_catalog_with_each_vendor_namespace(
 
 
 @respx.mock
+def test_key_granted_openrouter_wildcard_without_an_openrouter_deployment_lists_no_environment_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-environment-only")
+    catalog: Final = respx.get("https://openrouter.ai/api/v1/models/user").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]})
+    )
+    router: Final = Router(
+        model_list=[{"model_name": "or-team/*", "litellm_params": {"model": "openrouter/*", "api_key": "sk-or-team"}}]
+    )
+
+    listed: Final = get_complete_model_list(
+        key_models=["openrouter/*"],
+        team_models=[],
+        proxy_model_list=router.model_names,
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert (listed, catalog.call_count) == ([], 0)
+
+
+@respx.mock
 def test_custom_prefix_that_starts_a_discovered_id_still_prefixes_every_listed_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

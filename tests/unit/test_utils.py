@@ -8895,6 +8895,19 @@ def reset_mock_cache() -> None:
     _model_cache.flush_cache()
 
 
+@respx.mock
+def test_get_valid_models_does_not_ask_a_failing_provider_again_on_the_next_listing(reset_mock_cache: None) -> None:
+    catalog: Final = respx.get("https://openrouter.ai/api/v1/models/user").mock(return_value=httpx.Response(503))
+    deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-during-an-outage")
+
+    listings: Final = tuple(
+        get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
+        for _ in range(2)
+    )
+
+    assert (listings, catalog.call_count) == (([], []), 1)
+
+
 @pytest.fixture
 def isolated_openai_model_sets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(

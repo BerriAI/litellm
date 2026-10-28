@@ -572,7 +572,7 @@ async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monke
         allowed_model_names=allowed_model_names,
     )
 
-    assert [model["model_name"] for model in result] == ["gpt-4o"]
+    assert [(model["model_name"], model["litellm_params"]["model"]) for model in result] == [("gpt-4o", "openai/gpt-4o")]
     assert router.wildcard_routed_models("gpt-4o", None) == frozenset({"openai/gpt-4o"})
 
 

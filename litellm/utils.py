@@ -8386,14 +8386,17 @@ class AvailableModelsCache(InMemoryCache):
         custom_llm_provider: str,
         litellm_params: LiteLLM_Params | None,
         available_models: list[str],
+        ttl: float | None = None,
     ):
         """Set cached model info"""
         cache_key: Final = self._get_cache_key(custom_llm_provider, litellm_params)
-        self.set_cache(cache_key, copy.deepcopy(available_models))
+        self.set_cache(cache_key, copy.deepcopy(available_models), ttl=ttl)
 
 
 # Global cache instance
 _model_cache: Final = AvailableModelsCache()
+
+_FAILED_PROVIDER_LISTING_TTL_SECONDS: Final = 30
 
 
 def _infer_valid_provider_from_env_vars(
@@ -8455,6 +8458,9 @@ def _get_valid_models_from_provider_api(
         return models
     except Exception as e:
         verbose_logger.warning("Error getting valid models: %s", e)
+        _model_cache.set_cached_model_info(
+            custom_llm_provider, litellm_params, [], ttl=_FAILED_PROVIDER_LISTING_TTL_SECONDS
+        )
         return []
 
 
