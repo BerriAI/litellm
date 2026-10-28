@@ -599,7 +599,15 @@ class MistralConfig(OpenAIGPTConfig):
                 text_parts: Final = (
                     (ChatCompletionTextObject(type="text", text=flattened_text),) if flattened_text else ()
                 )
-                return {**message, "content": [*filter(MistralConfig._is_mistral_think_chunk, content), *text_parts]}
+                think_chunks: Final = tuple(filter(MistralConfig._is_mistral_think_chunk, content))
+                sent_chunks: Final = tuple(
+                    sendable
+                    for chunk in think_chunks
+                    if (sendable := MistralConfig._sendable_part(chunk, not text_parts)) is not None
+                )
+                return cast(  # cast-ok: Mistral's ThinkChunk is outside the OpenAI assistant content union
+                    AllMessageValues, {**message, "content": [*sent_chunks, *text_parts]}
+                )
             case _ if flattened_text:
                 return cast(  # cast-ok: every message role takes str content
                     AllMessageValues, {**message, "content": flattened_text}

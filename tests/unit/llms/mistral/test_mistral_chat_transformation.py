@@ -1250,6 +1250,12 @@ _PICKED_TEXT: Final = {"type": "text", "text": "I have picked it."}
             id="final_prefix_turn_with_text_after_the_chunk",
         ),
         pytest.param(
+            {"role": "assistant", "content": [_PICKED_TEXT, _OPEN_THINK_CHUNK], "prefix": True},
+            [],
+            {"role": "assistant", "content": [_THINK_CHUNK_WITHOUT_CLOSED, _PICKED_TEXT], "prefix": True},
+            id="final_prefix_turn_with_text_before_the_chunk",
+        ),
+        pytest.param(
             {"role": "assistant", "content": [_OPEN_THINK_CHUNK]},
             [],
             {"role": "assistant", "content": [_THINK_CHUNK_WITHOUT_CLOSED]},
