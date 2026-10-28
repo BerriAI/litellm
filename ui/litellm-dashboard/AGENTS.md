@@ -8,6 +8,8 @@ When you fix lint violations that are grandfathered in `eslint-suppressions.json
 
 Tests come in three tiers, named by the standard definitions. `Foo.test.tsx` is a unit test: one module, collaborators replaced by doubles, no multi-component tree, and it should run in milliseconds. `Foo.integration.test.tsx` renders a real component tree with real children and only stubs the network boundary. It costs seconds per case, so it earns its place by proving wiring that a unit test cannot reach. Browser-level tests live in `tests/e2e/ui/` as Playwright specs against a live proxy
 
+Do not test what shadcn and Base UI already guarantee, such as a tooltip opening on hover, a popup positioning itself against its trigger, focus trapping and Escape in a dialog, keyboard movement through a menu or select, and open and close animations. Those are the library's contract, and a test of them only fails when we restyle or move the page. Test what we put inside the primitive and what happens because of it, like the text a tooltip carries, the options a select offers, or the request a confirm button sends. Reach that content the most direct way, by a click, the keyboard, or the data the page renders, rather than through a hover race. If we change a primitive's behavior in `src/components/ui/`, its test lives next to that primitive as `*.test.tsx`, never in a page spec that borrows the page as a host
+
 When a component holds logic worth asserting, extract the logic and unit-test it there rather than driving it through a render. `CreateMCPServer` is the worked example: its payload building lives in `createServerPayload.ts` with 46 unit tests that run in single-digit milliseconds, while `CreateMCPServer.integration.test.tsx` keeps only the cases that prove a form field reaches the right payload key. A test that renders a whole modal to assert the shape of one object belongs in the first category, not the second
 
 Most of the suite predates this split and is not yet classified, so an unsuffixed `*.test.tsx` is not evidence that a file is really a unit test. Classify what you touch
@@ -30,7 +32,7 @@ Type tests are `*.test-d.ts` files run by the `types` vitest project (`npm run t
 
 <!-- BEGIN:nextjs-agent-rules -->
 
-# This is NOT the Next.js you know
+## This is NOT the Next.js you know
 
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
 

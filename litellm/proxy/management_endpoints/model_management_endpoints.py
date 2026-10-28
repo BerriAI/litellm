@@ -145,6 +145,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsSessionTag
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     AutoRouterClassifierDefaultPromptResponse,
+    PatchModelRequest,
     UpdateUsefulLinksRequest,
 )
 from litellm.types.router import (
@@ -160,6 +161,7 @@ from litellm.types.utils import (
     OIDC_SECRET_REFERENCE_PREFIX,
     echoed_cost_map_fields,
     echoed_cost_map_pricing_fields,
+    is_server_derived_pricing_key,
     without_server_derived_pricing,
 )
 from litellm.utils import get_utc_datetime
@@ -995,6 +997,7 @@ def _ptu_zeroed_pricing(
 def _ptu_pricing_delta(
     *,
     stored_model_info: Mapping[str, object],
+    stored_litellm_params: Mapping[str, object],
     model_info: Mapping[str, object],
     litellm_params: Mapping[str, object],
     patch: updateDeployment,
@@ -1014,6 +1017,24 @@ def _ptu_pricing_delta(
     supplied: Final = patch.litellm_params.model_dump(exclude_none=True) if patch.litellm_params else _EMPTY_MODEL_INFO
     zeroed: Final = _ptu_zeroed_pricing(model_info=model_info, litellm_params=litellm_params, supplied=supplied)
     if zeroed:
+        retains_ptu: Final = all(stored_model_info.get(field) is not None for field in _PTU_PRICED_PAIR)
+        protected_pricing: Final = frozenset(
+            field
+            for field in _CUSTOM_PRICING_FIELDS
+            if retains_ptu
+            and (stored_litellm_params.get(field) is not None or stored_model_info.get(field) is not None)
+        ).union(zeroed)
+        removed_ptu_pricing: Final = tuple(
+            field for field in _param_keys_to_remove(patch) if field in protected_pricing
+        )
+        if removed_ptu_pricing:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"PTU billing requires {', '.join(removed_ptu_pricing)}, so these pricing parameters cannot be removed. "
+                    "Keep them when enabling PTU, or clear ptu_count and cost_per_ptu_per_hour together to disable it."
+                ),
+            )
         return zeroed, frozenset()
     was_ptu: Final = any(stored_model_info.get(field) is not None for field in _PTU_PRICED_PAIR)
     if not was_ptu or not _explicitly_cleared_ptu_fields(patch.model_info) & _PTU_PRICED_PAIR:
@@ -1069,6 +1090,10 @@ def _loaded_catalog_entry(
     return loaded_catalog().get(catalog_key, MappingProxyType({}))
 
 
+def _param_keys_to_remove(patch: updateDeployment) -> tuple[str, ...]:
+    return patch.litellm_params_to_remove if isinstance(patch, PatchModelRequest) else ()
+
+
 def update_db_model(
     db_model: Deployment,
     updated_patch: updateDeployment,
@@ -1077,7 +1102,8 @@ def update_db_model(
     if updated_patch.model_info is not None:
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
-    merged_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True)
+    stored_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True, exclude_unset=True)
+    merged_litellm_params: Final = dict(stored_litellm_params)
     stored_model_info: Final = _dump_without_none(db_model.model_info)
     echoed_pricing: Final = echoed_cost_map_pricing_fields(stored_model_info)
     merged_model_info: Final[dict[str, object]] = {
@@ -1093,7 +1119,7 @@ def update_db_model(
                 if k == "complexity_router_config"
                 else encrypt_value_helper(v)
             )
-            for k, v in updated_patch.litellm_params.model_dump(exclude_none=True).items()
+            for k, v in updated_patch.litellm_params.model_dump(exclude_none=True, exclude_unset=True).items()
         }
 
         merged_litellm_params.update(encrypted_params)
@@ -1144,11 +1170,17 @@ def update_db_model(
         for field in _explicitly_cleared_ptu_fields(updated_patch.model_info):
             merged_model_info.pop(field, None)
 
+    for field in _param_keys_to_remove(updated_patch):
+        merged_litellm_params.pop(field, None)
+        if is_server_derived_pricing_key(field):
+            merged_model_info.pop(field, None)
+
     _validate_ptu_model_info(merged_model_info)
     ptu_pricing, ptu_released = _ptu_pricing_delta(
         stored_model_info=db_model.model_info.model_dump(exclude_none=True)
         if db_model.model_info
         else _EMPTY_MODEL_INFO,
+        stored_litellm_params=stored_litellm_params,
         model_info=merged_model_info,
         litellm_params=merged_litellm_params,
         patch=updated_patch,
@@ -1255,7 +1287,7 @@ async def get_kubernetes_pods(
 )
 async def patch_model(
     model_id: str,  # Get model_id from path parameter
-    patch_data: updateDeployment,  # Create a specific schema for PATCH operations
+    patch_data: PatchModelRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1319,18 +1351,34 @@ async def patch_model(
                 param=None,
             )
 
+        removals: Final = _param_keys_to_remove(patch_data)
+        incoming_params: Final = (
+            updateLiteLLMParams.model_validate(
+                {
+                    **(patch_data.litellm_params.model_dump(exclude_unset=True) if patch_data.litellm_params else {}),
+                    **dict.fromkeys(removals),
+                }
+            )
+            if removals
+            else patch_data.litellm_params
+        )
+        remaining_params: Final = db_model.litellm_params.model_copy(update=dict.fromkeys(removals))
         write_authorization: Final = await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=db_model,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
-            incoming_params=submitted_litellm_params(patch_data.litellm_params),
+            incoming_params=submitted_litellm_params(incoming_params),
             member_operation="update",
             incoming_model_params=patch_data,
         )
         member_write: Final = write_authorization if isinstance(write_authorization, MemberAutoRouterWrite) else None
-        member_marker: Final = _member_auto_router_marker_for_update(
-            incoming_params=patch_data.litellm_params, existing=db_model, member_write=member_write
+        member_marker: Final = (
+            False
+            if db_model.model_info.member_auto_router and STRATEGY_ROUTER_PARAM_FIELDS.intersection(removals)
+            else _member_auto_router_marker_for_update(
+                incoming_params=incoming_params, existing=db_model, member_write=member_write
+            )
         )
         marker_info: Final = (
             ModelInfo(id=db_model.model_info.id)
@@ -1367,27 +1415,26 @@ async def patch_model(
             )
 
         ModelManagementAuthChecks.can_user_attach_credential(
-            litellm_params=patch_data.litellm_params,
+            litellm_params=incoming_params,
             user_api_key_dict=user_api_key_dict,
             existing_litellm_params=db_model.litellm_params,
             null_detaches=True,
         )
-        await _raise_on_invalid_credential_name(patch_data.litellm_params, db_model.litellm_params, prisma_client)
+        await _raise_on_invalid_credential_name(incoming_params, db_model.litellm_params, prisma_client)
 
         ModelManagementAuthChecks.can_user_set_aws_session_tags(
-            litellm_params=patch_data.litellm_params,
+            litellm_params=incoming_params,
             user_api_key_dict=user_api_key_dict,
             existing_litellm_params=db_model.litellm_params,
+            null_detaches="aws_session_tags" in removals,
         )
 
         _raise_on_strategy_router_write_violation(
-            incoming_params=patch_data.litellm_params,
-            existing_params=db_model.litellm_params,
+            incoming_params=incoming_params,
+            existing_params=remaining_params,
         )
 
-        effective_params: Final = _effective_complexity_router_params(
-            patch_data.litellm_params, db_model.litellm_params
-        )
+        effective_params: Final = _effective_complexity_router_params(incoming_params, remaining_params)
         requested_model_name: Final = patch_data.model_name
         stored_model_name: str | None = None
 
@@ -1818,20 +1865,20 @@ async def _update_team_model_in_db(
         db_model=db_model,
     )
 
-    # Ensure model_info exists and set team_public_model_name
-    if patch_data.model_info is None:
-        from litellm.types.router import ModelInfo
-
-        patch_data.model_info = ModelInfo()
-    patch_data.model_info.team_public_model_name = public_model_name
-
     # Check if team assignment is new or changed
     db_team_id: Final = db_model.model_info.team_id if db_model.model_info else None
     is_new_team_assignment: Final = db_team_id != patch_team_id
 
     # Team rows keep their internal UUID-based model_name; the public name lives in model_info
-    patch_data.model_name = f"model_name_{patch_team_id}_{uuid.uuid4()}" if is_new_team_assignment else None
-    row: Final = await write_row(update_db_model(db_model=db_model, updated_patch=patch_data))
+    team_patch: Final = patch_data.model_copy(
+        update={
+            "model_name": f"model_name_{patch_team_id}_{uuid.uuid4()}" if is_new_team_assignment else None,
+            "model_info": (patch_data.model_info or ModelInfo()).model_copy(
+                update={"team_public_model_name": public_model_name}
+            ),
+        }
+    )
+    row: Final = await write_row(update_db_model(db_model=db_model, updated_patch=team_patch))
 
     if is_new_team_assignment:
         await _setup_new_team_model_assignment(
@@ -2228,14 +2275,16 @@ class ModelManagementAuthChecks:
         litellm_params: GenericLiteLLMParams | None,
         user_api_key_dict: UserAPIKeyAuth,
         existing_litellm_params: GenericLiteLLMParams | None = None,
+        *,
+        null_detaches: bool = False,
     ) -> Literal[True]:
-        if litellm_params is None or litellm_params.aws_session_tags is None:
+        if litellm_params is None or (litellm_params.aws_session_tags is None and not null_detaches):
             return True
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return True
         existing_tags: Final = existing_litellm_params.aws_session_tags if existing_litellm_params is not None else None
         if existing_tags is not None and _canonical_session_tags(existing_tags) == _canonical_session_tags(
-            litellm_params.aws_session_tags
+            litellm_params.aws_session_tags or ()
         ):
             return True
         raise ProxyException(
@@ -3217,12 +3266,13 @@ async def update_useful_links(
         )
 
 
-def _validated_labeled_tiers(
-    tier_labels: dict[ComplexityTier, str],  # mutable-ok: Pydantic materializes JSON object fields as dicts
-) -> tuple[tuple[ComplexityTier, str], ...]:
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _validated_labeled_tiers(tier_labels: object) -> tuple[tuple[ComplexityTier, str], ...]:
     """Validate tier labels once for both prompt-preview transports."""
     try:
-        return ComplexityRouterConfig(tier_labels=tier_labels).labeled_tiers()
+        return ComplexityRouterConfig.model_validate({"tier_labels": tier_labels}).labeled_tiers()
     except (TypeError, ValidationError) as e:
         raise ProxyException(
             message=f"tier_labels must be a JSON object of tier name to display name: {e}",
@@ -3237,7 +3287,7 @@ def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[Complexity
     if not tier_labels:
         return None
     try:
-        parsed: Final = json.loads(tier_labels)
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(tier_labels))
     except JSONDecodeError as e:
         raise ProxyException(
             message=f"tier_labels must be a JSON object of tier name to display name: {e}",

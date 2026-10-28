@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     anthropic_system_blocks,
     split_leading_system_run,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.wif import resolve_anthropic_base
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject, ValidUserMessageContentTypes
@@ -161,7 +162,7 @@ def _has_non_chat_user_block(message: Mapping[str, object]) -> bool:
 
 
 def _gets_placeholder_name(tool: Mapping[str, object]) -> bool:
-    from litellm.llms.anthropic.pass_through.adapters.transformation import is_provider_native_tool_dict
+    from litellm.llms.anthropic.messages.adapters.transformation import is_provider_native_tool_dict
 
     name: Final = tool.get("name")
     return not (_is_chat_tool(tool) or is_provider_native_tool_dict(tool) or (isinstance(name, str) and name.strip()))
@@ -317,7 +318,7 @@ class AnthropicCountTokensConfig:
         Returns:
             The endpoint URL for the CountTokens API
         """
-        return resolve_anthropic_base(api_base) + "/v1/messages/count_tokens"
+        return join_api_base(resolve_anthropic_base(api_base), "v1/messages/count_tokens")
 
     def transform_request_to_count_tokens(
         self,
