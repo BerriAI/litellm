@@ -10229,6 +10229,34 @@ class TestPatchModelRejectsParamsTheRouterDrops:
         assert exc_info.value.param == "litellm_params.model"
         assert "@cf/cloudflare/clef-flash" in exc_info.value.message
 
+    def test_model_and_provider_can_be_updated_together_after_model_only_rejection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _raise_on_unloadable_patch,
+            update_db_model,
+        )
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "fake-atomic-model-patch-test-salt")
+        stored: Final = self._stored(model="cloudflare/clef-flash")
+        with pytest.raises(ProxyException) as exc_info:
+            _raise_on_unloadable_patch(
+                stored, updateDeployment(litellm_params=updateLiteLLMParams(model="atomic-test-model"))
+            )
+        assert exc_info.value.code == "400"
+        assert "include model and custom_llm_provider together in the same update" in exc_info.value.message
+
+        combined: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(model="atomic-test-model", custom_llm_provider="openai")
+        )
+        _raise_on_unloadable_patch(stored, combined)
+        saved: Final = json.loads(update_db_model(db_model=stored, updated_patch=combined)["litellm_params"])
+        reloaded: Final = {key: proxy_config.resolve_db_litellm_param(key, value) for key, value in saved.items()}
+        assert reloaded["model"] == "atomic-test-model"
+        assert reloaded["custom_llm_provider"] == "openai"
+        assert self._router_loads(reloaded)
+
     def test_patch_not_touching_routing_params_is_never_judged(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from litellm.proxy.management_endpoints.model_management_endpoints import _raise_on_unloadable_patch
 

@@ -434,7 +434,11 @@ def _raise_on_unloadable_patch(db_model: Deployment, patch_data: updateDeploymen
         Router.resolve_deployment_provider(reloaded.litellm_params)
     except Exception as e:  # noqa: BLE001  # the router drops the deployment on any exception from this check
         raise ProxyException(
-            message=f"The router cannot load this deployment, so the update was not saved: {e}",
+            message=(
+                "The router cannot load this deployment, so the update was not saved. "
+                "Use a provider-prefixed model or include model and custom_llm_provider together in the same update. "
+                f"Provider error: {e}"
+            ),
             type=ProxyErrorTypes.validation_error.value,
             code=status.HTTP_400_BAD_REQUEST,
             param="litellm_params.model",
