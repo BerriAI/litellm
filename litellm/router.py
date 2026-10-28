@@ -215,6 +215,7 @@ from litellm.router_utils.common_utils import (
     as_retry_skipped_deployment_ids,
     deployments_the_caller_may_use,
     filter_team_based_models,
+    filter_tool_protocol_deployments,
     filter_web_search_deployments,
     format_fallback_outcome_message,
     format_no_fallback_group_message,
@@ -15032,6 +15033,10 @@ class Router:
                 model,
             )
         )
+        healthy_deployments = filter_tool_protocol_deployments(  # rebind-ok: progressive narrowing of the candidate list through the router filter pipeline; rebinding is the established pattern in this function
+            healthy_deployments=healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # router passes bare dicts; callee accepts dict[str, Any]
+            request_kwargs=request_kwargs,  # pyright: ignore[reportUnknownArgumentType]  # router passes bare dicts; callee accepts dict[str, Any]
+        )
 
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
@@ -16346,11 +16351,16 @@ class Router:
             self._filter_blocked_deployments(healthy_deployments), routing_kwargs
         )
 
+        healthy_deployments = filter_tool_protocol_deployments(  # rebind-ok: progressive narrowing of the candidate list through the router filter pipeline; rebinding is the established pattern in this function
+            healthy_deployments=healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # router passes bare dicts; callee accepts dict[str, Any]
+            request_kwargs=request_kwargs,  # pyright: ignore[reportUnknownArgumentType]  # router passes bare dicts; callee accepts dict[str, Any]
+        )
+
         # filter pre-call checks
         if self.enable_pre_call_checks and (messages is not None or input is not None):
             healthy_deployments = self._pre_call_checks(
                 model=model,
-                healthy_deployments=healthy_deployments,
+                healthy_deployments=healthy_deployments,  # pyright: ignore[reportArgumentType]  # filtered result stays a bare-dict list for the untyped callee
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
