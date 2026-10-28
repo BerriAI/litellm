@@ -1,28 +1,30 @@
+import asyncio
+import importlib
+import os
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
+from unittest.mock import patch
 
-import respx
-
-import asyncio, httpx, importlib, os
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import CustomLLM
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
-    resolve_model_and_provider_for_metadata,
     get_provider_affinity_header,
     inferred_provider,
     is_registered_custom_provider,
+    resolve_model_and_provider_for_metadata,
 )
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.router import LiteLLM_Params
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from unittest.mock import patch
 
 CUSTOM_PROVIDER: Final = "test-onprem-llm"
 
@@ -634,15 +636,14 @@ def shipped_generalizations():
     added on this branch, so these tests install the rule the branch actually
     ships rather than depending on whatever the live URL returns.
     """
+    from litellm._catalog import CATALOG
     from litellm.litellm_core_utils.fallback_generalizations import (
         get_fallback_generalization_rules,
         set_fallback_generalizations,
     )
-    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
     previous = list(get_fallback_generalization_rules())
-    backup = GetModelCostMap.load_local_model_cost_map()
-    rules = backup.get("fallback_generalizations", {}).get("rules", [])
+    rules = CATALOG.bundled().fallback_rules() or []
     set_fallback_generalizations(rules)
     try:
         yield rules

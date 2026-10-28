@@ -805,7 +805,8 @@ class StandardBuiltInToolCostTracking:
             model_key = model_info.get("key") if isinstance(model_info, dict) else getattr(model_info, "key", None)
 
             if model_key and model_key in litellm.model_cost:
-                return litellm.model_cost[model_key].get("code_interpreter_cost_per_session")
+                session_cost: Final = litellm.model_cost[model_key].get("code_interpreter_cost_per_session")
+                return float(session_cost) if isinstance(session_cost, (int, float)) else None
 
         except Exception:
             pass

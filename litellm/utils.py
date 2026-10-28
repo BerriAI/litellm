@@ -3830,10 +3830,19 @@ def _registration_attempt(
     warning_display_name: str | None,
     final_attempt: bool,
 ) -> _RegistrationWrite | None:
+    from litellm.litellm_core_utils.get_model_cost_map import model_cost_install_generation
+
     source: Final = _builtin_cost_map()
+    generation: Final = model_cost_install_generation()
     write: Final = _registration_write(key, value, custom_llm_provider, warning_display_name)
+    if not final_attempt and model_cost_install_generation() != generation:
+        return None
     _replace_cost_map_entry(_builtin_cost_map() if final_attempt else source, write.key, write.entry, value)
-    return write if final_attempt or litellm.model_cost is source else None
+    return (
+        write
+        if final_attempt or (litellm.model_cost is source and model_cost_install_generation() == generation)
+        else None
+    )
 
 
 def _register_on_current_map(
@@ -6041,6 +6050,10 @@ def get_utc_datetime() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
+def _as_max_tokens(value: object) -> int | None:
+    return value if isinstance(value, int) else None
+
+
 def get_max_tokens(model: str) -> int | None:
     """
     Get the maximum number of output tokens allowed for a given model.
@@ -6080,7 +6093,7 @@ def get_max_tokens(model: str) -> int | None:
 
     try:
         if model in litellm.model_cost and "max_output_tokens" in litellm.model_cost[model]:
-            return litellm.model_cost[model]["max_output_tokens"]
+            return _as_max_tokens(litellm.model_cost[model]["max_output_tokens"])
         get_llm_provider: Final = litellm_utils.get_llm_provider
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         if custom_llm_provider == "huggingface":
@@ -6088,7 +6101,7 @@ def get_max_tokens(model: str) -> int | None:
             return max_tokens
         if model in litellm.model_cost:  # check if extracted model is in model_list
             if "max_output_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_output_tokens"]
+                return _as_max_tokens(litellm.model_cost[model]["max_output_tokens"])
         else:
             raise Exception()
         return None
@@ -8236,8 +8249,9 @@ def trim_messages(
     try:
         if max_tokens is None:
             # Check if model is valid
-            if model in litellm.model_cost:
-                max_tokens_for_model: Final = litellm.model_cost[model]["max_input_tokens"]
+            trimmed_row: Final = None if model is None else litellm.model_cost.get(model)
+            max_tokens_for_model: Final = None if trimmed_row is None else trimmed_row.get("max_input_tokens")
+            if isinstance(max_tokens_for_model, (int, float)):
                 max_tokens = int(max_tokens_for_model * trim_ratio)
             else:
                 # if user did not specify max (input) tokens
@@ -9054,11 +9068,9 @@ def validate_openai_optional_params(stop: str | list[str] | None = None, **kwarg
 
 @lru_cache(maxsize=1)
 def get_bundled_model_cost_map() -> dict[str, Any]:
-    try:
-        model_cost_path: Final = resources.files("litellm").joinpath("model_prices_and_context_window_backup.json")
-        return json.loads(model_cost_path.read_text())
-    except Exception:
-        return {}
+    from litellm._catalog import CATALOG
+
+    return CATALOG.bundled().document()
 
 
 _get_bundled_model_cost_map = get_bundled_model_cost_map

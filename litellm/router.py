@@ -12284,9 +12284,9 @@ class Router:
             # tell a resolvable name apart; require usable limits/costs.
             _azure_fallback_key = _model if _model.startswith("azure/") else f"azure/{_model}"
             _fallback_entry = litellm.model_cost.get(_azure_fallback_key)
-            _fallback_resolves = _fallback_entry is not None and (
-                (_fallback_entry.get("max_input_tokens") or 0) > 0
-                or (_fallback_entry.get("input_cost_per_token") or 0) > 0
+            _fallback_resolves = _fallback_entry is not None and any(
+                isinstance(limit, (int, float)) and limit > 0
+                for limit in (_fallback_entry.get("max_input_tokens"), _fallback_entry.get("input_cost_per_token"))
             )
             if _fallback_resolves:
                 verbose_router_logger.debug(

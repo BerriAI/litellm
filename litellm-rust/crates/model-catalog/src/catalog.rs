@@ -62,6 +62,7 @@ pub struct Catalog {
     aliases: IndexMap<String, String>,
     lowercase_keys: HashMap<String, String>,
     fallback_generalizations: Option<FallbackGeneralizations>,
+    removals: Vec<String>,
 }
 
 impl IntegrityLimits {
@@ -96,7 +97,17 @@ impl Catalog {
         let mut sections = Vec::new();
         let mut entries = IndexMap::with_capacity(document.len());
         let mut alias_lists = Vec::new();
+        let mut removals = Vec::new();
         for (index, (name, value)) in document.into_iter().enumerate() {
+            if value.is_null() && !is_section(&name) {
+                removals.push(name.clone());
+                sections.push(Section {
+                    index,
+                    key: name,
+                    value,
+                });
+                continue;
+            }
             let fields = match value {
                 Value::Object(fields) if !is_section(&name) => fields,
                 value => {
@@ -169,6 +180,7 @@ impl Catalog {
                 aliases,
                 lowercase_keys,
                 fallback_generalizations,
+                removals,
             },
             errors: problems,
         })
@@ -280,6 +292,45 @@ impl Catalog {
         (catalog, removed_errors)
     }
 
+    /// Rows replaced by the same key's row in `bundled` when it has one, and left out otherwise (decision 15)
+    pub fn with_rejected_replaced<'a>(
+        self,
+        errors: &'a [Located],
+        bundled: &Catalog,
+    ) -> (Self, Vec<Rejection<'a>>) {
+        let (mut catalog, removed) = self.without_rejected(errors);
+        let mut rejected: IndexMap<String, Vec<&'a Located>> = IndexMap::new();
+        for error in removed {
+            if let Some(key) = crate::error::pointer_root(&error.path) {
+                rejected.entry(key).or_default().push(error);
+            }
+        }
+        let rejections = rejected
+            .into_iter()
+            .map(|(key, errors)| {
+                let bundled_entry = bundled.entries.get(&key).cloned();
+                let replaced_by_bundled = bundled_entry.is_some();
+                if let Some(entry) = bundled_entry {
+                    catalog
+                        .lowercase_keys
+                        .insert(key.to_lowercase(), key.clone());
+                    catalog.entries.insert(key.clone(), entry);
+                }
+                Rejection {
+                    key,
+                    errors,
+                    replaced_by_bundled,
+                }
+            })
+            .collect();
+        (catalog, rejections)
+    }
+
+    /// Keys written as `null`, which a fetched document uses to retire a row it no longer serves (decision 23)
+    pub fn removals(&self) -> impl Iterator<Item = &str> {
+        self.removals.iter().map(String::as_str)
+    }
+
     pub fn unrecognized(&self) -> impl Iterator<Item = (&str, &str)> {
         self.entries.iter().flat_map(|(name, entry)| {
             entry
@@ -369,4 +420,56 @@ fn unknown_timezone(wire: &EntryWire) -> Option<Located> {
             },
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::json;
+
+    use super::*;
+
+    fn parse(document: Value) -> Loaded<Catalog> {
+        Catalog::parse(document.to_string().as_bytes()).unwrap()
+    }
+
+    #[rstest]
+    fn a_rejected_row_is_replaced_by_bundled_or_left_out() {
+        let bundled =
+            parse(json!({"gpt-4o": {"litellm_provider": "openai", "input_cost_per_token": 1.0}}))
+                .value;
+        let fetched = parse(json!({
+            "gpt-4o": {"litellm_provider": "openai", "input_cost_per_token": -1},
+            "acme/new": {"litellm_provider": "acme", "input_cost_per_token": "free"},
+            "kept": {"litellm_provider": "openai", "input_cost_per_token": 2.0}
+        }));
+
+        let (catalog, rejections) = fetched
+            .value
+            .with_rejected_replaced(&fetched.errors, &bundled);
+
+        let replaced: Vec<(&str, bool)> = rejections
+            .iter()
+            .map(|rejection| (rejection.key.as_str(), rejection.replaced_by_bundled))
+            .collect();
+        assert_eq!(replaced, [("gpt-4o", true), ("acme/new", false)]);
+        assert_eq!(
+            catalog
+                .lookup("gpt-4o")
+                .unwrap()
+                .entry
+                .field("input_cost_per_token"),
+            Some(&json!(1.0))
+        );
+        assert!(catalog.lookup("acme/new").is_none());
+        assert!(catalog.lookup("kept").is_some());
+    }
+
+    #[rstest]
+    fn a_null_row_is_a_removal_not_an_error() {
+        let loaded = parse(json!({"gpt-4o": {"litellm_provider": "openai"}, "retired": null}));
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        assert_eq!(loaded.value.removals().collect::<Vec<_>>(), ["retired"]);
+        assert_eq!(loaded.value.served().count(), 1);
+    }
 }

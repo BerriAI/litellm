@@ -12,6 +12,8 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import urlparse
 
+from pydantic import TypeAdapter, ValidationError
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
@@ -56,6 +58,8 @@ if TYPE_CHECKING:
 else:
     GoogleCredentialsObject = Any
 
+
+_SUPPORTED_REGIONS: Final = TypeAdapter(tuple[str, ...])
 
 class _VertexCredentialsObject(Protocol):
     """Structural view of the google-auth credentials handle that this class caches and refreshes."""
@@ -114,8 +118,12 @@ class VertexBase:
         # Try to get supported_regions directly from model_cost
         # Check both with and without vertex_ai/ prefix
         model_key: Final = f"vertex_ai/{model}" if not model.startswith("vertex_ai/") else model
-        model_info: Final = litellm.model_cost.get(model_key, {})
-        supported_regions: Final = model_info.get("supported_regions")
+        try:
+            supported_regions: Final = _SUPPORTED_REGIONS.validate_python(
+                litellm.model_cost.get(model_key, {}).get("supported_regions") or ()
+            )
+        except ValidationError:
+            return vertex_region or "us-central1"
 
         if supported_regions and len(supported_regions) > 0:
             # If user didn't specify region, use the first supported region

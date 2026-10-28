@@ -711,7 +711,7 @@ def _is_cost_explicitly_configured(deployments: Sequence[DeploymentTypedDict]) -
     """
     for deployment in deployments:
         model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
-        if model_id is None:
+        if not isinstance(model_id, str):
             continue
         raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
         if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
@@ -729,7 +729,7 @@ def _has_explicit_positive_cost(deployments: Sequence[DeploymentTypedDict]) -> b
     """
     for deployment in deployments:
         model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
-        if model_id is None:
+        if not isinstance(model_id, str):
             continue
         raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
         if _is_positive_cost(raw_entry.get("input_cost_per_token")) or _is_positive_cost(

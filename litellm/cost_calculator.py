@@ -2794,7 +2794,7 @@ def default_image_cost_calculator(
             price * units
             for price_table in price_tables
             for cost_key, units in unit_counts
-            if (price := price_table.get(cost_key)) is not None
+            if isinstance(price := price_table.get(cost_key), (int, float))
         ),
         None,
     )

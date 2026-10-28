@@ -380,6 +380,7 @@ fn the_bundled_registry_parses_with_no_problems_and_every_key_understood() {
     assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
     let unrecognized: Vec<_> = catalog.unrecognized().collect();
     assert!(unrecognized.is_empty(), "{unrecognized:#?}");
+    assert!(catalog.removals().next().is_none());
     assert!(
         catalog
             .fallback_rules()

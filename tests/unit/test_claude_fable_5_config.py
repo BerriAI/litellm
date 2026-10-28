@@ -14,8 +14,8 @@ import os
 
 import pytest
 
+from litellm._catalog import CATALOG
 from litellm.constants import BEDROCK_CONVERSE_MODELS
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "../..")
 
@@ -64,7 +64,7 @@ FABLE_5_1_VARIANTS = (
 
 
 def test_fable_5_1_present_in_bundled_backup():
-    backup = GetModelCostMap.load_local_model_cost_map()
+    backup = CATALOG.bundled().served()
     root = _load_root_cost_map()
     for model_name in FABLE_5_1_VARIANTS:
         assert model_name in backup, f"Missing from backup cost map: {model_name}"

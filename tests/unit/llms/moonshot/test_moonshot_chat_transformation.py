@@ -7,12 +7,11 @@ Moonshot AI is an OpenAI-compatible provider with minor customizations.
 
 from unittest.mock import patch
 
-
 import pytest
 
 import litellm
 import litellm.utils
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm._catalog import CATALOG
 from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
 
 
@@ -681,7 +680,7 @@ class TestKimiK26ModelRegistry:
     @pytest.fixture(autouse=True)
     def model_cost_map(self):
         """Load directly from the bundled backup so tests don't depend on remote fetch."""
-        return GetModelCostMap.load_local_model_cost_map()
+        return CATALOG.bundled().served()
 
 
 class TestMoonshotResponseSchemaSupport:
@@ -703,7 +702,7 @@ class TestMoonshotResponseSchemaSupport:
 
     @pytest.fixture(autouse=True)
     def model_cost_map(self):
-        return GetModelCostMap.load_local_model_cost_map()
+        return CATALOG.bundled().served()
 
 
 class TestMoonshotReasoningEffort:
@@ -713,7 +712,7 @@ class TestMoonshotReasoningEffort:
 
     @pytest.fixture(autouse=True)
     def force_local_model_cost(self, monkeypatch):
-        monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+        monkeypatch.setattr(litellm, "model_cost", CATALOG.bundled().served())
 
     @pytest.mark.parametrize("model", ["kimi-k3", "kimi-k2.5", "kimi-k2.6"])
     def test_reasoning_model_supports_reasoning_effort(self, model):

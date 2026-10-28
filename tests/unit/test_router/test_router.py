@@ -20337,9 +20337,9 @@ class TestTierParamsTheTargetAccepts:
 
     @pytest.fixture(autouse=True)
     def force_local_model_cost(self, monkeypatch):
-        from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+        from litellm._catalog import CATALOG
 
-        monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+        monkeypatch.setattr(litellm, "model_cost", CATALOG.bundled().served())
 
     @staticmethod
     def _router(model: str) -> litellm.Router:
