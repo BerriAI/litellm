@@ -8,7 +8,7 @@ import litellm
 from litellm.caching.caching import Cache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
-from litellm.llms.anthropic.pass_through.messages import handler as python_messages
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.messages import dispatch
 from litellm.messages.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
