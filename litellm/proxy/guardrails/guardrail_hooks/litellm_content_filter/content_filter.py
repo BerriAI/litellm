@@ -853,7 +853,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         text: str,
         pattern_entry: CompiledPatternEntry,
         check_candidate: CandidateCheck = run_validator,
-    ) -> list[tuple[int, int]]:
+    ) -> Sequence[tuple[int, int]]:
         """Return all match spans for a pattern, applying contextual rules if required."""
 
         regex: Final[Pattern[str]] = pattern_entry["regex"]
@@ -890,7 +890,42 @@ class ContentFilterGuardrail(CustomGuardrail):
                     continue
                 match_spans.append((word_match.start(), word_match.end()))
 
-        return self._merge_spans(match_spans)
+        merged_spans: Final = self._merge_spans(match_spans)
+        if validator is None or not merged_spans:
+            return merged_spans
+        return self._with_overlapping_checksum_matches(text, pattern_entry, merged_spans, check_candidate)
+
+    def _with_overlapping_checksum_matches(
+        self,
+        text: str,
+        pattern_entry: CompiledPatternEntry,
+        spans: Sequence[tuple[int, int]],
+        check_candidate: CandidateCheck,
+    ) -> Sequence[tuple[int, int]]:
+        other_checksum_spans: Final = tuple(
+            itertools.chain.from_iterable(
+                self._entry_checksum_valid_spans(entry, text, check_candidate)
+                for entry in self.compiled_patterns
+                if entry is not pattern_entry
+            )
+        )
+        if not other_checksum_spans:
+            return spans
+        span_starts: Final = tuple(start for start, _ in spans)
+        span_ends: Final = tuple(end for _, end in spans)
+        return tuple(
+            component
+            for component in self._merge_spans([*spans, *other_checksum_spans])
+            if self._overlaps_any_span(component, span_starts, span_ends)
+        )
+
+    def _entry_checksum_valid_spans(
+        self, entry: CompiledPatternEntry, text: str, check_candidate: CandidateCheck
+    ) -> tuple[tuple[int, int], ...]:
+        validator: Final = entry.get("validator")
+        if validator is None:
+            return ()
+        return self._checksum_valid_spans(entry["regex"], text, validator, check_candidate)
 
     def _checksum_valid_spans(
         self,
@@ -911,15 +946,13 @@ class ContentFilterGuardrail(CustomGuardrail):
         valid_starts: Final = tuple(start for start, _ in valid_spans)
         furthest_valid_ends: Final = tuple(itertools.accumulate((end for _, end in valid_spans), max))
         return valid_spans + tuple(
-            span for span in leftmost_spans if self._overlaps_a_valid_span(span, valid_starts, furthest_valid_ends)
+            span for span in leftmost_spans if self._overlaps_any_span(span, valid_starts, furthest_valid_ends)
         )
 
     @staticmethod
-    def _overlaps_a_valid_span(
-        span: tuple[int, int], sorted_valid_starts: Sequence[int], furthest_valid_ends: Sequence[int]
-    ) -> bool:
-        index: Final = bisect_left(sorted_valid_starts, span[1])
-        return index > 0 and furthest_valid_ends[index - 1] > span[0]
+    def _overlaps_any_span(span: tuple[int, int], sorted_starts: Sequence[int], furthest_ends: Sequence[int]) -> bool:
+        index: Final = bisect_left(sorted_starts, span[1])
+        return index > 0 and furthest_ends[index - 1] > span[0]
 
     def _match_near_keyword(
         self,
@@ -973,7 +1006,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 merged.append((start, end))
         return merged
 
-    def _mask_spans(self, text: str, spans: list[tuple[int, int]], redaction: str) -> str:
+    def _mask_spans(self, text: str, spans: Sequence[tuple[int, int]], redaction: str) -> str:
         """Apply masking for the provided spans using the given redaction tag."""
 
         if not spans:
@@ -1379,7 +1412,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         pattern_name: str,
         action: ContentFilterAction,
         text: str,
-        spans: list[tuple[int, int]],
+        spans: Sequence[tuple[int, int]],
         detections: list[ContentFilterDetection] | None,
     ) -> str:
         """Handle regex pattern match detection and action."""
@@ -1499,8 +1532,9 @@ class ContentFilterGuardrail(CustomGuardrail):
             text = self._handle_category_keyword_match(keyword, category_name, severity, action, text, detections)
 
         # Check regex patterns - process ALL patterns, not just first match
+        memoized_check: Final = functools.cache(check_candidate)
         for pattern_entry in self.compiled_patterns:
-            spans = self._find_pattern_spans(text, pattern_entry, check_candidate)
+            spans = self._find_pattern_spans(text, pattern_entry, memoized_check)
             if spans:
                 pattern_name = pattern_entry["pattern_name"]
                 action = pattern_entry["action"]

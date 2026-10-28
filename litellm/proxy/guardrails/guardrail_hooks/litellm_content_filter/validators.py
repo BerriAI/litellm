@@ -1,4 +1,5 @@
 import re
+import string
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final, TypeAlias
@@ -115,6 +116,9 @@ _ISO_13616_IBAN_LENGTHS: Final[Mapping[str, int]] = MappingProxyType(
         "YT": 27,
     }
 )
+_IBAN_LETTER_VALUES: Final = str.maketrans(
+    {letter: str(value) for value, letter in enumerate(string.ascii_uppercase, 10)}
+)
 _DIGIT_VALUES: Final = bytes.maketrans(b"0123456789", bytes(range(10)))
 _DOUBLED_DIGIT_SUMS: Final = bytes.maketrans(b"0123456789", bytes((0, 2, 4, 6, 8, 1, 3, 5, 7, 9)))
 
@@ -143,7 +147,7 @@ def passes_iban_mod97(value: str) -> bool:
     if _IBAN_CHARACTERS.fullmatch(iban) is None:
         return False
     rearranged: Final = iban[4:] + iban[:4]
-    return int("".join(str(int(character, 36)) for character in rearranged)) % 97 == 1
+    return int(rearranged.translate(_IBAN_LETTER_VALUES)) % 97 == 1
 
 
 CandidateCheck: TypeAlias = Callable[[Callable[[str], bool], str], bool]

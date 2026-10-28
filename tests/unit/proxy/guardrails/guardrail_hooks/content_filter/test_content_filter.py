@@ -437,6 +437,33 @@ class TestContentFilterGuardrail:
         assert guardrailed_inputs.get("texts") == [expected]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("ids 4853 4091 4909 4475 5508 5016 6232 6258 end", "ids [VISA_REDACTED] end"),
+            ("ids 4336 4262 4755 4637 3753 786027 13221 end", "ids [VISA_REDACTED] end"),
+            ("4000 4000 0000 0000\n5555 5555 5555 4444", "[VISA_REDACTED]"),
+            ("cards 4532 0151 1283 0366 5555 5555 5555 4444 ok", "cards [VISA_REDACTED] [MASTERCARD_REDACTED] ok"),
+        ],
+    )
+    async def test_checksum_pattern_masks_the_valid_cards_of_later_patterns_it_overlaps(self, text: str, expected: str):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-checksum-cross-pattern",
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name=pattern_name, action=ContentFilterAction.MASK)
+                for pattern_name in ("visa", "mastercard", "amex", "discover", "credit_card", "iban")
+            ],
+        )
+
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [text]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert guardrailed_inputs.get("texts") == [expected]
+
+    @pytest.mark.asyncio
     async def test_checksum_pattern_streams_the_same_text_as_a_whole_response(self):
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
