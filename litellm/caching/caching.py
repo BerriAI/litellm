@@ -62,7 +62,7 @@ def print_verbose(print_statement):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
-            print(print_statement)  # noqa: T201
+            print("redacted-by-litellm" if litellm.redact_messages_in_debug_logs else print_statement)  # noqa: T201
     except Exception:
         pass
 

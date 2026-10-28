@@ -4,6 +4,7 @@ from typing import Final
 
 import httpx
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_factory,
     render_custom_prompt_template,
@@ -85,7 +86,9 @@ def completion(
             original_response=outputs,
             additional_args={"complete_input_dict": sampling_params},
         )
-        print_verbose(f"raw model_response: {outputs}")
+        print_verbose(
+            "redacted-by-litellm" if litellm.redact_messages_in_debug_logs else f"raw model_response: {outputs}"
+        )
         ## RESPONSE OBJECT
         model_response.choices[0].message.content = outputs[0].outputs[0].text
 

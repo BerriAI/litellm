@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, 
 from datetime import datetime
 from functools import lru_cache
 from itertools import chain
+from time import perf_counter
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -33,7 +34,7 @@ from starlette.types import Receive, Scope, Send
 from typing_extensions import Never
 
 import litellm
-from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
+from litellm._logging import log_safe_diagnostic, redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.constants import (
@@ -2775,7 +2776,7 @@ class ProxyBaseLLMRequestProcessing:
 
     def _debug_log_request_payload(self) -> None:
         """Log request payload at DEBUG level, truncating if too large."""
-        if not verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+        if litellm.redact_messages_in_debug_logs or not verbose_proxy_logger.isEnabledFor(logging.DEBUG):
             return
         _payload_str: Final = json.dumps(self.data, default=str)
         if len(_payload_str) > MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG:
@@ -2831,7 +2832,12 @@ class ProxyBaseLLMRequestProcessing:
                 dispatched_call_type=self.route_type,
             )
 
-        return await open_sse_before_first_byte(
+        diagnostic_started: Final = (
+            perf_counter()
+            if litellm.redact_messages_in_debug_logs and verbose_proxy_logger.isEnabledFor(logging.DEBUG)
+            else None
+        )
+        response: Final = await open_sse_before_first_byte(
             self._process_llm_request(
                 request=request,
                 fastapi_response=fastapi_response,
@@ -2856,6 +2862,18 @@ class ProxyBaseLLMRequestProcessing:
             ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
             on_late_failure=_audit_late_failure,
         )
+        if diagnostic_started is not None:
+            log_safe_diagnostic(
+                verbose_proxy_logger,
+                "response_ready",
+                status_code=(
+                    response.status_code
+                    if isinstance(response, Response)
+                    else fastapi_response.status_code or status.HTTP_200_OK
+                ),
+                elapsed_seconds=perf_counter() - diagnostic_started,
+            )
+        return response
 
     async def _process_llm_request(
         self,
@@ -4167,6 +4185,13 @@ class ProxyBaseLLMRequestProcessing:
         version: str | None = None,
     ) -> Never:
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
+        if litellm.redact_messages_in_debug_logs:
+            log_safe_diagnostic(
+                verbose_proxy_logger,
+                "request_failed",
+                status_code=error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR),
+                level=logging.ERROR,
+            )
         log_llm_api_exception(e, self.litellm_call_id)
         # Allow callbacks to transform the error response
         transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
@@ -4444,6 +4469,7 @@ class ProxyBaseLLMRequestProcessing:
         cost_injection_enabled: Final = bool(getattr(litellm, "include_cost_in_streaming_usage", False))
         fast_path = not caps.has_streaming_chunk_override and not caps.has_guardrail and not cost_injection_enabled
         debug_enabled: Final = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
+        diagnostic_started: Final = perf_counter() if litellm.redact_messages_in_debug_logs and debug_enabled else None
         stream_completed = False
         client_disconnected = False
         delivered_chunk = False
@@ -4458,7 +4484,7 @@ class ProxyBaseLLMRequestProcessing:
             async for chunk in guarded_stream:
                 # ``.format(chunk)`` was previously evaluated for every chunk
                 # regardless of log level; gate it behind the level check.
-                if debug_enabled:
+                if debug_enabled and not litellm.redact_messages_in_debug_logs:
                     verbose_proxy_logger.debug("async_data_generator: received streaming chunk - %s", chunk)
 
                 if not fast_path:
@@ -4501,6 +4527,11 @@ class ProxyBaseLLMRequestProcessing:
             if held_tail:
                 yield serialize_chunk(held_tail)
             stream_completed = True
+            log_safe_diagnostic(
+                verbose_proxy_logger,
+                "stream_completed",
+                elapsed_seconds=perf_counter() - diagnostic_started if diagnostic_started is not None else None,
+            )
         except (asyncio.CancelledError, GeneratorExit):
             # Client disconnected mid-stream. CancelledError / GeneratorExit
             # are BaseException and bypass the success/failure logging
@@ -4538,6 +4569,7 @@ class ProxyBaseLLMRequestProcessing:
             if isinstance(e, HTTPException):
                 raise e
             stream_error_status: Final = error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
+            log_safe_diagnostic(verbose_proxy_logger, "request_failed", status_code=stream_error_status)
             proxy_exception: Final = ProxyException(
                 message=redact_internal_details_from_client_message(getattr(e, "message", str(e))),
                 type=openai_error_type(e, stream_error_status),

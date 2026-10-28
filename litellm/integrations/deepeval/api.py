@@ -5,6 +5,7 @@ from typing import Final
 
 import httpx
 
+import litellm
 from litellm._logging import verbose_logger
 
 DEEPEVAL_BASE_URL: Final = "https://deepeval.confident-ai.com"
@@ -21,8 +22,8 @@ from litellm.llms.custom_httpx.http_handler import (
 
 
 def log_retry_error(details):
-    exception: Final = details.get("exception")
-    tries: Final = details.get("tries")
+    exception: Final = "redacted-by-litellm" if litellm.redact_messages_in_debug_logs else details.get("exception")
+    tries: Final = "redacted-by-litellm" if litellm.redact_messages_in_debug_logs else details.get("tries")
     if exception:
         logging.error("Confident AI Error: %s. Retrying: %s time(s)...", exception, tries)
     else:

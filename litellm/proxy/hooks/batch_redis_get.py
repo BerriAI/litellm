@@ -29,7 +29,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
         if debug_level == "DEBUG" or debug_level == "INFO":
             verbose_proxy_logger.debug(print_statement)
         if litellm.set_verbose is True:
-            print(print_statement)  # noqa: T201
+            print("redacted-by-litellm" if litellm.redact_messages_in_debug_logs else print_statement)  # noqa: T201
 
     async def async_pre_call_hook(
         self,

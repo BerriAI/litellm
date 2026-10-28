@@ -1221,7 +1221,10 @@ Model Info:
         if response.status_code == 200:
             return True
         else:
-            print("Error sending webhook alert. Error=", response.text)  # noqa: T201
+            print(  # noqa: T201  # legacy stdout diagnostic
+                "Error sending webhook alert. Error=",
+                "redacted-by-litellm" if litellm.redact_messages_in_debug_logs else response.text,
+            )
 
         return False
 

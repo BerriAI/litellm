@@ -9,7 +9,10 @@ try:
 
     from wandb.sdk.data_types import trace_tree
 
+    from litellm._logging import MessageContentFilter
+
     logger: Final = logging.getLogger(__name__)
+    logger.addFilter(MessageContentFilter())
 
     K = TypeVar("K", bound=str)
     V = TypeVar("V")

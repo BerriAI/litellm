@@ -819,7 +819,11 @@ def _text_completion_response_from_cached_dict(cached_response_dict: Mapping[str
 
 async def _async_streaming(response, model, custom_llm_provider, args):
     try:
-        print_verbose(f"received response in _async_streaming: {response}")
+        print_verbose(
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"received response in _async_streaming: {response}"
+        )
         if asyncio.iscoroutine(response):
             response = await response
         async for line in response:
@@ -9219,7 +9223,7 @@ def print_verbose(print_statement: object):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
-            print(print_statement)  # noqa: T201
+            print("redacted-by-litellm" if litellm.redact_messages_in_debug_logs else print_statement)  # noqa: T201
     except Exception:
         pass
 

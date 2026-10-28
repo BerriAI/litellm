@@ -28,6 +28,7 @@ from redis.commands.search.field import TagField, VectorField
 from redis.commands.search.indexDefinition import IndexDefinition, IndexType
 from redis.commands.search.query import Query
 
+import litellm
 from litellm._logging import print_verbose
 from litellm._uuid import uuid
 from litellm.llms.valkey.common_utils import build_valkey_url, pack_vector
@@ -259,7 +260,11 @@ class ValkeySemanticCache(RedisSemanticCache):
         return self._get_cache_logic(cached_response=hit.response)
 
     def set_cache(self, key: str, value: object, **kwargs: object) -> None:
-        print_verbose(f"Valkey semantic-cache set_cache, kwargs: {kwargs}")
+        print_verbose(
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"Valkey semantic-cache set_cache, kwargs: {kwargs}"
+        )
         try:
             prompt: Final = self._get_prompt_from_kwargs(**kwargs)
             if prompt is None:
@@ -278,7 +283,11 @@ class ValkeySemanticCache(RedisSemanticCache):
             print_verbose(f"Error in Valkey semantic-cache set_cache: {e}")
 
     def get_cache(self, key: str, **kwargs: object) -> object:
-        print_verbose(f"Valkey semantic-cache get_cache, kwargs: {kwargs}")
+        print_verbose(
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"Valkey semantic-cache get_cache, kwargs: {kwargs}"
+        )
         try:
             prompt: Final = self._get_prompt_from_kwargs(**kwargs)
             if prompt is None:
@@ -298,7 +307,11 @@ class ValkeySemanticCache(RedisSemanticCache):
             self._record_similarity(kwargs, 0.0)
 
     async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
-        print_verbose(f"Async Valkey semantic-cache set_cache, kwargs: {kwargs}")
+        print_verbose(
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"Async Valkey semantic-cache set_cache, kwargs: {kwargs}"
+        )
         try:
             prompt: Final = self._get_prompt_from_kwargs(**kwargs)
             if prompt is None:
@@ -317,7 +330,11 @@ class ValkeySemanticCache(RedisSemanticCache):
             print_verbose(f"Error in async Valkey semantic-cache set_cache: {e}")
 
     async def async_get_cache(self, key: str, **kwargs: object) -> object:
-        print_verbose(f"Async Valkey semantic-cache get_cache, kwargs: {kwargs}")
+        print_verbose(
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"Async Valkey semantic-cache get_cache, kwargs: {kwargs}"
+        )
         try:
             prompt: Final = self._get_prompt_from_kwargs(**kwargs)
             if prompt is None:

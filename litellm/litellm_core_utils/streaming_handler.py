@@ -151,10 +151,16 @@ def is_async_iterable(obj: object) -> bool:
     return isinstance(obj, collections.abc.AsyncIterable)
 
 
-def print_verbose(print_statement: object):
+def print_verbose(print_statement: object, *args: object):
     try:
         if litellm.set_verbose:
-            print(print_statement)  # noqa: T201
+            print(  # noqa: T201
+                "redacted-by-litellm"
+                if litellm.redact_messages_in_debug_logs
+                else str(print_statement) % args
+                if args
+                else print_statement
+            )
     except Exception:
         pass
 
@@ -654,10 +660,10 @@ class CustomStreamWrapper:
             text = ""
             is_finished = False
             finish_reason = ""
-            print_verbose(f"chunk: {chunk}")
+            print_verbose("chunk: %s", cast(object, chunk))  # cast-ok: logging accepts any object
             if chunk.startswith("data:"):
                 data_json: Final[_PredibaseStreamData] = json.loads(chunk[5:])
-                print_verbose(f"data json: {data_json}")
+                print_verbose("data json: %s", data_json)
                 if "token" in data_json and "text" in data_json["token"]:
                     text = data_json["token"]["text"]
                 if data_json.get("details", False) and data_json["details"].get("finish_reason", False):
@@ -847,7 +853,8 @@ class CustomStreamWrapper:
                         "completion_tokens": 0,
                     }
             else:
-                print_verbose(f"chunk: {chunk} (Type: {type(chunk)})")
+                if not litellm.redact_messages_in_debug_logs:
+                    print_verbose(f"chunk: {chunk} (Type: {type(chunk)})")
                 raise ValueError(f"Unable to parse response. Original response: {chunk}")
             text: Final = parsed_response.get("text_output", "")
             finish_reason: Final = parsed_response.get("stop_reason")
@@ -1483,13 +1490,21 @@ class CustomStreamWrapper:
         elif self.custom_llm_provider == "triton":
             response_obj = self.handle_triton_stream(chunk)
             completion_obj["content"] = response_obj["text"]
-            print_verbose(f"completion obj content: {completion_obj['content']}")
+            print_verbose(
+                "redacted-by-litellm"
+                if litellm.redact_messages_in_debug_logs
+                else f"completion obj content: {completion_obj['content']}"
+            )
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
         elif self.custom_llm_provider == "text-completion-openai":
             response_obj = self.handle_openai_text_completion_chunk(chunk)
             completion_obj["content"] = response_obj["text"]
-            print_verbose(f"completion obj content: {completion_obj['content']}")
+            print_verbose(
+                "redacted-by-litellm"
+                if litellm.redact_messages_in_debug_logs
+                else f"completion obj content: {completion_obj['content']}"
+            )
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
             if response_obj["usage"] is not None:
@@ -1511,7 +1526,11 @@ class CustomStreamWrapper:
                 litellm.CodestralTextCompletionConfig().chunk_parser(chunk),
             )
             completion_obj["content"] = response_obj["text"]
-            print_verbose(f"completion obj content: {completion_obj['content']}")
+            print_verbose(
+                "redacted-by-litellm"
+                if litellm.redact_messages_in_debug_logs
+                else f"completion obj content: {completion_obj['content']}"
+            )
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
             if "usage" in response_obj is not None:
@@ -1528,7 +1547,11 @@ class CustomStreamWrapper:
         elif self.custom_llm_provider == "azure_text":
             response_obj = self.handle_azure_text_completion_chunk(chunk)
             completion_obj["content"] = response_obj["text"]
-            print_verbose(f"completion obj content: {completion_obj['content']}")
+            print_verbose(
+                "redacted-by-litellm"
+                if litellm.redact_messages_in_debug_logs
+                else f"completion obj content: {completion_obj['content']}"
+            )
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
         elif self.custom_llm_provider == "cached_response":
@@ -1546,7 +1569,11 @@ class CustomStreamWrapper:
             completion_obj["content"] = response_obj["text"]
             if response_obj["tool_calls"] is not None:
                 completion_obj["tool_calls"] = response_obj["tool_calls"]
-            print_verbose(f"completion obj content: {completion_obj['content']}")
+            print_verbose(
+                "redacted-by-litellm"
+                if litellm.redact_messages_in_debug_logs
+                else f"completion obj content: {completion_obj['content']}"
+            )
             if hasattr(cached_chunk, "id"):
                 model_response.id = cached_chunk.id
                 self.response_id = cached_chunk.id
@@ -2038,11 +2065,13 @@ class CustomStreamWrapper:
                 else:
                     chunk = next(self.completion_stream)
                 if chunk is not None and chunk != b"":
-                    print_verbose(
-                        f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else chunk}; custom_llm_provider: {self.custom_llm_provider}"
-                    )
+                    if not litellm.redact_messages_in_debug_logs:
+                        print_verbose(
+                            f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else chunk}; custom_llm_provider: {self.custom_llm_provider}"
+                        )
                     response: ModelResponseStream | None = self.chunk_creator(chunk=chunk)
-                    print_verbose(f"PROCESSED CHUNK POST CHUNK CREATOR: {response}")
+                    if not litellm.redact_messages_in_debug_logs:
+                        print_verbose(f"PROCESSED CHUNK POST CHUNK CREATOR: {response}")
 
                     if response is None:
                         continue

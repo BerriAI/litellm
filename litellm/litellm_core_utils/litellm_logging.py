@@ -5,6 +5,7 @@ import copy
 import datetime
 import functools
 import json
+import logging
 import math
 import os
 import re
@@ -25,7 +26,9 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 import litellm
 from litellm._internal_context import post_response_phase
 from litellm._logging import (
+    diagnostic_message_logging_disabled,
     is_debugging_on,
+    log_safe_diagnostic,
     redact_string,
     session_id_var,
     set_session_id,
@@ -1708,6 +1711,13 @@ class Logging(LiteLLMLoggingBaseClass):
 
         Prints the RAW curl command sent from LiteLLM
         """
+        if diagnostic_message_logging_disabled():
+            log_safe_diagnostic(
+                verbose_logger,
+                "request_sent",
+                level=logging.WARNING if self.litellm_request_debug else logging.DEBUG,
+            )
+            return
         if is_debugging_on() or self.litellm_request_debug:
             if litellm.json_logs:
                 masked_headers: Final = self._get_masked_headers(headers or {})
@@ -1788,11 +1798,18 @@ class Logging(LiteLLMLoggingBaseClass):
                 attr = "debug"
 
             callattr: Final = verbose_logger.warning if attr == "warning" else verbose_logger.debug
-            callattr(
-                "RAW RESPONSE:\n{}\n\n".format(
-                    self._model_call_details_view.get("original_response", self._model_call_details_view)
+            if diagnostic_message_logging_disabled():
+                log_safe_diagnostic(
+                    verbose_logger,
+                    "response_received",
+                    level=logging.WARNING if self.litellm_request_debug else logging.DEBUG,
                 )
-            )
+            else:
+                callattr(
+                    "RAW RESPONSE:\n{}\n\n".format(
+                        self._model_call_details_view.get("original_response", self._model_call_details_view)
+                    )
+                )
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -7648,7 +7665,12 @@ def get_standard_logging_object_payload(
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
         try:
-            print(json.dumps(payload, indent=4, default=str), flush=True)  # noqa: T201
+            print(  # noqa: T201  # explicitly enabled diagnostic stdout
+                REDACTED_BY_LITELLM
+                if diagnostic_message_logging_disabled()
+                else json.dumps(payload, indent=4, default=str),
+                flush=True,
+            )
         except Exception as e:  # noqa: BLE001 # Safe catch-all for verbose logging
             verbose_logger.exception("Error serializing standard logging payload for debug output: %s", e)
 

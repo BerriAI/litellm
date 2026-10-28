@@ -198,7 +198,9 @@ class DualCache(BaseCache):
 
                 result = redis_result
 
-            print_verbose(f"get cache: cache result: {result}")
+            print_verbose(
+                "redacted-by-litellm" if litellm.redact_messages_in_debug_logs else f"get cache: cache result: {result}"
+            )
             return result
         except Exception as e:
             log_redis_failure(
@@ -262,7 +264,11 @@ class DualCache(BaseCache):
             if self.in_memory_cache is not None:
                 in_memory_result: Final = await self.in_memory_cache.async_get_cache(key, **kwargs)
 
-                print_verbose(f"in_memory_result: {in_memory_result}")
+                print_verbose(
+                    "redacted-by-litellm"
+                    if litellm.redact_messages_in_debug_logs
+                    else f"in_memory_result: {in_memory_result}"
+                )
                 if in_memory_result is not None:
                     result = in_memory_result
 
@@ -279,7 +285,9 @@ class DualCache(BaseCache):
 
                 result = redis_result
 
-            print_verbose(f"get cache: cache result: {result}")
+            print_verbose(
+                "redacted-by-litellm" if litellm.redact_messages_in_debug_logs else f"get cache: cache result: {result}"
+            )
             return result
         except Exception as e:
             log_redis_failure(

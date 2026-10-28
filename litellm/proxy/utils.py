@@ -435,9 +435,15 @@ def print_verbose(print_statement: object):
     """
     import traceback
 
-    verbose_proxy_logger.debug("%s\n%s", print_statement, traceback.format_exc())
+    verbose_proxy_logger.debug(
+        "%s\n%s", print_statement, "" if litellm.redact_messages_in_debug_logs else traceback.format_exc()
+    )
     if litellm.set_verbose:
-        print(f"LiteLLM Proxy: {redact_string(str(print_statement))}")  # noqa: T201
+        print(  # noqa: T201  # legacy stdout diagnostic
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"LiteLLM Proxy: {redact_string(str(print_statement))}"
+        )
 
 
 def _get_email_logger_class():

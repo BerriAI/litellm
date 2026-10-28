@@ -7,10 +7,11 @@ import logging
 import os
 import re
 import sys
+import traceback
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
-from typing import Final, TextIO
+from typing import Final, Literal, TextIO
 from urllib.parse import unquote
 
 from pydantic import TypeAdapter
@@ -21,6 +22,7 @@ from litellm.constants import (
     LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE,
     MAX_BASE64_LENGTH_STDOUT_LOG,
     MAX_STRING_LENGTH_STDOUT_LOG,
+    REDACTED_BY_LITELLM,
 )
 from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import UNSERIALIZABLE_OBJECT, safe_dumps, safe_json_structure
@@ -87,6 +89,88 @@ _redact_string = redact_string
 
 _REDACTED_RECORD_ATTR: Final = "litellm_redacted"
 _REDACTED_STAMP: Final = object()
+_SAFE_DIAGNOSTIC_ATTR: Final = "litellm_safe_diagnostic"
+_SAFE_DIAGNOSTIC_STAMP: Final = object()
+
+
+def diagnostic_message_logging_disabled() -> bool:
+    return getattr(litellm, "redact_messages_in_debug_logs", False) is True
+
+
+def _litellm_exception_record(record: logging.LogRecord) -> bool:
+    if not isinstance(record.exc_info, tuple) or record.exc_info[2] is None:
+        return False
+    return any(
+        isinstance(module := frame.f_globals.get("__name__"), str)
+        and (module == "litellm" or module.startswith("litellm."))
+        for frame, _ in traceback.walk_tb(record.exc_info[2])
+    )
+
+
+def _redact_diagnostic_record(record: logging.LogRecord) -> None:
+    if (
+        not diagnostic_message_logging_disabled()
+        or getattr(record, _SAFE_DIAGNOSTIC_ATTR, None) is _SAFE_DIAGNOSTIC_STAMP
+    ):
+        return
+    owned: Final = record.name in (
+        "LiteLLM",
+        "LiteLLM Router",
+        "LiteLLM Proxy",
+        "uvicorn.error",
+    ) or record.name.startswith(("LiteLLM.", "LiteLLM Router.", "LiteLLM Proxy.", "litellm."))
+    if not owned and not (record.name == "asyncio" and _litellm_exception_record(record)):
+        return
+    record.msg = REDACTED_BY_LITELLM  # rebind-ok: logging filters sanitize the diagnostic copy
+    record.args = ()  # rebind-ok: never render payload arguments
+    record.exc_info = None  # rebind-ok: exception messages may echo request content
+    record.exc_text = None  # rebind-ok: remove previously rendered exception content
+    record.stack_info = None  # rebind-ok: stack text may contain payloads
+    for key in tuple(record.__dict__):
+        if key not in _STANDARD_RECORD_ATTRS:
+            delattr(record, key)
+    setattr(record, _REDACTED_RECORD_ATTR, _REDACTED_STAMP)
+
+
+class MessageContentFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        _redact_diagnostic_record(record)
+        return True
+
+
+def log_safe_diagnostic(
+    logger: logging.Logger,
+    event: Literal[
+        "request_sent",
+        "response_received",
+        "response_ready",
+        "request_completed",
+        "request_failed",
+        "stream_completed",
+        "retry",
+        "fallback",
+    ],
+    *,
+    status_code: int | None = None,
+    elapsed_seconds: float | None = None,
+    attempt: int | None = None,
+    level: int = logging.DEBUG,
+) -> None:
+    if not diagnostic_message_logging_disabled() or not logger.isEnabledFor(level):
+        return
+    logger.log(
+        level,
+        "event=%s status=%s elapsed_seconds=%s attempt=%s content=%s",
+        event,
+        status_code,
+        elapsed_seconds,
+        attempt,
+        REDACTED_BY_LITELLM,
+        extra={_SAFE_DIAGNOSTIC_ATTR: _SAFE_DIAGNOSTIC_STAMP},
+        stacklevel=2,
+    )
+
+
 _DECODED_LOG_PAYLOAD: Final = TypeAdapter(object)
 _UNREDACTED_SCALAR_TYPES: Final = (bool, int, float, type(None))
 
@@ -162,6 +246,7 @@ class SecretRedactionFilter(logging.Filter):
     _formatter = logging.Formatter()
 
     def filter(self, record: logging.LogRecord) -> bool:
+        _redact_diagnostic_record(record)
         if not _ENABLE_SECRET_REDACTION or _is_redacted(record):
             return True
         return _process_record(record, base64_limit=0, text_limit=0, redact=True)
@@ -222,6 +307,23 @@ class AccessLogRedactionFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if diagnostic_message_logging_disabled():
+            safe_args: Final = (
+                tuple(value if isinstance(value, (int, float, bool)) else REDACTED_BY_LITELLM for value in record.args)
+                if isinstance(record.args, tuple) and len(record.args) == 5
+                else ()
+            )
+            record.msg = (  # rebind-ok: access diagnostic copy
+                '%s - "%s %s HTTP/%s" %s' if safe_args else REDACTED_BY_LITELLM
+            )
+            record.args = safe_args  # rebind-ok: preserve the access formatter's tuple contract
+            record.exc_info = None  # rebind-ok: exceptions can echo request content
+            record.exc_text = None  # rebind-ok: discard cached exception content
+            record.stack_info = None  # rebind-ok: discard stack content
+            for key in tuple(record.__dict__):
+                if key not in _STANDARD_RECORD_ATTRS:
+                    delattr(record, key)
+            return True
         if not _ENABLE_SECRET_REDACTION:
             return True
         if isinstance(record.args, tuple) and record.args:
@@ -431,6 +533,7 @@ def _render_exception(record: logging.LogRecord) -> str | None:
 
 
 def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit: int, redact: bool) -> bool:
+    _redact_diagnostic_record(record)
     if _is_redacted(record):
         return True
     message: Final = _render_message(record)
@@ -448,7 +551,7 @@ def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit:
             )
             for key, value in _record_attributes(record).items()
             if key not in _STANDARD_RECORD_ATTRS
-            and key != _REDACTED_RECORD_ATTR
+            and key not in (_REDACTED_RECORD_ATTR, _SAFE_DIAGNOSTIC_ATTR)
             and not isinstance(value, _UNREDACTED_SCALAR_TYPES)
         )
         if redact
@@ -532,6 +635,7 @@ class StdoutLogTruncationFilter(logging.Filter):
     _formatter = logging.Formatter()
 
     def filter(self, record: logging.LogRecord) -> bool:
+        _redact_diagnostic_record(record)
         try:
             message: Final = record.getMessage()
         except (TypeError, ValueError):
@@ -580,7 +684,7 @@ class CorrelationContextFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if not litellm.request_correlation_in_logs:
+        if diagnostic_message_logging_disabled() or not litellm.request_correlation_in_logs:
             return True
         trace_id: Final = trace_id_var.get()
         if trace_id:
@@ -719,13 +823,13 @@ def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
 
 # Standard LogRecord attribute names - used to identify 'extra' fields.
 # Derived at runtime so we automatically include version-specific attrs (e.g. taskName).
-def _get_standard_record_attrs() -> frozenset:
+def _get_standard_record_attrs() -> frozenset[str]:
     """Standard LogRecord attribute names - excludes extra keys from logger.debug(..., extra={...})."""
     return frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys())
 
 
 _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
-_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR}
+_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR, _SAFE_DIAGNOSTIC_ATTR}
 
 # CorrelationContextFilter is the only legitimate source for these two JSON fields;
 # see JsonFormatter.format() for why they're excluded from the generic message-content
@@ -743,6 +847,7 @@ class JsonFormatter(Formatter):
         return dt.isoformat()
 
     def format(self, record):
+        _redact_diagnostic_record(record)
         message_str: Final = record.getMessage()
         json_record: Final[dict[str, object]] = {
             "message": message_str,
@@ -833,7 +938,7 @@ def _setup_json_exception_handlers(formatter):
             level=logging.ERROR,
             pathname="",
             lineno=0,
-            msg=str(exc_value),
+            msg=REDACTED_BY_LITELLM if diagnostic_message_logging_disabled() else str(exc_value),
             args=(),
             exc_info=(exc_type, exc_value, exc_traceback),
         )
@@ -854,7 +959,7 @@ def _setup_json_exception_handlers(formatter):
                     level=logging.ERROR,
                     pathname="",
                     lineno=0,
-                    msg=str(exception),
+                    msg=REDACTED_BY_LITELLM if diagnostic_message_logging_disabled() else str(exception),
                     args=(),
                     exc_info=(exc_type, exception, exception.__traceback__),
                 )
@@ -1153,7 +1258,13 @@ def print_verbose(print_statement: object, *args: object) -> None:
     try:
         if not set_verbose:
             return
-        message: Final = str(print_statement) % args if args else str(print_statement)
+        message: Final = (
+            REDACTED_BY_LITELLM
+            if diagnostic_message_logging_disabled()
+            else str(print_statement) % args
+            if args
+            else str(print_statement)
+        )
         print(redact_secrets(message))  # noqa: T201
     except Exception:
         pass

@@ -1,10 +1,14 @@
 import zoneinfo
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import polars as pl
 import pytest
+import respx
+
+import litellm
 
 
 from litellm.integrations.cloudzero.cz_stream_api import CloudZeroStreamer
@@ -177,3 +181,20 @@ class TestCloudZeroStreamer:
         # Should avoid scientific notation
         assert "e" not in result["cost"].lower()
         assert "e" not in result["large_float"].lower()
+
+
+@pytest.mark.parametrize("redact", (False, True))
+def test_cloudzero_http_error_diagnostics_respect_privacy_without_changing_exception(
+    redact: bool, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
+    marker: Final = "synthetic-private-upstream-content"
+    streamer: Final = CloudZeroStreamer("test-key", "test-connection")
+    with respx.mock:
+        respx.post(f"{streamer.base_url}/v2/connections/billing/anycost/test-connection/billing_drops").respond(
+            status_code=400, text=marker
+        )
+        with pytest.raises(httpx.HTTPStatusError) as captured:
+            streamer._send_daily_batch("2026-01-01", pl.DataFrame({"cost/cost": [1.0]}), "replace_hourly")
+    assert captured.value.response.text == marker
+    assert (marker in capsys.readouterr().out) is not redact

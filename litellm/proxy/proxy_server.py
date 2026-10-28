@@ -1147,13 +1147,23 @@ def _redact_worker_config_for_logging(worker_config: str | dict[str, JsonValue] 
     (`LITELLM_DISABLE_REDACT_SECRETS=true`, an older log sink, a downstream
     handler that captures records pre-filter). Redact at the source.
     """
+    if litellm.redact_messages_in_debug_logs:
+        return "redacted-by-litellm"
     if worker_config is None:
         return None
-    if isinstance(worker_config, dict):
-        return _redact_secret_values_in_obj(worker_config)
-    parsed: Final[JsonValue] = safe_json_loads(worker_config, default=None)
+    parsed: Final[JsonValue] = (
+        worker_config if isinstance(worker_config, dict) else safe_json_loads(worker_config, default=None)
+    )
     if isinstance(parsed, dict):
-        return safe_dumps(_redact_secret_values_in_obj(parsed))
+        settings: Final = parsed.get("litellm_settings")
+        if isinstance(settings, dict) and settings.get("redact_messages_in_debug_logs") is not None:
+            try:
+                if TypeAdapter(bool).validate_python(settings["redact_messages_in_debug_logs"]):
+                    return "redacted-by-litellm"
+            except ValidationError:
+                return "redacted-by-litellm"
+        redacted: Final = _redact_secret_values_in_obj(parsed)
+        return redacted if isinstance(worker_config, dict) else safe_dumps(redacted)
     return worker_config
 
 
@@ -5739,6 +5749,11 @@ class ProxyConfig:
         }
 
     def _apply_resolved_runtime_settings(self, config: Mapping[str, object]) -> None:
+        diagnostic_settings: Final = config.get("litellm_settings")
+        if isinstance(diagnostic_settings, Mapping) and "redact_messages_in_debug_logs" in diagnostic_settings:
+            litellm.redact_messages_in_debug_logs = TypeAdapter(bool).validate_python(
+                diagnostic_settings["redact_messages_in_debug_logs"]
+            )
         for section, store in self._settings_stores.items():
             if isinstance(config.get(section), Mapping):
                 store.apply_runtime_values(_as_settings_mapping(config[section]))
@@ -6915,6 +6930,8 @@ class ProxyConfig:
 
                     parse_budget_reset_time(value)
                     setattr(litellm, key, value)
+                elif key == "redact_messages_in_debug_logs":
+                    litellm.redact_messages_in_debug_logs = TypeAdapter(bool).validate_python(value)
                 elif key == "drop_params":
                     litellm.drop_params = drop_params_flag(value, "litellm_settings.drop_params", verbose_proxy_logger)
                 else:

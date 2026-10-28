@@ -52,7 +52,9 @@ def handle_prediction_response_streaming(
                         headers=response.headers,
                     )
                 new_output = output_string[len(previous_output) :]
-                print_verbose(f"New chunk: {new_output}")
+                print_verbose(
+                    "redacted-by-litellm" if litellm.redact_messages_in_debug_logs else f"New chunk: {new_output}"
+                )
                 yield {"output": new_output, "status": status}
                 previous_output = output_string
             status = response_data["status"]
@@ -66,7 +68,9 @@ def handle_prediction_response_streaming(
         else:
             # this can fail temporarily but it does not mean the replicate request failed, replicate request fails when status=="failed"
             print_verbose(
-                f"Replicate: Failed to fetch prediction status and output.{response.status_code}{response.text}"
+                "redacted-by-litellm"
+                if litellm.redact_messages_in_debug_logs
+                else f"Replicate: Failed to fetch prediction status and output.{response.status_code}{response.text}"
             )
 
 
@@ -107,7 +111,9 @@ async def async_handle_prediction_response_streaming(
                         headers=response.headers,
                     )
                 new_output = output_string[len(previous_output) :]
-                print_verbose(f"New chunk: {new_output}")
+                print_verbose(
+                    "redacted-by-litellm" if litellm.redact_messages_in_debug_logs else f"New chunk: {new_output}"
+                )
                 yield {"output": new_output, "status": status}
                 previous_output = output_string
             status = response_data.get("status", "")
@@ -121,7 +127,9 @@ async def async_handle_prediction_response_streaming(
         else:
             # this can fail temporarily but it does not mean the replicate request failed, replicate request fails when status=="failed"
             print_verbose(
-                f"Replicate: Failed to fetch prediction status and output.{response.status_code}{response.text}"
+                "redacted-by-litellm"
+                if litellm.redact_messages_in_debug_logs
+                else f"Replicate: Failed to fetch prediction status and output.{response.status_code}{response.text}"
             )
 
 

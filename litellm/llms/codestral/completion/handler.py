@@ -181,7 +181,11 @@ class CodestralTextCompletion:
             original_response=response.text,
             additional_args={"complete_input_dict": data},
         )
-        print_verbose(f"codestral api: raw model_response: {response.text}")
+        print_verbose(
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"codestral api: raw model_response: {response.text}"
+        )
         ## RESPONSE OBJECT
         if response.status_code != 200:
             raise TextCompletionCodestralError(

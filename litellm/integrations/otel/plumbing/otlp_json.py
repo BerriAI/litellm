@@ -20,7 +20,10 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.semconv.attributes.http_attributes import HTTP_RESPONSE_STATUS_CODE
 
+from litellm._logging import MessageContentFilter
+
 _logger: Final = logging.getLogger(__name__)
+_logger.addFilter(MessageContentFilter())
 JSON_CONTENT_TYPE: Final = "application/json"
 _HEX_ID_KEYS: Final = frozenset({"traceId", "spanId", "parentSpanId"})
 

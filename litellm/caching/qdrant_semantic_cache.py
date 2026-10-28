@@ -208,7 +208,11 @@ class QdrantSemanticCache(BaseCache):
                 },
             )
             if response.status_code not in (200, 201):
-                print_verbose(f"Qdrant semantic-cache could not create cache-key payload index: {response.text}")
+                print_verbose(
+                    "redacted-by-litellm"
+                    if litellm.redact_messages_in_debug_logs
+                    else f"Qdrant semantic-cache could not create cache-key payload index: {response.text}"
+                )
         except Exception as exc:
             print_verbose(f"Qdrant semantic-cache could not create cache-key payload index: {exc}")
 
@@ -284,7 +288,11 @@ class QdrantSemanticCache(BaseCache):
         return await asyncio.wait_for(embedding_call, self.embedding_timeout)
 
     def set_cache(self, key, value, **kwargs):
-        print_verbose(f"qdrant semantic-cache set_cache, kwargs: {kwargs}")
+        print_verbose(
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"qdrant semantic-cache set_cache, kwargs: {kwargs}"
+        )
         from litellm._uuid import uuid
 
         # get the prompt
@@ -324,7 +332,11 @@ class QdrantSemanticCache(BaseCache):
         )
 
     def get_cache(self, key, **kwargs):
-        print_verbose(f"sync qdrant semantic-cache get_cache, kwargs: {kwargs}")
+        print_verbose(
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"sync qdrant semantic-cache get_cache, kwargs: {kwargs}"
+        )
 
         # get the messages
         messages: Final = kwargs["messages"]
@@ -399,7 +411,11 @@ class QdrantSemanticCache(BaseCache):
     async def async_set_cache(self, key, value, **kwargs):
         from litellm._uuid import uuid
 
-        print_verbose(f"async qdrant semantic-cache set_cache, kwargs: {kwargs}")
+        print_verbose(
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"async qdrant semantic-cache set_cache, kwargs: {kwargs}"
+        )
 
         # get the prompt
         messages: Final = kwargs["messages"]
@@ -434,7 +450,11 @@ class QdrantSemanticCache(BaseCache):
         )
 
     async def async_get_cache(self, key, **kwargs):
-        print_verbose(f"async qdrant semantic-cache get_cache, kwargs: {kwargs}")
+        print_verbose(
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"async qdrant semantic-cache get_cache, kwargs: {kwargs}"
+        )
 
         # get the messages
         messages: Final = kwargs["messages"]

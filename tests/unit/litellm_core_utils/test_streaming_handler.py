@@ -7943,3 +7943,13 @@ def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
     assert usage.prompt_tokens_details.cached_tokens == 80
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == 5
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_legacy_stream_verbose_output_obeys_diagnostic_privacy(monkeypatch, capsys, enabled):
+    from litellm.litellm_core_utils.streaming_handler import print_verbose
+
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", enabled)
+    print_verbose("chunk: %s", "PRIVATE_STREAM_CONTENT")
+    assert capsys.readouterr().out.strip() == ("redacted-by-litellm" if enabled else "chunk: PRIVATE_STREAM_CONTENT")

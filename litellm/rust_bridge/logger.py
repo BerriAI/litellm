@@ -5,6 +5,7 @@ from typing import Final
 
 from pydantic import JsonValue
 
+import litellm
 from litellm._logging import (
     CorrelationContextFilter,
     DiagnosticProcessingFilter,
@@ -24,7 +25,7 @@ def context() -> tuple[str, str]:
 
 
 def enabled(level: int) -> bool:
-    return verbose_logger.isEnabledFor(level)
+    return not getattr(litellm, "redact_messages_in_debug_logs", False) and verbose_logger.isEnabledFor(level)
 
 
 def emit(

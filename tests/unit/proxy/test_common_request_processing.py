@@ -12191,3 +12191,61 @@ def test_maybe_get_model_id_prefers_litellm_metadata_over_caller_metadata_withou
 
 def test_maybe_get_model_id_returns_none_before_the_router_picked_a_deployment():
     assert ProxyBaseLLMRequestProcessing(data={"metadata": {}}).maybe_get_model_id(None) is None
+
+
+def test_debug_message_privacy_does_not_serialize_proxy_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Unrenderable:
+        def __str__(self) -> str:
+            raise AssertionError("diagnostics must not serialize request content")
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", True)
+    content: Final = Unrenderable()
+    request: Final = ProxyBaseLLMRequestProcessing(data={"messages": [{"role": "user", "content": content}]})
+    request._debug_log_request_payload()
+    assert request.data["messages"][0]["content"] is content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("privacy", [False, True])
+async def test_debug_message_privacy_preserves_stream_content(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, privacy: bool
+) -> None:
+    import logging
+
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", privacy)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
+    monkeypatch.setattr(verbose_proxy_logger, "level", logging.DEBUG)
+    ProxyLogging._callback_capabilities_cache.clear()
+    chunks: Final = ("data: PRIVATE_STREAM_INPUT_42896\n\n", "data: [DONE]\n\n")
+
+    async def upstream() -> AsyncGenerator[str, None]:
+        for chunk in chunks:
+            yield chunk
+
+    def serialize(chunk: object) -> str:
+        assert isinstance(chunk, str)
+        return chunk
+
+    stream: Final = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+        response=upstream(),
+        user_api_key_dict=ProxyUserAPIKeyAuth(),
+        request_data={"model": "example-model"},
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        serialize_chunk=serialize,
+        serialize_error=lambda error: str(error),
+    )
+    observed: Final = tuple([chunk async for chunk in stream])
+    assert observed == chunks
+    messages: Final = tuple(
+        record.getMessage() for record in caplog.records if record.name == verbose_proxy_logger.name
+    )
+    if privacy:
+        assert any("event=stream_completed" in message for message in messages)
+        assert all("PRIVATE_STREAM_INPUT_42896" not in message for message in messages)
+    else:
+        assert any("PRIVATE_STREAM_INPUT_42896" in message for message in messages)

@@ -1,5 +1,10 @@
 import os
 import unittest
+from typing import Final
+
+import pytest
+
+import litellm
 from litellm._uuid import uuid
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
@@ -118,3 +123,19 @@ class TestDeepEvalLogger(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.mark.parametrize("redact", (False, True))
+def test_retry_diagnostic_hides_exception_and_dynamic_details_only_when_opted_in(
+    redact: bool, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.integrations.deepeval.api import log_retry_error
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
+    marker: Final = "synthetic-private-retry-content"
+    failure: Final = ValueError(marker)
+    details: Final = {"exception": failure, "tries": 2}
+    log_retry_error(details)
+    assert (marker in caplog.text) is not redact
+    assert ("redacted-by-litellm" in caplog.text) is redact
+    assert details["exception"] is failure

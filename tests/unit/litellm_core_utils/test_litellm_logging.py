@@ -13775,3 +13775,56 @@ def test_record_native_bedrock_guardrail_bills_nothing_for_a_response_served_fro
     logging_obj.record_native_bedrock_guardrail({"trace": trace})
 
     assert "standard_logging_guardrail_information" not in logging_obj.model_call_details["litellm_params"]["metadata"]
+
+
+class _UnrenderableRequestBody:
+    def __repr__(self) -> str:
+        raise AssertionError("request body was formatted for diagnostics")
+
+
+@pytest.mark.parametrize("json_logs", [False, True])
+def test_private_debug_request_skips_body_formatting_and_keeps_transform_data(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, json_logs: bool
+) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", True)
+    monkeypatch.setattr(litellm, "json_logs", json_logs)
+    logging_obj.litellm_request_debug = True
+    body: Final = {"messages": _UnrenderableRequestBody()}
+    details: Final = {"api_base": "https://example.com", "complete_input_dict": body, "request_str": "PRIVATE_REQUEST"}
+    logging_obj._print_llm_call_debugging_log(api_base="https://example.com", headers={}, additional_args=details)
+    assert "event=request_sent" in caplog.text
+    assert "PRIVATE_REQUEST" not in caplog.text
+    assert details["complete_input_dict"] is body
+
+
+@pytest.mark.parametrize("diagnostic_privacy", [False, True])
+@pytest.mark.parametrize("callback_privacy", [False, True])
+def test_debug_privacy_preserves_raw_transform_request_body(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, diagnostic_privacy: bool, callback_privacy: bool
+) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", diagnostic_privacy)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", callback_privacy)
+    metadata: Final = _pre_call_with_raw_request_logging(logging_obj)
+    if callback_privacy:
+        assert metadata["raw_request"] == REDACTED_BY_LITELLM
+    else:
+        assert "PRIVATE" in metadata["raw_request"]
+    assert logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_body"] == _PRIVATE_RAW_REQUEST_ARGS["complete_input_dict"]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_standard_payload_debug_stdout_obeys_diagnostic_privacy(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], enabled: bool
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import emit_standard_logging_payload
+
+    monkeypatch.setenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD", "1")
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", enabled)
+    payload: Final = StandardLoggingPayload(messages=[{"role": "user", "content": "PRIVATE_PAYLOAD"}])
+    emit_standard_logging_payload(payload)
+    output: Final = capsys.readouterr().out
+    if enabled:
+        assert output.strip() == REDACTED_BY_LITELLM
+    else:
+        assert json.loads(output)["messages"] == payload["messages"]
+    assert payload["messages"] == [{"role": "user", "content": "PRIVATE_PAYLOAD"}]

@@ -18,7 +18,10 @@ import litellm
 if TYPE_CHECKING:
     from litellm.router import Router
 
+from litellm._logging import MessageContentFilter
+
 logger: Final = logging.getLogger(__name__)
+logger.addFilter(MessageContentFilter())
 _DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
 from litellm.constants import (
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS,

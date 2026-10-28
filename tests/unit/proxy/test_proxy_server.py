@@ -3857,3 +3857,36 @@ async def test_model_list_return_wildcard_routes_defaults_to_general_setting(
 
     assert "gpt-6.1-sol" in listed, listed
     assert ("openai/*" in listed) is wildcard_listed, listed
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_yaml_config_applies_diagnostic_privacy_before_model_initialization(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", not enabled)
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text("litellm_settings:\n  redact_messages_in_debug_logs: " + str(enabled).lower() + "\n")
+    config: Final = await ProxyConfig().get_config(str(config_file))
+    assert litellm.redact_messages_in_debug_logs is enabled
+    assert config["litellm_settings"]["redact_messages_in_debug_logs"] is enabled
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_worker_config_privacy_applies_before_global_setting(
+    monkeypatch: pytest.MonkeyPatch, as_json: bool, enabled: bool
+) -> None:
+    from litellm.proxy.proxy_server import _redact_worker_config_for_logging
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", False)
+    config: Final = {
+        "litellm_settings": {"redact_messages_in_debug_logs": enabled},
+        "model_list": [{"litellm_params": {"messages": [{"content": "PRIVATE_SYSTEM_PROMPT"}]}}],
+    }
+    result: Final = _redact_worker_config_for_logging(json.dumps(config) if as_json else config)
+    if enabled:
+        assert result == "redacted-by-litellm"
+    else:
+        assert "PRIVATE_SYSTEM_PROMPT" in str(result)
