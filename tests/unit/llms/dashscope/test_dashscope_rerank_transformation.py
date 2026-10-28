@@ -467,9 +467,11 @@ def test_transform_rerank_response_shape_errors_do_not_echo_the_payload():
     [
         "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks",
         "https://dashscope-intl.aliyuncs.com/compatible-api/v1",
+        "https://dashscope-intl.aliyuncs.com",
+        "https://dashscope-intl.aliyuncs.com/api/v1",
     ],
 )
-def test_rerank_sends_an_explicit_compatible_api_base_over_the_rerank_env(
+def test_rerank_sends_an_explicit_base_over_the_rerank_env(
     monkeypatch: pytest.MonkeyPatch, provider: str, rerank_env: str, api_base: str
 ):
     monkeypatch.setenv("DASHSCOPE_API_BASE", "https://dashscope-intl.aliyuncs.com")

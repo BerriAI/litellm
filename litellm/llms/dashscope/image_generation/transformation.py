@@ -106,8 +106,11 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
             raise ValueError("DASHSCOPE_API_KEY is not set")
         return resolved_api_key
 
-    def _resolve_image_api_base(self, image_api_base: str | None) -> str:
-        return image_api_base or get_secret_str("DASHSCOPE_API_BASE_IMAGE") or DEFAULT_API_BASE
+    def _image_api_base_env(self) -> str | None:
+        return get_secret_str("DASHSCOPE_API_BASE_IMAGE")
+
+    def _default_image_api_base(self) -> str:
+        return DEFAULT_API_BASE
 
     def _configured_chat_api_base(self) -> str | None:
         return get_secret_str("DASHSCOPE_API_BASE")
@@ -121,13 +124,14 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
+        image_env_api_base: Final = self._image_api_base_env()
         configured_api_base: Final = api_base or self._configured_chat_api_base()
         if configured_api_base and configured_api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH):
-            return self._resolve_image_api_base(None)
+            return image_env_api_base or self._default_image_api_base()
         endpoints: Final = resolve_dashscope_endpoints(configured_api_base)
         if endpoints is not None:
-            return f"{endpoints.origin}{DASHSCOPE_IMAGE_PATH}"
-        return self._resolve_image_api_base(configured_api_base)
+            return (None if api_base else image_env_api_base) or f"{endpoints.origin}{DASHSCOPE_IMAGE_PATH}"
+        return configured_api_base or image_env_api_base or self._default_image_api_base()
 
     def validate_environment(
         self,

@@ -63,8 +63,11 @@ class QwenAIPlatformImageGenerationConfig(DashScopeImageGenerationConfig):
     def _resolve_api_key(self, api_key: str | None) -> str:
         return _require_qwen_ai_platform_api_key(api_key)
 
-    def _resolve_image_api_base(self, image_api_base: str | None) -> str:
-        return image_api_base or get_secret_str("QWEN_AI_PLATFORM_API_BASE_IMAGE") or QWEN_AI_PLATFORM_IMAGE_API_BASE
+    def _image_api_base_env(self) -> str | None:
+        return get_secret_str("QWEN_AI_PLATFORM_API_BASE_IMAGE")
+
+    def _default_image_api_base(self) -> str:
+        return QWEN_AI_PLATFORM_IMAGE_API_BASE
 
     def _configured_chat_api_base(self) -> str | None:
         return get_secret_str("QWEN_AI_PLATFORM_API_BASE")

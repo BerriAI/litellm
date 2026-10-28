@@ -81,6 +81,9 @@ def test_openai_base_derives_from_the_domain(monkeypatch: pytest.MonkeyPatch):
 
     assert resolve_dashscope_openai_api_base(WORKSPACE) == f"{WORKSPACE}/compatible-mode/v1"
     assert resolve_dashscope_openai_api_base(f"{WORKSPACE}/apps/anthropic") == f"{WORKSPACE}/compatible-mode/v1"
+    assert (
+        resolve_dashscope_openai_api_base(f"{WORKSPACE}/compatible-api/v1/reranks") == f"{WORKSPACE}/compatible-mode/v1"
+    )
 
 
 def test_openai_base_keeps_unrecognized_hosts(monkeypatch: pytest.MonkeyPatch):

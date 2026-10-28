@@ -500,6 +500,13 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
             "https://images.example.com/generate",
         ),
         (None, "https://gateway.example.com/dashscope/images", "", "https://gateway.example.com/dashscope/images"),
+        (None, "https://dashscope-us.aliyuncs.com", "https://images.example.com/generate", "https://images.example.com/generate"),
+        (
+            "https://dashscope-us.aliyuncs.com",
+            "",
+            "https://images.example.com/generate",
+            f"https://dashscope-us.aliyuncs.com{DASHSCOPE_IMAGE_PATH}",
+        ),
         (
             None,
             "https://dashscope-us.aliyuncs.com",

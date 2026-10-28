@@ -96,19 +96,12 @@ def resolve_dashscope_endpoints(api_base: str | None) -> DashScopeEndpoints | No
     )
 
 
-def _is_compatible_api_base(api_base: str) -> bool:
-    path: Final = urlparse(api_base).path.rstrip("/")
-    return path == DASHSCOPE_COMPATIBLE_API_PATH or path.startswith(f"{DASHSCOPE_COMPATIBLE_API_PATH}/")
-
-
 def resolve_dashscope_openai_api_base(
     api_base: str | None,
     env_var: str = "DASHSCOPE_API_BASE",
     default: str = f"{DASHSCOPE_DEFAULT_ORIGIN}{DASHSCOPE_CHAT_COMPATIBLE_PATH}",
 ) -> str:
     candidate: Final = api_base or get_secret_str(env_var)
-    if candidate and _is_compatible_api_base(candidate):
-        return candidate
     endpoints: Final = resolve_dashscope_endpoints(candidate)
     if endpoints is not None:
         return endpoints.openai
@@ -148,20 +141,21 @@ def _chat_shaped_aliyun_origin(api_base: str | None) -> str | None:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
-def _rerank_origin(api_base: str | None) -> str | None:
-    endpoints: Final = resolve_dashscope_endpoints(api_base)
-    return endpoints.origin if endpoints is not None else _chat_shaped_aliyun_origin(api_base)
+def _is_compatible_api_base(api_base: str) -> bool:
+    path: Final = urlparse(api_base).path.rstrip("/")
+    return path == DASHSCOPE_COMPATIBLE_API_PATH or path.startswith(f"{DASHSCOPE_COMPATIBLE_API_PATH}/")
 
 
 def resolve_dashscope_family_rerank_api_base(api_base: str | None, env_var: str, default_rerank_base: str) -> str:
-    if api_base is not None and _is_compatible_api_base(api_base):
+    if api_base is None:
+        return get_secret_str(env_var) or default_rerank_base
+    if _is_compatible_api_base(api_base):
         return api_base
-    origin: Final = _rerank_origin(api_base)
-    if origin is not None:
-        return get_secret_str(env_var) or f"{origin}{DASHSCOPE_RERANK_PATH}"
-    if api_base is not None:
-        return api_base
-    return get_secret_str(env_var) or default_rerank_base
+    chat_origin: Final = _chat_shaped_aliyun_origin(api_base)
+    if chat_origin is not None:
+        return get_secret_str(env_var) or f"{chat_origin}{DASHSCOPE_RERANK_PATH}"
+    endpoints: Final = resolve_dashscope_endpoints(api_base)
+    return f"{endpoints.origin}{DASHSCOPE_RERANK_PATH}" if endpoints is not None else api_base
 
 
 def get_dashscope_family_embedding_config(custom_llm_provider: str) -> "BaseEmbeddingConfig":
