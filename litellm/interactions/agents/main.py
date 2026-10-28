@@ -181,7 +181,7 @@ def _create_request_or_error(
     instruction_conflict: Final = _alias_conflict(
         "system_instruction", system_instruction, "instructions", instructions
     )
-    if instruction_conflict is not None:
+    if instruction_conflict is not None and not drop_invalid_fields:
         return _InvalidAgentRequest(instruction_conflict)
     sent_only_instructions: Final = system_instruction is None and instructions is not None
     return _validated_create_request(

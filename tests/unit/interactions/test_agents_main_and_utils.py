@@ -462,6 +462,28 @@ class TestCreateRequestBody:
 
         assert _sent_json(route) == {"id": "slides", "system_instruction": "Make slides."}
 
+    def test_create_with_drop_params_drops_a_clashing_instructions_alias(self, respx_mock: respx.MockRouter) -> None:
+        route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(
+            return_value=httpx.Response(200, json={"id": "slides"})
+        )
+
+        create(
+            id="slides",
+            system_instruction="Make slides.",
+            instructions="Make decks.",
+            drop_params=True,
+            api_key="AIza-test",
+        )
+
+        assert _sent_json(route) == {"id": "slides", "system_instruction": "Make slides."}
+
+    def test_create_with_drop_params_still_rejects_a_clashing_identifier(self, respx_mock: respx.MockRouter) -> None:
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            create(id="slides", name="decks", drop_params=True, api_key="AIza-test")
+
+        assert exc_info.value.status_code == 400
+        assert not respx_mock.calls
+
     @pytest.mark.parametrize(
         ("fields", "expected_message"),
         [
