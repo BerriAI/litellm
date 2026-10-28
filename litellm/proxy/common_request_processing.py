@@ -2373,9 +2373,11 @@ class ProxyBaseLLMRequestProcessing:
             kind="image_edit" if route_type == "aimage_edit" else "completion",
         )
         self.data["model"] = resolved_model
-        # Auth checked the body model; the endpoint model from the URL wins here, so
-        # authorize the resolved name before any alias rewrite.
-        if llm_router is not None:
+        # Auth read the body model (requested_model above). When the endpoint model from
+        # the URL overrides it, the served model was never checked, so authorize the
+        # resolved name here, before any alias rewrite. A request whose model came from
+        # the body was already checked by auth, so it is left alone.
+        if llm_router is not None and isinstance(model, str) and model and model != requested_model:
             await can_key_call_requested_models(
                 model=resolved_model, valid_token=user_api_key_dict, llm_router=llm_router
             )
