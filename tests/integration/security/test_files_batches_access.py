@@ -765,6 +765,30 @@ def test_non_admin_cannot_reach_vertex_with_a_twice_encoded_raw_gcs_uri(
         assert token_requests == (), f"non-admin twice-encoded raw GCS {method} reached the Vertex token endpoint"
 
 
+def _assert_signed_empty_body_s3_request(request: Request, method: Literal["GET", "DELETE"], wire_url: str) -> None:
+    assert request.method == method, request.method
+    request_date: Final = request.headers["x-amz-date"]
+    content_hash: Final = hashlib.sha256(b"").hexdigest()
+    assert request.headers["x-amz-content-sha256"] == content_hash, request.headers
+    aws_request: Final = AWSRequest(
+        method=method,
+        url=wire_url + request.target,
+        headers={
+            "host": request.headers["host"],
+            "x-amz-date": request_date,
+            "x-amz-content-sha256": content_hash,
+        },
+    )
+    aws_request.context["timestamp"] = request_date
+    auth: Final = S3SigV4Auth(Credentials(AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY), "s3", AWS_REGION)
+    signature: Final = auth.signature(auth.string_to_sign(aws_request, auth.canonical_request(aws_request)), aws_request)
+    expected_authorization: Final = (
+        f"AWS4-HMAC-SHA256 Credential={AWS_ACCESS_KEY_ID}/{request_date[:8]}/{AWS_REGION}/s3/aws4_request, "
+        f"SignedHeaders={auth.signed_headers(auth.headers_to_sign(aws_request))}, Signature={signature}"
+    )
+    assert request.headers["authorization"] == expected_authorization, request.headers["authorization"]
+
+
 def test_proxy_admin_deletes_a_raw_s3_uri_with_one_signed_delete(gateway: Gateway) -> None:
     with wire_server(_s3_backend()) as wire, gateway.scenario() as scenario:
         model: Final = _bedrock_model(scenario, wire)
@@ -778,29 +802,7 @@ def test_proxy_admin_deletes_a_raw_s3_uri_with_one_signed_delete(gateway: Gatewa
         assert parsed.deleted is True and parsed.id == object_uri, deleted.text
         (request,) = _drained_other_than_model_list_probes(wire)
         assert request.target == f"/{BUCKET}/litellm-bedrock-files-obj.jsonl", request.target
-        request_date: Final = request.headers["x-amz-date"]
-        content_hash: Final = hashlib.sha256(b"").hexdigest()
-        assert request.headers["x-amz-content-sha256"] == content_hash, request.headers
-        aws_request: Final = AWSRequest(
-            method="DELETE",
-            url=wire.url + request.target,
-            headers={
-                "host": request.headers["host"],
-                "x-amz-date": request_date,
-                "x-amz-content-sha256": content_hash,
-            },
-        )
-        aws_request.context["timestamp"] = request_date
-        auth: Final = S3SigV4Auth(Credentials(AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY), "s3", AWS_REGION)
-        signature: Final = auth.signature(
-            auth.string_to_sign(aws_request, auth.canonical_request(aws_request)), aws_request
-        )
-        expected_authorization: Final = (
-            f"AWS4-HMAC-SHA256 Credential={AWS_ACCESS_KEY_ID}/{request_date[:8]}/{AWS_REGION}/s3/aws4_request, "
-            f"SignedHeaders={auth.signed_headers(auth.headers_to_sign(aws_request))}, Signature={signature}"
-        )
-        assert request.headers["authorization"] == expected_authorization, request.headers["authorization"]
-        assert request.method == "DELETE", request.method
+        _assert_signed_empty_body_s3_request(request, "DELETE", wire.url)
 
 
 def _s3_object_backend(request: Request) -> Reply:
@@ -822,12 +824,8 @@ def test_proxy_admin_reads_a_raw_s3_uri_with_one_signed_get(gateway: Gateway) ->
         storage_requests: Final = _drained_other_than_model_list_probes(wire)
         assert read.status_code == 200, f"{read.text}; storage requests={storage_requests}"
         assert read.content == S3_OBJECT_BODY, read.content
-        assert [(request.method, request.target) for request in storage_requests] == [
-            ("GET", f"/{BUCKET}/{object_key}")
-        ], storage_requests
-        assert (
-            storage_requests[0].headers["authorization"].startswith(f"AWS4-HMAC-SHA256 Credential={AWS_ACCESS_KEY_ID}/")
-        ), storage_requests[0].headers
+        assert [request.target for request in storage_requests] == [f"/{BUCKET}/{object_key}"], storage_requests
+        _assert_signed_empty_body_s3_request(storage_requests[0], "GET", wire.url)
 
 
 def _granting_vertex_token_backend(request: Request) -> Reply:
