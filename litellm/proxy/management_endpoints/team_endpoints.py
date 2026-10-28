@@ -1498,9 +1498,10 @@ def _check_team_model_budget_update_authority(
     routed_models: Final = routed_models_source(data.team_id)
     for entry, proposed in requested.items():
         existing = _existing_model_cap(existing_model_max_budget.get(entry))
-        if existing is not None and (is_enforced_budget_entry(existing) or not is_enforced_budget_entry(proposed)):
+        if existing is not None:
             _check_existing_model_cap_kept(entry=entry, cap_entry=entry, proposed=proposed, existing=existing)
-            continue
+            if is_enforced_budget_entry(existing) or not is_enforced_budget_entry(proposed):
+                continue
         governing = resolve_model_budget(model=entry, model_max_budget=existing_model_max_budget, team_id=data.team_id)
         if governing is not None and entry_names_model(entry=governing.budget_model, model=entry):
             _check_existing_model_cap_kept(
@@ -1583,7 +1584,7 @@ def _looser_model_cap(proposed: BudgetConfig, cap: BudgetConfig) -> bool:
     return (
         proposed.max_budget is None
         or (cap.max_budget is not None and proposed.max_budget > cap.max_budget)
-        or proposed.budget_duration != cap.budget_duration
+        or (is_enforced_budget_entry(cap) and proposed.budget_duration != cap.budget_duration)
     )
 
 

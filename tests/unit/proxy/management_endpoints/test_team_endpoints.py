@@ -17797,6 +17797,16 @@ def test_team_admin_cannot_make_an_unenforced_entry_take_precedence_over_a_cap()
     assert "'claude-opus*'" in exc.value.detail["error"]
 
 
+def test_team_admin_cannot_raise_an_unenforced_cap_while_enforcing_it() -> None:
+    with pytest.raises(HTTPException) as exc:
+        _check_team_admin_model_caps(
+            existing={"gpt-4o": {"max_budget": 10.0}},
+            requested={"gpt-4o": {"max_budget": 20.0, "budget_duration": "1d"}},
+        )
+    assert exc.value.status_code == 403
+    assert "(entry 'gpt-4o')" in exc.value.detail["error"]
+
+
 @pytest.mark.parametrize("added_entry", _BEDROCK_ROUTE_ADDED_ENTRIES, ids=["model", "pattern"])
 def test_team_admin_cannot_lift_a_bedrock_vendor_cap_through_a_bedrock_wildcard_route(added_entry: str) -> None:
     with pytest.raises(HTTPException) as exc:
