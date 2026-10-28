@@ -1,3 +1,4 @@
+import hashlib
 import os
 import queue
 import secrets
@@ -1134,6 +1135,42 @@ def test_a_value_postgres_compresses_under_the_limit_is_not_counted_while_random
     assert isinstance(finding, migration_data_checks.BlockedChange)
     assert finding.rows == 1, "only the random key is too long for the index once Postgres compresses the other"
     assert finding.detail == "with an index entry over 2704 bytes, largest 3016 bytes (k up to 3000 bytes)"
+
+
+def _postgres_rejects_an_index_on(conn: "psycopg.Connection[tuple[object, ...]]", key: str) -> bool:
+    conn.execute('DROP TABLE IF EXISTS "one_key"')
+    conn.execute('CREATE TABLE "one_key" ("k" TEXT)')
+    conn.execute('INSERT INTO "one_key" ("k") VALUES (%s)', (key,))
+    try:
+        conn.execute('CREATE INDEX "one_key_idx" ON "one_key" ("k")')
+    except psycopg.errors.ProgramLimitExceeded:
+        return True
+    return False
+
+
+@requires_db
+def test_the_check_flags_exactly_the_compressed_keys_postgres_rejects_at_the_entry_limit(scratch_database: str) -> None:
+    """Keys that compress to a stored size just under and just over the entry limit go through the
+    check and through Postgres one by one. The check must flag a key exactly when Postgres rejects it."""
+    noise: Final = "".join(hashlib.sha256(str(i).encode()).hexdigest() for i in range(40))
+    keys: Final = tuple(noise[:n] + "a" * 1500 for n in range(2400, 2500))
+    create_index: Final = sql.SQL('CREATE INDEX "stored_probe_idx" ON "stored_probe" ("k")')
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute('CREATE TABLE "stored_probe" ("k" TEXT)')
+        conn.execute('INSERT INTO "stored_probe" ("k") SELECT unnest(%s::text[])', (list(keys),))
+        compressed: Final = conn.execute(
+            'SELECT count(*) FROM "stored_probe" WHERE pg_column_size("k") < octet_length("k") AND octet_length("k") > 2704'
+        ).fetchone()
+        findings: Final = migration_data_checks.find_blockers(
+            conn, "public", migration_data_checks.checks_for_statement(create_index.as_string(conn), "probe")
+        )
+        rejected: Final = tuple(key for key in keys if _postgres_rejects_an_index_on(conn, key))
+
+    assert compressed == (len(keys),), "every probe key must be longer than the limit yet stored compressed"
+    assert 0 < len(rejected) < len(keys), f"the probe must straddle the limit, Postgres rejected {len(rejected)}"
+    (finding,) = findings
+    assert isinstance(finding, migration_data_checks.BlockedChange)
+    assert finding.rows == len(rejected), f"the check must flag the {len(rejected)} keys Postgres rejects and no other"
 
 
 @requires_db
