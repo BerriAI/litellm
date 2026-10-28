@@ -2464,7 +2464,8 @@ def test_transform_response_keeps_a_tool_only_message_without_content() -> None:
     completion: Final = ChatCompletion.model_validate(result.model_dump())
     assert completion.choices[0].finish_reason == "tool_calls"
     assert completion.choices[0].message.model_dump(exclude_none=True) == {"role": "assistant", "tool_calls": [tool_call]}
-    assert completion.usage is not None and completion.usage.total_tokens == 8
+    assert completion.usage is not None
+    assert (completion.usage.prompt_tokens, completion.usage.completion_tokens, completion.usage.total_tokens) == (5, 3, 8)
 
 
 _DATABRICKS_TOOLS_WITH_OPENAI_TOOL_SEARCH: Final = [
