@@ -209,7 +209,6 @@ async def test_gpt_token_counting():
     assert response.request_model == "gpt-4"
 
 
-
 @pytest.mark.asyncio
 async def test_token_counter_leaves_the_routers_deployment_without_the_credentials_it_resolves(tmp_path, monkeypatch):
     """token_counter reads the router's own deployment, so loading the named credential into it would leave the
@@ -1859,14 +1858,17 @@ async def test_uncountable_model_with_framing_falls_through_to_the_local_estimat
 
 
 @pytest.mark.parametrize(
-    "count_model",
-    [replace(_OPUS_IN_US_EAST_1, configured=True), replace(_OPUS_IN_US_EAST_1, region=None, configured=True)],
+    ("count_model", "region_hints"),
+    [
+        (replace(_OPUS_IN_US_EAST_1, configured=True), 1),
+        (replace(_OPUS_IN_US_EAST_1, region=None, configured=True), 0),
+    ],
     ids=["pinned_to_a_region", "in_the_deployment_region"],
 )
 @pytest.mark.parametrize("status_code", [400, 404])
 @pytest.mark.asyncio
 async def test_configured_token_count_model_error_stands_even_with_framing(
-    count_model: TokenCountModel, status_code: int
+    count_model: TokenCountModel, region_hints: int, status_code: int
 ):
     counter: Final = _ScriptedCounter(
         {"us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=status_code)}
@@ -1877,6 +1879,31 @@ async def test_configured_token_count_model_error_stands_even_with_framing(
 
     assert raised.value.code == str(status_code)
     assert raised.value.message.startswith(f"scripted {status_code} for opus")
+    assert raised.value.message.count("counts tokens with us.anthropic.claude-opus-5-5 in us-east-1") == region_hints
+
+
+@pytest.mark.parametrize(
+    ("count_model", "region_hints"),
+    [(_OPUS_IN_US_EAST_1, frozenset({True})), (replace(_OPUS_IN_US_EAST_1, region=None), frozenset())],
+    ids=["pinned_to_a_region", "in_the_deployment_region"],
+)
+@pytest.mark.asyncio
+async def test_framing_standing_in_for_a_pinned_token_count_model_warns_with_the_region_to_enable(
+    count_model: TokenCountModel, region_hints: frozenset[bool], caplog: pytest.LogCaptureFixture
+):
+    counter: Final = _ScriptedCounter({"us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=404)})
+    verbose_proxy_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+            result: Final = await _ladder(counter, TokenCountSettings(framing=50, count_model=count_model))
+    finally:
+        verbose_proxy_logger.removeHandler(caplog.handler)
+
+    assert isinstance(result, ProviderCountFailure)
+    stand_in_warnings: Final = [
+        r.getMessage() for r in caplog.records if "framed local estimate stands in" in r.getMessage()
+    ]
+    assert {"us.anthropic.claude-opus-5-5 in us-east-1" in message for message in stand_in_warnings} == region_hints
 
 
 @pytest.mark.asyncio
@@ -2852,7 +2879,9 @@ async def test_configured_token_count_model_overrides_the_shipped_one_and_an_emp
 async def test_shipped_token_count_model_keeps_the_prompt_in_the_deployment_geography(
     monkeypatch: pytest.MonkeyPatch, aws_region_name: str, counted_in: str
 ):
-    counter: Final = _ScriptedCounter({"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)})
+    counter: Final = _ScriptedCounter(
+        {"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)}
+    )
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
         "llm_router",

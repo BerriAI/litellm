@@ -24,6 +24,7 @@ _SONNET: Final = "us.anthropic.claude-sonnet-5-5"
 _SONNET_BASE: Final = "anthropic.claude-sonnet-5-5"
 _OPUS: Final = "us.anthropic.claude-opus-5-5"
 _OPUS_BASE: Final = "anthropic.claude-opus-5-5"
+_OPUS_4_7: Final = "us.anthropic.claude-opus-4-7"
 _NOVA: Final = "amazon.nova-lite-v1:0"
 _RUNTIME_ROUTED: Final = "us.anthropic.claude-sonnet-4-6"
 _CONFIGURED_COUNT_REGION: Final = "us-east-2"
@@ -208,9 +209,9 @@ def _mantle_count_requests(wire: Wire) -> tuple[tuple[tuple[str, str], dict[str,
     return tuple((_signer(request), _JSON_OBJECT.validate_json(request.body)) for request in requests)
 
 
-def _mantle_body(prompt: str) -> dict[str, JsonValue]:
+def _mantle_body(prompt: str, model: str = _OPUS_BASE) -> dict[str, JsonValue]:
     return {
-        "model": _OPUS_BASE,
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "system": _SYSTEM,
         "tools": _SDK_TOOLS,
@@ -418,9 +419,13 @@ def test_framing_is_added_to_the_local_estimate_when_a_shipped_runtime_count_mod
 
 
 @pytest.mark.parametrize(
-    ("model", "deployment_region", "count_region"),
-    [(_SONNET, _REGION, _COUNT_REGION), (_SONNET_BASE, "ca-central-1", "ca-central-1")],
-    ids=["in_its_pinned_region", "outside_the_pinned_geography"],
+    ("model", "deployment_region", "count_region", "count_model"),
+    [
+        (_SONNET, _REGION, _COUNT_REGION, _OPUS_BASE),
+        (_SONNET_BASE, "ca-central-1", "ca-central-1", _OPUS_BASE),
+        (_OPUS_4_7, _REGION, _shipped_token_count_model_field(_OPUS_4_7, "region"), "anthropic.claude-opus-4-7"),
+    ],
+    ids=["sonnet_5_5_in_its_pinned_region", "sonnet_5_5_outside_the_pinned_geography", "opus_4_7_in_its_pinned_region"],
 )
 def test_framing_is_added_to_the_local_estimate_when_a_shipped_mantle_count_model_cannot_count(
     counting_proxy: OwnedProxy,
@@ -429,6 +434,7 @@ def test_framing_is_added_to_the_local_estimate_when_a_shipped_mantle_count_mode
     model: str,
     deployment_region: str,
     count_region: str,
+    count_model: str,
 ) -> None:
     gateway: Final = counting_proxy.gateway
     assert _shipped_token_count_model_field(model, "litellm_provider") == "bedrock_mantle"
@@ -452,7 +458,10 @@ def test_framing_is_added_to_the_local_estimate_when_a_shipped_mantle_count_mode
         assert (framed.model_extra, unframed.model_extra) == (_LOCAL_SOURCE, _LOCAL_SOURCE), (framed, unframed)
         assert framed.input_tokens - unframed.input_tokens == _FRAMING, (framed, unframed)
         assert _runtime_counts(runtime) == ()
-        assert _mantle_count_requests(mantle) == (((_ACCESS_KEY, count_region), _mantle_body(_prompt(200, 404))),) * 2
+        assert (
+            _mantle_count_requests(mantle)
+            == (((_ACCESS_KEY, count_region), _mantle_body(_prompt(200, 404), count_model)),) * 2
+        )
 
 
 def test_configured_token_count_model_error_stands_with_framing(

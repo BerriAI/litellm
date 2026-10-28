@@ -14861,18 +14861,23 @@ async def _provider_token_count(
         if count_model is None:
             return counted.model_copy(update={"count_source": "provider"})
         return counted.model_copy(update={"count_source": "token_count_model", "model_used": count_model.model})
-    failure: Final = (
-        counted
+    region_hint: Final = (
+        None
         if count_model is None or count_model.region is None
-        else counted.with_hint(
-            f"This model counts tokens with {count_model.model} in {count_model.region}. "
-            "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
-        )
+        else f"This model counts tokens with {count_model.model} in {count_model.region}. "
+        "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
     )
+    failure: Final = counted if region_hint is None else counted.with_hint(region_hint)
     framing_can_stand_in: Final = count_model is None or not count_model.configured
-    if framing_can_stand_in and failure.cannot_count_model and settings.framing is not None and local_estimate_allowed:
-        return failure
-    raise failure.to_proxy_exception()
+    if not (
+        framing_can_stand_in and failure.cannot_count_model and settings.framing is not None and local_estimate_allowed
+    ):
+        raise failure.to_proxy_exception()
+    if region_hint is not None:
+        verbose_proxy_logger.warning(
+            "Token count answered %s, so the framed local estimate stands in. %s", failure.status_code, region_hint
+        )
+    return failure
 
 
 @dataclass(frozen=True, slots=True)
