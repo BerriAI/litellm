@@ -38,8 +38,8 @@ mod _native {
     use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
     use crate::model_registry::{
-        Bundled, CatalogHandle, Fetched, File, Installed, Invalid, Missing, Provenance, Registered,
-        Remote, Resolved, RowError, Unavailable, overlay,
+        Bundled, CatalogHandle, Fetched, File, Installed, Invalid, Missing, Provenance, Refresher,
+        Registered, Remote, Resolved, RowError, Unavailable, overlay,
     };
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};

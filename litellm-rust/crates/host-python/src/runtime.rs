@@ -40,6 +40,11 @@ pub fn reserve_process_for_forking() -> Result<(), RuntimeAlreadyStarted> {
     FORK_GATE.reserve(std::process::id())
 }
 
+/// Whether this process reserved itself for forking workers, so background native work must not run in it.
+pub fn reserved_for_forking() -> bool {
+    FORK_GATE.reserved(std::process::id())
+}
+
 /// Claims process-bound native state before runtime startup or tokenizer execution.
 pub fn enter_native() -> PyResult<()> {
     FORK_GATE

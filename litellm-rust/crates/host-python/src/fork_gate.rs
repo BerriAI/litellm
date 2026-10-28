@@ -69,6 +69,10 @@ impl ForkGate {
     pub(crate) fn started(&self, pid: u32) -> bool {
         self.runtime_pid.load(Ordering::SeqCst) == pid
     }
+
+    pub(crate) fn reserved(&self, pid: u32) -> bool {
+        self.fork_only_pid.load(Ordering::SeqCst) == pid
+    }
 }
 
 #[cfg(test)]
@@ -77,6 +81,16 @@ mod tests {
 
     const MASTER: u32 = 100;
     const WORKER: u32 = 101;
+
+    #[test]
+    fn a_reservation_is_seen_only_by_the_reserving_pid() {
+        let gate = ForkGate::new();
+
+        assert!(!gate.reserved(MASTER));
+        assert_eq!(gate.reserve(MASTER), Ok(()));
+        assert!(gate.reserved(MASTER));
+        assert!(!gate.reserved(WORKER));
+    }
 
     #[test]
     fn unreserved_process_starts_the_runtime_and_stays_started() {

@@ -505,7 +505,7 @@ async def get_litellm_model_cost_map(catalog_only: bool = False):
     import litellm
 
     try:
-        _model_cost_map: Final = GetModelCostMap.loaded_model_cost_map() if catalog_only else litellm.model_cost
+        _model_cost_map: Final = GetModelCostMap.loaded_model_cost_map() if catalog_only else dict(litellm.model_cost)
         return _model_cost_map
     except Exception as e:
         raise HTTPException(

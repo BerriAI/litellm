@@ -9,9 +9,9 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 ```
 """
 
+import atexit
 import os
 import sys
-import threading
 import time
 import warnings
 from collections.abc import Callable, Mapping
@@ -25,7 +25,7 @@ from pydantic import JsonValue, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm import verbose_logger
-from litellm._catalog import CATALOG, Catalog, Fetched, Installed, Remote, Source, Unavailable
+from litellm._catalog import CATALOG, Catalog, Fetched, Installed, Refresher, Remote, Source, Unavailable
 from litellm.litellm_core_utils.fallback_generalizations import (
     set_fallback_generalizations,
 )
@@ -36,7 +36,7 @@ _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
 MODEL_COST_MAP_FETCH_MAX_ATTEMPTS: Final = 3
 _IMPORT_FETCH_TIMEOUT_SECONDS: Final = 5
-_litellm_import_complete = threading.Event()
+REVALIDATION_PENDING: Final = "remote revalidation pending"
 
 
 def _is_cli_process() -> bool:
@@ -47,10 +47,6 @@ def _local_map_forced() -> bool:
     # Note: can't use get_secret_bool here — this runs during litellm.__init__
     # before litellm._key_management_settings is set.
     return is_offline_mode() or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true"
-
-
-def mark_litellm_import_complete() -> None:
-    _litellm_import_complete.set()
 
 
 class GetModelCostMap:
@@ -187,76 +183,49 @@ def reload_model_cost_map(source: Source, catalog: Catalog = CATALOG) -> Install
     return installed
 
 
-def _retry_remote_fetch_in_background(
-    url: str, max_attempts: int, first_wait: float, sleep: Callable[[float], None], catalog: Catalog
-) -> None:
-    try:
-        sleep(first_wait)
-        fetched: Final = catalog.fetch(Remote(url), timeout=_IMPORT_FETCH_TIMEOUT_SECONDS, attempts=max_attempts - 1)
-        if isinstance(fetched, Unavailable):
-            verbose_logger.warning(
-                "LiteLLM: Failed to fetch remote model cost map from %s after %d attempts; keeping local backup",
-                url,
-                max_attempts,
-            )
-            return
-        _litellm_import_complete.wait()
-        _install(_note_loaded(fetched), catalog, url=url)
-        _refresh_derived_state()
-    except Exception as e:  # noqa: BLE001  # a failed background retry must not kill the task; the backup stays
-        verbose_logger.warning("LiteLLM: Background model cost map retry failed: %s", e)
-
-
-def _pick_model_cost_map(
-    url: str, timeout: int, max_attempts: int, sleep: Callable[[float], None], catalog: Catalog
-) -> tuple[Fetched, bool, str | None]:
-    """
-    The map main loads at import, with the provenance facts install records. The bundled map when
-    ``LITELLM_LOCAL_MODEL_COST_MAP`` is set, in offline mode or in a ``lite`` / ``litellm-proxy`` CLI process.
-    Otherwise one remote attempt, with a background retry on a transient failure, and the bundled map on any failure
-    """
-    if _local_map_forced() or _is_cli_process():
-        return _note_loaded(catalog.bundled()), True, None
-    fetched: Final = catalog.fetch(Remote(url or ""), timeout=timeout, attempts=1)
-    if isinstance(fetched, Fetched):
-        return _note_loaded(fetched), False, None
-    if fetched.retry_after is not None and max_attempts > 1:
-        threading.Thread(
-            target=_retry_remote_fetch_in_background,
-            kwargs={
-                "url": url,
-                "max_attempts": max_attempts,
-                "first_wait": fetched.retry_after,
-                "sleep": sleep,
-                "catalog": catalog,
-            },
-            name="litellm-model-cost-map-retry",
-            daemon=True,
-        ).start()
-    verbose_logger.warning(
-        "LiteLLM: Failed to fetch remote model cost map from %s: %s. Falling back to local backup.",
-        url,
-        fetched.reason,
-    )
-    return _note_loaded(catalog.bundled()), False, f"Remote fetch failed: {fetched.reason}"
-
-
-def load_model_cost_map_at_import(
-    url: str,
-    catalog: Catalog = CATALOG,
-    sleep: Callable[[float], None] = time.sleep,
-    max_attempts: int = MODEL_COST_MAP_FETCH_MAX_ATTEMPTS,
-) -> Installed:
-    """Fills ``litellm.model_cost`` at import with the map main's rules pick"""
-    fetched, env_forced, fallback_reason = _pick_model_cost_map(
-        url=url,
-        timeout=_IMPORT_FETCH_TIMEOUT_SECONDS,
-        max_attempts=max_attempts,
-        sleep=sleep,
-        catalog=catalog,
-    )
+def load_bundled_model_cost_map_at_import(catalog: Catalog = CATALOG) -> Installed:
+    """Fills ``litellm.model_cost`` at import with the bundled map and no network (decision 4). The refresher fetches
+    the remote map after import returns, unless the bundled map is forced"""
+    forced: Final = _local_map_forced()
     return _install(
-        fetched, catalog, env_forced=env_forced, fallback_reason=fallback_reason, url=None if env_forced else url
+        _note_loaded(catalog.bundled()),
+        catalog,
+        env_forced=forced,
+        fallback_reason=None if forced or _is_cli_process() else REVALIDATION_PENDING,
+    )
+
+
+def start_model_cost_map_refresh(url: str, catalog: Catalog = CATALOG) -> Refresher | None:
+    """Starts the background refresh at the end of import, except where main used the bundled map only. The refresher
+    restarts in a forked child that has no remote map yet and is stopped at exit"""
+    if _local_map_forced() or _is_cli_process() or not url:
+        return None
+    try:
+        refresher: Final = catalog.refresher(Remote(url))
+    except ValueError as e:
+        verbose_logger.warning("LiteLLM: model cost map %s cannot be refreshed: %s", url, e)
+        return None
+    os.register_at_fork(after_in_child=refresher.after_fork)
+    atexit.register(refresher.stop)
+    refresher.start()
+    return refresher
+
+
+def install_refreshed(fetched: Fetched, catalog: Catalog, url: str) -> None:
+    """Called by the Rust refresher thread with a fetched map, after import returned"""
+    _install(_note_loaded(fetched), catalog, url=url)
+    _refresh_derived_state()
+
+
+def note_refresh_dropped(url: str) -> None:
+    verbose_logger.info(
+        "LiteLLM: dropped the background model cost map refresh from %s, a newer map was installed meanwhile", url
+    )
+
+
+def note_refresh_failed(url: str, reason: str) -> None:
+    verbose_logger.warning(
+        "LiteLLM: Failed to fetch remote model cost map from %s: %s. Keeping the bundled map.", url, reason
     )
 
 

@@ -95,6 +95,10 @@ impl Provenance {
 }
 
 impl Provenance {
+    pub(crate) fn is_remote(&self) -> bool {
+        self.source == "remote"
+    }
+
     pub(crate) fn of(
         fetched: &Fetched,
         env_forced: bool,
@@ -145,7 +149,7 @@ pub(crate) fn requested(source: &Bound<'_, PyAny>) -> PyResult<Requested> {
     ))
 }
 
-enum Outcome {
+pub(crate) enum Outcome {
     Fetched {
         parsed: Parsed,
         revision: String,
@@ -217,7 +221,7 @@ fn unavailable(
 }
 
 /// Main's `MODEL_COST_MAP_MIN_MODEL_COUNT` and `MODEL_COST_MAP_MAX_SHRINK_RATIO`, which are env-overridable
-fn integrity_limits(py: Python<'_>) -> PyResult<IntegrityLimits> {
+pub(crate) fn integrity_limits(py: Python<'_>) -> PyResult<IntegrityLimits> {
     let constants = py.import("litellm.constants")?;
     let minimum: usize = constants
         .getattr("MODEL_COST_MAP_MIN_MODEL_COUNT")?
@@ -251,37 +255,45 @@ fn drive(source: &Source, policy: RetryPolicy, config: HttpClientConfig) -> Outc
             };
         }
     };
-    let step = runtime.block_on(async {
-        let pool = HttpClientPool::new(Arc::new(PublicDnsResolver));
-        let client = match pool.client(&config, ClientVariant::Provider) {
-            Ok(client) => client,
-            Err(error) => {
-                return Step::Done {
-                    reason: format!("the HTTP client could not be built: {error}"),
-                    retry_after: None,
-                };
-            }
-        };
-        let installed = Installed {
-            origin: Origin::Bundled,
-            etag: None,
-            revision: BUNDLED_REVISION.clone(),
-            model_count: BUNDLED.raw.model_count(),
-        };
-        fetch_with_retry(
-            source,
-            &installed,
-            policy,
-            None,
-            &Transports {
-                http: &client,
-                s3: None,
-            },
-            tokio::time::sleep,
-        )
-        .await
-    });
+    let outcome = runtime.block_on(drive_async(source, policy, config));
     runtime.shutdown_timeout(Duration::from_secs(1));
+    outcome
+}
+
+/// One fetch with retries on the caller's runtime, with a client built inside it
+pub(crate) async fn drive_async(
+    source: &Source,
+    policy: RetryPolicy,
+    config: HttpClientConfig,
+) -> Outcome {
+    let pool = HttpClientPool::new(Arc::new(PublicDnsResolver));
+    let client = match pool.client(&config, ClientVariant::Provider) {
+        Ok(client) => client,
+        Err(error) => {
+            return Outcome::Unavailable {
+                reason: format!("the HTTP client could not be built: {error}"),
+                retry_after: None,
+            };
+        }
+    };
+    let installed = Installed {
+        origin: Origin::Bundled,
+        etag: None,
+        revision: BUNDLED_REVISION.clone(),
+        model_count: BUNDLED.raw.model_count(),
+    };
+    let step = fetch_with_retry(
+        source,
+        &installed,
+        policy,
+        None,
+        &Transports {
+            http: &client,
+            s3: None,
+        },
+        tokio::time::sleep,
+    )
+    .await;
     match step {
         Step::Adopt {
             catalog,

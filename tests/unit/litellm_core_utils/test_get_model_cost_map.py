@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import sys
+import time
 import tempfile
 import threading
 import types
@@ -37,8 +38,9 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     GetModelCostMap,
     get_model_cost_map,
     get_model_cost_map_source_info,
-    load_model_cost_map_at_import,
+    load_bundled_model_cost_map_at_import,
     reload_model_cost_map,
+    start_model_cost_map_refresh,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import (
@@ -133,10 +135,6 @@ def _file(tmp_path: Path, body: bytes) -> File:
 def _unset_local_cost_map_env(monkeypatch):
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
     monkeypatch.delenv("LITELLM_OFFLINE_MODE", raising=False)
-
-
-def _retry_threads():
-    return [thread for thread in threading.enumerate() if thread.name == "litellm-model-cost-map-retry"]
 
 
 # ---------------------------------------------------------------------------
@@ -461,46 +459,63 @@ def test_reload_reads_a_file_url(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# load_model_cost_map_at_import: the import-time load
+# the import-time load and the background refresh (decision 4)
 # ---------------------------------------------------------------------------
 
 
-class _SyncSleepRecorder:
-    """Injected as the retry thread's first wait so the boot path is asserted without delay"""
-
-    def __init__(self, block=False):
-        self.waits = []
-        self.block = block
-        self.started = threading.Event()
-        self.release = threading.Event()
-
-    def __call__(self, seconds: float) -> None:
-        if self.block:
-            self.started.set()
-            self.release.wait(timeout=10)
-        self.waits.append(seconds)
+def _eventually(condition, timeout=20.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.05)
+    return condition()
 
 
-def test_boot_load_success_does_not_start_background_retry():
+def test_boot_load_installs_bundled_map_and_records_pending_revalidation():
     module, catalog = _bound_catalog()
-    sleeper = _SyncSleepRecorder()
-    with _serving([(200, {}, _real_map_bytes())]) as server:
-        load_model_cost_map_at_import(server.url, catalog, sleeper)
-    assert len(server.requests) == 1
-    assert sleeper.waits == []
-    assert _retry_threads() == []
+    load_bundled_model_cost_map_at_import(catalog)
+    provenance = catalog.provenance()
+    assert (provenance.source, provenance.fallback_reason, provenance.is_env_forced) == (
+        "local",
+        "remote revalidation pending",
+        False,
+    )
     assert module.model_cost.keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
-    assert catalog.provenance().source == "remote"
 
 
-def test_boot_load_transient_failure_installs_local_then_background_retry_installs_remote(monkeypatch):
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_MODEL_COST_MAP", "LITELLM_OFFLINE_MODE"])
+def test_boot_load_respects_local_env_override(monkeypatch, flag):
+    monkeypatch.setenv(flag, "True")
+    _, catalog = _bound_catalog()
+    with _serving([(200, {}, _real_map_bytes())]) as server:
+        load_bundled_model_cost_map_at_import(catalog)
+        assert start_model_cost_map_refresh(server.url, catalog) is None
+    assert server.requests == []
+    provenance = catalog.provenance()
+    assert (provenance.is_env_forced, provenance.fallback_reason) == (True, None)
 
+
+@pytest.mark.parametrize(("argv0", "refreshed"), [("/some/venv/bin/lite", False), ("/some/venv/bin/python", True)])
+def test_cli_processes_never_start_the_refresh(monkeypatch: pytest.MonkeyPatch, argv0: str, refreshed: bool) -> None:
+    monkeypatch.setattr(sys, "argv", [argv0, "--version"])
+    _, catalog = _bound_catalog()
+    with _serving([(200, {}, _real_map_bytes())]) as server:
+        refresher = start_model_cost_map_refresh(server.url, catalog)
+        try:
+            assert (refresher is not None) is refreshed
+            assert _eventually(lambda: catalog.provenance().source == "remote", timeout=20 if refreshed else 1) is refreshed
+        finally:
+            if refresher is not None:
+                refresher.stop()
+
+
+def test_the_refresh_retries_a_transient_failure_and_installs_the_remote_map(monkeypatch):
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     for name, provider_models in tuple(vars(litellm).items()):
         if name.endswith("_models") and isinstance(provider_models, set):
             monkeypatch.setattr(litellm, name, set(provider_models))
     monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
-    catalog = CATALOG
     held = litellm.model_cost
     remote = _with(
         lambda document: (
@@ -508,124 +523,36 @@ def test_boot_load_transient_failure_installs_local_then_background_retry_instal
             document["gpt-4o"].update({"input_cost_per_token": 0.125}),
         )
     )
-    sleeper = _SyncSleepRecorder(block=True)
     litellm.register_model({"my-runtime-model": {"litellm_provider": "custom", "max_input_tokens": 4321}})
 
     with _serving([(503, {"Retry-After": "0"}, b""), (200, {}, remote)]) as server:
-        load_model_cost_map_at_import(server.url, catalog, sleeper)
-        assert sleeper.started.wait(timeout=10)
-        threads = _retry_threads()
-        try:
-            assert len(server.requests) == 1
-            assert len(threads) == 1
-            assert "claude-remote-only-test" not in litellm.model_cost
-            provenance = catalog.provenance()
-            assert provenance.source == "local"
-            assert provenance.fallback_reason.startswith("Remote fetch failed:")
-            sleeper.release.set()
-            for thread in threads:
-                thread.join(timeout=10)
-            assert all(not thread.is_alive() for thread in threads)
-            assert sleeper.waits == [0.0]
-            assert len(server.requests) == 2
-            assert "claude-remote-only-test" in litellm.model_cost
-            assert litellm.model_cost is held
-            assert held["gpt-4o"]["input_cost_per_token"] == 0.125
-            assert "claude-remote-only-test" in litellm.anthropic_models
-            assert "my-runtime-model" in litellm.model_cost
-            assert catalog.provenance().source == "remote"
-            assert catalog.provenance().fallback_reason is None
-        finally:
-            sleeper.release.set()
-            for thread in _retry_threads():
-                thread.join(timeout=10)
-
-
-def test_boot_load_does_not_retry_non_retryable_failure():
-    _, catalog = _bound_catalog()
-    sleeper = _SyncSleepRecorder()
-    with _serving([(404, {}, b"")]) as server:
-        load_model_cost_map_at_import(server.url, catalog, sleeper)
-    assert len(server.requests) == 1
-    assert sleeper.waits == []
-    assert _retry_threads() == []
-    provenance = catalog.provenance()
-    assert provenance.source == "local"
-    assert provenance.fallback_reason == f"Remote fetch failed: HTTP 404 from {server.url}"
-    assert provenance.url == server.url
-
-
-def test_boot_load_falls_back_when_the_url_does_not_parse():
-    module, catalog = _bound_catalog()
-    load_model_cost_map_at_import("http://[bad/model_prices.json", catalog, _SyncSleepRecorder())
-    assert _retry_threads() == []
-    assert module.model_cost.keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
-    assert "invalid URL" in (catalog.provenance().fallback_reason or "")
-
-
-@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_MODEL_COST_MAP", "LITELLM_OFFLINE_MODE"])
-def test_boot_load_respects_local_env_override(monkeypatch, flag):
-    monkeypatch.setenv(flag, "True")
-    module, catalog = _bound_catalog()
-    with _serving([(200, {}, _real_map_bytes())]) as server:
-        load_model_cost_map_at_import(server.url, catalog, _SyncSleepRecorder())
-    assert server.requests == []
-    assert len(module.model_cost) > 100
-    assert catalog.provenance().is_env_forced is True
-
-
-def test_boot_load_records_the_blob_id_of_the_bytes_served_and_the_fetch_etag():
-    _, catalog = _bound_catalog()
-    body = _real_map_bytes()
-    with _serving([(200, {"ETag": 'W/"boot"'}, body)]) as server:
-        load_model_cost_map_at_import(server.url, catalog, _SyncSleepRecorder())
-    provenance = catalog.provenance()
-    assert (provenance.source, provenance.etag, provenance.source_revision) == ("remote", 'W/"boot"', git_blob_id(body))
-
-
-def test_boot_load_fallback_to_the_bundled_map_reports_its_blob_id_and_drops_the_remote_etag():
-    _, catalog = _bound_catalog()
-    with _serving([(200, {"ETag": 'W/"boot"'}, _real_map_bytes())]) as server:
-        load_model_cost_map_at_import(server.url, catalog, _SyncSleepRecorder())
-    with _serving([(404, {}, b"")]) as server:
-        load_model_cost_map_at_import(server.url, catalog, _SyncSleepRecorder())
-    provenance = catalog.provenance()
-    assert (provenance.source, provenance.etag, provenance.source_revision) == (
-        "local",
-        None,
-        git_blob_id(_real_map_bytes()),
-    )
-
-
-def test_boot_load_that_fails_the_integrity_check_reports_the_bundled_map_not_the_rejected_fetch():
-    _, catalog = _bound_catalog()
-    shrunk_body = b'{"gpt-5.4-mini": {"mode": "chat", "input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}}'
-    with _serving([(200, {"ETag": 'W/"shrunk"'}, shrunk_body)]) as server:
-        load_model_cost_map_at_import(server.url, catalog, _SyncSleepRecorder())
-    provenance = catalog.provenance()
-    assert provenance.source == "local"
-    assert "below minimum" in (provenance.fallback_reason or "")
-    assert provenance.etag is None
-    assert provenance.source_revision == git_blob_id(_real_map_bytes())
+        with CATALOG.refresher(Remote(server.url)):
+            assert _eventually(lambda: "claude-remote-only-test" in litellm.model_cost)
+        assert len(server.requests) == 2
+    assert litellm.model_cost is held
+    assert held["gpt-4o"]["input_cost_per_token"] == 0.125
+    assert "claude-remote-only-test" in litellm.anthropic_models
+    assert "my-runtime-model" in litellm.model_cost
+    assert CATALOG.provenance().source == "remote"
 
 
 @pytest.mark.parametrize(
-    ("argv0", "request_count"),
+    "reply",
     [
-        ("/some/venv/bin/lite", 0),
-        ("/some/venv/bin/lite.exe", 0),
-        ("/some/venv/bin/python", 1),
+        pytest.param((404, {}, b""), id="not-found"),
+        pytest.param(
+            (200, {}, b'{"gpt-5.4-mini": {"mode": "chat", "input_cost_per_token": 1e-06}}'), id="below-minimum"
+        ),
     ],
 )
-def test_boot_load_skips_remote_fetch_for_cli_processes(
-    monkeypatch: pytest.MonkeyPatch, argv0: str, request_count: int
-) -> None:
-    monkeypatch.setattr(sys, "argv", [argv0, "--version"])
+def test_a_failed_refresh_keeps_the_bundled_map(reply):
     _, catalog = _bound_catalog()
-    with _serving([(200, {}, _real_map_bytes())]) as server:
-        load_model_cost_map_at_import(server.url, catalog, _SyncSleepRecorder())
-    assert len(server.requests) == request_count
-    assert catalog.provenance().source == ("local" if request_count == 0 else "remote")
+    load_bundled_model_cost_map_at_import(catalog)
+    with _serving([reply]) as server, catalog.refresher(Remote(server.url)):
+        assert _eventually(lambda: len(server.requests) == 1)
+        time.sleep(0.5)
+    provenance = catalog.provenance()
+    assert (provenance.source, provenance.source_revision) == ("local", git_blob_id(_real_map_bytes()))
 
 
 def test_get_model_cost_map_returns_the_remote_rows_without_installing_them():
@@ -757,7 +684,6 @@ def test_a_side_read_changes_no_global_state(status):
     source_info = get_model_cost_map_source_info()
     loaded_catalog = GetModelCostMap.loaded_model_cost_map()
     fallback_rules = json.dumps(get_fallback_generalization_rules(), sort_keys=True, default=str)
-    threads_before = frozenset(thread.ident for thread in _retry_threads())
     remote = _with(
         lambda document: (
             document.update({"side-read-only": {"litellm_provider": "openai"}}),
@@ -776,7 +702,6 @@ def test_a_side_read_changes_no_global_state(status):
     assert get_model_cost_map_source_info() == source_info
     assert GetModelCostMap.loaded_model_cost_map() is loaded_catalog
     assert json.dumps(get_fallback_generalization_rules(), sort_keys=True, default=str) == fallback_rules
-    assert frozenset(thread.ident for thread in _retry_threads()) <= threads_before
 
 
 def test_url_registration_fetches_the_requested_map_when_local_flag_is_set(monkeypatch):

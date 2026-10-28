@@ -2,6 +2,7 @@ mod fetch;
 mod install;
 mod name_index;
 mod py_values;
+mod refresher;
 mod register;
 mod resolve;
 mod row_error;
@@ -22,6 +23,7 @@ use serde::Serialize;
 
 pub(crate) use fetch::{Bundled, File, Provenance, Remote};
 use install::{Record, write_into};
+pub(crate) use refresher::Refresher;
 pub(crate) use register::Registered;
 pub(crate) use resolve::{Invalid, Missing, Resolved};
 pub(crate) use row_error::{RowError, RowErrorKind, row_error};
@@ -203,6 +205,19 @@ impl CatalogHandle {
         attempts: u32,
     ) -> PyResult<Py<PyAny>> {
         fetch::fetch(py, fetch::requested(source)?, timeout, attempts)
+    }
+
+    /// A background refresh of the bound map from `source`, built and not started (decisions 2 and 4)
+    fn refresher(slf: Py<Self>, py: Python<'_>, source: &Bound<'_, PyAny>) -> PyResult<Refresher> {
+        match fetch::requested(source)? {
+            fetch::Requested::Source(source) => Ok(Refresher::new(slf.clone_ref(py), source)),
+            fetch::Requested::Bundled => Err(pyo3::exceptions::PyValueError::new_err(
+                "the bundled map needs no refresh",
+            )),
+            fetch::Requested::Invalid(reason) => {
+                Err(pyo3::exceptions::PyValueError::new_err(reason))
+            }
+        }
     }
 
     /// Fetch with main's reload policy, 3 attempts of 5 s, then install

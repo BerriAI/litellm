@@ -45,3 +45,13 @@ def reserve_process_for_forking(where: str) -> None:
             "threads do not survive fork(). Move the native call (warm-up, health check, "
             "import-time initialization) into the worker, after the fork."
         ) from error
+    _stop_model_cost_refresher()
+
+
+def _stop_model_cost_refresher() -> None:
+    """A process that only forks workers drops a model cost map refresh in flight. Each worker refreshes its own"""
+    import litellm
+
+    refresher: Final = getattr(litellm, "model_cost_refresher", None)
+    if refresher is not None:
+        refresher.stop()
