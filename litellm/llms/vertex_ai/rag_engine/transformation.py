@@ -4,13 +4,25 @@ Transformation utilities for Vertex AI RAG Engine.
 Handles transforming LiteLLM's unified formats to Vertex AI RAG Engine API format.
 """
 
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.rag import RAGChunkingStrategy
+
+
+class VertexRAGChunkingConfig(TypedDict):
+    chunk_size: ReadOnly[int]
+    chunk_overlap: ReadOnly[int]
+
+
+class VertexRAGTransformationConfig(TypedDict):
+    chunking_config: ReadOnly[VertexRAGChunkingConfig]
 
 
 class VertexAIRAGTransformation(VertexBase):
@@ -55,7 +67,7 @@ class VertexAIRAGTransformation(VertexBase):
     def transform_chunking_strategy_to_vertex_format(
         self,
         chunking_strategy: RAGChunkingStrategy | None,
-    ) -> dict[str, Any]:
+    ) -> VertexRAGTransformationConfig:
         """
         Transform LiteLLM's unified chunking_strategy to Vertex AI RAG format.
 
@@ -105,7 +117,7 @@ class VertexAIRAGTransformation(VertexBase):
         self,
         gcs_uri: str,
         chunking_strategy: RAGChunkingStrategy | None = None,
-    ) -> dict[str, Any]:
+    ) -> Mapping[str, object]:
         """
         Build the request payload for importing RAG files.
 

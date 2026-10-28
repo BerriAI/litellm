@@ -14,10 +14,11 @@ a hold that such a pass accounts for is reported under `garbage collection` inst
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from itertools import groupby
 from pathlib import Path
@@ -79,10 +80,23 @@ class StallRow:
     total_seconds: float
     max_seconds: float
     allowed_by: KnownStall | None
+    """Every hold in the row, longest first."""
+    holds: tuple[float, ...] = ()
 
     @property
     def offending(self) -> bool:
         return self.allowed_by is None or self.count > self.allowed_by.max_count
+
+    @property
+    def over_allowance(self) -> int:
+        return self.count if self.allowed_by is None else max(0, self.count - self.allowed_by.max_count)
+
+    @property
+    def note(self) -> str:
+        allowed: Final = (
+            f"{self.count} of {self.allowed_by.max_count} allowed" if self.allowed_by else "not on the allowlist"
+        )
+        return f"{allowed}, max {self.max_seconds:.2f} s"
 
 
 def _short(path: str) -> str:
@@ -160,6 +174,7 @@ def summarize(spec: EventLoopStalls, stalls: Iterable[Stall]) -> tuple[StallRow,
             total_seconds=sum(stall.seconds for stall in group),
             max_seconds=max(stall.seconds for stall in group),
             allowed_by=_allowed_by(spec, coroutine, where),
+            holds=tuple(sorted((stall.seconds for stall in group), reverse=True)),
         )
         for (coroutine, where), group in (
             (key, tuple(items)) for key, items in groupby(over, key=lambda s: (s.coroutine, s.where))
@@ -178,6 +193,68 @@ def offenders(rows: Iterable[StallRow]) -> tuple[str, ...]:
         )
         for row in rows
         if row.offending
+    )
+
+
+TOP_HOLDS: Final = 10
+
+
+@dataclass(frozen=True, slots=True)
+class Slice:
+    """One `_breakdown` row in the shape the other metrics use (label, value, share) plus the allowlist verdict the
+    dashboard shows under the label and colours by. `share` is None where the rows are not parts of a total."""
+
+    label: str
+    value: float
+    share: float | None
+    note: str | None
+    over: bool
+
+
+def _label(row: StallRow) -> str:
+    return f"{row.coroutine} {row.where}".strip()
+
+
+def _slice(row: StallRow, value: float, total: float) -> Slice:
+    return Slice(label=_label(row), value=value, share=value / total, note=row.note, over=row.offending)
+
+
+def _breakdown(name: str, slices: Iterable[Slice]) -> tuple[tuple[str, str], ...]:
+    rows: Final = tuple(asdict(row) for row in slices)
+    return ((f"perf_event_loop_{name}_breakdown", json.dumps(rows)),) if rows else ()
+
+
+def _longest_holds(table: tuple[StallRow, ...]) -> tuple[Slice, ...]:
+    holds: Final = sorted(((seconds, row) for row in table for seconds in row.holds), key=lambda hold: -hold[0])
+    return tuple(
+        Slice(label=_label(row), value=seconds, share=None, note=None, over=row.offending)
+        for seconds, row in holds[:TOP_HOLDS]
+    )
+
+
+def junit_properties(spec: EventLoopStalls, rows: Iterable[StallRow]) -> tuple[tuple[str, float | str], ...]:
+    """The stall table as `perf_event_loop_*` properties for the dashboard: every hold over the threshold with the
+    allowlist's total as its limit, the holds past their allowance (limit 0, the case's one assertion), the longest
+    and the summed hold, each with a `_breakdown` the dashboard opens on click: holds and seconds per location, the
+    locations past their cap by how far over they are, and the ten longest single holds with where they landed."""
+    table: Final = tuple(rows)
+    holds: Final = sum(row.count for row in table)
+    offending: Final = sum(row.over_allowance for row in table)
+    total_seconds: Final = sum(row.total_seconds for row in table)
+    return (
+        ("perf_event_loop_holds", holds),
+        ("perf_event_loop_holds_limit", sum(known.max_count for known in spec.allowlist)),
+        ("perf_event_loop_offending_holds", offending),
+        ("perf_event_loop_offending_holds_limit", 0),
+        ("perf_event_loop_hold_seconds_max", max((row.max_seconds for row in table), default=0.0)),
+        ("perf_event_loop_hold_seconds_total", total_seconds),
+        *_breakdown("holds", (_slice(row, row.count, holds) for row in table)),
+        *_breakdown(
+            "offending_holds",
+            (_slice(row, row.over_allowance, offending) for row in table if row.over_allowance),
+        ),
+        *_breakdown("hold_seconds_total", (_slice(row, row.total_seconds, total_seconds) for row in table)),
+        *_breakdown("hold_seconds_max", _longest_holds(table)),
     )
 
 

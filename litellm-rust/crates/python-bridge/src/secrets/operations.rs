@@ -4,6 +4,8 @@ use litellm_secrets::cyberark::AuthenticationRetry;
 use litellm_secrets::{Error, SecretManager};
 use litellm_secrets_types::{PythonSecretRead, SecretOperationContext};
 
+use super::ManagerError;
+
 pub(super) struct PythonReadRequest {
     pub secret_name: String,
     pub primary_secret_name: Option<String>,
@@ -62,15 +64,18 @@ pub(super) async fn read_python_provider(
 
 #[derive(Debug)]
 pub(super) enum PythonMutationError {
-    Unsupported,
+    Manager(ManagerError),
     Vault(Box<super::vault::Failure>),
     CyberarkWrite {
         name: String,
         failure: Box<litellm_secrets::cyberark::WriteFailure>,
     },
-    CurrentMissing(String),
-    ReplacementMissing(String),
-    ReplacementMismatch,
+}
+
+impl From<ManagerError> for PythonMutationError {
+    fn from(error: ManagerError) -> Self {
+        Self::Manager(error)
+    }
 }
 
 pub(super) async fn write_python_provider(
@@ -89,7 +94,7 @@ pub(super) async fn write_python_provider(
                 })?;
             Ok(write_success(name))
         }
-        _ => Err(PythonMutationError::Unsupported),
+        _ => Err(ManagerError::MutationUnsupported.into()),
     }
 }
 
@@ -115,7 +120,7 @@ pub(super) async fn delete_python_provider(
                 "message": "CyberArk Conjur does not support direct secret deletion. Use policy updates to remove variables.",
             }))
         }
-        _ => Err(PythonMutationError::Unsupported),
+        _ => Err(ManagerError::MutationUnsupported.into()),
     }
 }
 
@@ -138,7 +143,7 @@ pub(super) async fn rotate_python_provider(
                 .flatten()
                 .is_none()
             {
-                return Err(PythonMutationError::CurrentMissing(current_name.to_owned()));
+                return Err(ManagerError::CurrentMissing(current_name.to_owned()).into());
             }
             client
                 .write_with_retry(
@@ -157,16 +162,16 @@ pub(super) async fn rotate_python_provider(
                 .await
                 .ok()
                 .flatten()
-                .ok_or_else(|| PythonMutationError::ReplacementMissing(new_name.to_owned()))?;
+                .ok_or_else(|| ManagerError::ReplacementMissing(new_name.to_owned()))?;
             if actual != *value {
-                return Err(PythonMutationError::ReplacementMismatch);
+                return Err(ManagerError::ReplacementMismatch.into());
             }
             if current_name != new_name {
                 client.invalidate_cached_secret(current_name).await;
             }
             Ok(write_success(new_name))
         }
-        _ => Err(PythonMutationError::Unsupported),
+        _ => Err(ManagerError::MutationUnsupported.into()),
     }
 }
 fn write_success(name: &str) -> serde_json::Value {

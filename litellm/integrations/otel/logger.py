@@ -74,6 +74,7 @@ from litellm.integrations.otel.plumbing.metrics import (
     create_genai_metrics,
 )
 from litellm.integrations.otel.plumbing.providers import (
+    LITELLM_TRACER_NAME,
     attach_tenant_fan_out,
     build_tracer_provider,
     get_event_logger,
@@ -97,7 +98,6 @@ if TYPE_CHECKING:
         StandardLoggingPayload,
     )
 
-LITELLM_TRACER_NAME: Final = "litellm"
 _published_v2_provider: ApiTracerProvider | None = None
 
 
@@ -600,6 +600,7 @@ class OpenTelemetryV2(CustomLogger):
             trace=call.trace,
             session_id=call.session_id,
             metadata_keys=tuple(self.config.baggage_metadata_keys),
+            operation=call.operation,
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:
