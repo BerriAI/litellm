@@ -6118,7 +6118,7 @@ class ProxyConfig:
             if "team_id" not in team:
                 raise Exception(f"team_id missing from team: {SENSITIVE_DATA_MASKER.mask_dict(team)}")
             if team_id == team["team_id"]:
-                team_config = team
+                team_config = copy.deepcopy(team)
                 break
         for k, v in team_config.items():
             if isinstance(v, str) and v.startswith("os.environ/"):
@@ -6131,11 +6131,9 @@ class ProxyConfig:
         - return the relevant completion() call params
         """
 
-        # load existing config
-        config: Final = self.get_config_state()
-
+        # read in place: ``_get_team_config`` copies the one matching team, not the whole config
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
-        litellm_settings: Final = config.get("litellm_settings", {})
+        litellm_settings: Final = self.config.get("litellm_settings", {})
         all_teams_config: Final = litellm_settings.get("default_team_settings", None)
         if all_teams_config is None:
             return {}

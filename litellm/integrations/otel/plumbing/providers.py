@@ -57,6 +57,7 @@ from litellm.integrations.otel.model.config import (
 )
 from litellm.integrations.otel.model.semconv import (
     DB,
+    HTTP,
     MCP,
     Error,
     ExceptionEvent,
@@ -540,21 +541,43 @@ _MAX_PENDING_TREES: Final = 1024
 _MAX_PENDING_SPANS_PER_TREE: Final = 512
 _MAX_REMEMBERED_VERDICTS: Final = 4096
 _MAX_OPEN_REQUESTS: Final = 16384
+#: The least time between two warnings that the bound decided request trees early.
+_EARLY_DECISION_WARNING_SECONDS: Final = 60.0
+#: The status code the HTTP instrumentation stamps on the server span, under the
+#: convention it reports by default and the stable one.
+_HTTP_STATUS_KEYS: Final = ("http.status_code", HTTP.RESPONSE_STATUS_CODE)
 
 
 class _PendingTree:
-    """The spans of one request held for its sampled destinations, and whether any
-    span of the tree has failed so far."""
+    """The spans of one request held for its sampled destinations, whether any span of
+    the tree has failed so far, and whether the request itself has."""
 
-    __slots__ = ("failed", "held")
+    __slots__ = ("failed", "held", "request_failed")
 
     def __init__(self) -> None:
         self.failed = False
+        self.request_failed = False
         self.held: list[tuple[ReadableSpan, OtelDestination]] = []  # mutable-ok: bounded per tree
 
 
 def _is_sampled(destination: "OtelDestination") -> bool:
-    return destination.success_sampling_rate is not None or destination.error_sampling_rate is not None
+    return (
+        destination.failure_only
+        or destination.success_sampling_rate is not None
+        or destination.error_sampling_rate is not None
+    )
+
+
+def _fails_the_request(span: ReadableSpan, request: "_RequestKey") -> bool:
+    """Whether ``span`` says its request failed, the way the failure callback does: the
+    model or MCP call it made ended in error, or the request itself did, in error or
+    answering with an HTTP error status. A cache, database or guardrail span that
+    failed while the request went on to succeed does not count."""
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    if span.context is not None and span.context.span_id == request[1]:
+        status: Final = next((attributes[key] for key in _HTTP_STATUS_KEYS if key in attributes), None)
+        return span.status.status_code is StatusCode.ERROR or (isinstance(status, int) and status >= 400)
+    return span.status.status_code is StatusCode.ERROR and GenAI.OPERATION_NAME in attributes
 
 
 #: A request is its trace id and the id of its root, the span of it whose parent is
@@ -565,22 +588,31 @@ _RequestKey: TypeAlias = tuple[int, int]
 #: A verdict is one request's keep or drop for one destination at its rates: the exporter
 #: ``cache_key`` leaves the rates out, so two destinations sharing an exporter with
 #: different rates would otherwise share one verdict.
-_VerdictKey: TypeAlias = tuple[int, int, object, float | None, float | None]
+_VerdictKey: TypeAlias = tuple[int, int, object, float | None, float | None, bool]
 
 
 def _verdict_key(request: _RequestKey, destination: "OtelDestination") -> _VerdictKey:
-    return (*request, destination.cache_key(), destination.success_sampling_rate, destination.error_sampling_rate)
+    return (
+        *request,
+        destination.cache_key(),
+        destination.success_sampling_rate,
+        destination.error_sampling_rate,
+        destination.failure_only,
+    )
 
 
-def _keeps_tree(destination: "OtelDestination", failed: bool, trace_id: int) -> bool:
-    """Whether the destination's rate keeps a request tree of ``trace_id``: a tree with
-    a failed span answers to ``arize_error_sampling_rate``, the rest to
-    ``arize_success_sampling_rate``, an unset rate keeps everything and ``0.0`` keeps
-    nothing.
+def _keeps_tree(destination: "OtelDestination", tree: _PendingTree, trace_id: int) -> bool:
+    """Whether the destination keeps a request tree of ``trace_id``: a ``failure_only``
+    destination none whose request did not fail. Otherwise a tree with a failed span
+    answers to ``arize_error_sampling_rate``, the rest to ``arize_success_sampling_rate``,
+    an unset rate keeps everything and ``0.0`` keeps nothing.
 
     The first eight bytes of a SHA-256 of the trace id are read against the rate, so
     every process deciding a request of the trace with the same outcome reaches the same
     verdict."""
+    failed: Final = tree.request_failed if destination.failure_only else tree.failed
+    if destination.failure_only and not failed:
+        return False
     rate: Final = destination.error_sampling_rate if failed else destination.success_sampling_rate
     if rate is None:
         return True
@@ -745,6 +777,8 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._span_roots: weakref.WeakKeyDictionary[SDKSpan, int] = weakref.WeakKeyDictionary()
         self._verdicts: OrderedDict[_VerdictKey, bool] = OrderedDict()  # mutable-ok: bounded LRU
         self._drain: Final = drain_pool if drain_pool is not None else _DrainPool(capacity=pending_drains)
+        self._decided_early = 0  # guarded by ``_lock``: trees the bound decided since the last warning
+        self._warned_early_at: float | None = None  # guarded by ``_lock``
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         context: Final = span.context
@@ -766,7 +800,9 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             if span.context is not None:
                 self._roots.pop(span.context.span_id, None)
         failed: Final = span.status.status_code is StatusCode.ERROR
-        for destination in request_destinations():
+        fails_request: Final = _fails_the_request(span, request)
+        destinations: Final = request_destinations()
+        for destination in destinations:
             if (
                 self._operator_already_writes(span, destination, suppressed)
                 or not _in_scope(span, destination.span_scope)
@@ -781,9 +817,10 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             if not _is_sampled(destination):
                 self._forward(span, destination)
                 continue
-            for held_span, held_destination in self._route(request, span, destination, failed):
+            for held_span, held_destination in self._route(request, span, destination, failed, fails_request):
                 self._forward(held_span, held_destination)
-        for held_span, held_destination in self._settle(request, span, failed):
+        sampled: Final = fails_request and any(_is_sampled(destination) for destination in destinations)
+        for held_span, held_destination in self._settle(request, span, failed, fails_request, sampled):
             self._forward(held_span, held_destination)
 
     def _request_of(self, span: ReadableSpan, parent_span: Span | None = None) -> _RequestKey:
@@ -829,14 +866,20 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             self._release(processor)
 
     def _route(
-        self, request: _RequestKey, span: ReadableSpan, destination: "OtelDestination", failed: bool
+        self,
+        request: _RequestKey,
+        span: ReadableSpan,
+        destination: "OtelDestination",
+        failed: bool,
+        fails_request: bool,
     ) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
         """The spans to forward now for ``span`` on a sampled ``destination``: the span
         itself when its tree's verdict is already known and keeps it, nothing while the
         tree is held for the rest of its request, or what the bounds made the fan-out decide
         early (a tree that outgrew its cap is decided on what it has, and so is the oldest
         tree once too many are waiting, so a span that never ends holds nothing back for
-        ever). A failed span marks its tree before any such early decision. Once shutdown
+        ever). A failed span marks its tree, and its request when it says the request
+        failed, before any such early decision. Once shutdown
         has started flushing, nothing is held: a span ending then is decided at once,
         since no later flush would reach it.
 
@@ -849,21 +892,42 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 return ((span, destination),) if verdict else ()
             tree: Final = self._pending.setdefault(request, _PendingTree())
             tree.held.append((span, destination))
-            if failed:
-                tree.failed = True
+            tree.failed = tree.failed or failed
+            tree.request_failed = tree.request_failed or fails_request
             if self._draining or len(tree.held) >= _MAX_PENDING_SPANS_PER_TREE:
                 return self._decide_locked(request)
-            if len(self._pending) > _MAX_PENDING_TREES:
-                oldest: Final = next(iter(self._pending))
-                return self._decide_locked(oldest)
+            return self._decide_oldest_over_bound_locked()
+
+    def _decide_oldest_over_bound_locked(self) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
+        """Decide the oldest held tree on what it has once too many are waiting.
+
+        Its request may not have finished, so a ``failure_only`` destination loses a
+        failure that comes later, and a sampled one judges it on the outcome so far.
+        Each such decision is counted and the count logged at most once a minute, so
+        the loss is never silent.
+        """
+        if len(self._pending) <= _MAX_PENDING_TREES:
             return ()
+        self._decided_early += 1
+        now: Final = time.monotonic()
+        if self._warned_early_at is None or now - self._warned_early_at >= _EARLY_DECISION_WARNING_SECONDS:
+            verbose_logger.warning(
+                "OTel V2 fan-out: %d request trees were sent or dropped before their request finished, because "
+                "more than %d were held for sampled or failure-only destinations; a failure that came later "
+                "did not reach a failure-only destination",
+                self._decided_early,
+                _MAX_PENDING_TREES,
+            )
+            self._decided_early = 0
+            self._warned_early_at = now
+        return self._decide_locked(next(iter(self._pending)))
 
     def _decide(self, request: _RequestKey) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
         with self._lock:
             return self._decide_locked(request)
 
     def _settle(
-        self, request: _RequestKey, span: ReadableSpan, failed: bool
+        self, request: _RequestKey, span: ReadableSpan, failed: bool, fails_request: bool, sampled: bool
     ) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
         """What the request's held tree exports once the span that just ended was the last
         of its request still open. The model-call span ends in the post-call callback,
@@ -871,17 +935,22 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         when its root ends, and a model call that fails late still answers to the error
         rate. A request whose starts this fan-out never saw (attached mid-flight, or
         forgotten by the bound) is decided as each of its spans ends.
+
+        A span that fails a ``sampled`` request before the request has held anything (the
+        server span answering an error ahead of an ``llm_only`` destination's model call)
+        opens the tree, so the verdict still sees the failure.
         """
         with self._lock:
-            tree: Final = self._pending.get(request)
-            if tree is not None and failed:
-                tree.failed = True
+            tree: Final = self._pending.setdefault(request, _PendingTree()) if sampled else self._pending.get(request)
+            if tree is not None:
+                tree.failed = tree.failed or failed
+                tree.request_failed = tree.request_failed or fails_request
             still_open: Final = self._open.pop(request, set())
             if span.context is not None:
                 still_open.discard(span.context.span_id)
             if still_open:
                 self._open[request] = still_open
-                return ()
+                return self._decide_oldest_over_bound_locked()
             return self._decide_locked(request)
 
     def _decide_locked(self, request: _RequestKey) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
@@ -894,7 +963,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         for _, destination in tree.held:
             key = _verdict_key(request, destination)
             if key not in verdicts:
-                verdicts[key] = _keeps_tree(destination, tree.failed, request[0])
+                verdicts[key] = _keeps_tree(destination, tree, request[0])
                 self._verdicts[key] = verdicts[key]
         while len(self._verdicts) > _MAX_REMEMBERED_VERDICTS:
             self._verdicts.popitem(last=False)
@@ -1630,7 +1699,13 @@ def deliverable_destinations(
     fan-out attached, or with an exporter that will not build, the request keeps
     exactly the routing it would have had without any override.
     """
-    fan_out: Final = next(
+    fan_out: Final = tenant_fan_out(provider)
+    return fan_out.deliverable(destinations) if fan_out is not None else ()
+
+
+def tenant_fan_out(provider: trace.TracerProvider | None = None) -> TenantFanOutSpanProcessor | None:
+    """The fan-out attached to ``provider`` (the OTel global when omitted), if any."""
+    return next(
         (
             processor
             for processor in _attached_processors(provider if provider is not None else trace.get_tracer_provider())
@@ -1638,7 +1713,6 @@ def deliverable_destinations(
         ),
         None,
     )
-    return fan_out.deliverable(destinations) if fan_out is not None else ()
 
 
 def operator_sink_scopes(*configs: OpenTelemetryV2Config) -> 'Mapping[_SinkKey, "OtelSpanScope"]':

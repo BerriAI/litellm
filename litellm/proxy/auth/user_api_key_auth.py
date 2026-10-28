@@ -4220,7 +4220,8 @@ def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Reque
 
     Only destinations the published fan-out can build are anchored. Anchoring one is
     what tells the operator's exporter to hold that backend's spans back under
-    ``override``, so an unbuildable one would leave the span with nowhere to go.
+    ``override``, so an unbuildable one would leave the span with nowhere to go. With
+    no fan-out published (OTel V2 off) the key and team config is not read at all.
 
     The ``postgres`` spans under ``auth`` close before this runs, because they are the
     reads that resolve the identity being read here. They never reach the tenant's
@@ -4230,16 +4231,16 @@ def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Reque
     try:
         from litellm.integrations.otel.logger import fan_out_provider
         from litellm.integrations.otel.plumbing.context import set_request_destinations
-        from litellm.integrations.otel.plumbing.providers import deliverable_destinations
+        from litellm.integrations.otel.plumbing.providers import tenant_fan_out
         from litellm.proxy.litellm_pre_call_utils import (
             resolve_tenant_otel_destinations,
         )
 
+        fan_out: Final = tenant_fan_out(fan_out_provider())
         set_request_destinations(
-            deliverable_destinations(
-                resolve_tenant_otel_destinations(user_api_key_dict, safe_get_request_headers(request)),
-                fan_out_provider(),
-            )
+            fan_out.deliverable(resolve_tenant_otel_destinations(user_api_key_dict, safe_get_request_headers(request)))
+            if fan_out is not None
+            else ()
         )
     except Exception as exc:  # noqa: BLE001  # telemetry routing is best-effort and must never break authentication
         verbose_proxy_logger.debug("OTel V2: tenant destination resolution failed: %s", exc)

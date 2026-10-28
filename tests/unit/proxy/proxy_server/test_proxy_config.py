@@ -1633,6 +1633,27 @@ def test_ProxyConfig_load_team_config_no_settings_returns_empty():
         pc.load_team_config(team_id="anything")
 
 
+def test_ProxyConfig_load_team_config_resolves_env_values_without_touching_the_config(monkeypatch):
+    monkeypatch.setenv("TEAM_TA_LANGFUSE_SECRET", "sk-from-env")
+    pc = ProxyConfig()
+    team: Final = {
+        "team_id": "ta",
+        "langfuse_secret": "os.environ/TEAM_TA_LANGFUSE_SECRET",
+        "callback_vars": {"langfuse_host": "https://cloud.langfuse.com"},
+    }
+    pc.config = MappingProxyType({"litellm_settings": {"default_team_settings": [{"team_id": "tb"}, team]}})
+
+    out = pc.load_team_config(team_id="ta")
+    out["callback_vars"]["langfuse_host"] = "https://changed.example"
+
+    assert out["langfuse_secret"] == "sk-from-env"
+    assert team == {
+        "team_id": "ta",
+        "langfuse_secret": "os.environ/TEAM_TA_LANGFUSE_SECRET",
+        "callback_vars": {"langfuse_host": "https://cloud.langfuse.com"},
+    }
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._init_cache
 # ---------------------------------------------------------------------------

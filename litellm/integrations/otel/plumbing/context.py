@@ -493,8 +493,12 @@ def destination_backends() -> frozenset[str]:
 def suppressed_backends() -> frozenset[str]:
     """Backends whose operator-level exporters this request must NOT reach.
 
-    Empty under ``additive``, where the operator keeps its copy of every span.
+    Empty under ``additive``, where the operator keeps its copy of every span. A
+    ``failure_only`` destination suppresses nothing: it takes the failed requests
+    without taking the request away from the operator's own account.
     """
     if tenant_destinations_are_additive():
         return frozenset()
-    return destination_backends()
+    return frozenset(
+        d.callback_name for d in _request_destinations.get() if d.callback_name and not d.failure_only
+    )

@@ -227,6 +227,7 @@ def destination_for(
         span_scope=_span_scope(callback_name, params),
         capture_message_content=capture_message_content,
         excluded_db_systems=excluded_db_systems,
-        success_sampling_rate=0.0 if failure_only else success_sampling_rate,
+        success_sampling_rate=success_sampling_rate,
         error_sampling_rate=error_sampling_rate,
+        failure_only=failure_only,
     )

@@ -50,6 +50,13 @@ class OtelDestination(LiteLLMBaseModel):
         default=None,
         description="Same, for the requests with a failed span in their tree; ``None`` forwards every one.",
     )
+    failure_only: bool = Field(
+        default=False,
+        description=(
+            "Forwards only the request trees whose request failed: its model or MCP call, or the request "
+            "itself. The operator's own exporter for the backend keeps every request."
+        ),
+    )
     capture_message_content: str | None = Field(
         default=None,
         description=(

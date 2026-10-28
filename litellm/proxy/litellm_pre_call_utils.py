@@ -1327,9 +1327,10 @@ def resolve_tenant_otel_destinations(
     way ``convert_key_logging_metadata_to_callback`` merges them, so the destination
     and the per-request tracer routing cannot read one config two ways.
 
-    A backend only ``failure``-only entries name resolves to a destination that keeps
-    no successful request: the fan-out holds that request's spans until the request
-    goes quiet and forwards them only when one of them failed.
+    A backend only ``failure``-only entries name resolves to a ``failure_only``
+    destination: the fan-out holds that request's spans until the request goes quiet
+    and forwards them only when the request failed, and the operator's own exporter
+    for the backend keeps every request.
 
     A backend the request disabled dynamically, through the key's
     ``litellm_disabled_callbacks`` or the ``x-litellm-disable-callbacks`` header in
