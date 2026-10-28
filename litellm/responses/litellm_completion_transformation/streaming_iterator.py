@@ -150,7 +150,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.sent_output_text_done_event: bool = False
         self.sent_output_content_part_done_event: bool = False
         self.sent_output_item_done_event: bool = False
-        self.sent_annotation_events: bool = False
+        self._annotation_index: int = 0
         self.litellm_model_response: ModelResponse | TextCompletionResponse | None = None
         self.completed_response = None
         self.final_text: str = ""
@@ -1229,6 +1229,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         response_api_chunk = self._transform_chat_completion_chunk_to_response_api_chunk(chunk)
                         if response_api_chunk:
                             self._pending_response_events.append(response_api_chunk)
+                        self._queue_annotation_events(chunk)
 
                     if self._pending_response_events:
                         return self._pending_response_events.pop(0)
@@ -1292,6 +1293,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     response_api_chunk = self._transform_chat_completion_chunk_to_response_api_chunk(chunk)
                     if response_api_chunk:
                         self._pending_response_events.append(response_api_chunk)
+                    self._queue_annotation_events(chunk)
                     if self._pending_response_events:
                         return self._pending_response_events.pop(0)
                     # Otherwise, loop to next chunk
@@ -1302,6 +1304,33 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self.finished = True
             raise e
 
+    def _queue_annotation_events(self, chunk: ModelResponseStream) -> None:
+        annotations: Final = getattr(chunk.choices[0].delta, "annotations", None) if chunk.choices else None
+        if not annotations:
+            return
+        if not self.sent_message_item_added_event:
+            self._queue_message_item_added_events()
+        item_id: Final = self._cached_item_id
+        assert item_id is not None
+        response_annotations: Final = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
+                annotations=annotations
+            )
+        )
+        for annotation in response_annotations:
+            self._sequence_number += 1
+            self._pending_response_events.append(
+                OutputTextAnnotationAddedEvent(
+                    type=ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
+                    item_id=item_id,
+                    output_index=self._message_index(),
+                    content_index=0,
+                    annotation_index=self._annotation_index,
+                    annotation=annotation.model_dump(),
+                ).model_copy(update={"sequence_number": self._sequence_number})
+            )
+            self._annotation_index += 1
+
     def _transform_chat_completion_chunk_to_response_api_chunk(
         self, chunk: ModelResponseStream
     ) -> ResponsesAPIStreamingResponse | None:
@@ -1310,37 +1339,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
         This currently handles emitting the OutputTextDeltaEvent, which is used by other tools using the responses API
         and the ReasoningSummaryTextDeltaEvent, which is used by the responses API to emit reasoning content.
-        It also handles emitting annotation.added events when annotations are detected in the chunk.
         """
         if self._cached_item_id is None:
             self._cached_item_id = f"msg_{uuid.uuid4()}"
         item_id: Final = self._cached_item_id
 
-        # Check if this chunk has annotations first (before processing text/reasoning)
-        # This ensures we detect and queue annotation events from the annotation chunk
-        if chunk.choices and hasattr(chunk.choices[0].delta, "annotations"):
-            annotations: Final = chunk.choices[0].delta.annotations
-            if annotations and self.sent_annotation_events is False:
-                self.sent_annotation_events = True
-                # Store annotation events to emit them one by one
-                if not hasattr(self, "_pending_annotation_events"):
-                    response_annotations = LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
-                        annotations=annotations
-                    )
-                    self._pending_annotation_events = []
-                    for idx, annotation in enumerate(response_annotations):
-                        annotation_dict = (
-                            annotation.model_dump() if hasattr(annotation, "model_dump") else dict(annotation)
-                        )
-                        event = OutputTextAnnotationAddedEvent(
-                            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
-                            item_id=item_id,
-                            output_index=self._message_index(),
-                            content_index=0,
-                            annotation_index=idx,
-                            annotation=annotation_dict,
-                        )
-                        self._pending_annotation_events.append(event)
         # Priority 1: Handle reasoning content (highest priority)
         if (
             chunk.choices
@@ -1383,13 +1386,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if self._pending_tool_events:
                 return self._pending_tool_events.pop(0)
 
-        # Priority 4: If we have pending annotation events, emit the next one
-        # This happens when the current chunk has no text/reasoning content
-        if hasattr(self, "_pending_annotation_events") and self._pending_annotation_events:
-            event = self._pending_annotation_events.pop(0)
-            return event
-
-        # Priority 5: If we have pending tool events (from earlier chunk), emit the next one
         if self._pending_tool_events:
             return self._pending_tool_events.pop(0)
 

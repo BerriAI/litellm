@@ -1558,3 +1558,52 @@ async def test_a_compaction_block_without_its_summary_streams_no_compaction_item
 
     assert [event["item"]["type"] for event in events if "item" in event] == ["message", "message"]
     assert [item["type"] for item in events[-1]["response"]["output"]] == ["message"]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("batches", [(5,), (2, 3)])
+@pytest.mark.parametrize("with_text", [True, False])
+@pytest.mark.parametrize("reasoning_first", [True, False])
+@pytest.mark.asyncio
+async def test_all_citation_batches_stream_before_message_done(
+    sync_mode: bool, batches: tuple[int, ...], with_text: bool, reasoning_first: bool
+) -> None:
+    annotations: Final = [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "start_index": 0,
+                "end_index": 5,
+                "url": f"https://example.com/{index}",
+                "title": f"Source {index}",
+            },
+        }
+        for index in range(sum(batches))
+    ]
+    chunks: Final = list(_reasoning_then_text_chunks()[:1]) if reasoning_first else []
+    chunks.append(_chunk("Claim"))
+    offset = 0
+    for size in batches:
+        chunk = _chunk("!" if with_text else "", finish_reason="stop" if offset + size == len(annotations) else None)
+        chunk.choices[0].delta.annotations = annotations[offset : offset + size]
+        chunks.append(chunk)
+        offset += size
+
+    events: Final = await _collect_events(_build_iterator(chunks), sync_mode)
+
+    added: Final = [event for event in events if event.type == "response.output_text.annotation.added"]
+    terminal: Final = events[-1]
+    message: Final = next(item for item in terminal.response.output if item.type == "message")
+    final_annotations: Final = [annotation.model_dump() for annotation in message.content[0].annotations]
+    assert [event.annotation for event in added] == final_annotations
+    assert len(added) == len(annotations)
+    assert [event.annotation_index for event in added] == list(range(len(annotations)))
+    message_index: Final = next(
+        event.output_index
+        for event in events
+        if event.type == "response.output_item.added" and event.item.type == "message"
+    )
+    assert all(event.item_id == message.id and event.output_index == message_index for event in added)
+    done_index: Final = next(index for index, event in enumerate(events) if event.type == "response.output_text.done")
+    assert all(events.index(event) < done_index for event in added)
+    assert message.content[0].text == "Claim" + ("!" * len(batches) if with_text else "")
