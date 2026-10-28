@@ -6133,7 +6133,7 @@ def completion(
                 }
             )
         )
-        bedrock_bridges_to_responses: Final = bedrock_request_bridges_to_responses(
+        bedrock_bridges_to_responses: Final = custom_llm_provider == "bedrock" and bedrock_request_bridges_to_responses(
             custom_llm_provider,
             model,
             request_params,
@@ -6148,6 +6148,7 @@ def completion(
             responses_api_model_info.get("mode") == "responses" or bedrock_bridges_to_responses
         ) and not skip_responses_api_bridge:
             from litellm.completion_extras import responses_api_bridge
+            from litellm.responses.utils import openai_bridge_reasoning
 
             bridge_optional_params, bridge_litellm_params = (
                 bedrock_responses_bridge_call_params(optional_params, litellm_params, api_base)
@@ -6156,6 +6157,21 @@ def completion(
             )
             stripped_optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(
                 bridge_optional_params
+            )
+            bridged_optional_params: Final = (
+                {
+                    **stripped_optional_params,
+                    "reasoning_effort": openai_bridge_reasoning(
+                        requested=resolved_reasoning_effort,
+                        effort_kept="reasoning_effort" in stripped_optional_params,
+                        summary_alias=rs_val,
+                        model=model,
+                        drop_params=drop_unsupported_reasoning,
+                        additional_drop_params=routing_kwargs.get("additional_drop_params"),
+                    ),
+                }
+                if custom_llm_provider == "openai" and isinstance(resolved_reasoning_effort, dict)
+                else with_reasoning_summary_in_effort(stripped_optional_params, resolved_reasoning_effort, rs_val)
             )
 
             return responses_api_bridge.completion(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
@@ -6167,9 +6183,7 @@ def completion(
                 api_base=api_base,
                 acompletion=acompletion,
                 logging_obj=logging,
-                optional_params=with_reasoning_summary_in_effort(
-                    stripped_optional_params, resolved_reasoning_effort, rs_val
-                ),
+                optional_params=bridged_optional_params,
                 litellm_params=bridge_litellm_params,
                 timeout=timeout,
                 client=client,  # pass AsyncOpenAI, OpenAI client
@@ -8410,7 +8424,7 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
     )
 
-    response: TranscriptionResponse | Coroutine[object, object, TranscriptionResponse] | None = None
+    response: TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]
 
     provider_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
         model=model,
@@ -8572,10 +8586,16 @@ def transcription(
             provider_config=provider_config,
             shared_session=shared_session,
         )
+    else:
+        raise litellm.UnsupportedEndpointError(
+            message=f"{custom_llm_provider}/{model} does not support audio transcription.",
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
 
     # Store duration in _hidden_params for cost calculation without
     # exposing it in the response body (see sync path comment above).
-    if response is not None and not isinstance(response, Coroutine):
+    if not isinstance(response, Coroutine):
         existing_duration: Final = getattr(response, "duration", None)
         if existing_duration is None:
             calculated_duration: Final = calculate_request_duration(file)
@@ -8585,8 +8605,6 @@ def transcription(
                 )
                 response_hidden_params["audio_transcription_duration"] = calculated_duration
 
-    if response is None:
-        raise ValueError("Unmapped provider passed in. Unable to get the response.")
     return response
 
 

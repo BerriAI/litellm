@@ -2,7 +2,11 @@ import base64
 import json
 import logging
 import os
+import threading
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from queue import SimpleQueue
 from typing import Final
 from unittest.mock import Mock, patch
 
@@ -12,6 +16,7 @@ import litellm
 from litellm._logging import redact_internal_details_from_client_message
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.secret_managers.main import (
+    _cached_azure_oidc_token_provider,
     get_secret,
     normalize_nonempty_secret_str,
     resolve_local_oidc_reference,
@@ -311,6 +316,41 @@ def test_oidc_azure_ad_token_success(mock_get_azure_ad_token_provider, monkeypat
             azure_scope="api://azure-audience"
         )
         mock_token_provider.assert_called_once_with()
+
+
+def test_concurrent_azure_oidc_reads_build_one_token_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AZURE_FEDERATED_TOKEN_FILE", raising=False)
+    callers: Final = 8
+    start: Final = threading.Barrier(callers)
+    builds: Final = SimpleQueue[str | None]()
+    everyone_building: Final = threading.Event()
+    release: Final = threading.Event()
+
+    def held_build(azure_scope: str | None = None) -> Callable[[], str]:
+        builds.put(azure_scope)
+        if builds.qsize() >= callers:
+            everyone_building.set()
+        release.wait(5)
+        return lambda: "identity-token"
+
+    def read() -> str | None:
+        start.wait(5)
+        return get_secret("oidc/azure/api://concurrent-audience")
+
+    _cached_azure_oidc_token_provider.cache_clear()
+    with (
+        patch("litellm.secret_managers.main.get_azure_ad_token_provider", side_effect=held_build),
+        ThreadPoolExecutor(max_workers=callers) as pool,
+    ):
+        calls: Final = tuple(pool.submit(read) for _ in range(callers))
+        assert builds.get(timeout=5) == "api://concurrent-audience"
+        everyone_building.wait(0.5)
+        release.set()
+        tokens: Final = tuple(call.result(timeout=5) for call in calls)
+    _cached_azure_oidc_token_provider.cache_clear()
+
+    assert tokens == ("identity-token",) * callers
+    assert builds.qsize() == 0
 
 
 def test_oidc_file_success(tmp_path, monkeypatch):
