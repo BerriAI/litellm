@@ -17,7 +17,7 @@ import pytest
 from opentelemetry import trace as trace_api
 from opentelemetry.context import Context
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
@@ -27,6 +27,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel import GenAIOperation
 from litellm.integrations.otel import logger as otel_logger
+from litellm.integrations.otel.emitter import SpanEmitter
 from litellm.integrations.otel.logger import (
     OpenTelemetryV2,
     build_otel_v2_logger,
@@ -52,6 +53,8 @@ from litellm.integrations.otel.model.payloads import (
     ServerInfo,
     ToolDefinition,
 )
+from litellm.integrations.otel.model.spans import SpanRole
+from litellm.integrations.otel.model.trace_controls import TraceControls
 from litellm.integrations.otel.plumbing import providers as otel_providers
 from litellm.integrations.otel.plumbing.context import (
     destination_backends,
@@ -3518,6 +3521,64 @@ class TestLangfuseTenantOnly:
 
         assert later is at_startup
         assert loggers == [at_startup]
+
+    def test_a_key_destination_gets_the_langfuse_fields_from_the_generic_startup_logger(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With ``langfuse_otel`` only in a key's or team's logging, the startup logger is the
+        generic one; the key's project still gets the user, session and tags, and the
+        operator's stdout placeholder still gets no Langfuse request metadata."""
+        credential_less_proxy(monkeypatch)
+        capture: Final = _ExporterCapture()
+        for kind in ("otlp_grpc", "otlp_http", "console"):
+            monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)
+        config: Final = OpenTelemetryV2Config()
+        provider: Final = build_tracer_provider(config, tenant_overrides=True)
+        attach_tenant_fan_out(provider, config)
+        emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
+        call: Final = replace(
+            _MODEL_CALL_WITHOUT_CONTENT,
+            trace=TraceControls(user_id="user-42", session_id="sess-1", tags=("agent:orders",)),
+            request_metadata=MappingProxyType({"user_api_key_alias": "prod-key"}),
+        )
+
+        def with_destination() -> None:
+            set_request_destinations(deliverable_destinations((LANGFUSE_DEST,), provider))
+            emitter.emit(SpanRole.LLM_CALL, call)
+
+        in_fresh_context(with_destination)
+        provider.force_flush()
+
+        received: Final = {
+            headers: exporter.get_finished_spans()[0].attributes or {} for headers, exporter in capture.built
+        }
+        to_langfuse: Final = received[LANGFUSE_DEST.header_string()]
+        assert {key: to_langfuse.get(key) for key in ("user.id", "session.id", "langfuse.trace.tags")} == {
+            "user.id": "user-42",
+            "session.id": "sess-1",
+            "langfuse.trace.tags": ("agent:orders",),
+        }
+        assert "langfuse.observation.metadata" in to_langfuse
+        assert "langfuse.observation.metadata" not in received[None]
+
+    def test_a_span_at_its_attribute_limit_sheds_the_destinations_langfuse_fields_first(self) -> None:
+        def attributes(destinations: tuple[OtelDestination, ...], limit: int | None) -> dict[str, object]:
+            exporter: Final = InMemorySpanExporter()
+            provider: Final = TracerProvider(span_limits=SpanLimits(max_span_attributes=limit))
+            provider.add_span_processor(SimpleSpanProcessor(exporter))
+            emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), OpenTelemetryV2Config())
+
+            def run() -> None:
+                set_request_destinations(destinations)
+                emitter.emit(SpanRole.LLM_CALL, _MODEL_CALL_WITH_CONTENT)
+
+            in_fresh_context(run)
+            return dict(exporter.get_finished_spans()[0].attributes or {})
+
+        generic: Final = attributes((), None)
+
+        assert "user.id" not in generic
+        assert attributes((LANGFUSE_DEST,), len(generic)) == generic, "the generic attributes all survive"
 
 
 class TestContextIsolation:

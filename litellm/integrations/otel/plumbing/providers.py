@@ -1524,8 +1524,9 @@ def build_tracer_provider(
 
     ``config.langfuse_span_scope`` narrows the exporter owned by ``langfuse_otel``
     alone; a collector or any other backend in the same config keeps the full tree.
-    In a config that writes the Langfuse vocabulary, every exporter but ``langfuse_otel``'s
-    goes without the request metadata the Langfuse mapper writes on LiteLLM's own spans.
+    Every exporter but ``langfuse_otel``'s goes without the request metadata the Langfuse
+    mapper writes on LiteLLM's own spans, which any logger writes for a request with a
+    Langfuse destination.
     ``strip_message_content`` removes prompt and response content before every
     exporter, for a routed provider whose spans can carry content another
     destination asked for.
@@ -1541,9 +1542,6 @@ def build_tracer_provider(
 
     # ``config._normalize`` guarantees at least one spec (it folds the top-level
     # ``exporter``/``endpoint``/``headers`` fields in when ``exporters`` is empty).
-    writes_langfuse: Final = "langfuse" in config.mapper_names or any(
-        spec.owner is ExporterOwner.LANGFUSE_OTEL for spec in config.exporters
-    )
     for spec in config.exporters:
         if spec.requires_headers and not spec.headers:
             continue
@@ -1551,7 +1549,7 @@ def build_tracer_provider(
             spec,
             use_simple_processor,
             strip_message_content,
-            strip_langfuse_request_metadata=writes_langfuse and spec.owner is not ExporterOwner.LANGFUSE_OTEL,
+            strip_langfuse_request_metadata=spec.owner is not ExporterOwner.LANGFUSE_OTEL,
         )
         owner = spec.owner.value if tenant_overrides and spec.owner is not None else None
         scope = _operator_scope(config, spec)
