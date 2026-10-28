@@ -669,6 +669,69 @@ def test_prepare_mcp_server_headers_legacy_delegate_strips_repeated_admission_ke
     assert extra_headers is None
 
 
+@pytest.mark.parametrize(
+    "caller_fields",
+    [{}, {"user_id": "jwt-user", "api_key": "upstream-jwt", "jwt_claims": {"sub": "jwt-user"}}],
+    ids=["anonymous", "admitted-jwt-user"],
+)
+def test_prepare_mcp_server_headers_legacy_delegate_forwards_marked_upstream_authorization(caller_fields):
+    """When admission marked the caller's Authorization as the upstream token, a legacy delegate forwards
+    it, including a JWT that also admitted the caller and would otherwise be stripped as an admission JWT."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.mcp_server.server import (
+        _prepare_mcp_server_headers,
+    )
+
+    server = MCPServer(
+        server_id="legacy-delegate-marked",
+        name="legacy-delegate",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        delegate_auth_to_upstream=True,
+    )
+    caller = UserAPIKeyAuth(**caller_fields).model_copy(update={"mcp_forwards_caller_authorization": True})
+
+    server_auth_header, extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers={"Authorization": "Bearer upstream-jwt"},
+        raw_headers={"authorization": "Bearer upstream-jwt"},
+        user_api_key_auth=caller,
+    )
+
+    assert server_auth_header is None
+    assert extra_headers == {"Authorization": "Bearer upstream-jwt"}
+
+
+def test_prepare_mcp_server_headers_forwarding_marker_is_ignored_off_legacy_delegates():
+    """The forwarding marker only applies to legacy delegates, so it can never carry a LiteLLM key to an
+    oauth_delegate upstream."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.mcp_server.server import (
+        _prepare_mcp_server_headers,
+    )
+
+    server = MCPServer(
+        server_id="oauth-delegate-marked",
+        name="oauth-delegate",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth_delegate,
+    )
+    caller = UserAPIKeyAuth(api_key="sk-litellm-key").model_copy(update={"mcp_forwards_caller_authorization": True})
+
+    _, extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers={"Authorization": "Bearer sk-litellm-key"},
+        raw_headers={"authorization": "Bearer sk-litellm-key"},
+        user_api_key_auth=caller,
+    )
+
+    assert extra_headers is None
+
+
 def test_prepare_mcp_server_headers_m2m_skips_authorization_from_raw_extra_headers():
     """M2M must not merge caller Authorization from raw_headers when extra_headers lists it."""
     try:
@@ -7265,8 +7328,9 @@ async def test_legacy_delegate_bare_token_is_not_probed_upstream():  # test-qual
 
 
 @pytest.mark.asyncio
-async def test_legacy_delegate_dual_credentials_are_not_probed_upstream():  # test-quality-ok: this removed security-sensitive egress has no return value; non-invocation is the contract
-    """A separate upstream bearer never triggers the removed legacy probe."""
+async def test_legacy_delegate_dual_credentials_probe_only_the_upstream_token():  # test-quality-ok: the credential sent to the upstream probe is the security contract and has no return value
+    """With a separate x-litellm-api-key, the preflight probes the upstream with its own token and never
+    with the LiteLLM key."""
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.mcp_server.server import (
         _check_passthrough_upstream_auth,
@@ -7285,9 +7349,9 @@ async def test_legacy_delegate_dual_credentials_are_not_probed_upstream():  # te
             "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
             new=AsyncMock(return_value=[server]),
         ),
-        patch(  # test-quality-ok: the removed probe call is the security regression under test
+        patch(  # test-quality-ok: the probe's outbound credential is the security contract under test
             "litellm.proxy.mcp_server.server._probe_upstream_auth",
-            new=AsyncMock(),
+            new=AsyncMock(return_value=(200, None)),
         ) as probe,
     ):
         await _check_passthrough_upstream_auth(
@@ -7300,7 +7364,59 @@ async def test_legacy_delegate_dual_credentials_are_not_probed_upstream():  # te
             raw_headers={"x-litellm-api-key": "sk-litellm-proxy-key", "Authorization": "Bearer upstream-token"},
         )
 
-    probe.assert_not_awaited()
+    assert probe.await_args.args == ("http://upstream:9401/mcp", "Bearer upstream-token")
+
+
+def _expired_delegate_token_preflight(mcp_servers: list[str]):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.mcp_server.server import (
+        _check_passthrough_upstream_auth,
+    )
+
+    return _check_passthrough_upstream_auth(
+        scope=_delegate_scope([(b"authorization", b"Bearer expired-upstream-token")]),
+        user_api_key_auth=UserAPIKeyAuth().model_copy(update={"mcp_forwards_caller_authorization": True}),
+        mcp_servers=mcp_servers,
+        client_ip=None,
+        oauth2_headers={"Authorization": "Bearer expired-upstream-token"},
+        mcp_server_auth_headers=None,
+        raw_headers={"authorization": "Bearer expired-upstream-token"},
+    )
+
+
+def _patch_rejecting_delegate_upstream():
+    return (
+        patch(  # test-quality-ok: isolate authorized-server resolution so this test targets the preflight boundary
+            "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
+            new=AsyncMock(return_value=[_delegate_auth_mcp_server()]),
+        ),
+        patch(  # test-quality-ok: stands in for the upstream rejecting an expired token
+            "litellm.proxy.mcp_server.server._probe_upstream_auth",
+            new=AsyncMock(return_value=(401, 'Bearer error="invalid_token"')),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_legacy_delegate_expired_upstream_token_gets_reauthorization_challenge():
+    """An expired upstream token on a single-server route gets the RFC 9728 re-authorization challenge
+    for the requested name, so the client signs in again instead of seeing an empty tool list."""
+    allowed_servers, probe = _patch_rejecting_delegate_upstream()
+    with allowed_servers, probe, pytest.raises(HTTPException) as exc_info:
+        await _expired_delegate_token_preflight(["delegate_test"])
+
+    assert exc_info.value.status_code == 401
+    challenge = exc_info.value.headers["www-authenticate"]
+    assert 'error="invalid_token"' in challenge
+    assert 'resource_metadata="http://localhost:4000/.well-known/oauth-protected-resource/mcp/delegate_test"' in challenge
+
+
+@pytest.mark.asyncio
+async def test_legacy_delegate_multi_server_scope_is_not_failed_by_one_upstream_token():
+    """A multi-server scope is not probed, so one rejected upstream token cannot fail the whole connect."""
+    allowed_servers, probe = _patch_rejecting_delegate_upstream()
+    with allowed_servers, probe:
+        assert await _expired_delegate_token_preflight(["delegate_test", "other_server"]) is None
 
 
 @pytest.mark.parametrize(

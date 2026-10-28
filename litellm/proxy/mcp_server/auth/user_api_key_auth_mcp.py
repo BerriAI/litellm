@@ -100,6 +100,7 @@ if TYPE_CHECKING:
 
 _EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
 OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+_PROXY_SETTINGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _CACHED_VALUE: Final = TypeAdapter(object)
 
 
@@ -231,6 +232,74 @@ def _is_legacy_delegate_cold_start(mcp_servers: list[str] | None, client_ip: str
         if MCPServerManager.effective_oauth2_flow(server) == "client_credentials":
             return False
     return True
+
+
+def _caused_by(exc: BaseException | None, error_type: type[BaseException], depth: int = 16) -> bool:
+    if exc is None or depth == 0:
+        return False
+    return isinstance(exc, error_type) or _caused_by(exc.__cause__ or exc.__context__, error_type, depth - 1)
+
+
+async def _bearer_is_litellm_credential(token: str) -> bool:
+    """True when ``token`` is, or may be, a credential LiteLLM issued: the master key, a sealed gateway
+    bearer, or a virtual key the key table holds (a lookup fault counts as held). Only ``sk-`` tokens are
+    looked up, because no other token can be a virtual key."""
+    from litellm.proxy.mcp_server.bridge_token_flow import (  # noqa: PLC0415  # bridge flow imports this module
+        is_sealed_gateway_bearer,
+        virtual_key_may_exist,
+    )
+    from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # manager imports this module
+        LITELLM_VIRTUAL_KEY_PREFIX,
+    )
+    from litellm.proxy.proxy_server import master_key  # noqa: PLC0415  # startup owns the master key
+
+    if master_key and secrets.compare_digest(token.encode(), master_key.encode()):
+        return True
+    if is_sealed_gateway_bearer(token):
+        return True
+    return token.startswith(LITELLM_VIRTUAL_KEY_PREFIX) and await virtual_key_may_exist(token)
+
+
+async def _upstream_bearer_identity(token: str, litellm_api_key: str, request: Request) -> UserAPIKeyAuth | None:
+    """The LiteLLM user an upstream bearer also proves, or ``None`` when it proves none.
+
+    Custom auth decides alone, so any rejection is ``None``. A JWT is tried only when JWT auth is on, its
+    issuer may be LiteLLM's, and its signature verifies. Past that, only a user LiteLLM does not know is
+    ``None``; every other refusal (budget, blocked team, disallowed route) propagates."""
+    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.mcp_server.bridge_token_flow import (  # noqa: PLC0415  # bridge flow imports this module
+        custom_auth_configured,
+        jwt_issuer_may_be_litellm,
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # startup owns the active auth configuration
+        general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy global is declared as a bare dict
+        jwt_handler,
+        premium_user,
+    )
+
+    if custom_auth_configured():
+        try:
+            return await user_api_key_auth(api_key=litellm_api_key, request=request)
+        except (HTTPException, ProxyException):
+            return None
+    settings: Final = _PROXY_SETTINGS_ADAPTER.validate_python(general_settings)
+    if (
+        settings.get("enable_jwt_auth") is not True
+        or premium_user is not True
+        or not JWTHandler.is_jwt(token=token)
+        or not jwt_issuer_may_be_litellm(token)
+    ):
+        return None
+    try:
+        await jwt_handler.auth_jwt(token=token)  # pyright: ignore[reportUnknownMemberType]  # returns a bare dict; only whether it raises matters
+    except Exception:  # noqa: BLE001  # any verification failure means LiteLLM does not vouch for this bearer
+        return None
+    try:
+        return await user_api_key_auth(api_key=litellm_api_key, request=request)
+    except (HTTPException, ProxyException) as exc:
+        if _caused_by(exc, UserNotFoundError):
+            return None
+        raise
 
 
 def _is_litellm_auth_admission_error(exc: Exception) -> bool:
@@ -704,6 +773,19 @@ class MCPRequestHandler:
                     route=request_route,
                     mcp_servers=mcp_servers,
                 )
+            elif oauth2_headers and (
+                legacy_delegate_targets := MCPRequestHandler._legacy_delegate_targets(
+                    path=request_route,
+                    mcp_servers=mcp_servers,
+                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                )
+            ):
+                validated_user_api_key_auth = await MCPRequestHandler._admit_legacy_delegate_bearer(  # rebind-ok: one assignment per admission arm, like its siblings
+                    authorization_value=oauth2_headers["Authorization"],
+                    litellm_api_key=litellm_api_key,
+                    targets=legacy_delegate_targets,
+                    request=request,
+                )
             elif oauth2_headers:
                 # Authorization on a non-delegated server: the bearer must be a real
                 # LiteLLM credential, so a failed validation is a genuine 401/403 and
@@ -741,10 +823,14 @@ class MCPRequestHandler:
             custom_key_header_name: Final = OPTIONAL_STRING_ADAPTER.validate_python(
                 general_settings.get("litellm_key_header_name")
             )
-            admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-                headers,
-                validated_user_api_key_auth,
-                custom_key_header_name=custom_key_header_name,
+            admitted_credential: Final = (
+                None
+                if validated_user_api_key_auth.mcp_forwards_caller_authorization
+                else MCPRequestHandler.caller_admission_credential(
+                    headers,
+                    validated_user_api_key_auth,
+                    custom_key_header_name=custom_key_header_name,
+                )
             )
             (
                 oauth2_headers,
@@ -933,6 +1019,53 @@ class MCPRequestHandler:
             if server is None or server.auth_type != MCPAuth.true_passthrough:
                 return False
         return True
+
+    @staticmethod
+    def _legacy_delegate_targets(
+        path: str, mcp_servers: Sequence[str] | None, client_ip: str | None
+    ) -> tuple[MCPServer, ...]:
+        """Every server the request targets when ALL of them are legacy ``delegate_auth_to_upstream``
+        servers, else ``()``. Names resolve the way downstream routing resolves them, so a permissive
+        ``x-mcp-servers`` header cannot open the gate for a stricter path target."""
+        from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # manager imports this module
+            global_mcp_server_manager,
+            is_legacy_upstream_delegate,
+        )
+
+        servers: Final = tuple(
+            global_mcp_server_manager.get_mcp_server_by_name(name, client_ip=client_ip)
+            for name in MCPRequestHandler._resolve_target_server_names(path=path, mcp_servers_header=mcp_servers)
+        )
+        delegates: Final = tuple(
+            server for server in servers if server is not None and is_legacy_upstream_delegate(server)
+        )
+        return delegates if servers and len(delegates) == len(servers) else ()
+
+    @staticmethod
+    async def _admit_legacy_delegate_bearer(
+        authorization_value: str,
+        litellm_api_key: str,
+        targets: tuple[MCPServer, ...],
+        request: Request,
+    ) -> UserAPIKeyAuth:
+        """Admit a bare ``Authorization`` bearer sent to legacy ``delegate_auth_to_upstream`` servers.
+
+        A LiteLLM credential runs normal admission, and its errors propagate. Any other bearer is the
+        upstream token and is marked for forwarding: a user it also proves who is granted every target is
+        admitted as that user, and every other caller is admitted anonymously."""
+        from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # manager imports this module
+            global_mcp_server_manager,
+        )
+
+        token: Final = _normalize_caller_admission_credential(authorization_value)
+        if await _bearer_is_litellm_credential(token):
+            return await user_api_key_auth(api_key=litellm_api_key, request=request)
+        identity: Final = await _upstream_bearer_identity(token, litellm_api_key, request)
+        if identity is not None:
+            allowed: Final = frozenset(await global_mcp_server_manager.get_allowed_mcp_servers(identity))
+            if all(server.server_id in allowed for server in targets):
+                return identity.model_copy(update={"mcp_forwards_caller_authorization": True})
+        return UserAPIKeyAuth().model_copy(update={"mcp_forwards_caller_authorization": True})
 
     @staticmethod
     def _single_dcr_bridge_delegate_target(
@@ -1553,7 +1686,7 @@ class MCPRequestHandler:
         return expiry >= datetime.now(timezone.utc)
 
     @staticmethod
-    def _resolve_target_server_names(path: str, mcp_servers_header: list[str] | None) -> list[str]:
+    def _resolve_target_server_names(path: str, mcp_servers_header: Sequence[str] | None) -> Sequence[str]:
         """
         Resolve the target MCP server names exactly as downstream routing
         does (``server.py::extract_mcp_auth_context``).

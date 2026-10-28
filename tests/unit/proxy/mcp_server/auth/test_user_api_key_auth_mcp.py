@@ -1663,10 +1663,10 @@ class TestMCPOAuth2AuthFlow:
     as LiteLLM API keys, causing auth failures and empty tool listings.
     """
 
-    async def test_oauth2_token_in_authorization_header_requires_litellm_admission(self):
+    async def test_oauth2_upstream_token_on_legacy_delegate_is_admitted_anonymously(self):
         """
-        A bare Authorization token on the legacy delegated mode must establish
-        a LiteLLM principal rather than entering anonymously.
+        A bare upstream OAuth token on the legacy delegated mode is admitted
+        anonymously without LiteLLM key validation and kept for egress.
         """
         from litellm.types.mcp import MCPAuth
 
@@ -1702,10 +1702,11 @@ class TestMCPOAuth2AuthFlow:
                 raw_headers,
             ) = await MCPRequestHandler.process_mcp_request(scope)
 
-            assert isinstance(auth_result, UserAPIKeyAuth)
-            assert auth_result.user_id == "admitted-user"
-            mock_auth.assert_awaited_once()
-            assert oauth2_headers.get("Authorization") == "Bearer atlassian-oauth2-access-token-xyz"
+            assert auth_result.user_id is None
+            assert auth_result.api_key is None
+            assert auth_result.mcp_forwards_caller_authorization is True
+            mock_auth.assert_not_awaited()
+            assert oauth2_headers == {"Authorization": "Bearer atlassian-oauth2-access-token-xyz"}
 
     async def test_explicit_litellm_key_with_oauth2_authorization(self):
         """
@@ -2545,9 +2546,10 @@ class TestMCPDelegateAuthToUpstream:
     """
     Tests for the ``delegate_auth_to_upstream`` per-server flag.
 
-    The legacy flag no longer bypasses LiteLLM admission. OAuth discovery may
-    still use the anonymous cold-start challenge, but a presented bearer must
-    authenticate to LiteLLM unless a separate admission credential is supplied.
+    A bare bearer that is a LiteLLM credential takes normal admission and is
+    never forwarded. Any other bearer is the upstream token: it is forwarded,
+    and the caller is admitted as the JWT or custom-auth user it also proves
+    when that user is granted the server, else anonymously.
     """
 
     @staticmethod
@@ -2652,37 +2654,237 @@ class TestMCPDelegateAuthToUpstream:
             assert isinstance(auth_result, UserAPIKeyAuth)
             mock_auth.assert_awaited_once()
 
-    async def test_delegate_with_only_upstream_token_requires_litellm_auth(self):
-        """
-        An upstream token cannot establish a LiteLLM principal and must not
-        reopen anonymous admission.
-        """
-        from litellm.types.mcp import MCPAuth
-
-        scope = {
+    @staticmethod
+    def _bearer_scope(token: str) -> dict:
+        return {
             "type": "http",
             "method": "POST",
             "path": "/mcp/delegated_oauth_server",
-            "headers": [(b"authorization", b"Bearer upstream-pkce-token")],
+            "headers": [(b"authorization", f"Bearer {token}".encode())],
         }
 
+    @staticmethod
+    def _jwt(issuer: str = "https://idp.example") -> str:
+        import jwt
+
+        return jwt.encode({"iss": issuer, "sub": "jwt-user"}, "test-signing-secret", algorithm="HS256")
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _delegate_admission(admission: AsyncMock, allowed_server_ids: Sequence[str] = ("test-server-id",)):
+        from litellm.types.mcp import MCPAuth
+
         with (
-            patch(
-                "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-                new_callable=AsyncMock,
-                side_effect=HTTPException(status_code=401, detail="Invalid API key"),
-            ) as mock_auth,
+            patch("litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth", admission),
             patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = TestMCPDelegateAuthToUpstream._make_server(
                 auth_type=MCPAuth.oauth2,
                 delegate_auth_to_upstream=True,
             )
-            with pytest.raises(HTTPException) as exc_info:
-                await MCPRequestHandler.process_mcp_request(scope)
+            mock_mgr.get_allowed_mcp_servers = AsyncMock(return_value=list(allowed_server_ids))
+            yield
 
-            assert exc_info.value.status_code == 401
-            mock_auth.assert_awaited_once()
+    @staticmethod
+    @contextlib.contextmanager
+    def _jwt_auth_enabled(auth_jwt: AsyncMock):
+        from litellm.proxy import proxy_server
+        from litellm.proxy._types import LiteLLM_JWTAuth
+
+        with (
+            patch.dict(proxy_server.general_settings, {"enable_jwt_auth": True}),
+            patch.object(proxy_server, "premium_user", True),
+            patch.object(proxy_server, "user_custom_auth", None),
+            patch.object(proxy_server.jwt_handler, "auth_jwt", auth_jwt),
+            patch.object(proxy_server.jwt_handler, "litellm_jwtauth", LiteLLM_JWTAuth(), create=True),
+            patch.dict(os.environ),
+        ):
+            os.environ.pop("JWT_ISSUER", None)
+            yield
+
+    async def test_delegate_forwards_unknown_sk_token_after_key_table_miss(self):
+        """An sk- token the key table does not hold, such as a provider API key, belongs to the upstream:
+        it is forwarded anonymously rather than rejected for its prefix."""
+        from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+
+        admission = AsyncMock()
+        with (
+            TestMCPDelegateAuthToUpstream._delegate_admission(admission),
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore.resolve",
+                new_callable=AsyncMock,
+                side_effect=KeyNotFoundError("hashed-token"),
+            ),
+        ):
+            auth_result, _, _, _, oauth2_headers, _ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope("sk-proj-upstream-provider-key")
+            )
+
+        assert auth_result.api_key is None
+        assert auth_result.mcp_forwards_caller_authorization is True
+        assert oauth2_headers == {"Authorization": "Bearer sk-proj-upstream-provider-key"}
+        admission.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "lookup_effect",
+        [None, RuntimeError("key table unreachable")],
+        ids=["key-held", "lookup-fault"],
+    )
+    async def test_delegate_litellm_key_refusal_propagates(self, lookup_effect):
+        """A key the table holds, or one the lookup could not check, takes normal admission, so its
+        refusal reaches the caller instead of becoming an anonymous request that forwards the key."""
+        refusal = ProxyException(message="Budget has been exceeded", type="budget_exceeded", param=None, code=400)
+        with (
+            TestMCPDelegateAuthToUpstream._delegate_admission(AsyncMock(side_effect=refusal)),
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore.resolve",
+                new_callable=AsyncMock,
+                side_effect=lookup_effect,
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(TestMCPDelegateAuthToUpstream._bearer_scope("sk-held-key"))
+
+        assert exc_info.value is refusal
+
+    @staticmethod
+    def _unknown_user_refusal() -> ProxyException:
+        from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+
+        refusal = ProxyException(message="User doesn't exist in db", type="auth_error", param=None, code=401)
+        refusal.__cause__ = UserNotFoundError(user_id="jwt-user")
+        return refusal
+
+    @pytest.mark.parametrize(
+        "auth_jwt_effect, admission, allowed_server_ids, expected_user_id",
+        [
+            (
+                None,
+                lambda: AsyncMock(return_value=UserAPIKeyAuth(user_id="jwt-user", jwt_claims={"sub": "jwt-user"})),
+                ["test-server-id"],
+                "jwt-user",
+            ),
+            (
+                None,
+                lambda: AsyncMock(return_value=UserAPIKeyAuth(user_id="jwt-user", jwt_claims={"sub": "jwt-user"})),
+                [],
+                None,
+            ),
+            (
+                None,
+                lambda: AsyncMock(side_effect=TestMCPDelegateAuthToUpstream._unknown_user_refusal()),
+                ["test-server-id"],
+                None,
+            ),
+            (
+                ValueError("Signature verification failed"),
+                lambda: AsyncMock(return_value=UserAPIKeyAuth(user_id="jwt-user")),
+                ["test-server-id"],
+                None,
+            ),
+        ],
+        ids=["granted-user", "user-not-granted", "user-unknown-to-litellm", "signature-rejected"],
+    )
+    async def test_delegate_jwt_is_forwarded_as_granted_user_or_anonymously(
+        self, auth_jwt_effect, admission, allowed_server_ids, expected_user_id
+    ):
+        """A JWT LiteLLM also accepts admits that user when granted the server; a user who is not
+        granted, unknown to LiteLLM, or whose signature fails is admitted anonymously. The JWT is always
+        forwarded, because on this server it is the upstream's token."""
+        token = TestMCPDelegateAuthToUpstream._jwt()
+        with (
+            TestMCPDelegateAuthToUpstream._jwt_auth_enabled(AsyncMock(side_effect=auth_jwt_effect)),
+            TestMCPDelegateAuthToUpstream._delegate_admission(admission(), allowed_server_ids),
+        ):
+            auth_result, _, _, _, oauth2_headers, _ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope(token)
+            )
+
+        assert auth_result.user_id == expected_user_id
+        assert auth_result.mcp_forwards_caller_authorization is True
+        assert oauth2_headers == {"Authorization": f"Bearer {token}"}
+
+    @pytest.mark.parametrize(
+        "refusal",
+        [
+            ProxyException(message="Budget has been exceeded", type="budget_exceeded", param=None, code=400),
+            ProxyException(message="Team=t1 is blocked", type="auth_error", param=None, code=401),
+        ],
+        ids=["over-budget", "blocked-team"],
+    )
+    async def test_delegate_jwt_refusal_after_valid_signature_propagates(self, refusal):
+        """Once the signature verifies, LiteLLM knows who the caller is, so a budget or an explicit
+        disallowment is enforced and the request fails instead of continuing anonymously."""
+        with (
+            TestMCPDelegateAuthToUpstream._jwt_auth_enabled(AsyncMock(return_value={"sub": "jwt-user"})),
+            TestMCPDelegateAuthToUpstream._delegate_admission(AsyncMock(side_effect=refusal)),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(
+                    TestMCPDelegateAuthToUpstream._bearer_scope(TestMCPDelegateAuthToUpstream._jwt())
+                )
+
+        assert exc_info.value is refusal
+
+    async def test_delegate_jwt_from_unconfigured_issuer_is_forwarded_without_jwt_auth(self):
+        """A JWT from an issuer LiteLLM's JWT auth is not configured for never reaches JWT auth."""
+        auth_jwt = AsyncMock(return_value={"sub": "jwt-user"})
+        admission = AsyncMock(return_value=UserAPIKeyAuth(user_id="jwt-user"))
+        with (
+            TestMCPDelegateAuthToUpstream._jwt_auth_enabled(auth_jwt),
+            patch.dict(os.environ, {"JWT_ISSUER": "https://litellm-idp.example"}),
+            TestMCPDelegateAuthToUpstream._delegate_admission(admission),
+        ):
+            auth_result, *_ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope(
+                    TestMCPDelegateAuthToUpstream._jwt(issuer="https://upstream-idp.example")
+                )
+            )
+
+        assert auth_result.user_id is None
+        assert auth_result.mcp_forwards_caller_authorization is True
+        auth_jwt.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "admission, expected_user_id",
+        [
+            (
+                lambda: AsyncMock(return_value=UserAPIKeyAuth(user_id="custom-user", api_key="upstream-custom-token")),
+                "custom-user",
+            ),
+            (
+                lambda: AsyncMock(
+                    side_effect=ProxyException(message="custom auth rejected", type="auth_error", param=None, code=401)
+                ),
+                None,
+            ),
+        ],
+        ids=["accepted", "rejected"],
+    )
+    async def test_delegate_custom_auth_decides_alone(self, admission, expected_user_id):
+        """With custom auth configured, its answer alone decides: accepted admits that user, any failure
+        admits anonymously. The bearer is forwarded either way."""
+        from litellm.proxy import proxy_server
+
+        with (
+            patch.object(proxy_server, "user_custom_auth", AsyncMock()),
+            TestMCPDelegateAuthToUpstream._delegate_admission(admission()),
+        ):
+            auth_result, _, _, _, oauth2_headers, _ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope("upstream-custom-token")
+            )
+
+        assert auth_result.user_id == expected_user_id
+        assert auth_result.mcp_forwards_caller_authorization is True
+        assert oauth2_headers == {"Authorization": "Bearer upstream-custom-token"}
+
+    def test_forwarding_marker_cannot_be_forged_from_input(self):
+        """Only admission may mark a caller's Authorization for forwarding; caller-shaped input never can."""
+        assert UserAPIKeyAuth(mcp_forwards_caller_authorization=True).mcp_forwards_caller_authorization is False
+        assert (
+            UserAPIKeyAuth.model_validate({"mcp_forwards_caller_authorization": True}).mcp_forwards_caller_authorization
+            is False
+        )
 
     async def test_delegate_off_still_requires_litellm_auth(self):
         """
@@ -2753,7 +2955,12 @@ class TestMCPDelegateAuthToUpstream:
                 await MCPRequestHandler.process_mcp_request(scope)
             assert exc_info.value.status_code == 401
 
-    async def test_delegate_mixed_targets_fail_closed(self):
+    @pytest.mark.parametrize(
+        "bearer_headers",
+        [[], [(b"authorization", b"Bearer upstream-pkce-token")]],
+        ids=["no-bearer", "upstream-bearer"],
+    )
+    async def test_delegate_mixed_targets_fail_closed(self, bearer_headers):
         """
         x-mcp-servers can list multiple targets. If ANY of them does not opt in
         to delegate_auth_to_upstream, the bypass must NOT fire — otherwise an
@@ -2769,6 +2976,7 @@ class TestMCPDelegateAuthToUpstream:
             "path": "/mcp",
             "headers": [
                 (b"x-mcp-servers", b"delegated_oauth,plain_oauth"),
+                *bearer_headers,
             ],
         }
 
@@ -2863,9 +3071,8 @@ class TestMCPDelegateAuthToUpstream:
 
     async def test_authorization_bearer_on_delegate_server_establishes_litellm_principal(self):
         """
-        A bare Authorization bearer now follows normal LiteLLM admission. A
-        separate x-litellm-api-key is required when Authorization is intended
-        for the upstream server.
+        A bare sk- bearer the key table may hold takes normal LiteLLM admission
+        and is never marked for forwarding upstream.
         """
         from litellm.types.mcp import MCPAuth
 
@@ -2898,6 +3105,7 @@ class TestMCPDelegateAuthToUpstream:
             ) = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             assert auth_result.user_id == "real-user"
+            assert auth_result.mcp_forwards_caller_authorization is False
             assert oauth2_headers.get("Authorization") == "Bearer sk-9876"
             mock_auth.assert_awaited_once()
 
@@ -3079,8 +3287,9 @@ class TestMCPDelegateAuthToUpstream:
             mock_auth.assert_awaited_once()
             assert auth.api_key is None
 
-    async def test_get_allowed_servers_excludes_legacy_delegates(self):
-        """Legacy delegated servers are never added to anonymous access."""
+    async def test_get_allowed_servers_includes_interactive_legacy_delegates_for_anonymous(self):
+        """Anonymous callers reach interactive legacy delegates, never an M2M server whose stored
+        client credentials would let them act as LiteLLM's service account."""
         from litellm.proxy.mcp_server.mcp_server_manager import (
             MCPServerManager,
         )
@@ -3118,7 +3327,7 @@ class TestMCPDelegateAuthToUpstream:
         ):
             result = await manager.get_allowed_mcp_servers(None)
 
-        assert result == []
+        assert result == ["pkce-server"]
 
     async def test_true_passthrough_skips_litellm_auth_anonymously(self):
         """auth_type=true_passthrough performs no admission auth: the caller's Authorization is an

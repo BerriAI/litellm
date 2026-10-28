@@ -588,6 +588,7 @@ if MCP_AVAILABLE:
     from litellm.proxy.mcp_server.mcp_server_manager import (
         MCPServerManager,
         global_mcp_server_manager,
+        is_legacy_upstream_delegate,
     )
 
     ######################################################
@@ -2163,7 +2164,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         raw_headers: Mapping[str, str] | None,
     ) -> None:
-        """Probe pass-through upstream servers in parallel before the MCP session starts.
+        """Probe pass-through and legacy delegate upstream servers in parallel before the MCP session starts.
 
         Only servers the caller's key is already authorized to reach are probed —
         the list is derived from _get_allowed_mcp_servers so that a user cannot
@@ -2186,6 +2187,9 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
+        # A legacy delegate is probed only on a single-server route, so one rejected token cannot 401 a
+        # multi-server connect; its challenge echoes the requested name, matching the tokenless challenge.
+        single_requested_name: Final = mcp_servers[0] if mcp_servers is not None and len(mcp_servers) == 1 else None
         prepared_headers: Final = tuple(
             (
                 srv,
@@ -2200,7 +2204,7 @@ if MCP_AVAILABLE:
                 ),
             )
             for srv in allowed_servers
-            if srv.is_oauth_passthrough
+            if srv.is_oauth_passthrough or (single_requested_name is not None and is_legacy_upstream_delegate(srv))
         )
         probe_headers: Final = tuple(
             (
@@ -2213,7 +2217,7 @@ if MCP_AVAILABLE:
             for srv, (auth, extra) in prepared_headers
         )
         probe_targets: Final[tuple[tuple[MCPServer, str, str], ...]] = tuple(
-            (srv, auth_header, srv.name)
+            (srv, auth_header, srv.name if srv.is_oauth_passthrough else single_requested_name or srv.name)
             for srv, headers in probe_headers
             if (
                 auth_header := next(
