@@ -182,7 +182,9 @@ async def test_async_stream_skips_blank_sse_lines_and_keeps_the_usage_chunk():
 
     chunks: Final = [chunk async for chunk in ModelResponseIterator(streaming_response=lines(), sync_stream=False)]
 
-    assert [(chunk["text"], chunk["finish_reason"], (chunk["usage"] or {}).get("prompt_tokens")) for chunk in chunks] == [
+    assert [
+        (chunk["text"], chunk["finish_reason"], (chunk["usage"] or {}).get("prompt_tokens")) for chunk in chunks
+    ] == [
         ("144", "", None),
         ("", "stop", None),
         ("", "", None),
@@ -222,3 +224,72 @@ async def test_async_stream_without_done_marker_ends_after_the_last_chunk():
     chunks: Final = [chunk async for chunk in ModelResponseIterator(streaming_response=lines(), sync_stream=False)]
 
     assert [(chunk["text"], chunk["finish_reason"]) for chunk in chunks] == [("144", ""), ("", "stop")]
+
+
+def test_chunk_parser_extracts_reasoning_content():
+    """Reasoning-only delta chunks must preserve reasoning_content."""
+    iterator = ModelResponseIterator(streaming_response=None, sync_stream=True)
+    chunk = {
+        "id": "chatcmpl-reasoning",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "glm-4",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"role": "assistant", "reasoning_content": "Thinking about prime numbers..."},
+                "finish_reason": None,
+            }
+        ],
+    }
+
+    result = iterator.chunk_parser(chunk=chunk)
+
+    assert result["text"] == ""
+    assert result.get("reasoning_content") == "Thinking about prime numbers..."
+
+
+def test_chunk_parser_extracts_multiple_tool_calls_with_indices():
+    """Multiple tool call deltas in a chunk must preserve all tool calls and their indices."""
+    iterator = ModelResponseIterator(streaming_response=None, sync_stream=True)
+    chunk = {
+        "id": "chatcmpl-tools",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "glm-4",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                        },
+                        {
+                            "index": 1,
+                            "id": "call_2",
+                            "type": "function",
+                            "function": {"name": "get_time", "arguments": '{"city": "Paris"}'},
+                        },
+                    ]
+                },
+                "finish_reason": None,
+            }
+        ],
+    }
+
+    result = iterator.chunk_parser(chunk=chunk)
+
+    assert result.get("tool_calls") is not None
+    assert len(result["tool_calls"]) == 2
+    assert result["tool_calls"][0]["id"] == "call_1"
+    assert result["tool_calls"][0]["function"]["name"] == "get_weather"
+    assert result["tool_calls"][0]["index"] == 0
+    assert result["tool_calls"][1]["id"] == "call_2"
+    assert result["tool_calls"][1]["function"]["name"] == "get_time"
+    assert result["tool_calls"][1]["index"] == 1
+    # Backward compatibility with tool_use
+    assert result["tool_use"]["id"] == "call_1"

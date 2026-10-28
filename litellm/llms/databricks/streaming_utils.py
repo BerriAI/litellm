@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 from typing import Final
 
 import litellm
@@ -31,12 +32,6 @@ class ModelResponseIterator:
         try:
             processed_chunk: Final = litellm.ModelResponseStream(**chunk)
 
-            text = ""
-            tool_use: ChatCompletionToolCallChunk | None = None
-            is_finished = False
-            finish_reason = ""
-            usage: ChatCompletionUsageBlock | None = None
-
             # Usage-only final chunk (OpenAI ``stream_options.include_usage``)
             # arrives with an empty ``choices`` list — return usage without
             # indexing ``choices[0]``.
@@ -51,36 +46,47 @@ class ModelResponseIterator:
                     index=0,
                 )
 
-            if processed_chunk.choices[0].delta.content is not None:
-                text = processed_chunk.choices[0].delta.content
+            choice_0: Final = processed_chunk.choices[0]
+            choice_delta: Final = choice_0.delta
+            text: Final[str] = choice_delta.content if choice_delta.content is not None else ""
+            reasoning_content: Final[str | None] = getattr(choice_delta, "reasoning_content", None)
 
-            if (
-                processed_chunk.choices[0].delta.tool_calls is not None
-                and len(processed_chunk.choices[0].delta.tool_calls) > 0
-                and processed_chunk.choices[0].delta.tool_calls[0].function is not None
-                and processed_chunk.choices[0].delta.tool_calls[0].function.arguments is not None
-            ):
-                tool_use = ChatCompletionToolCallChunk(
-                    id=processed_chunk.choices[0].delta.tool_calls[0].id,
-                    type="function",
-                    function=ChatCompletionToolCallFunctionChunk(
-                        name=processed_chunk.choices[0].delta.tool_calls[0].function.name,
-                        arguments=processed_chunk.choices[0].delta.tool_calls[0].function.arguments,
-                    ),
-                    index=processed_chunk.choices[0].delta.tool_calls[0].index,
-                )
+            tool_calls_list: list[ChatCompletionToolCallChunk] = []  # mutable-ok: accumulates delta calls
+            if choice_delta.tool_calls is not None:
+                for tc in choice_delta.tool_calls:
+                    tc_fn = getattr(tc, "function", None)
+                    fn_chunk = (
+                        ChatCompletionToolCallFunctionChunk(
+                            name=getattr(tc_fn, "name", None),
+                            arguments=getattr(tc_fn, "arguments", "") or "",
+                        )
+                        if tc_fn is not None
+                        else ChatCompletionToolCallFunctionChunk(name=None, arguments="")
+                    )
+                    call_chunk = ChatCompletionToolCallChunk(
+                        id=getattr(tc, "id", None),
+                        type="function",
+                        function=fn_chunk,
+                        index=getattr(tc, "index", 0) if getattr(tc, "index", None) is not None else 0,
+                    )
+                    tool_calls_list.append(call_chunk)
 
-            if processed_chunk.choices[0].finish_reason is not None:
-                is_finished = True
-                finish_reason = processed_chunk.choices[0].finish_reason
+            tool_calls: Final[Sequence[ChatCompletionToolCallChunk] | None] = tool_calls_list or None
+            tool_use: Final[ChatCompletionToolCallChunk | None] = tool_calls_list[0] if tool_calls_list else None
+
+            is_finished: Final[bool] = choice_0.finish_reason is not None
+            finish_reason: Final[str] = choice_0.finish_reason or ""
 
             usage_chunk: Final[Usage | None] = getattr(processed_chunk, "usage", None)
-            if usage_chunk is not None:
-                usage = _usage_block(usage_chunk)
+            usage: Final[ChatCompletionUsageBlock | None] = (
+                _usage_block(usage_chunk) if usage_chunk is not None else None
+            )
 
             return GenericStreamingChunk(
                 text=text,
                 tool_use=tool_use,
+                tool_calls=tool_calls,
+                reasoning_content=reasoning_content,
                 is_finished=is_finished,
                 finish_reason=finish_reason,
                 usage=usage,

@@ -972,6 +972,11 @@ class CustomStreamWrapper:
             "content" in completion_obj
             and (isinstance(completion_obj["content"], str) and len(completion_obj["content"]) > 0)
             or (
+                "reasoning_content" in completion_obj
+                and completion_obj["reasoning_content"] is not None
+                and len(completion_obj["reasoning_content"]) > 0
+            )
+            or (
                 "tool_calls" in completion_obj
                 and completion_obj["tool_calls"] is not None
                 and len(completion_obj["tool_calls"]) > 0
@@ -1214,7 +1219,12 @@ class CustomStreamWrapper:
                         )
                 else:
                     ## else
-                    completion_obj["content"] = model_response_str
+                    if model_response_str or (
+                        completion_obj.get("reasoning_content") is None and completion_obj.get("tool_calls") is None
+                    ):
+                        completion_obj["content"] = model_response_str  # rebind-ok: builds delta payload
+                    else:
+                        completion_obj["content"] = None  # rebind-ok: builds delta payload
                     if self.sent_first_chunk is False:
                         completion_obj["role"] = "assistant"
                         self.sent_first_chunk = True
@@ -1345,7 +1355,9 @@ class CustomStreamWrapper:
             if self.received_finish_reason is not None:
                 _chunk_has_content: Final = isinstance(chunk, dict) and (
                     bool(chunk.get("text", ""))
+                    or bool(chunk.get("reasoning_content", ""))
                     or chunk.get("tool_use") is not None
+                    or bool(chunk.get("tool_calls"))
                     # Usage-only final chunks are valid and needed to surface
                     # finish_reason/usage to downstream translators.
                     or chunk.get("usage") is not None
@@ -1354,6 +1366,9 @@ class CustomStreamWrapper:
                     raise StopIteration
             anthropic_response_obj: Final[GChunk] = cast(GChunk, chunk)
             completion_obj["content"] = anthropic_response_obj["text"]
+            reasoning_chunk: Final = anthropic_response_obj.get("reasoning_content")
+            if reasoning_chunk is not None:
+                completion_obj["reasoning_content"] = reasoning_chunk  # rebind-ok: forwards reasoning
             if anthropic_response_obj["is_finished"]:
                 self.received_finish_reason = anthropic_response_obj["finish_reason"]
 
@@ -1367,8 +1382,12 @@ class CustomStreamWrapper:
                     litellm.Usage(**anthropic_response_obj["usage"]),
                 )
 
-            if "tool_use" in anthropic_response_obj and anthropic_response_obj["tool_use"] is not None:
-                completion_obj["tool_calls"] = [anthropic_response_obj["tool_use"]]
+            tool_calls_chunk: Final = anthropic_response_obj.get("tool_calls")
+            legacy_tool_chunk: Final = anthropic_response_obj.get("tool_use")
+            if tool_calls_chunk is not None:
+                completion_obj["tool_calls"] = tool_calls_chunk  # rebind-ok: forwards tool calls
+            elif legacy_tool_chunk is not None:
+                completion_obj["tool_calls"] = [legacy_tool_chunk]  # rebind-ok: forwards tool calls
 
             if (
                 "provider_specific_fields" in anthropic_response_obj
@@ -2781,6 +2800,17 @@ def convert_generic_chunk_to_model_response_stream(
 ) -> ModelResponseStream:
     from litellm.types.utils import Delta
 
+    raw_tool_calls: Final = chunk.get("tool_calls", None)
+    legacy_tool_use: Final = chunk.get("tool_use", None)
+    tool_calls: Final = [legacy_tool_use] if raw_tool_calls is None and legacy_tool_use is not None else raw_tool_calls
+
+    raw_content: Final = chunk["text"]
+    content: Final = (
+        None
+        if not raw_content and (chunk.get("reasoning_content") is not None or tool_calls is not None)
+        else raw_content
+    )
+
     model_response_stream: Final = ModelResponseStream(
         id=str(uuid.uuid4()),
         model="",
@@ -2788,8 +2818,9 @@ def convert_generic_chunk_to_model_response_stream(
             StreamingChoices(
                 index=chunk.get("index", 0),
                 delta=Delta(
-                    content=chunk["text"],
-                    tool_calls=chunk.get("tool_use", None),
+                    content=content,
+                    reasoning_content=chunk.get("reasoning_content", None),
+                    tool_calls=tool_calls,
                 ),
             )
         ],
