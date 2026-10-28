@@ -122,15 +122,31 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         returned_response: Final = ModelResponse(**response_json)
         set_provider_response_headers_in_hidden_params(returned_response, response.headers)
 
-        if hasattr(model_response, "_hidden_params") and model_response._hidden_params:
-            for k, v in model_response._hidden_params.items():
-                if k not in returned_response._hidden_params:
-                    returned_response._hidden_params[k] = v
+        src_hidden: Final[dict[str, object]] = (
+            model_response.hidden_params
+        )  # mutable-ok: ModelResponse.hidden_params is a mutable dict  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # ModelResponse.hidden_params is untyped dict
+        dst_hidden: Final[dict[str, object]] = (
+            returned_response.hidden_params
+        )  # mutable-ok: ModelResponse.hidden_params is a mutable dict  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # ModelResponse.hidden_params is untyped dict
+        for k, v in src_hidden.items():
+            if k not in dst_hidden:
+                dst_hidden[k] = v
 
+        resolved_provider: Final = custom_llm_provider or (
+            src_hidden["custom_llm_provider"]
+            if "custom_llm_provider" in src_hidden and isinstance(src_hidden["custom_llm_provider"], str)
+            else None
+        )
         if custom_llm_provider is not None:
-            returned_response._hidden_params["custom_llm_provider"] = custom_llm_provider
-            if returned_response.model and not returned_response.model.startswith(f"{custom_llm_provider}/"):
-                returned_response.model = custom_llm_provider + "/" + returned_response.model
+            returned_response.model = custom_llm_provider + "/" + (returned_response.model or "")
+        elif resolved_provider is not None:
+            dst_hidden["custom_llm_provider"] = resolved_provider
+            if (
+                returned_response.model
+                and "/" in returned_response.model
+                and not returned_response.model.startswith(f"{resolved_provider}/")
+            ):
+                returned_response.model = f"{resolved_provider}/{returned_response.model}"
 
         if base_model is not None:
             returned_response.hidden_params["model"] = base_model
@@ -150,14 +166,16 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        resolved_custom_llm_provider: Final = (
-            litellm_params.get("custom_llm_provider") if isinstance(litellm_params, dict) else None
-        ) or (
-            model_response._hidden_params.get("custom_llm_provider")
-            if isinstance(model_response._hidden_params, dict)
-            else None
-        )
-        transformed_response: Final = OpenAILikeChatConfig._transform_response(
+        if "custom_llm_provider" in litellm_params and isinstance(
+            litellm_params["custom_llm_provider"],  # pyright: ignore[reportUnknownArgumentType]  # litellm_params is untyped dict
+            str,
+        ):
+            model_hidden: Final[dict[str, object]] = (
+                model_response.hidden_params
+            )  # mutable-ok: ModelResponse.hidden_params is a mutable dict  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # ModelResponse.hidden_params is untyped dict
+            if "custom_llm_provider" not in model_hidden:
+                model_hidden["custom_llm_provider"] = litellm_params["custom_llm_provider"]  # pyright: ignore[reportUnknownArgumentType]  # litellm_params is untyped dict
+        return OpenAILikeChatConfig._transform_response(
             model=model,
             response=raw_response,
             model_response=model_response,
@@ -173,15 +191,6 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
             custom_llm_provider=None,
             base_model=None,
         )
-        if resolved_custom_llm_provider is not None and isinstance(transformed_response._hidden_params, dict):
-            transformed_response._hidden_params.setdefault("custom_llm_provider", resolved_custom_llm_provider)
-            if (
-                transformed_response.model
-                and "/" in transformed_response.model
-                and not transformed_response.model.startswith(f"{resolved_custom_llm_provider}/")
-            ):
-                transformed_response.model = f"{resolved_custom_llm_provider}/{transformed_response.model}"
-        return transformed_response
 
     def map_openai_params(
         self,
