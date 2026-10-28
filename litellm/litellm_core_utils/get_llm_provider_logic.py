@@ -166,6 +166,27 @@ def resolve_model_and_provider_for_metadata(model: str, custom_llm_provider: str
     return resolved_model, resolved_provider
 
 
+API_ROUTING_PREFIXES: Final = ("responses/", "chat_completions/")
+
+
+def _drop_api_selector(name: str) -> str:
+    prefix: Final = next((p for p in API_ROUTING_PREFIXES if name.startswith(p)), None)
+    return name.removeprefix(prefix) if prefix is not None else name
+
+
+def strip_api_routing_prefix(model: str) -> str:
+    """Drop the API-selector segment from a model name.
+
+    ``openai/responses/gpt-5`` resolves to ``openai/gpt-5``. The segment chooses
+    which provider API serves the call, so it is a routing instruction rather than
+    part of the model's identity, and no ``litellm.model_cost`` key contains one.
+    """
+    provider, separator, remainder = model.partition("/")
+    if separator and remainder != _drop_api_selector(remainder):
+        return f"{provider}/{_drop_api_selector(remainder)}"
+    return _drop_api_selector(model)
+
+
 def inferred_provider(model: str | None) -> str | None:
     if not model:
         return None
