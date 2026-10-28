@@ -1737,6 +1737,7 @@ PASS_THROUGH_HEADER_PREFIX: Final = "x-pass-"
 TYPESAFE_DANGER_ZONE_HEADER_PREFIX: Final = "typesafe-danger-zone-"
 INTERNAL_KWARG_PREFIX: Final = "_litellm_"
 CONTROL_OPTIONS_KEY: Final = f"{INTERNAL_KWARG_PREFIX}control"
+SESSION_ID_FROM_TRACE_ID_PARAM_KEY: Final = f"{INTERNAL_KWARG_PREFIX}session_id_from_trace_id"
 
 AZURE_SPEECH_CUSTOM_LLM_PROVIDER: Final = "azure_speech"
 AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX: Final = "/azure_speech"
