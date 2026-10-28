@@ -1,8 +1,12 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, Literal
 
+from pydantic import TypeAdapter
+
 RETRIEVE_STREAM_QUERY_KEYS: Final = frozenset({"stream", "starting_after"})
 RETRIEVE_INCLUDE_QUERY_KEYS: Final = frozenset({"include", "include[]", "include_obfuscation"})
+_QUERY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,3 +63,12 @@ def parse_retrieve_stream_query(
     if isinstance(parsed_starting_after, InvalidRetrieveStreamQuery):
         return _FULL_REPLAY if drop_malformed else parsed_starting_after
     return RetrieveStreamQuery(stream=True, starting_after=parsed_starting_after)
+
+
+def requests_streamed_retrieval(request: Mapping[str, object]) -> bool:
+    extra_query: Final = request.get("extra_query")
+    return (
+        "response_id" in request
+        and isinstance(extra_query, Mapping)
+        and _parsed_stream(_QUERY_ADAPTER.validate_python(extra_query).get("stream")) is True
+    )

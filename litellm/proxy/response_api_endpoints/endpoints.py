@@ -104,6 +104,38 @@ _RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdap
 _DECODED_JSON: Final = TypeAdapter(object)
 _PROXY_SERVER_REQUEST_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _RETRIEVE_QUERY_PARAMS: Final = tuple(sorted(RETRIEVE_INCLUDE_QUERY_KEYS | RETRIEVE_STREAM_QUERY_KEYS))
+_RETRIEVE_QUERY_OPENAPI: Final = {
+    "parameters": [
+        {
+            "name": "stream",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "boolean"},
+            "description": "Replay the response's events as server-sent events (OpenAI, Azure, and Azure AI Foundry)",
+        },
+        {
+            "name": "starting_after",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "integer", "minimum": 0},
+            "description": "With stream=true, replay only the events after this sequence number",
+        },
+        {
+            "name": "include",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "array", "items": {"type": "string"}},
+            "description": "Additional output data to include, forwarded to the provider",
+        },
+        {
+            "name": "include_obfuscation",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "boolean"},
+            "description": "With stream=true, whether delta events carry obfuscation padding",
+        },
+    ]
+}
 
 _ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
 
@@ -743,18 +775,21 @@ async def cursor_chat_completions(
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
     responses=RESPONSES_API_RESPONSE_SCHEMAS,
+    openapi_extra=_RETRIEVE_QUERY_OPENAPI,
 )
 @router.get(
     "/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
     responses=RESPONSES_API_RESPONSE_SCHEMAS,
+    openapi_extra=_RETRIEVE_QUERY_OPENAPI,
 )
 @router.get(
     "/openai/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
     responses=RESPONSES_API_RESPONSE_SCHEMAS,
+    openapi_extra=_RETRIEVE_QUERY_OPENAPI,
 )
 async def get_response(
     response_id: str,
@@ -778,6 +813,10 @@ async def get_response(
     
     # Get provider response
     curl -X GET http://localhost:4000/v1/responses/resp_abc123 \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+
+    # Resume a background response's event stream after sequence number 7
+    curl -N "http://localhost:4000/v1/responses/resp_abc123?stream=true&starting_after=7" \
     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """

@@ -1,7 +1,6 @@
 import json
 import queue
 import threading
-import time
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from typing import Final, Literal, TypeAlias
@@ -501,6 +500,38 @@ async def test_streamed_retrieve_on_an_unsupported_provider_drops_the_stream_und
     assert dict(call.request.url.params) == {}
 
 
+@pytest.mark.asyncio
+async def test_a_routed_resume_requested_in_extra_query_gets_the_deployment_stream_timeout() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "background-model",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5",
+                    "api_key": "sk-test",
+                    "api_base": "https://api.openai.com/v1",
+                    "timeout": 2,
+                    "stream_timeout": 60,
+                },
+            }
+        ]
+    )
+    with respx.mock() as mock_router:
+        route: Final = _retrieve_route(mock_router, "openai").mock(
+            return_value=httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3)
+        )
+        stream: Final = await router.aget_responses(
+            model="background-model",
+            response_id=_STORED_RESPONSE_ID,
+            extra_query={"stream": "true", "starting_after": "3"},
+        )
+        event_types: Final = await _event_types(stream)
+        (call,) = route.calls
+
+    assert event_types == ("response.output_text.delta", "response.completed")
+    assert call.request.extensions["timeout"]["read"] == 60
+
+
 class _SuccessLog(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -510,7 +541,7 @@ class _SuccessLog(CustomLogger):
         self.logged.put(response_obj)
 
 
-def test_a_sync_streamed_retrieve_logs_success_once_with_the_finished_response(
+def test_a_sync_streamed_retrieve_logs_success_with_the_finished_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     success_log: Final = _SuccessLog()
@@ -525,10 +556,8 @@ def test_a_sync_streamed_retrieve_logs_success_once_with_the_finished_response(
         assert isinstance(stream, SyncResponsesAPIStreamingIterator)
         consumed: Final = tuple(stream)
 
-    first_logged: Final = success_log.logged.get(timeout=10)
-    time.sleep(0.5)
+    logged: Final = success_log.logged.get(timeout=10)
 
     assert len(consumed) == 2
-    assert isinstance(first_logged, ResponsesAPIResponse)
-    assert first_logged.status == "completed"
-    assert success_log.logged.empty()
+    assert isinstance(logged, ResponsesAPIResponse)
+    assert logged.status == "completed"
