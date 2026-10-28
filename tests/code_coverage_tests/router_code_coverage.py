@@ -93,6 +93,7 @@ ignored_function_names = [
     "_apply_updated_routing_strategy_args",  # Tested via update_settings in test_lowest_latency.py (file lacks "router" in name)
     "_wait_for_scheduler_turn",  # Tested through prioritized acompletion and atext_completion in test_router.py
     "arm_routing_read_prefetch",  # Tested in tests/unit/caching/test_request_redis_batch_pre_call.py (file lacks "router" in name)
+    "_deployment_params_base_model",  # Tested through log_retry in test_router_helper_utils.py
     "_configured_model_info",  # Tested through get_configured_service_tiers in test_router.py
     "_routable_deployments",  # Tested through get_configured_service_tiers and get_routable_upstream_model in test_router.py
     "_async_get_available_deployment",  # Body of the `route {model}` phase wrapper, exercised through async_get_available_deployment in test_router.py
@@ -137,6 +138,9 @@ ignored_function_names = [
     "_pre_call_check_requested_chat_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
     "_deployment_supports_param",  # Tested through the deployment-capability pre-call check tests in test_router.py
     "_capability_model_and_provider",  # Tested through the authenticating-provider pre-call check test in test_router.py
+    "_route_capability_pin",  # Exercised through Decisions routing tests in test_router.py
+    "_deployment_serves_route",  # Exercised through mixed-group Decisions tests in test_router.py
+    "_without_deployments_that_cannot_serve_route",  # Exercised through Decisions routing tests in test_router.py
     "_exact_base_model_max_input_tokens",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_base_model_widened_window",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_provider_model_id",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
@@ -145,6 +149,18 @@ ignored_function_names = [
     "async_admit_deployment_turn",  # Bound as the WebSocket turn_admission partial, tested through it in test_router_helper_utils.py
     "_deployment_as_configured_now",  # Read by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
     "_admit_turn_through_routing_strategy",  # Run by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
+    "_callback_selectors",  # Run by discard, tested through the discard tests in test_router_helper_utils.py
+    "bind_to_request_logging",  # Run by the proxy user_config route, tested through the user_config tests in test_route_llm_request.py
+    "serve_through_request_logging",  # Run by the proxy user_config route, tested through the user_config tests in test_route_llm_request.py
+    "_request_adaptive_router_hooks",  # Run by serve_through_request_logging, tested through the user_config adaptive test
+    "_release_global_callbacks",  # Run by discard, tested through the discard tests in test_router_helper_utils.py
+    "_routing_callbacks",  # Read by the pre-call checks, tested through the user_config limit tests in test_route_llm_request.py
+    "_request_policies_not_set_globally",  # Read by bind_to_request_logging, tested through the user_config budget test in test_route_llm_request.py
+    "_optional_loggers",  # Read by discard and serve_through_request_logging, tested through the budget limiter discard test
+    "retire_routing_state",  # Run by discard, tested through the budget limiter discard test
+    "_slack_alerting_loggers",  # Run by discard, tested through the Slack alerting discard test in test_router_helper_utils.py
+    "_adaptive_router_hooks",  # Run by discard, tested through the adaptive router discard tests in test_router_helper_utils.py
+    "_global_callback_candidates",  # Run by discard, tested through the survivor discard tests in test_router_helper_utils.py
     "without_deployments_that_cannot_batch",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
     "batch_create_routing",  # Tested through the mixed-group acreate_batch tests in test_router.py
     "is_batch_create_routing",  # Tested through the chat-after-batch-create test in test_router.py
@@ -155,6 +171,7 @@ ignored_function_names = [
     "_deployment_field",  # Read by is_batch_capable, tested through the mixed-group tests in test_router.py
     "_deployment_provider",  # Read by without_deployments_that_cannot_batch, tested through the mixed-group tests in test_router.py
     "_cannot_run_batches",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
+    "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py
     "priority_header_update",  # Tested through the priority header tests in test_common_request_processing.py
     "_drops_params",  # Read by split_request_priority and priority_header_update, tested through both
 ]

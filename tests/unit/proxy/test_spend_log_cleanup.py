@@ -20,13 +20,13 @@ from litellm.constants import (
     SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS,
 )
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+    SPEND_LOG_CLEANUP_BOUND_SETTINGS,
     SizeCleanupState,
+    SpendLogCleanup,
     SpendLogStorage,
     StorageProbe,
-    advance_size_state,
-    SPEND_LOG_CLEANUP_BOUND_SETTINGS,
-    SpendLogCleanup,
     TableCleanupResult,
+    advance_size_state,
 )
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
     SpendLogCleanupMetrics,
@@ -1539,8 +1539,8 @@ async def test_progress_reported_for_a_cancelled_run_is_that_run_only(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_progress_reported_by_an_overlapping_run_is_its_own(monkeypatch):
-    """With APSCHEDULER_MAX_INSTANCES above one, two runs share the cleaner but not their progress"""
+async def test_a_size_pass_that_fires_while_an_age_pass_is_running_in_the_same_pod_waits_for_it(monkeypatch):
+    """Without Redis there is no pod lock, and the two jobs are scheduled on two SpendLogCleanup instances"""
     import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
 
     mock_logger = MagicMock()
@@ -1557,22 +1557,31 @@ async def test_progress_reported_by_an_overlapping_run_is_its_own(monkeypatch):
     slow_client = MagicMock()
     _wire_tx(slow_client.db)
     slow_client.db.execute_raw = _slow_execute_raw
-    fast_client = MagicMock()
-    _wire_tx(fast_client.db)
-    fast_client.db.execute_raw = AsyncMock(side_effect=[150, 150, 0, 0])
+    size_db = MagicMock()
+    _wire_tx(size_db)
+    size_db.execute_raw = AsyncMock(return_value=1000)
+    _wire_size_probes(size_db, [_storage(allocated=10 * 1024**3, live=1000, dead=0)], cutoff=datetime.now(timezone.utc))
+    size_client = MagicMock()
+    size_client.db = size_db
 
-    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
-    cleaner.pod_lock_manager = None
+    age_cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
+    age_cleaner.pod_lock_manager = None
+    size_cleaner = _size_cleaner({})
 
-    slow_run = asyncio.ensure_future(cleaner.cleanup_old_spend_logs(slow_client))
+    slow_run = asyncio.ensure_future(age_cleaner.cleanup_old_spend_logs(slow_client))
     await asyncio.wait_for(first_batch_done.wait(), timeout=5)
-    await cleaner.cleanup_old_spend_logs(fast_client)
+    size_run = asyncio.ensure_future(size_cleaner.cleanup_spend_logs_by_size(size_client))
+    await asyncio.sleep(0.05)
+    assert size_db.deletes.await_count == 0 and not size_run.done(), "the size pass ran while the age pass held the pod"
+
     second_run_done.set()
     await asyncio.sleep(0)
     slow_run.cancel()
     with pytest.raises(asyncio.CancelledError):
         await slow_run
+    await asyncio.wait_for(size_run, timeout=5)
 
+    assert size_db.deletes.await_count > 0, "the size pass never ran once the age pass let go"
     (error_call,) = mock_logger.error.call_args_list
     rendered = error_call[0][0] % error_call[0][1:]
     assert "(rows_deleted=100, batches=1)" in rendered
@@ -1868,19 +1877,41 @@ async def test_size_pass_stops_at_the_run_batch_cap_and_reports_how_far_above_th
 
 
 @pytest.mark.asyncio
-async def test_size_pass_skips_on_stale_row_statistics_instead_of_trusting_an_estimate_of_zero(caplog):
+async def test_size_pass_analyzes_and_measures_again_when_the_row_statistics_were_reset(caplog):
+    """A crash zeroes pg_stat_user_tables under a full file; the pass rebuilds the counters instead of skipping.
+    The first read after ANALYZE still shows zeros, as the stats collector publishes them a moment later"""
     db = MagicMock()
     _wire_tx(db)
-    db.execute_raw = AsyncMock(return_value=1000)
-    _wire_size_probes(db, [_storage(allocated=5 * 1024**3, live=0, dead=0)], cutoff=datetime.now(timezone.utc))
+    statements = AsyncMock(return_value=0)
+    db.execute_raw = statements
+    saves = _wire_size_probes(
+        db,
+        [
+            _storage(allocated=10 * 1024**3, live=0, dead=0, inserted=0, deleted=0),
+            _storage(allocated=10 * 1024**3, live=0, dead=0, inserted=0, deleted=0),
+            _storage(10 * 1024**3, 1000, 0, 0, 0),
+        ],
+        cutoff=datetime.now(timezone.utc),
+        saved_state=SizeCleanupState(
+            allocated_bytes=10 * 1024**3,
+            reclaimable_bytes=9 * 1024**3 + 512 * 1024**2,
+            bytes_per_row=1024.0,
+            inserted_total=50_000,
+            deleted_total=49_000,
+        ),
+    )
     client = MagicMock()
     client.db = db
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         await _size_cleaner({}).cleanup_spend_logs_by_size(client)
 
-    assert db.deletes.await_count == 0
+    issued = [call.args[0] for call in statements.await_args_list]
+    assert issued == ['ANALYZE "LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex"'], (
+        "the only statement is the ANALYZE: no DELETE, the carried count puts the table under 1GB"
+    )
     assert any("row statistics are stale" in record.getMessage() for record in caplog.records)
+    assert saves[0].reclaimable_bytes == 9 * 1024**3 + 512 * 1024**2
 
 
 @pytest.mark.asyncio
@@ -1948,9 +1979,19 @@ _RUN_STATE = SizeCleanupState(
         ),
         ("the retention job deleted 2000 more rows", _storage(32_030_720, 3000, 2000, 20_000, 17_000), 27_217_000),
         (
-            "statistics reset: counters restart from the dead rows",
+            "statistics reset (a crash, then ANALYZE): the count is carried forward, not restarted from the dead rows",
             _storage(32_030_720, 5000, 1000, 5000, 1000),
-            5_338_453,
+            24_015_000,
+        ),
+        (
+            "statistics reset on a file VACUUM FULL shrank meanwhile: the carried count loses the shrink",
+            _storage(8_015_720, 5000, 0, 5000, 0),
+            0,
+        ),
+        (
+            "statistics reset with more dead rows than the carried count explains: the dead rows win",
+            _storage(32_030_720, 1000, 19_000, 1000, 19_000),
+            30_429_184,
         ),
     ],
 )
