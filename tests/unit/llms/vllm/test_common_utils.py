@@ -1,19 +1,21 @@
+from typing import Final
+
 import httpx
 import pytest
 import respx
 
 from litellm.llms.vllm.common_utils import VLLMModelInfo
 
-MODELS_URL = "http://vllm.example/v1/models"
-MODEL_RESPONSE = {"data": [{"id": "Qwen/Qwen3-8B"}]}
+MODELS_URL: Final = "http://vllm.example/v1/models"
+MODEL_RESPONSE: Final = {"data": [{"id": "Qwen/Qwen3-8B"}]}
 
 
 def test_get_models_without_api_key_sends_no_authorization_header(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
 
     with respx.mock:
-        route = respx.get(MODELS_URL).mock(return_value=httpx.Response(200, json=MODEL_RESPONSE))
-        models = VLLMModelInfo().get_models(api_base="http://vllm.example/v1")
+        route: Final = respx.get(MODELS_URL).mock(return_value=httpx.Response(200, json=MODEL_RESPONSE))
+        models: Final = VLLMModelInfo().get_models(api_base="http://vllm.example/v1")
 
     assert models == ["Qwen/Qwen3-8B"]
     assert "authorization" not in route.calls[0].request.headers
@@ -21,8 +23,8 @@ def test_get_models_without_api_key_sends_no_authorization_header(monkeypatch: p
 
 def test_get_models_sends_api_key_as_bearer_token() -> None:
     with respx.mock:
-        route = respx.get(MODELS_URL).mock(return_value=httpx.Response(200, json=MODEL_RESPONSE))
-        models = VLLMModelInfo().get_models(
+        route: Final = respx.get(MODELS_URL).mock(return_value=httpx.Response(200, json=MODEL_RESPONSE))
+        models: Final = VLLMModelInfo().get_models(
             api_key="vllm-test-key",
             api_base="http://vllm.example/v1",
         )
