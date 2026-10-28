@@ -2328,6 +2328,7 @@ def _map_exception_by_status(
         return
     message: Final = f"{exception_provider} - {error_str}"
     response: Final = original_exception.response if hasattr(original_exception, "response") else None
+    body: Final = getattr(original_exception, "body", None)
     match status_code:
         case 401:
             raise AuthenticationError(
@@ -2366,6 +2367,7 @@ def _map_exception_by_status(
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=response,
+                body=body,
                 litellm_debug_info=extra_information,
             )
         case 500:
@@ -2414,6 +2416,7 @@ def _map_exception_by_status(
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=response,
+                body=body,
                 litellm_debug_info=extra_information,
             )
         case _:
