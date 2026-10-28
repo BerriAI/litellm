@@ -139,6 +139,11 @@ class ModelRateLimitingCheck(CustomLogger):
         )
         return None if count is None else int(count)
 
+    async def _async_refund_rpd(self, rpd_key: str, current_rpd: int | None, parent_otel_span: Span | None) -> None:
+        if current_rpd is None:
+            return
+        await self._async_increment(rpd_key, -1, RoutingArgs.daily_ttl, parent_otel_span)
+
     async def _async_increment_request_counts(
         self, rpm_key: str | None, rpd_key: str | None, parent_otel_span: Span | None
     ) -> tuple[int | None, int | None]:
@@ -409,25 +414,23 @@ class ModelRateLimitingCheck(CustomLogger):
                 rpd_key if rpd_limit is not None else None,
                 parent_otel_span,
             )
-            if rpm_limit is not None:
-                if current_rpm is not None and current_rpm > rpm_limit:
-                    if current_rpd is not None:
-                        await self._async_increment(rpd_key, -1, RoutingArgs.daily_ttl, parent_otel_span)
-                    raise litellm.RateLimitError(
-                        message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
-                        llm_provider="",
-                        model=model_name,
-                        response=httpx.Response(
-                            status_code=429,
-                            content=f"{RouterErrors.user_defined_ratelimit_error.value} rpm limit={rpm_limit}. current usage={current_rpm}. id={model_id}, model_group={model_group}",
-                            headers={"retry-after": str(60)},
-                            request=httpx.Request(
-                                method="model_rate_limit_check",
-                                url="https://github.com/BerriAI/litellm",
-                            ),
+            if rpm_limit is not None and current_rpm is not None and current_rpm > rpm_limit:
+                await self._async_refund_rpd(rpd_key, current_rpd, parent_otel_span)
+                raise litellm.RateLimitError(
+                    message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
+                    llm_provider="",
+                    model=model_name,
+                    response=httpx.Response(
+                        status_code=429,
+                        content=f"{RouterErrors.user_defined_ratelimit_error.value} rpm limit={rpm_limit}. current usage={current_rpm}. id={model_id}, model_group={model_group}",
+                        headers={"retry-after": str(60)},
+                        request=httpx.Request(
+                            method="model_rate_limit_check",
+                            url="https://github.com/BerriAI/litellm",
                         ),
-                        num_retries=0,  # Don't retry - return 429 immediately
-                    )
+                    ),
+                    num_retries=0,  # Don't retry - return 429 immediately
+                )
 
             if rpd_limit is not None and current_rpd is not None and current_rpd > rpd_limit:
                 raise daily.limit_error("rpd", rpd_limit, current_rpd, dt)
