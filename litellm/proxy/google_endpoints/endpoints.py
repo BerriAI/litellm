@@ -1,11 +1,11 @@
 from collections.abc import Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import Final
+from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, ORJSONResponse
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types
 from litellm.proxy._types import *
@@ -25,6 +25,21 @@ from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
 
+def _google_repeated_field(value: JsonValue) -> JsonValue:
+    match value:
+        case None:
+            return []
+        case dict():
+            return [value]
+        case list():
+            return [item for item in value if item is not None]
+        case _:
+            return value
+
+
+_GOOGLE_REPEATED_FIELD: Final = BeforeValidator(_google_repeated_field)
+
+
 class _GoogleCountTokensTextPart(BaseModel):
     model_config = ConfigDict(frozen=True)
     text: str
@@ -32,12 +47,7 @@ class _GoogleCountTokensTextPart(BaseModel):
 
 class _GoogleCountTokensSystemInstruction(BaseModel):
     model_config = ConfigDict(frozen=True)
-    parts: tuple[_GoogleCountTokensTextPart, ...]
-
-    @field_validator("parts", mode="before")
-    @classmethod
-    def normalize_parts(cls, parts: JsonValue) -> JsonValue:
-        return [parts] if isinstance(parts, dict) else parts
+    parts: Annotated[tuple[_GoogleCountTokensTextPart, ...], _GOOGLE_REPEATED_FIELD] = ()
 
 
 class _GoogleCountTokensFunctionDeclaration(BaseModel):
@@ -50,7 +60,7 @@ class _GoogleCountTokensFunctionDeclaration(BaseModel):
 
 class _GoogleCountTokensTool(BaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
-    function_declarations: tuple[_GoogleCountTokensFunctionDeclaration, ...] = Field(
+    function_declarations: Annotated[tuple[_GoogleCountTokensFunctionDeclaration, ...], _GOOGLE_REPEATED_FIELD] = Field(
         default=(), alias="functionDeclarations"
     )
 
@@ -59,7 +69,7 @@ class _GoogleCountTokensRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
     contents: tuple[Mapping[str, JsonValue], ...] = ()
     system_instruction: _GoogleCountTokensSystemInstruction | None = Field(default=None, alias="systemInstruction")
-    tools: tuple[_GoogleCountTokensTool, ...] | None = ()
+    tools: Annotated[tuple[_GoogleCountTokensTool, ...], _GOOGLE_REPEATED_FIELD] = ()
 
 
 router: Final = APIRouter(
@@ -119,7 +129,7 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
         if validated_data.system_instruction is not None
         else None
     )
-    declarations: Final = chain.from_iterable(tool.function_declarations for tool in validated_data.tools or ())
+    declarations: Final = chain.from_iterable(tool.function_declarations for tool in validated_data.tools)
     tools: Final = [
         {
             "name": declaration.name,

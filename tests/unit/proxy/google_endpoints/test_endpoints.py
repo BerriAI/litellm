@@ -106,21 +106,36 @@ async def test_proxy_gemini_to_openai_like_model_token_counting():
     assert response.get("totalTokens") > 0
 
 
-@pytest.mark.parametrize("system_field", ("systemInstruction", "system_instruction"))
-@pytest.mark.parametrize("parts", ({"text": "Follow these rules"}, [{"text": "Follow these rules"}]))
-@pytest.mark.parametrize("tools", (None, []))
-def test_google_count_tokens_accepts_equivalent_system_parts_and_no_tools(
-    system_field: str, parts: JsonValue, tools: JsonValue
+_DECLARATION: Final = {"name": "lookup", "description": "Find a record"}
+_SYSTEM: Final = {"systemInstruction": {"parts": [{"text": "Follow these rules"}]}}
+_NO_SYSTEM_PARTS: Final = {"systemInstruction": {"parts": []}}
+_TOOLS: Final = {"tools": [{"functionDeclarations": [_DECLARATION]}]}
+
+
+@pytest.mark.parametrize(
+    ("spelled", "canonical"),
+    (
+        ({"systemInstruction": {"parts": {"text": "Follow these rules"}}}, _SYSTEM),
+        ({"system_instruction": {"parts": {"text": "Follow these rules"}}}, _SYSTEM),
+        ({"systemInstruction": {"parts": [{"text": "Follow these rules"}, None]}}, _SYSTEM),
+        ({"systemInstruction": {"parts": None}}, _NO_SYSTEM_PARTS),
+        ({"systemInstruction": {}}, _NO_SYSTEM_PARTS),
+        ({"tools": None}, {}),
+        ({"tools": [None]}, {}),
+        ({"tools": [{"functionDeclarations": None}]}, {}),
+        ({"tools": {"functionDeclarations": [_DECLARATION]}}, _TOOLS),
+        ({"tools": [{"functionDeclarations": _DECLARATION}]}, _TOOLS),
+        ({"tools": {"functionDeclarations": _DECLARATION}}, _TOOLS),
+    ),
+)
+def test_google_count_tokens_counts_every_google_spelling_of_a_repeated_field_like_its_list_form(
+    spelled: dict[str, JsonValue], canonical: dict[str, JsonValue]
 ) -> None:
     contents: Final = [{"role": "user", "parts": [{"text": "Count this request"}]}]
-    request: Final = _google_count_tokens_request(
-        "counted", {"contents": contents, system_field: {"parts": parts}, "tools": tools}
-    )
 
-    assert request.messages == [{"role": "user", "content": "Count this request"}]
-    assert request.system == [{"type": "text", "text": "Follow these rules"}]
-    assert request.tools is None
-    assert request.contents == contents
+    assert _google_count_tokens_request("counted", {"contents": contents, **spelled}) == _google_count_tokens_request(
+        "counted", {"contents": contents, **canonical}
+    )
 
 
 @pytest.mark.parametrize(
