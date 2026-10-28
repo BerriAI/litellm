@@ -1027,11 +1027,17 @@ def _cost_map_model_name(model: str, custom_llm_provider: str | None, region_nam
     return _strip_unregistered_leading_segments(f"{provider_prefix}/{model}", region_name)
 
 
-def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
-    if _declares_rates(_cost_map_model_info(model, custom_llm_provider)):
-        return True
+def _row_declares_rates(model: str, custom_llm_provider: str | None) -> bool:
+    return _declares_rates(_cost_map_model_info(model, custom_llm_provider))
+
+
+def _rule_declares_rates(model: str, custom_llm_provider: str | None) -> bool:
     rule_info: Final = unmapped_model_generalization(model, custom_llm_provider)
     return rule_info is not None and _cost_map_entry_prices_anything(rule_info)
+
+
+def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
+    return _row_declares_rates(model, custom_llm_provider) or _rule_declares_rates(model, custom_llm_provider)
 
 
 def _served_or_priced_requested_model(
@@ -1041,9 +1047,11 @@ def _served_or_priced_requested_model(
     if requested_model is None:
         return served
     requested: Final = _cost_map_model_name(requested_model, custom_llm_provider, None)
-    if requested == served or _resolves_to_rates(served, custom_llm_provider):
+    if requested == served or _row_declares_rates(served, custom_llm_provider):
         return served
-    return requested if _resolves_to_rates(requested, custom_llm_provider) else served
+    if not _resolves_to_rates(requested, custom_llm_provider):
+        return served
+    return served if _rule_declares_rates(served, custom_llm_provider) else requested
 
 
 def _strip_unregistered_leading_segments(model: str, region_name: str | None) -> str:
