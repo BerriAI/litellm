@@ -89,6 +89,7 @@ from litellm.types.responses.streaming_websocket import ResponsesWebSocketReques
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
+    AgenticLoopParams,
     CallTypes,
     CostPerToken,
     CustomPricingLiteLLMParams,
@@ -1526,6 +1527,7 @@ def responses(
             local_vars=local_vars,
             use_chat_completions_api=use_chat_completions_api,
         )
+        litellm_logging_obj.model_call_details["agentic_loop_params"] = AgenticLoopParams(model=model)
 
         from litellm.litellm_core_utils.core_helpers import attribute_or_none
 
