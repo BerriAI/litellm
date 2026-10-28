@@ -404,8 +404,13 @@ class DeploymentAffinityCheck(CustomLogger):
         # 1) Responses API continuity (high priority)
         if enable_responses_api:
             previous_response_id: Final = request_kwargs.get("previous_response_id")
-            if previous_response_id is not None:
-                responses_model_id = ResponsesAPIRequestUtils.get_model_id_from_response_id(str(previous_response_id))
+            pinning_response_id: Final = (
+                str(previous_response_id)
+                if previous_response_id is not None
+                else ResponsesAPIRequestUtils.comparison_response_id(request_kwargs)
+            )
+            if pinning_response_id is not None:
+                responses_model_id = ResponsesAPIRequestUtils.get_model_id_from_response_id(pinning_response_id)
                 if responses_model_id is not None:
                     deployment = self._find_deployment_by_model_id(
                         healthy_deployments=typed_healthy_deployments,
@@ -413,7 +418,7 @@ class DeploymentAffinityCheck(CustomLogger):
                     )
                     if deployment is not None:
                         verbose_router_logger.debug(
-                            "DeploymentAffinityCheck: previous_response_id pinning -> deployment=%s",
+                            "DeploymentAffinityCheck: response id pinning -> deployment=%s",
                             responses_model_id,
                         )
                         return [deployment]

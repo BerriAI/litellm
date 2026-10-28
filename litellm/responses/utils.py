@@ -783,6 +783,34 @@ class ResponsesAPIRequestUtils:
         return decoded if rebuilt == response_id else None
 
     @staticmethod
+    def with_original_comparison_response_id(
+        body: Mapping[str, object], custom_llm_provider: str | None
+    ) -> Mapping[str, object]:
+        options: Final = as_str_mapping(body.get("prompt_cache_options"))
+        comparison_id: Final = None if options is None else options.get("comparison_response_id")
+        decoded: Final = (
+            ResponsesAPIRequestUtils.decode_exact_responses_api_response_id(comparison_id)
+            if isinstance(comparison_id, str)
+            else None
+        )
+        original_id: Final = (
+            decoded.get("response_id")
+            if decoded is not None and decoded.get("custom_llm_provider") == custom_llm_provider
+            else None
+        )
+        if options is None or original_id is None:
+            return body
+        return {**body, "prompt_cache_options": {**options, "comparison_response_id": original_id}}
+
+    @staticmethod
+    def comparison_response_id(request: Mapping[str, object]) -> str | None:
+        extra_body: Final = as_str_mapping(request.get("extra_body"))
+        container: Final = extra_body if extra_body is not None and "prompt_cache_options" in extra_body else request
+        options: Final = as_str_mapping(container.get("prompt_cache_options"))
+        comparison_id: Final = None if options is None else options.get("comparison_response_id")
+        return comparison_id if isinstance(comparison_id, str) and comparison_id else None
+
+    @staticmethod
     def _is_litellm_encoded_response_id(response_id: str) -> bool:
         decoded_response_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id)
         return (

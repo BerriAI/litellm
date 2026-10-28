@@ -6032,7 +6032,7 @@ def test_get_litellm_params_keys_never_reach_the_provider():
 
 
 @pytest.mark.parametrize("retained_field", [ADDRESSED_RESPONSE_ID_FIELD, COMPARISON_RESPONSE_ID_FIELD])
-def test_retained_response_id_never_reaches_the_provider(retained_field):
+def test_retained_response_id_never_reaches_the_provider(retained_field: str) -> None:
     kwargs = {
         "a_real_provider_specific_param": 1,
         retained_field: "resp_addressed-by-the-client",

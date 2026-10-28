@@ -3913,6 +3913,47 @@ class TestNativeWebSocketEncryptedContentAffinity:
         assert body["previous_response_id"] == "resp_orig"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [False, True])
+    @pytest.mark.parametrize(
+        ("issuing_provider", "expected_unwrapped"),
+        [("openai", True), ("azure", False)],
+        ids=["same-provider", "other-provider"],
+    )
+    async def test_client_to_backend_unwraps_a_same_provider_comparison_response_id(
+        self, nested: bool, issuing_provider: str, expected_unwrapped: bool
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        wrapped_comparison: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider=issuing_provider, model_id="dep-1", response_id="resp_orig"
+        )
+        payload: Final = {
+            "input": "hi",
+            "prompt_cache_options": {"comparison_response_id": wrapped_comparison, "retention": "24h"},
+        }
+        frame: Final = (
+            {"type": "response.create", "response": payload} if nested else {"type": "response.create", **payload}
+        )
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock()
+        websocket: Final = MagicMock()
+        websocket.receive_text = AsyncMock(side_effect=[json.dumps(frame), Exception("stop")])
+        handler: Final = _make_streaming(
+            websocket=websocket, backend_ws=backend_ws, request_data={}, custom_llm_provider="openai"
+        )
+
+        await handler.client_to_backend()
+
+        sent: Final = json.loads(backend_ws.send.await_args_list[0][0][0])
+        body: Final = sent["response"] if nested else sent
+        assert body["prompt_cache_options"] == {
+            "comparison_response_id": "resp_orig" if expected_unwrapped else wrapped_comparison,
+            "retention": "24h",
+        }
+
+    @pytest.mark.asyncio
     async def test_client_to_backend_leaves_unwrapped_frames_untouched(self):
         from unittest.mock import AsyncMock
 

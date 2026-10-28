@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -558,3 +559,28 @@ async def test_async_multiple_response_ids_routing():
 
         # Verify it went to the correct deployment
         assert follow_up_2._hidden_params["model_id"] == model_id_2
+
+
+@pytest.mark.asyncio
+async def test_comparison_response_id_pins_its_deployment_without_a_previous_response_id() -> None:
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+    from litellm.router_utils.pre_call_checks.responses_api_deployment_check import ResponsesApiDeploymentCheck
+
+    with pytest.warns(DeprecationWarning, match="ResponsesApiDeploymentCheck is deprecated"):
+        check: Final = ResponsesApiDeploymentCheck()
+    healthy_deployments: Final = [
+        {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}, "model_info": {"id": model_id}}
+        for model_id in ("A", "B")
+    ]
+    comparison_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id="B", response_id="resp_upstream"
+    )
+
+    pinned: Final = await check.async_filter_deployments(
+        model="gpt-4o",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={"prompt_cache_options": {"comparison_response_id": comparison_id}},
+    )
+
+    assert pinned == [healthy_deployments[1]]

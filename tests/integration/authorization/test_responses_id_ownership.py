@@ -255,6 +255,49 @@ def test_response_ids_are_scoped_to_the_issuing_user_and_team(gateway: Gateway, 
         assert _contract_requests(wire) == ()
 
 
+def test_comparison_response_id_is_scoped_to_the_issuing_user(gateway: Gateway) -> None:
+    raw_id: Final = f"resp_owned_{uuid.uuid4().hex}"
+    unmanaged_id: Final = f"resp_vendor_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return _model_discovery_reply()
+        if request.method == "POST" and request.target == "/v1/responses":
+            return Reply(body=_response(raw_id))
+        raise AssertionError(f"Unexpected upstream request: {request.method} {request.target}")
+
+    def compare(client: openai.OpenAI, model: str, comparison_id: str) -> object:
+        return client.responses.create(
+            model=model,
+            input="compare cache",
+            extra_body={"prompt_cache_options": {"comparison_response_id": comparison_id}},
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        team: Final = scenario.team(models=[model])
+        owner_client: Final = _client(gateway, _key(scenario, team, scenario.member(team), model), "/v1")
+        stranger_client: Final = _client(gateway, _key(scenario, team, scenario.member(team), model), "/v1")
+        client_id: Final = owner_client.responses.create(model=model, input="create owned response").id
+        assert client_id.startswith("resp_") and client_id != raw_id, client_id
+        assert len(_contract_requests(wire)) == 1
+
+        _refused(lambda: compare(stranger_client, model, client_id), _OTHER_USER_DETAIL)
+        assert _contract_requests(wire) == ()
+
+        compare(owner_client, model, client_id)
+        compare(owner_client, model, unmanaged_id)
+        requests: Final = _contract_requests(wire)
+        assert [_JSON_OBJECT.validate_json(request.body) for request in requests] == [
+            {"model": _MODEL, "input": "compare cache", "prompt_cache_options": {"comparison_response_id": raw_id}},
+            {
+                "model": _MODEL,
+                "input": "compare cache",
+                "prompt_cache_options": {"comparison_response_id": unmanaged_id},
+            },
+        ], requests
+
+
 @pytest.mark.parametrize("prefix", _ALIASES)
 def test_compact_previous_response_id_is_scoped_to_the_issuing_user_and_team(
     gateway: Gateway,

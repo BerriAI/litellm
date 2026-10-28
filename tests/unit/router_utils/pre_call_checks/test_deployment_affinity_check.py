@@ -1299,3 +1299,61 @@ async def test_previous_response_id_pin_holds_even_after_its_deployment_failed()
         },
         parent_otel_span=None,
     ) == [healthy_deployments[0]]
+
+
+def _response_id_from(model_id: str) -> str:
+    return ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id=model_id, response_id=f"resp_upstream_{model_id}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_kwargs", "pinned_model_id"),
+    [
+        pytest.param(
+            {"prompt_cache_options": {"comparison_response_id": _response_id_from("B")}},
+            "B",
+            id="top-level-comparison",
+        ),
+        pytest.param(
+            {
+                "prompt_cache_options": {"comparison_response_id": _response_id_from("A")},
+                "extra_body": {"prompt_cache_options": {"comparison_response_id": _response_id_from("B")}},
+            },
+            "B",
+            id="extra-body-comparison-wins",
+        ),
+        pytest.param(
+            {
+                "previous_response_id": _response_id_from("A"),
+                "prompt_cache_options": {"comparison_response_id": _response_id_from("B")},
+            },
+            "A",
+            id="previous-response-wins",
+        ),
+    ],
+)
+async def test_comparison_response_id_pins_its_deployment_unless_a_previous_response_id_does(
+    request_kwargs: dict[str, object], pinned_model_id: str
+) -> None:
+    callback: Final = DeploymentAffinityCheck(
+        cache=DualCache(),
+        ttl_seconds=60,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=True,
+    )
+    healthy_deployments: Final = [
+        {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}, "model_info": {"id": model_id}}
+        for model_id in ("A", "B", "C")
+    ]
+
+    pinned: Final = await callback.async_filter_deployments(
+        model="gpt-4o",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs=request_kwargs,
+        parent_otel_span=None,
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in pinned] == [pinned_model_id]

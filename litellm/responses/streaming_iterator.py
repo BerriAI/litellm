@@ -2272,7 +2272,9 @@ def _restore_input_item_ids(items: Sequence[object]) -> Sequence[object]:
     return ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(list(items)))
 
 
-def _restored_container_fields(container: Mapping[str, object]) -> Mapping[str, object]:
+def _restored_container_fields(
+    container: Mapping[str, object], custom_llm_provider: str | None
+) -> Mapping[str, object]:
     input_items: Final = container.get("input")
     previous_response_id: Final = container.get("previous_response_id")
     restored: Final = {
@@ -2282,14 +2284,21 @@ def _restored_container_fields(container: Mapping[str, object]) -> Mapping[str, 
             if isinstance(previous_response_id, str)
             else previous_response_id
         ),
+        "prompt_cache_options": ResponsesAPIRequestUtils.with_original_comparison_response_id(
+            container, custom_llm_provider
+        ).get("prompt_cache_options"),
     }
     return MappingProxyType({key: value for key, value in restored.items() if value != container.get(key)})
 
 
-def _restore_wrapped_ids_in_response_create(msg_obj: Mapping[str, object]) -> dict[str, object] | None:
+def _restore_wrapped_ids_in_response_create(
+    msg_obj: Mapping[str, object], custom_llm_provider: str | None
+) -> dict[str, object] | None:
     nested: Final = msg_obj.get("response")
-    nested_fields: Final = _restored_container_fields(nested) if _is_json_object(nested) else EMPTY_MAPPING
-    top_fields: Final = _restored_container_fields(msg_obj)
+    nested_fields: Final = (
+        _restored_container_fields(nested, custom_llm_provider) if _is_json_object(nested) else EMPTY_MAPPING
+    )
+    top_fields: Final = _restored_container_fields(msg_obj, custom_llm_provider)
     if not nested_fields and not top_fields:
         return None
     restored_nested: Final = (
@@ -2610,7 +2619,7 @@ class ResponsesWebSocketStreaming:
 
         # Always enforce the authorized model, even when PII masking is off.
         model_modified: Final = self._enforce_authorized_model(authorized_obj)
-        restored_obj: Final = _restore_wrapped_ids_in_response_create(authorized_obj)
+        restored_obj: Final = _restore_wrapped_ids_in_response_create(authorized_obj, self.custom_llm_provider)
         msg_obj: Final = authorized_obj if restored_obj is None else restored_obj
         frame_modified: Final = model_modified or restored_obj is not None or defaults_applied
 
