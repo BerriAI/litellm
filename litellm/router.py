@@ -305,14 +305,20 @@ from litellm.router_utils.kubernetes_pod_discovery import (
 )
 from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_MARKER,
+    RESPONSES_CONTINUATION_KWARG,
     ContinuationOutput,
     ContinuationPrefillDeploymentCheck,
     ContinuedPartial,
+    ResponsesContinuation,
+    ResponsesContinuationSeam,
     constrains_continuation,
+    constrains_responses_continuation,
     continuation_deployments,
     continuation_output_ceilings,
     continued_text,
     deployment_can_continue,
+    responses_continuation_input,
+    responses_continuation_input_for,
 )
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
@@ -457,6 +463,7 @@ from litellm.utils import (
     provider_rejectable_params,
     resolve_api_key_secret_reference,
     set_live_deployment_replay,
+    token_counter,
 )
 
 from .router_utils.pattern_match_deployments import PatternMatchRouter
@@ -488,7 +495,6 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import (
         ResponseAPIUsage,
         ResponseIncompleteEvent,
-        ResponseInputParam,
         ResponsesAPIResponse,
     )
 
@@ -3869,7 +3875,8 @@ class Router:
     ) -> Mapping[str, object]:
         """The request as the deployment received it, merged in the order _update_kwargs_with_deployment applies."""
         deployment_params: Final = deployment.litellm_params.model_dump(exclude_none=True) if deployment else {}
-        defaults: Final = {key: value for key, value in self.default_litellm_params.items() if value is not None}
+        default_params: Final = _REQUEST_KWARGS_ADAPTER.validate_python(self.default_litellm_params)
+        defaults: Final = {key: value for key, value in default_params.items() if value is not None}
         deployment_tool_choice: Final = (
             {"tool_choice": deployment_params["tool_choice"]}
             if deployment_params.get("tool_choice") is not None
@@ -3948,67 +3955,6 @@ class Router:
         extended: Final = _extend_trailing_text_block(blocks, new_text)
         return [*messages[:-1], {**last, "content": extended, "prefix": True}]
 
-    @staticmethod
-    def _build_responses_continuation_input(
-        input_val: Union[str, "ResponseInputParam"] | None,
-        generated_content: str,
-    ) -> "ResponseInputParam":
-        """
-        Convert Responses-API input + partial assistant output into a
-        continuation input that asks the fallback model to pick up where the
-        prior assistant message stopped.
-
-        Best effort across providers. The chat-completions path uses
-        Anthropic's `prefix: True` prefill trick on the assistant message;
-        the Responses-API input schema has no direct equivalent, so we
-        append an instruction (developer role) plus a prior assistant
-        message containing the partial output. Providers without prefill
-        semantics (OpenAI, Vertex) treat this as conversational context
-        and may regenerate — same trade-off as the chat-completions path
-        for non-Anthropic fallbacks.
-        """
-        # base/continuation are List[Any] because ResponseInputParam items
-        # are a wide Union of TypedDicts (EasyInputMessageParam, Message,
-        # ResponseOutputMessageParam, ...) — annotating as List[Dict[str, Any]]
-        # rejects the list() spread of input_val. We cast the combined list to
-        # ResponseInputParam at the return.
-        base: list[object]
-        if isinstance(input_val, str):
-            base = [
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": input_val}],
-                }
-            ]
-        elif isinstance(input_val, list):
-            base = list(input_val)
-        else:
-            base = []
-        continuation: Final[list[object]] = [
-            {
-                "type": "message",
-                "role": "developer",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": (
-                            "The previous assistant response was interrupted "
-                            "mid-stream. Continue exactly where it stopped — "
-                            "do not repeat any of its content. Your response "
-                            "must read as a seamless continuation."
-                        ),
-                    }
-                ],
-            },
-            {
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": generated_content}],
-            },
-        ]
-        return cast("ResponseInputParam", base + continuation)
-
     async def _aresponses_streaming_iterator(
         self,
         response: "BaseResponsesAPIStreamingIterator",
@@ -4030,9 +3976,12 @@ class Router:
 
         Full parity with the chat-completions path:
           - Pre-first-chunk: retry with the original input unchanged.
-          - Partial content: inject a developer instruction + prior
-            assistant message carrying the generated text so the fallback
-            model continues rather than restarts.
+          - Partial content: continue from the generated text, as an
+            assistant prefill on a fallback that takes one and as assistant
+            history plus a user request to continue on any other. A request
+            whose output is constrained (a JSON schema, a forced tool), or a
+            stream that began a tool call, is not continued, and the primary's
+            error surfaces instead.
           - Usage combining: merge partial-stream usage onto the fallback's
             response.completed event so accounting reflects both attempts.
           - Stream cleanup: shielded aclose() on both source and fallback
@@ -4202,7 +4151,7 @@ class Router:
                     yield held_event
             except MidStreamFallbackError as e:
                 if response_id_exposed:
-                    raise e.original_exception or e
+                    Router._raise_original_mid_stream_error(e)
                 async with contextlib.aclosing(
                     self._aresponses_fallback_attempt(
                         e, source_iterator, initial_kwargs, wrapper.adopt_fallback_headers, held_lifecycle_events
@@ -4246,6 +4195,42 @@ class Router:
         model_group: Final = kwargs.get("model")
         return isinstance(model_group, str) and not self._stream_can_fall_back(model_group, kwargs)
 
+    def _responses_continuation(
+        self,
+        e: "MidStreamFallbackError",
+        source_iterator: "BaseResponsesAPIStreamingIterator",
+        request_kwargs: Mapping[str, object],
+    ) -> ResponsesContinuation | None:
+        """What a fallback continues from once a Responses stream broke after text, raising the primary's error
+        when the request constrains its output or the stream began a tool call, since a continued JSON document or
+        tool call would not parse, and when a content filter cut it, so no other model finishes filtered text."""
+        if not e.generated_content or e.is_pre_first_chunk:
+            return None
+        if source_iterator.started_tool_call or isinstance(e.original_exception, litellm.ContentPolicyViolationError):
+            Router._raise_original_mid_stream_error(e)
+        cut_deployment_id: Final = (get_hidden_params(source_iterator) or {}).get("model_id")
+        cut_deployment: Final = (
+            self.get_deployment(model_id=cut_deployment_id) if isinstance(cut_deployment_id, str) else None
+        )
+        if constrains_responses_continuation(self._params_sent_to_deployment(request_kwargs, cut_deployment)):
+            Router._raise_original_mid_stream_error(e)
+        earlier: Final = request_kwargs.get(RESPONSES_CONTINUATION_KWARG)
+        if isinstance(earlier, ResponsesContinuation):
+            return earlier.extended(e.generated_content)
+        return ResponsesContinuation(request_kwargs.get("input"), e.generated_content)
+
+    @staticmethod
+    def _responses_continuation_ceilings(
+        e: "MidStreamFallbackError", request_kwargs: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        """The caller's output ceilings less what the cut stream already emitted, raising the primary's error once
+        nothing is left."""
+        emitted_tokens: Final = token_counter(model=e.model or "", text=e.generated_content)
+        reduced: Final = continuation_output_ceilings(request_kwargs, emitted_tokens)
+        if reduced is None:
+            Router._raise_original_mid_stream_error(e)
+        return reduced
+
     async def _aresponses_fallback_attempt(
         self,
         e: "MidStreamFallbackError",
@@ -4264,6 +4249,11 @@ class Router:
         """
         from litellm.exceptions import MidStreamFallbackError
 
+        continuation: Final = self._responses_continuation(e, source_iterator, initial_kwargs)
+        reduced_ceilings: Final[Mapping[str, object]] = (
+            Router._responses_continuation_ceilings(e, initial_kwargs) if continuation is not None else {}
+        )
+        seam: Final = ResponsesContinuationSeam(continuation.emitted_text if continuation is not None else "")
         partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
         fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted
         fallback_yielded = False  # rebind-ok: flipped on the first fallback item so a fallback that dies before its first event still replays the primary's held announcement
@@ -4281,11 +4271,10 @@ class Router:
             initial_kwargs["original_function"] = (  # rebind-ok: the fallback chain re-enters on the same kwargs
                 self._ageneric_api_call_with_fallbacks_responses_attempt
             )
-            if e.generated_content and not e.is_pre_first_chunk:
-                initial_kwargs["input"] = Router._build_responses_continuation_input(  # rebind-ok: fallback hop input
-                    initial_kwargs.get("input"),
-                    e.generated_content,
-                )
+            if continuation is not None:
+                initial_kwargs.update(reduced_ceilings)
+                initial_kwargs[RESPONSES_CONTINUATION_KWARG] = continuation  # rebind-ok: shaped per fallback deployment
+                initial_kwargs["input"] = responses_continuation_input(continuation)  # rebind-ok: fallback hop input
             # The Responses-API path stores observability metadata
             # under "litellm_metadata" (not the default "metadata") —
             # see _ageneric_api_call_with_fallbacks. Mirroring that
@@ -4314,7 +4303,7 @@ class Router:
             )
             prepared_fallback_hidden_params: Final = adopt_headers(fallback_response)
             if hasattr(fallback_response, "__aiter__"):
-                async for fallback_item in fallback_response:
+                async for fallback_item in seam.splice(fallback_response):
                     Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                     if partial_usage is not None:
                         Router._combine_responses_fallback_usage(fallback_item, partial_usage)
@@ -4837,11 +4826,12 @@ class Router:
         splits_stream_timeout: bool = False,
     ) -> None:
         """
-        4 jobs:
+        5 jobs:
         - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
         - Adds default litellm params to kwargs, if set.
         - Merges tools from deployment with request (proxy-configured tools + request tools).
         - On a fallback hop, drops the encrypted reasoning this deployment cannot decrypt, keeping its summary.
+        - On a Responses continuation, sends the partial response as prefill where this deployment takes one.
         """
         for key in self._forwarded_alias_marker_keys_the_deployment_sets(
             deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
@@ -5044,6 +5034,11 @@ class Router:
                 hop_kwargs.get("messages"),
                 (_FALLBACK_HOP_ADAPTER.validate_python(deployment),),
                 unmarked_origin=deployment_that_just_failed,
+            )
+        if RESPONSES_CONTINUATION_KWARG in hop_kwargs:
+            del kwargs[RESPONSES_CONTINUATION_KWARG]  # rebind-ok: this method prepares the call's kwargs in place
+            kwargs["input"] = responses_continuation_input_for(  # rebind-ok: the deployment's continuation input
+                hop_kwargs, _FALLBACK_HOP_ADAPTER.validate_python(deployment)
             )
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
