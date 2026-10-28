@@ -77,7 +77,6 @@ ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
 COPY pyproject.toml uv.lock ./
 COPY enterprise/pyproject.toml enterprise/
 COPY litellm-proxy-extras/pyproject.toml litellm-proxy-extras/
-COPY litellm-rust/crates/gateway/pyproject.toml litellm-rust/crates/gateway/
 
 # Install third-party dependencies (cached unless pyproject.toml/uv.lock change)
 RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \

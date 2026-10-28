@@ -171,7 +171,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy --no-install-package litellm-gateway
+          uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy
           uv run --no-sync python scripts/openapi_docs_gate.py --base "$GATE_BASE_SHA"
 
       - name: Print OpenAI version
@@ -516,7 +516,7 @@ jobs:
         uses: ./.github/actions/cache-cargo-build
 
       - name: Install dependencies
-        run: uv sync --frozen --all-groups --all-extras --no-install-package litellm-gateway
+        run: uv sync --frozen --all-groups --all-extras
 
       - name: check_licenses
         run: uv run --no-sync python ./tests/code_coverage_tests/check_licenses.py

@@ -58,7 +58,6 @@ RUN apk add --no-cache \
     gcc \
     python-3.13 \
     python-3.13-dev \
-    rust \
     openssl \
     libssl3 \
     openssl-dev \
@@ -75,7 +74,6 @@ ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
 COPY pyproject.toml uv.lock ./
 COPY enterprise/pyproject.toml enterprise/
 COPY litellm-proxy-extras/pyproject.toml litellm-proxy-extras/
-COPY litellm-rust/crates/gateway/pyproject.toml litellm-rust/crates/gateway/
 
 # Install third-party dependencies (cached unless pyproject.toml/uv.lock change)
 RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \

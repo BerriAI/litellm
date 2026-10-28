@@ -52,9 +52,6 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Set up Rust before concurrent package builds
-        run: rustup toolchain install --no-self-update
-
       - name: Install dependencies
         run: .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python ${{ matrix.python-version }}
 
@@ -103,7 +100,7 @@ jobs:
   all-extras:
     name: all-extras-py${{ matrix.python-version }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -125,9 +122,6 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
-
-      - name: Set up Rust before concurrent package builds
-        run: rustup toolchain install --no-self-update
 
       - name: Install every extra and dependency group
         run: .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras --python ${{ matrix.python-version }}

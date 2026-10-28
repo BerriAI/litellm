@@ -33,5 +33,4 @@ cache-keys = [
 version = "0.1.0"
 version_files = [
     "pyproject.toml:^version",
-    "../../../pyproject.toml:litellm-gateway==",
 ]

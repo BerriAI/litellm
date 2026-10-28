@@ -189,34 +189,11 @@ jobs:
 
       - run: uv build --wheel --out-dir dist
 
-      - run: python .github/scripts/verify_linux_native_wheel.py dist/*.whl
+      - run: python .github/scripts/verify_linux_native_wheel.py extension dist/*.whl
         env:
           RELEASE_WHEEL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - run: python tests/unit/rust_bridge/native_route_wheel_test.py dist/*.whl
-
-      - name: Build and install the gateway binary wheel
-        run: |
-          uv build --package litellm-gateway --wheel --out-dir gateway-dist
-          python .github/scripts/verify_linux_native_wheel.py gateway-dist/*.whl --gateway
-          uv venv .venv-gateway
-          uv pip install --python .venv-gateway gateway-dist/*.whl
-
-      - name: Smoke test the installed gateway binary
-        run: |
-          printf 'model_list: []\n' > "$RUNNER_TEMP/gateway-config.yaml"
-          LITELLM_CONFIG="$RUNNER_TEMP/gateway-config.yaml" HOST=127.0.0.1 PORT=4010 \
-            .venv-gateway/bin/litellm-gateway > "$RUNNER_TEMP/gateway.log" 2>&1 &
-          gateway_pid=$!
-          trap 'kill "$gateway_pid" 2>/dev/null || true; cat "$RUNNER_TEMP/gateway.log"' EXIT
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:4010/health/readiness; then
-              exit 0
-            fi
-            kill -0 "$gateway_pid"
-            sleep 1
-          done
-          exit 1
 
       - name: Run pytest tests/test_litellm_rust with the compiled extension
         run: make test-rust-extension
@@ -226,3 +203,45 @@ jobs:
           --config-setting "maturin.build-args=--features panic-test,extension-module"
 
       - run: python .github/scripts/smoke_test_native_wheel.py panic-dist/*.whl
+
+  gateway-wheel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - uses: $/.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - run: rustup toolchain install --no-self-update
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: litellm-rust
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - run: uv build --package litellm-gateway --wheel --out-dir dist
+
+      - run: python .github/scripts/verify_linux_native_wheel.py gateway dist/*.whl
+        env:
+          RELEASE_WHEEL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - run: uv venv .venv-gateway && uv pip install --python .venv-gateway dist/*.whl
+
+      - name: Smoke test the installed gateway binary
+        run: |
+          printf 'model_list: []\n' > "$RUNNER_TEMP/config.yaml"
+          LITELLM_CONFIG="$RUNNER_TEMP/config.yaml" HOST=127.0.0.1 PORT=4010 \
+            .venv-gateway/bin/litellm-gateway > "$RUNNER_TEMP/gateway.log" 2>&1 &
+          gateway_pid=$!
+          trap 'kill "$gateway_pid" 2>/dev/null || true; cat "$RUNNER_TEMP/gateway.log"' EXIT
+          curl --fail --silent --retry 30 --retry-delay 1 --retry-all-errors --retry-connrefused \
+            http://127.0.0.1:4010/health/readiness

@@ -7,14 +7,62 @@ import subprocess
 import sys
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from itertools import product
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType, ModuleType
 from typing import Final, Protocol
 
-EXPECTED_PYTHON_TAG: Final = "cp310"
-EXPECTED_ABI_TAG: Final = "abi3"
 EXPECTED_PLATFORM_TAG: Final = "linux_x86_64"
+REPO_ROOT: Final = Path(__file__).parents[2]
+
+
+@dataclass(frozen=True, slots=True)
+class WheelProfile:
+    distribution: str
+    python_tag: str
+    abi_tag: str
+    project_directory: Path
+    label: str
+    report_title: str
+    size_limit: int
+    is_payload: Callable[[str], bool]
+    is_extension: bool
+
+
+PROFILES: Final = MappingProxyType(
+    {
+        "extension": WheelProfile(
+            distribution="litellm",
+            python_tag="cp310",
+            abi_tag="abi3",
+            project_directory=REPO_ROOT,
+            label="Native extension",
+            report_title="Native wheel build report",
+            size_limit=48_000_000,
+            is_payload=lambda name: name.startswith("litellm/rust_bridge/_native.") and name.endswith(".so"),
+            is_extension=True,
+        ),
+        "gateway": WheelProfile(
+            distribution="litellm_gateway",
+            python_tag="py3",
+            abi_tag="none",
+            project_directory=REPO_ROOT / "litellm-rust" / "crates" / "gateway",
+            label="Gateway binary",
+            report_title="Gateway wheel build report",
+            size_limit=37_000_000,
+            is_payload=lambda name: name.endswith(".data/scripts/litellm-gateway"),
+            is_extension=False,
+        ),
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Validation:
+    label: str
+    passed: bool
+    failure: str
 
 
 class CommandRunner(Protocol):
@@ -65,6 +113,57 @@ def _load_native_module(native_path: Path) -> ModuleType | None:
     return native_module
 
 
+def _extension_validations(
+    wheel: Path,
+    native_path: Path,
+    native_bytes: bytes,
+    load_native_module: Callable[[Path], ModuleType | None],
+    run_command: CommandRunner,
+) -> tuple[Validation, ...]:
+    with zipfile.ZipFile(wheel) as archive:
+        duplicated_vocabularies: Final = tuple(
+            member.filename
+            for member in archive.infolist()
+            if member.filename.startswith("litellm/litellm_core_utils/tokenizers/")
+            and re.fullmatch(r"[0-9a-f]{40}", PurePosixPath(member.filename).name)
+            and member.file_size > 0
+            and archive.read(member) in native_bytes
+        )
+    dynamic_symbols: Final = run_command(
+        ("readelf", "--dyn-syms", "--wide", str(native_path)),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    native_module: Final = load_native_module(native_path)
+    return (
+        Validation(
+            "Tokenizer vocabularies are not duplicated in the native extension",
+            not duplicated_vocabularies,
+            f"native extension duplicates tokenizer vocabularies: {', '.join(duplicated_vocabularies)}",
+        ),
+        Validation(
+            "Python extension entry point is present",
+            "PyInit__native" in dynamic_symbols,
+            "native extension does not export PyInit__native",
+        ),
+        Validation("Native module loads", native_module is not None, "native module did not load"),
+        Validation(
+            "Production module omits the panic test hook",
+            native_module is None or not hasattr(native_module, "_panic_for_test"),
+            "production native module exposes _panic_for_test",
+        ),
+    )
+
+
+def _write_report(report: str, summary_path: str | None) -> None:
+    if summary_path is None:
+        sys.stdout.write(report + "\n")
+        return
+    with Path(summary_path).open("a") as summary:
+        summary.write(report + "\n")
+
+
 def main(
     argv: Sequence[str] | None = None,
     environment: Mapping[str, str] | None = None,
@@ -73,23 +172,19 @@ def main(
 ) -> int:
     arguments: Final = tuple(sys.argv if argv is None else argv)
     resolved_environment: Final = os.environ if environment is None else environment
-    gateway: Final = len(arguments) == 3 and arguments[2] == "--gateway"
-    if len(arguments) != 2 and not gateway:
-        sys.stderr.write(f"usage: {Path(arguments[0]).name} WHEEL [--gateway]\n")
+    if len(arguments) != 3 or arguments[1] not in PROFILES:
+        sys.stderr.write("usage: verify_linux_native_wheel.py {extension|gateway} WHEEL\n")
         return 2
 
-    expected_distribution: Final = "litellm_gateway" if gateway else "litellm"
-    expected_python_tag: Final = "py3" if gateway else EXPECTED_PYTHON_TAG
-    expected_abi_tag: Final = "none" if gateway else EXPECTED_ABI_TAG
-    native_label: Final = "Gateway binary" if gateway else "Native extension"
-    wheel: Final = Path(arguments[1])
+    profile: Final = PROFILES[arguments[1]]
+    wheel: Final = Path(arguments[2])
     wheel_tags: Final = wheel.stem.rsplit("-", maxsplit=3)
     if len(wheel_tags) != 4:
         sys.stderr.write(f"cannot parse wheel tags from {wheel.name}\n")
         return 1
 
     wheel_identity: Final = wheel_tags[0].split("-")
-    if len(wheel_identity) != 2 or wheel_identity[0] != expected_distribution or not wheel_identity[1]:
+    if len(wheel_identity) != 2 or wheel_identity[0] != profile.distribution or not wheel_identity[1]:
         sys.stderr.write(f"unexpected wheel identity: {wheel_tags[0]}\n")
         return 1
 
@@ -120,17 +215,9 @@ def main(
             member for member in wheel_members if member.filename == f"{expected_dist_info_directory}/WHEEL"
         )
         wheel_metadata_tags: Final = _wheel_metadata_tags(archive, wheel_metadata_members)
-        native_members: Final = tuple(
-            member
-            for member in wheel_members
-            if (
-                member.filename == f"{wheel_tags[0]}.data/scripts/litellm-gateway"
-                if gateway
-                else member.filename.startswith("litellm/rust_bridge/_native.") and member.filename.endswith(".so")
-            )
-        )
+        native_members: Final = tuple(member for member in wheel_members if profile.is_payload(member.filename))
         if len(native_members) != 1:
-            sys.stderr.write(f"expected one {native_label.lower()}, found {len(native_members)}\n")
+            sys.stderr.write(f"expected one {profile.label.lower()}, found {len(native_members)}\n")
             return 1
 
         unexpected_members: Final = tuple(
@@ -145,14 +232,6 @@ def main(
         native_path.parent.mkdir(parents=True, exist_ok=True)
         native_bytes: Final = archive.read(native_member)
         native_path.write_bytes(native_bytes)
-        duplicated_vocabularies: Final = tuple(
-            member.filename
-            for member in wheel_members
-            if member.filename.startswith("litellm/litellm_core_utils/tokenizers/")
-            and re.fullmatch(r"[0-9a-f]{40}", PurePosixPath(member.filename).name)
-            and member.file_size > 0
-            and archive.read(member) in native_bytes
-        )
 
     wheel_metadata_tags_match: Final = (
         len(wheel_metadata_tags) == len(expanded_filename_tags)
@@ -167,10 +246,7 @@ def main(
         capture_output=True,
         text=True,
     ).stdout.strip()
-    project_directory: Final = Path(__file__).parents[2] / (
-        "litellm-rust/crates/gateway" if gateway else "."
-    )
-    pyproject: Final = (project_directory / "pyproject.toml").read_text()
+    pyproject: Final = (profile.project_directory / "pyproject.toml").read_text()
     maturin_match: Final = re.search(r'"maturin==([^";]+)', pyproject)
     if maturin_match is None:
         sys.stderr.write("build-system does not pin an exact Maturin version\n")
@@ -180,7 +256,7 @@ def main(
     native_percentage: Final = native_member.file_size / uncompressed_wheel_size * 100
     size_report: Final = "\n".join(
         (
-            "## Gateway wheel build report" if gateway else "## Native wheel build report",
+            f"## {profile.report_title}",
             "",
             "| Build | Value |",
             "| --- | --- |",
@@ -195,14 +271,13 @@ def main(
             "| --- | ---: |",
             f"| Compressed wheel | {wheel.stat().st_size / 1_000_000:.2f} MB |",
             f"| Uncompressed wheel | {uncompressed_wheel_size / 1_000_000:.2f} MB |",
-            f"| {native_label} | {native_member.file_size / 1_000_000:.2f} MB |",
+            f"| {profile.label} | {native_member.file_size / 1_000_000:.2f} MB |",
             f"| Native share | {native_percentage:.2f}% |",
             "",
         )
     )
     summary_path: Final = resolved_environment.get("GITHUB_STEP_SUMMARY")
-    if summary_path is None:
-        sys.stdout.write(size_report)
+    _write_report(size_report, summary_path)
 
     sections: Final = run_command(
         ("readelf", "--sections", "--wide", str(native_path)),
@@ -211,102 +286,77 @@ def main(
         text=True,
     ).stdout
     debug_sections: Final = tuple(section for section in (".debug_", ".zdebug_") if section in sections)
-    debug_sections_absent: Final = not debug_sections
-    static_symbol_table_absent: Final = ".symtab" not in sections
-
-    dynamic_symbols: Final = (
-        ""
-        if gateway
-        else run_command(
-            ("readelf", "--dyn-syms", "--wide", str(native_path)),
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
-    )
-    extension_entry_point_present: Final = "PyInit__native" in dynamic_symbols
-    native_module: Final = None if gateway else load_native_module(native_path)
-    native_module_loads: Final = native_module is not None
-    panic_test_hook_absent: Final = native_module is not None and not hasattr(native_module, "_panic_for_test")
-    native_size_limit: Final = 48_000_000
-    native_size_within_limit: Final = native_member.file_size <= native_size_limit
     validations: Final = (
-        (f"Python tag is {expected_python_tag}", python_tag == expected_python_tag),
-        (f"ABI tag is {expected_abi_tag}", abi_tag == expected_abi_tag),
-        (f"Platform tag is {EXPECTED_PLATFORM_TAG}", platform_tag == EXPECTED_PLATFORM_TAG),
-        ("Wheel dist-info directory matches the filename", dist_info_directories == expected_dist_info_directories),
-        (
+        Validation(
+            f"Python tag is {profile.python_tag}",
+            python_tag == profile.python_tag,
+            f"unexpected Python tag: expected {profile.python_tag}, found {python_tag}",
+        ),
+        Validation(
+            f"ABI tag is {profile.abi_tag}",
+            abi_tag == profile.abi_tag,
+            f"unexpected ABI tag: expected {profile.abi_tag}, found {abi_tag}",
+        ),
+        Validation(
+            f"Platform tag is {EXPECTED_PLATFORM_TAG}",
+            platform_tag == EXPECTED_PLATFORM_TAG,
+            f"unexpected platform tag: expected {EXPECTED_PLATFORM_TAG}, found {platform_tag}",
+        ),
+        Validation(
+            "Wheel dist-info directory matches the filename",
+            dist_info_directories == expected_dist_info_directories,
+            f"unexpected dist-info directories: expected {expected_dist_info_directory}, "
+            f"found {', '.join(sorted(dist_info_directories))}",
+        ),
+        Validation(
             "Required dist-info files are present exactly once",
             all(count == 1 for count in dist_info_file_counts.values()),
+            f"required dist-info file counts are invalid: {dist_info_file_counts}",
         ),
-        ("Wheel metadata tags match the filename", wheel_metadata_tags_match),
-        ("Debug sections are absent", debug_sections_absent),
-        ("Static symbol table is absent", static_symbol_table_absent),
-        (f"{native_label} does not exceed {native_size_limit / 1_000_000:.0f} MB", native_size_within_limit),
-        ("Tokenizer vocabularies are not duplicated in the native extension", not duplicated_vocabularies),
-        ("Wheel contents are valid", not unexpected_members),
+        Validation(
+            "Wheel metadata tags match the filename",
+            wheel_metadata_tags_match,
+            f"WHEEL tags do not match filename: expected {', '.join(sorted(expanded_filename_tags))}, "
+            f"found {', '.join(sorted(wheel_metadata_tags))}",
+        ),
+        Validation(
+            "Debug sections are absent",
+            not debug_sections,
+            f"{native_member.filename} contains debug sections: {', '.join(debug_sections)}",
+        ),
+        Validation(
+            "Static symbol table is absent",
+            ".symtab" not in sections,
+            f"{native_member.filename} contains a static symbol table",
+        ),
+        Validation(
+            f"{profile.label} does not exceed {profile.size_limit / 1_000_000:.0f} MB",
+            native_member.file_size <= profile.size_limit,
+            f"{profile.label.lower()} exceeds {profile.size_limit / 1_000_000:.0f} MB: "
+            f"{native_member.file_size / 1_000_000:.2f} MB",
+        ),
+        Validation(
+            "Wheel contents are valid",
+            not unexpected_members,
+            f"wheel contains unexpected build artifacts: {', '.join(unexpected_members)}",
+        ),
     ) + (
-        ()
-        if gateway
-        else (
-            ("Python extension entry point is present", extension_entry_point_present),
-            ("Native module loads", native_module_loads),
-            ("Production module omits the panic test hook", panic_test_hook_absent),
-        )
+        _extension_validations(wheel, native_path, native_bytes, load_native_module, run_command)
+        if profile.is_extension
+        else ()
     )
 
-    verified_report: Final = size_report + "\n".join(
+    verified_report: Final = "\n".join(
         ("", "| Validation | Expected | Result |", "| --- | --- | :---: |")
-        + tuple(f"| {label} | Yes | {'O' if passed else 'X'} |" for label, passed in validations)
+        + tuple(f"| {row.label} | Yes | {'O' if row.passed else 'X'} |" for row in validations)
         + ("",)
     )
-    if summary_path is not None:
-        with Path(summary_path).open("a") as summary:
-            summary.write(verified_report + "\n")
+    _write_report(verified_report, summary_path)
 
-    invalid_dist_info_files: Final = any(count != 1 for count in dist_info_file_counts.values())
-    validation_errors: Final = tuple(
-        message
-        for failed, message in (
-            (bool(debug_sections), f"{native_member.filename} contains debug sections: {', '.join(debug_sections)}"),
-            (not static_symbol_table_absent, f"{native_member.filename} contains a static symbol table"),
-            (not gateway and not extension_entry_point_present, "native extension does not export PyInit__native"),
-            (
-                python_tag != expected_python_tag,
-                f"unexpected Python tag: expected {expected_python_tag}, found {python_tag}",
-            ),
-            (abi_tag != expected_abi_tag, f"unexpected ABI tag: expected {expected_abi_tag}, found {abi_tag}"),
-            (
-                platform_tag != EXPECTED_PLATFORM_TAG,
-                f"unexpected platform tag: expected {EXPECTED_PLATFORM_TAG}, found {platform_tag}",
-            ),
-            (
-                dist_info_directories != expected_dist_info_directories,
-                f"unexpected dist-info directories: expected {expected_dist_info_directory}, "
-                f"found {', '.join(sorted(dist_info_directories))}",
-            ),
-            (invalid_dist_info_files, f"required dist-info file counts are invalid: {dist_info_file_counts}"),
-            (
-                not invalid_dist_info_files and not wheel_metadata_tags_match,
-                f"WHEEL tags do not match filename: expected {', '.join(sorted(expanded_filename_tags))}, "
-                f"found {', '.join(sorted(wheel_metadata_tags))}",
-            ),
-            (
-                native_module is not None and not panic_test_hook_absent,
-                "production native module exposes _panic_for_test",
-            ),
-            (
-                not native_size_within_limit,
-                f"{native_label.lower()} exceeds {native_size_limit / 1_000_000:.0f} MB: "
-                f"{native_member.file_size / 1_000_000:.2f} MB",
-            ),
-            (bool(unexpected_members), f"wheel contains unexpected build artifacts: {', '.join(unexpected_members)}"),
-        )
-        if failed
-    )
+    validation_errors: Final = tuple(row.failure for row in validations if not row.passed)
     sys.stderr.write("".join(f"{message}\n" for message in validation_errors))
 
-    return 0 if all(passed for _, passed in validations) else 1
+    return 0 if not validation_errors else 1
 
 
 if __name__ == "__main__":
