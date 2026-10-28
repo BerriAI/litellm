@@ -87,7 +87,7 @@ test.describe("Clear custom pricing on a deployment", () => {
     // Both cache fields share the same placeholder ("Defaults to Input Cost if blank"),
     // so disambiguate via their labels.
     const cacheReadCost = page.getByLabel(/Cache Read Cost/);
-    const cacheWriteCost = page.getByLabel(/Cache Write Cost/);
+    const cacheWriteCost = page.getByLabel("Cache Write Cost (per 1M tokens)", { exact: true });
     await inputCost.waitFor({ timeout: 15_000 });
     for (const field of [inputCost, outputCost, cacheReadCost, cacheWriteCost]) {
       await field.click({ clickCount: 3 });

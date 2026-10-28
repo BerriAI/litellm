@@ -39,12 +39,12 @@ git clone https://github.com/YOUR_USERNAME/litellm.git
 cd litellm
 
 # Create a new branch for your feature (see "Commit and Branch Conventions" below)
-git checkout -b feature/your-feature
+git checkout -b litellm_your_feature
 
 # Install development dependencies
 make install-dev
 
-# Install git hooks that enforce commit + branch conventions (one-time, opt-in)
+# Install git hooks that enforce commit conventions (one-time, opt-in)
 make install-hooks
 
 # Verify your setup works
@@ -55,7 +55,7 @@ That's it! Your local development environment is ready.
 
 ## Commit and Branch Conventions
 
-Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) and branches follow [Conventional Branches](https://conventional-branch.github.io/). Run `make install-hooks` once per clone to enable the local git hooks that enforce these — see the [contributor docs](https://docs.litellm.ai/docs/extras/contributing_code#commit-and-branch-conventions) for the full type list, examples, the protected-branch bypass list, and how to opt out.
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). Internal contributors name branches with the `litellm_` prefix and no `/`, and fork branches can use any name. Run `make install-hooks` once per clone to enable the local hook that enforces the commit convention. See the [contributor docs](https://docs.litellm.ai/docs/extras/contributing_code#commit-and-branch-conventions) for details
 
 ### 2. Development Workflow
 
@@ -78,8 +78,8 @@ uv run pytest tests/unit/<your_test_file>.py -v
 git add .
 git commit -m "feat(scope): your descriptive commit message"
 
-# Push and create a PR (branch must follow Conventional Branches — see above)
-git push origin feature/your-feature
+# Push and create a PR
+git push origin litellm_your_feature
 ```
 
 ## Adding Testing
@@ -93,6 +93,8 @@ Add your tests to the [`tests/unit/` directory](https://github.com/BerriAI/litel
 - This directory mirrors the structure of the `litellm/` directory
 - **Only add mocked tests** - no real LLM API calls in this directory
 - For integration tests with real APIs, use the appropriate test directories
+
+Tests that call `litellm.register_model` or change `litellm.model_cost` should use the `local_model_cost_map` fixture from `tests/unit/conftest.py`. It provides a fresh catalog and restores the previous map, so pricing and capability overrides cannot leak into later tests
 
 ### File Naming Convention
 

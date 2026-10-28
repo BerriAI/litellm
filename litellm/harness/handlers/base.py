@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from typing import Any
 
 from litellm.harness.context import SessionContext
 from litellm.harness.errors import CapabilityUnsupported
@@ -38,5 +37,5 @@ class BaseHarnessHandler(ABC):
     async def resume(self, ctx: SessionContext, native_session_id: str) -> None:
         """Continue the runtime's own session on the next turn."""
 
-    async def history(self, ctx: SessionContext) -> list[dict[str, Any]]:  # mutable-ok: public history() API shape
+    async def history(self, ctx: SessionContext) -> list[dict[str, object]]:  # mutable-ok: public history() API shape
         raise CapabilityUnsupported(f"Harness.{self.config.harness.name} does not expose history")

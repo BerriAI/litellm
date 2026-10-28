@@ -1,12 +1,14 @@
 from collections.abc import Mapping
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictInt
+from pydantic import ConfigDict, Field, JsonValue, StrictInt
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 TokenCount: TypeAlias = Annotated[StrictInt, Field(ge=0)]
 
 
-class CacheTokenBuckets(BaseModel):
+class CacheTokenBuckets(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     uncached_input_tokens: TokenCount = 0
@@ -24,7 +26,7 @@ class CacheTokenBuckets(BaseModel):
         )
 
 
-class CacheEvidence(BaseModel):
+class CacheEvidence(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     observed_at: float
@@ -33,12 +35,12 @@ class CacheEvidence(BaseModel):
     confidence: Literal["observed"] = "observed"
 
 
-class CacheCostScenario(BaseModel):
+class CacheCostScenario(LiteLLMBaseModel):
     tokens: CacheTokenBuckets
     input_cost: float
 
 
-class CachePredictionArm(BaseModel):
+class CachePredictionArm(LiteLLMBaseModel):
     deployment_id: str
     model: str | None = None
     cache_state: Literal["warm", "partial", "stale", "unknown", "disabled"] = "unknown"
@@ -50,7 +52,7 @@ class CachePredictionArm(BaseModel):
     token_count_source: Literal["anthropic_count_tokens"] | None = None
 
 
-class CachePredictionRequest(BaseModel):
+class CachePredictionRequest(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     current_deployment_id: str = Field(min_length=1, max_length=256)
@@ -58,7 +60,7 @@ class CachePredictionRequest(BaseModel):
     request: Mapping[str, JsonValue]
 
 
-class CachePredictionResponse(BaseModel):
+class CachePredictionResponse(LiteLLMBaseModel):
     stay: CachePredictionArm
     switch: CachePredictionArm
     switch_delta: float | None

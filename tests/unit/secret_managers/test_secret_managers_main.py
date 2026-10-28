@@ -2,16 +2,24 @@ import base64
 import json
 import logging
 import os
+import threading
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from queue import SimpleQueue
+from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
 
 import litellm
+from litellm._logging import redact_internal_details_from_client_message
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.secret_managers.main import (
+    _cached_azure_oidc_token_provider,
     get_secret,
     normalize_nonempty_secret_str,
+    resolve_local_oidc_reference,
     secret_manager_would_be_consulted,
 )
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
@@ -230,6 +238,13 @@ def test_oidc_circleci_success(monkeypatch):
     assert result == "circleci_token"
 
 
+def test_oidc_circleci_v2_returns_the_environment_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    token: Final = "circleci-v2-token"
+    monkeypatch.setenv("CIRCLE_OIDC_TOKEN_V2", token)
+
+    assert get_secret("oidc/circleci_v2/test-audience") == token
+
+
 def test_oidc_circleci_failure(monkeypatch):
     monkeypatch.delenv("CIRCLE_OIDC_TOKEN", raising=False)
     secret_name = "oidc/circleci/test-audience"
@@ -303,6 +318,41 @@ def test_oidc_azure_ad_token_success(mock_get_azure_ad_token_provider, monkeypat
         mock_token_provider.assert_called_once_with()
 
 
+def test_concurrent_azure_oidc_reads_build_one_token_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AZURE_FEDERATED_TOKEN_FILE", raising=False)
+    callers: Final = 8
+    start: Final = threading.Barrier(callers)
+    builds: Final = SimpleQueue[str | None]()
+    everyone_building: Final = threading.Event()
+    release: Final = threading.Event()
+
+    def held_build(azure_scope: str | None = None) -> Callable[[], str]:
+        builds.put(azure_scope)
+        if builds.qsize() >= callers:
+            everyone_building.set()
+        release.wait(5)
+        return lambda: "identity-token"
+
+    def read() -> str | None:
+        start.wait(5)
+        return get_secret("oidc/azure/api://concurrent-audience")
+
+    _cached_azure_oidc_token_provider.cache_clear()
+    with (
+        patch("litellm.secret_managers.main.get_azure_ad_token_provider", side_effect=held_build),
+        ThreadPoolExecutor(max_workers=callers) as pool,
+    ):
+        calls: Final = tuple(pool.submit(read) for _ in range(callers))
+        assert builds.get(timeout=5) == "api://concurrent-audience"
+        everyone_building.wait(0.5)
+        release.set()
+        tokens: Final = tuple(call.result(timeout=5) for call in calls)
+    _cached_azure_oidc_token_provider.cache_clear()
+
+    assert tokens == ("identity-token",) * callers
+    assert builds.qsize() == 0
+
+
 def test_oidc_file_success(tmp_path, monkeypatch):
     token_file = tmp_path / "token.txt"
     token_file.write_text("file_token")
@@ -312,6 +362,15 @@ def test_oidc_file_success(tmp_path, monkeypatch):
     result = get_secret(secret_name)
 
     assert result == "file_token"
+
+
+def test_oidc_file_reads_a_token_under_a_directory_named_oidc(tmp_path, monkeypatch):
+    token_dir: Final = tmp_path / "oidc"
+    token_dir.mkdir()
+    (token_dir / "token").write_text("nested_token")
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+
+    assert get_secret(f"oidc/file/{token_dir}/token") == "nested_token"
 
 
 def test_oidc_file_rejects_path_outside_allowlist(tmp_path, monkeypatch):
@@ -326,10 +385,12 @@ def test_oidc_file_rejects_path_outside_allowlist(tmp_path, monkeypatch):
         get_secret(f"oidc/file/{outside_file}")
 
 
-def test_oidc_file_rejects_relative_path(tmp_path, monkeypatch):
+def test_oidc_file_rejects_relative_path_with_a_hint_client_redaction_leaves_whole(tmp_path, monkeypatch):
     monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
-    with pytest.raises(ValueError, match="must be absolute"):
+    with pytest.raises(ValueError, match="must be absolute") as excinfo:
         get_secret("oidc/file/relative/path/token")
+    hint: Final = str(excinfo.value)
+    assert redact_internal_details_from_client_message(hint) == hint
 
 
 def test_oidc_env_success(mock_env):
@@ -466,3 +527,15 @@ def test_get_secret_turns_only_boolean_literals_from_the_secret_manager_into_boo
 
     assert secret == expected
     assert type(secret) is type(expected)
+
+
+def test_an_unresolvable_reference_cannot_forge_a_server_log_line(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.delenv("LIT_UNSET_SA_TOKEN", raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        resolve_local_oidc_reference("oidc/env/LIT_UNSET_SA_TOKEN\nFORGED ENTRY")
+
+    assert "LIT_UNSET_SA_TOKEN" in caplog.text
+    assert "\nFORGED" not in caplog.text

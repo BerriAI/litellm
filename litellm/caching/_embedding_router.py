@@ -13,7 +13,7 @@ This module is dependency-injected: callers pass the proxy ``llm_router`` and
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm.constants import SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
@@ -25,12 +25,12 @@ if TYPE_CHECKING:
 def resolve_embedding_router(
     embedding_model: str,
     llm_router: Router | None,
-    llm_model_list: list[dict[str, Any]] | None,
+    llm_model_list: Sequence[Mapping[str, object]] | None,
 ) -> Router | None:
     """Return ``llm_router`` iff it serves ``embedding_model`` as a deployment."""
     if llm_router is None:
         return None
-    router_model_names: Final[list[str]] = (
+    router_model_names: Final[Sequence[object]] = (
         [m["model_name"] for m in llm_model_list if "model_name" in m] if llm_model_list is not None else []
     )
     if embedding_model in router_model_names:

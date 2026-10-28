@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use litellm_model_catalog::{AliasIssue, Catalog, Error, IntegrityLimits, Provenance};
+use litellm_model_catalog::{AliasIssue, Catalog, Error, IntegrityLimits, Mode, Provenance};
 use rstest::{fixture, rstest};
 use serde_json::json;
 
@@ -40,6 +40,20 @@ fn fixture_catalog() -> Catalog {
         },
     )
     .unwrap()
+}
+
+#[rstest]
+#[case::decisions("decisions", Mode::Decisions)]
+#[case::legacy_evaluation("evaluation", Mode::Evaluation)]
+fn parses_decision_modes(#[case] mode: &str, #[case] expected: Mode) {
+    let source = json!({"Test":{"litellm_provider":"test","mode":mode}}).to_string();
+    let catalog = Catalog::parse(source.as_bytes(), Provenance::default()).unwrap();
+
+    assert_eq!(
+        catalog.lookup("Test").unwrap().entry.info().mode,
+        Some(expected)
+    );
+    assert_eq!(serde_json::to_value(expected).unwrap(), json!(mode));
 }
 
 #[rstest]

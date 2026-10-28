@@ -1,5 +1,8 @@
-use crate::cache::cache_error;
-use std::{sync::Arc, time::Duration};
+use crate::cache::{HandleError, cache_error};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use litellm_cache::{DeleteCache, DisconnectCache, PingCache};
 use litellm_host_python::{from_py, release_gil, to_py};
@@ -11,7 +14,7 @@ use litellm_cache_response::{
     CacheEntry, CacheKeyInput, ExactResponseCache, ResponseCache, ResponseCacheCodec,
     ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
 };
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use pyo3::{prelude::*, types::PyDict};
 
 #[pyclass(
     frozen,
@@ -34,9 +37,7 @@ enum Storage {
 impl NativeCacheHandle {
     fn check_process(&self) -> PyResult<()> {
         if self.pid != std::process::id() {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "recreate the v2 cache after fork",
-            ));
+            return Err(HandleError::Forked.into());
         }
         Ok(())
     }
@@ -58,7 +59,7 @@ impl NativeCacheHandle {
     fn memory(ttl: f64, capacity: usize, max_entry_bytes: usize) -> PyResult<Self> {
         let ttl = duration(ttl)?;
         if capacity == 0 || max_entry_bytes == 0 {
-            return Err(PyValueError::new_err("cache limits must be positive"));
+            return Err(HandleError::Limits.into());
         }
         let storage = Arc::new(InMemoryCache::new(Some(capacity), Some(ttl)));
         let backend = Arc::new(ResponseCache::new(storage.clone()).with_config(
@@ -86,9 +87,7 @@ impl NativeCacheHandle {
     ) -> PyResult<Self> {
         let ttl = duration(ttl)?;
         if namespace.is_empty() || max_entry_bytes == 0 {
-            return Err(PyValueError::new_err(
-                "namespace and a positive cache limit are required",
-            ));
+            return Err(HandleError::RedisLimits.into());
         }
         let storage = Arc::new(
             release_gil(py, || {
@@ -118,8 +117,8 @@ impl NativeCacheHandle {
     fn get(&self, py: Python<'_>, key: String) -> PyResult<Py<PyAny>> {
         self.check_process()?;
         let request = request(key, None)?;
-        let value = release_gil(py, || self.backend.lookup(&request, super::request::now()))
-            .map_err(cache_error)?;
+        let value =
+            release_gil(py, || self.backend.lookup(&request, now())).map_err(cache_error)?;
         to_py(py, &value)
     }
 
@@ -134,10 +133,7 @@ impl NativeCacheHandle {
         self.check_process()?;
         let request = request(key, ttl)?;
         let value: Value = from_py(value)?;
-        release_gil(py, || {
-            self.backend.store(&request, value, super::request::now())
-        })
-        .map_err(cache_error)
+        release_gil(py, || self.backend.store(&request, value, now())).map_err(cache_error)
     }
 
     fn async_get<'py>(&self, py: Python<'py>, key: String) -> PyResult<Bound<'py, PyAny>> {
@@ -146,7 +142,7 @@ impl NativeCacheHandle {
         let backend = self.backend.clone();
         crate::execution::run_async(
             py,
-            async move { backend.async_lookup(&request, super::request::now()).await },
+            async move { backend.async_lookup(&request, now()).await },
             cache_error,
         )
     }
@@ -165,11 +161,7 @@ impl NativeCacheHandle {
         let backend = self.backend.clone();
         crate::execution::run_async(
             py,
-            async move {
-                backend
-                    .async_store(&request, value, super::request::now())
-                    .await
-            },
+            async move { backend.async_store(&request, value, now()).await },
             cache_error,
         )
     }
@@ -190,11 +182,7 @@ impl NativeCacheHandle {
         let backend = self.backend.clone();
         crate::execution::run_async(
             py,
-            async move {
-                backend
-                    .async_store_batch(entries, super::request::now())
-                    .await
-            },
+            async move { backend.async_store_batch(entries, now()).await },
             cache_error,
         )
     }
@@ -260,11 +248,12 @@ impl NativeCacheHandle {
     }
 }
 
-fn duration(seconds: f64) -> PyResult<Duration> {
-    Duration::try_from_secs_f64(seconds)
-        .ok()
-        .filter(|value| !value.is_zero())
-        .ok_or_else(|| PyValueError::new_err("cache durations must be finite and positive"))
+fn duration(seconds: f64) -> Result<Duration, HandleError> {
+    match Duration::try_from_secs_f64(seconds) {
+        Ok(duration) if !duration.is_zero() => Ok(duration),
+        Ok(_) => Err(HandleError::Duration(None)),
+        Err(error) => Err(HandleError::Duration(Some(error))),
+    }
 }
 
 pub(in crate::cache) fn native_handle<'py>(
@@ -285,11 +274,7 @@ pub(in crate::cache) fn configured(
     Option<Arc<dyn ResponseCacheService>>,
     litellm_cache_response::CacheOptions,
 )> {
-    let handle = native_handle(configured)?.ok_or_else(|| {
-        pyo3::exceptions::PyRuntimeError::new_err(
-            "the configured cache changed to a Python cache after native admission",
-        )
-    })?;
+    let handle = native_handle(configured)?.ok_or(HandleError::NotNative)?;
     let cache = handle.extract::<PyRef<'_, NativeCacheHandle>>()?;
     cache.check_process()?;
     let controls = kwargs.get_item("cache")?.filter(|value| !value.is_none());
@@ -304,9 +289,7 @@ pub(in crate::cache) fn configured(
                 name.as_str(),
                 "no-cache" | "no-store" | "ttl" | "s-maxage" | "s-max-age" | "use-cache"
             ) {
-                return Err(PyValueError::new_err(format!(
-                    "unsupported v2 cache control: {name}"
-                )));
+                return Err(HandleError::Control(name).into());
             }
         }
     }
@@ -324,7 +307,7 @@ pub(in crate::cache) fn configured(
             .map(|values| values.get_item(name))
             .transpose()?
             .flatten()
-            .map(|value| duration(value.extract()?))
+            .map(|value| Ok(duration(value.extract()?)?))
             .transpose()
     };
     Ok((
@@ -344,4 +327,10 @@ pub(in crate::cache) fn configured(
             scope: litellm_cache_response::CacheScope::Shared,
         },
     ))
+}
+
+fn now() -> Duration {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
 }

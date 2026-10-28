@@ -7,6 +7,7 @@ from typing import Final, Literal
 import pytest
 from e2e_config import CHEAP_OPENAI_MODEL, PROXY_BASE_URL, unique_marker
 from e2e_http import UnauthorizedError, UnknownApiError, unwrap
+from e2e_metadata import Domain, Route, Subject, meta
 from idp import ADMIN_CLIENT_ID, Identity, Keycloak, token_claims
 from lifecycle import ResourceManager
 from management.jwt_actors import ActorFactory, ActorRole
@@ -32,6 +33,7 @@ class TestJwtManagement:
         ),
     )
     @pytest.mark.covers("mgmt.user.jwt.database_roles")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.USER_MANAGEMENT))
     def test_actor_subject_and_database_role(self, actor_factory: ActorFactory, role: ActorRole) -> None:
         tenants: Final = (
             (actor_factory.tenant(),) if role in ("organization_admin", "team_admin", "team_member") else ()
@@ -70,6 +72,7 @@ class TestJwtManagement:
             } == {(actor.identity.user_id, "org_admin" if role == "organization_admin" else "internal_user")}
 
     @pytest.mark.covers("mgmt.key.jwt.viewer_denied")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.KEY_MANAGEMENT))
     def test_admin_viewer_reads_but_cannot_update(self, actor_factory: ActorFactory) -> None:
         actor: Final = actor_factory.create("proxy_admin_viewer")
         viewer: Final = actor_factory.bootstrap.with_caller(actor.mint_caller(actor_factory.idp))
@@ -83,6 +86,7 @@ class TestJwtManagement:
         assert actor_factory.bootstrap.proxy.key_info(key).key_alias == alias
 
     @pytest.mark.covers("mgmt.user.oidc.identity_mapping")
+    @meta(Subject(domain=Domain.PROXY_AUTH))
     def test_oidc_browser_profile_identity_mapping(self, actor_factory: ActorFactory) -> None:
         actor: Final = actor_factory.create("internal_user")
         idp: Final = actor_factory.idp.with_strict_cleanup()
@@ -100,6 +104,7 @@ class TestJwtManagement:
 
     @pytest.mark.covers("mgmt.key.jwt.lifecycle")
     @pytest.mark.parametrize("credential_kind", ("direct_jwt", "virtual_key"))
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.KEY_MANAGEMENT))
     def test_admin_creates_reads_updates_clears_and_deletes_a_key(
         self,
         actor_factory: ActorFactory,
@@ -142,6 +147,7 @@ class TestJwtManagement:
         assert unwrap(bound.key_list(updated_alias)).total_count == 0
 
     @pytest.mark.covers("mgmt.team.jwt.tenant_isolation")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.KEY_MANAGEMENT))
     def test_two_actor_sets_keep_tenants_and_keys_isolated(self, actor_factory: ActorFactory) -> None:
         first: Final = actor_factory.tenant()
         second: Final = actor_factory.tenant()
@@ -163,6 +169,7 @@ class TestJwtManagement:
         assert tuple(actor.identity.groups for actor in actors) == ((first.team_id,), (second.team_id,))
 
     @pytest.mark.covers("mgmt.team.jwt.multiple_memberships")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_multi_group_actor_keeps_exact_memberships(self, actor_factory: ActorFactory) -> None:
         tenants: Final = (actor_factory.tenant(), actor_factory.tenant())
         actor: Final = actor_factory.create("team_member", tenants=tenants, profile="group_scoped")
@@ -177,6 +184,7 @@ class TestJwtManagement:
             } == {(actor.identity.user_id, "user")}
 
     @pytest.mark.covers("mgmt.user.jwt.cleanup")
+    @meta(Subject(domain=Domain.PROXY_AUTH))
     def test_successful_actor_cleanup_removes_owned_state(self, actor_factory: ActorFactory) -> None:
         resources: Final = ResourceManager(client=actor_factory.bootstrap.proxy, strict_cleanup=True)
         factory: Final = ActorFactory(bootstrap=actor_factory.bootstrap, idp=actor_factory.idp, resources=resources)
@@ -197,6 +205,7 @@ class TestJwtManagement:
 
     @pytest.mark.parametrize("stage", ("group", "user"))
     @pytest.mark.covers("mgmt.user.jwt.partial_cleanup")
+    @meta(Subject(domain=Domain.PROXY_AUTH))
     def test_partial_setup_removes_previously_created_identities(
         self,
         actor_factory: ActorFactory,
@@ -236,6 +245,7 @@ class TestJwtManagement:
             idp.assert_absent("users", identity.user_id)
 
     @pytest.mark.covers("mgmt.key.jwt.member_denied", "mgmt.key.jwt.other_team_denied")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.KEY_MANAGEMENT))
     def test_member_cannot_write_and_another_team_cannot_read_the_key(
         self, client: ManagementClient, idp: Keycloak, jwt_identity: Identity, resources: ResourceManager
     ) -> None:
