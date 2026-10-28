@@ -44,7 +44,7 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,  # Import UserAPIKeyAuth
 )
-from litellm.proxy.hooks.model_max_budget_limiter import RoutedModels
+from litellm.proxy.hooks.model_max_budget_limiter import RoutedModels, routed_models_of
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     PROXY_CONTROLLED_TEAM_METADATA_KEYS,
@@ -17637,7 +17637,7 @@ def _check_team_admin_model_caps(
         data=UpdateTeamRequest(team_id="t1", model_max_budget=dict(requested)),
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"),
         existing_model_max_budget=existing,
-        routed_models_source=lambda: routed_models,
+        routed_models_source=lambda _team_id: routed_models,
     )
 
 
@@ -17666,6 +17666,12 @@ def _check_team_admin_model_caps(
             {"team-route/*": {"max_budget": 10.0, "budget_duration": "1d"}},
             {"gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"}},
         ),
+        (_TEAM_OPUS_FAMILY_CAP, {"claude-opus-4-8": {"max_budget": 10.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {"claude-opus-4*": {"max_budget": 10.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {"opus-group": {"max_budget": 5.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {"opus-group": {"max_budget": 10.0, "budget_duration": "2d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {"opus-group": {"max_budget": 0.01, "budget_duration": "1h"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {"claude-opus-4-8": {"rpm_limit": 10}}),
     ],
     ids=[
         "group_over_pattern",
@@ -17678,9 +17684,15 @@ def _check_team_admin_model_caps(
         "model_under_provider_pattern",
         "model_under_served_prefix",
         "model_under_wildcard_route",
+        "model_carved_out_at_the_same_cap",
+        "pattern_carved_out_at_the_same_cap",
+        "tighter_group",
+        "group_with_a_slower_window",
+        "group_with_a_faster_window_within_the_cap",
+        "uncapped_model",
     ],
 )
-def test_team_admin_cannot_add_an_entry_looser_than_a_cap_it_outranks(
+def test_team_admin_cannot_add_an_entry_that_takes_precedence_over_a_cap(
     existing: Mapping[str, object], added: Mapping[str, object]
 ) -> None:
     with pytest.raises(HTTPException) as exc:
@@ -17693,7 +17705,6 @@ def test_team_admin_cannot_add_an_entry_looser_than_a_cap_it_outranks(
 @pytest.mark.parametrize(
     ("existing", "requested"),
     [
-        (_TEAM_OPUS_FAMILY_CAP, {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 5.0, "budget_duration": "1d"}}),
         (_TEAM_OPUS_FAMILY_CAP, {**_TEAM_OPUS_FAMILY_CAP, "claude*": {"max_budget": 1000.0, "budget_duration": "1d"}}),
         (_TEAM_OPUS_GROUP_CAP, {**_TEAM_OPUS_GROUP_CAP, "a-gemini-group": {"max_budget": 1000.0, "budget_duration": "1d"}}),
         (_TEAM_OPUS_GROUP_CAP, {**_TEAM_OPUS_GROUP_CAP, "zz-opus-group": {"max_budget": 1000.0, "budget_duration": "1d"}}),
@@ -17715,15 +17726,12 @@ def test_team_admin_cannot_add_an_entry_looser_than_a_cap_it_outranks(
             {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"rpm_limit": 10}},
             {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"rpm_limit": 20}},
         ),
-        (_TEAM_OPUS_FAMILY_CAP, {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 0.1, "budget_duration": "30d"}}),
-        (_TEAM_OPUS_FAMILY_CAP, {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 0.01, "budget_duration": "1h"}}),
         (
             _TEAM_OPUS_FAMILY_CAP,
             {**_TEAM_OPUS_FAMILY_CAP, "gemini-3-pro*": {"max_budget": 1000.0, "budget_duration": "1d"}},
         ),
     ],
     ids=[
-        "tighter_group",
         "less_specific_pattern",
         "group_without_shared_models",
         "later_group_sharing_a_model",
@@ -17733,12 +17741,10 @@ def test_team_admin_cannot_add_an_entry_looser_than_a_cap_it_outranks(
         "unchanged_looser_entry",
         "tightened_looser_entry",
         "uncapped_entry_edited",
-        "group_with_a_slower_window_and_lower_cap",
-        "group_with_a_faster_window_within_the_cap",
         "pattern_sharing_only_a_wildcard_route",
     ],
 )
-def test_team_admin_can_add_entries_that_never_lift_an_outranked_cap(
+def test_team_admin_can_keep_or_tighten_entries_and_add_ones_that_outrank_no_cap(
     existing: Mapping[str, object], requested: Mapping[str, object]
 ) -> None:
     assert _check_team_admin_model_caps(existing=existing, requested=requested) is None
@@ -17768,6 +17774,34 @@ def test_team_admin_can_add_entries_beside_a_bedrock_vendor_cap_no_route_serves(
         )
         is None
     )
+
+
+def test_team_admin_cannot_outrank_a_group_cap_through_a_team_model_both_groups_serve() -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _check_team_model_budget_update_authority
+
+    team_router: Final = Router(
+        model_list=[
+            {
+                "model_name": f"model_name_t1_{group}",
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "sk-test"},
+                "model_info": {"team_id": "t1", "team_public_model_name": "claude-opus-4-8", "access_groups": [group]},
+            }
+            for group in ("a-opus", "z-opus")
+        ]
+    )
+    existing: Final = {"z-opus": {"max_budget": 10.0, "budget_duration": "1d"}}
+
+    with pytest.raises(HTTPException) as exc:
+        _check_team_model_budget_update_authority(
+            data=UpdateTeamRequest(
+                team_id="t1", model_max_budget={**existing, "a-opus": {"max_budget": 100.0, "budget_duration": "1d"}}
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"),
+            existing_model_max_budget=existing,
+            routed_models_source=lambda team_id: routed_models_of(router=team_router, team_id=team_id),
+        )
+    assert exc.value.status_code == 403
+    assert "'z-opus'" in exc.value.detail["error"]
 
 
 def test_team_model_cap_authority_skips_omitted_field_malformed_rows_and_proxy_admins() -> None:

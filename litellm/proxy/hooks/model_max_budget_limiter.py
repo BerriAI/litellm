@@ -177,22 +177,40 @@ def model_access_groups_of(router: "Router", model: str, team_id: str | None = N
     )
 
 
-def routed_models_of(router: "Router") -> RoutedModels:
+def routed_models_of(router: "Router", team_id: str | None = None) -> RoutedModels:
     serves_every_name: Final = (
         router.default_deployment is not None or router.router_general_settings.pass_through_all_models
     )
     served_names: Final = frozenset(router.model_names) | (
         frozenset({_GLOB_WILDCARD}) if serves_every_name else frozenset()
     )
+    team_members: Final = _team_public_names_by_group(router=router, team_id=team_id)
     return RoutedModels(
         served_names=served_names,
         group_members=MappingProxyType(
             {
-                group: frozenset(members)
+                group: frozenset(members) | team_members.get(group, frozenset())
                 for group, members in router.get_model_access_groups().items()
                 if group not in served_names
             }
         ),
+    )
+
+
+def _team_public_names_by_group(router: "Router", team_id: str | None) -> Mapping[str, frozenset[str]]:
+    if team_id is None:
+        return MappingProxyType({})
+    groups_by_name: Final = MappingProxyType(
+        {
+            name: model_access_groups_of(router=router, model=name, team_id=team_id)
+            for name in router.team_public_model_names_of(team_id)
+        }
+    )
+    return MappingProxyType(
+        {
+            group: frozenset(name for name, groups in groups_by_name.items() if group in groups)
+            for group in frozenset[str]().union(*groups_by_name.values())
+        }
     )
 
 
@@ -201,11 +219,11 @@ def proxy_model_access_groups(model: str, team_id: str | None = None) -> frozens
     return frozenset() if router is None else model_access_groups_of(router=router, model=model, team_id=team_id)
 
 
-def proxy_routed_models() -> RoutedModels:
+def proxy_routed_models(team_id: str | None = None) -> RoutedModels:
     router: Final = _proxy_router()
     if router is None:
         return RoutedModels(served_names=frozenset(), group_members=MappingProxyType({}))
-    return routed_models_of(router)
+    return routed_models_of(router=router, team_id=team_id)
 
 
 def _proxy_router() -> "Router | None":

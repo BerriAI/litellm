@@ -11755,6 +11755,11 @@ class Router:
             indices: Final = self.model_name_to_deployment_indices.get(model_name)
             return None if indices is None else tuple(self.model_list[idx] for idx in indices)
 
+    def team_public_model_names_of(self, team_id: str) -> frozenset[str]:
+        """The public names `team_id` serves its own deployments under."""
+        with self._deployment_index_lock:
+            return frozenset(name for owner, name in self.team_model_to_deployment_indices if owner == team_id)
+
     def _team_deployments_named(self, team_id: str, public_model_name: str) -> tuple[DeploymentTypedDict, ...] | None:
         """The deployments `team_id` serves under `public_model_name`, or None when that pair is not indexed."""
         with self._deployment_index_lock:

@@ -11,6 +11,7 @@ All /team management endpoints
 
 import asyncio
 import copy
+import itertools
 import json
 import math
 import traceback
@@ -44,7 +45,6 @@ from litellm._uuid import uuid
 from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.constants import TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
 from litellm.integrations.prometheus import PrometheusLogger
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds_bounds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     UI_TEAM_ID,
@@ -1472,9 +1472,10 @@ def _check_team_model_budget_update_authority(
     data: UpdateTeamRequest,
     user_api_key_dict: UserAPIKeyAuth,
     existing_model_max_budget: Mapping[str, object] | None,
-    routed_models_source: Callable[[], RoutedModels] = proxy_routed_models,
+    routed_models_source: Callable[[str | None], RoutedModels] = proxy_routed_models,
 ) -> None:
-    """Like `_check_team_budget_update_authority`: only a proxy admin may raise, re-window or drop a per-model cap."""
+    """Like `_check_team_budget_update_authority`: only a proxy admin may raise, re-window or drop a per-model cap, or
+    add an entry that takes precedence over one."""
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         return
     if "model_max_budget" not in data.model_fields_set or not existing_model_max_budget:
@@ -1493,52 +1494,53 @@ def _check_team_model_budget_update_authority(
                 )
             },
         )
-    for model_name, proposed in requested.items():
-        governing = resolve_model_budget(
-            model=model_name, model_max_budget=existing_model_max_budget, team_id=data.team_id
-        )
-        if governing is None:
+    routed_models: Final = routed_models_source(data.team_id)
+    for entry, proposed in requested.items():
+        existing = _existing_model_cap(existing_model_max_budget.get(entry))
+        if existing is not None:
+            _check_existing_model_cap_kept(entry=entry, proposed=proposed, existing=existing)
             continue
-        cap = governing.budget_config
-        if cap.max_budget is None:
-            continue
-        lets_more_through = (
-            _looser_model_cap
-            if entry_names_model(entry=governing.budget_model, model=model_name)
-            else _allows_more_than
-        )
-        if lets_more_through(proposed=proposed, cap=cap):
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": (
-                        f"Only a proxy admin can raise a team's model_max_budget for {model_name!r} or change its "
-                        f"budget_duration. Current max_budget={cap.max_budget} per {cap.budget_duration} "
-                        f"(entry {governing.budget_model!r}), requested={proposed.max_budget} per "
-                        f"{proposed.budget_duration}."
-                    )
-                },
-            )
-    routed_models: Final = routed_models_source()
-    for model_name, proposed in requested.items():
-        _check_outranked_model_caps(
-            entry=model_name,
-            proposed=proposed,
+        governing = resolve_model_budget(model=entry, model_max_budget=existing_model_max_budget, team_id=data.team_id)
+        if governing is not None and entry_names_model(entry=governing.budget_model, model=entry):
+            _check_existing_model_cap_kept(entry=entry, proposed=proposed, existing=governing.budget_config)
+        _check_new_entry_outranks_no_cap(
+            entry=entry,
             existing_model_max_budget=existing_model_max_budget,
             routed_models=routed_models,
+            team_id=data.team_id,
         )
 
 
-def _check_outranked_model_caps(
+def _check_existing_model_cap_kept(entry: str, proposed: BudgetConfig, existing: BudgetConfig) -> None:
+    if existing.max_budget is None or not _looser_model_cap(proposed=proposed, cap=existing):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": (
+                f"Only a proxy admin can raise a team's model_max_budget for {entry!r} or change its "
+                f"budget_duration. Current max_budget={existing.max_budget} per {existing.budget_duration}, "
+                f"requested={proposed.max_budget} per {proposed.budget_duration}."
+            )
+        },
+    )
+
+
+def _check_new_entry_outranks_no_cap(
     entry: str,
-    proposed: BudgetConfig,
     existing_model_max_budget: Mapping[str, object],
     routed_models: RoutedModels,
+    team_id: str | None,
 ) -> None:
-    if _keeps_or_tightens(proposed=proposed, existing=_existing_model_cap(existing_model_max_budget.get(entry))):
-        return
+    """A new entry gets its own counter, so the models it takes from a capped entry stop drawing from that cap."""
     outranked: Final = next(
-        _looser_than_outranked_caps(entry, proposed, existing_model_max_budget, routed_models), None
+        _capped_entries_outranked_by(
+            entry=entry,
+            existing_model_max_budget=existing_model_max_budget,
+            routed_models=routed_models,
+            team_id=team_id,
+        ),
+        None,
     )
     if outranked is None:
         return
@@ -1547,61 +1549,29 @@ def _check_outranked_model_caps(
         status_code=403,
         detail={
             "error": (
-                f"Only a proxy admin can set a team's model_max_budget entry {entry!r} looser than "
-                f"{outranked_name!r}, which it can take precedence over. Current max_budget={cap.max_budget} per "
-                f"{cap.budget_duration} (entry {outranked_name!r}), requested={proposed.max_budget} per "
-                f"{proposed.budget_duration}."
+                f"Only a proxy admin can add a team model_max_budget entry {entry!r} that takes precedence over "
+                f"{outranked_name!r}, since the models they share would stop drawing from its max_budget="
+                f"{cap.max_budget} per {cap.budget_duration}."
             )
         },
     )
 
 
-def _looser_than_outranked_caps(
+def _capped_entries_outranked_by(
     entry: str,
-    proposed: BudgetConfig,
     existing_model_max_budget: Mapping[str, object],
     routed_models: RoutedModels,
+    team_id: str | None,
 ) -> Iterator[tuple[str, BudgetConfig]]:
-    outranked_caps: Final = (
-        (outranked, _existing_model_cap(existing_model_max_budget[outranked]))
-        for outranked in entries_outranked_by(
-            entry=entry, model_max_budget=existing_model_max_budget, routed_models=routed_models
-        )
+    governing: Final = resolve_model_budget(model=entry, model_max_budget=existing_model_max_budget, team_id=team_id)
+    outranked_names: Final = itertools.chain(
+        ()
+        if governing is None or entry_names_model(entry=governing.budget_model, model=entry)
+        else (governing.budget_model,),
+        entries_outranked_by(entry=entry, model_max_budget=existing_model_max_budget, routed_models=routed_models),
     )
-    yield from (
-        (outranked, cap)
-        for outranked, cap in outranked_caps
-        if cap is not None and cap.max_budget is not None and _allows_more_than(proposed=proposed, cap=cap)
-    )
-
-
-def _keeps_or_tightens(proposed: BudgetConfig, existing: BudgetConfig | None) -> bool:
-    return existing is not None and (
-        existing.max_budget is None or not _looser_model_cap(proposed=proposed, cap=existing)
-    )
-
-
-def _allows_more_than(proposed: BudgetConfig, cap: BudgetConfig) -> bool:
-    """Whether `proposed` lets more spend through in one of `cap`'s windows than `cap` itself does."""
-    proposed_window: Final = _budget_window_bounds(proposed)
-    cap_window: Final = _budget_window_bounds(cap)
-    if (
-        proposed.budget_duration == cap.budget_duration
-        or proposed.max_budget is None
-        or cap.max_budget is None
-        or proposed_window is None
-        or cap_window is None
-        or proposed_window[0] <= 0
-    ):
-        return _looser_model_cap(proposed=proposed, cap=cap)
-    shortest_proposed_window, _ = proposed_window
-    _, longest_cap_window = cap_window
-    proposed_windows_per_cap_window: Final = max(math.ceil(longest_cap_window / shortest_proposed_window), 1)
-    return proposed.max_budget * proposed_windows_per_cap_window > cap.max_budget
-
-
-def _budget_window_bounds(budget: BudgetConfig) -> tuple[int, int] | None:
-    return None if budget.budget_duration is None else duration_in_seconds_bounds(budget.budget_duration)
+    outranked_caps: Final = ((name, _existing_model_cap(existing_model_max_budget[name])) for name in outranked_names)
+    yield from ((name, cap) for name, cap in outranked_caps if cap is not None and cap.max_budget is not None)
 
 
 def _looser_model_cap(proposed: BudgetConfig, cap: BudgetConfig) -> bool:

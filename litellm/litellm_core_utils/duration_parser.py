@@ -82,21 +82,6 @@ def duration_in_seconds(duration: str) -> int:
         raise ValueError(f"Unsupported duration unit, passed duration: {duration}")
 
 
-def duration_in_seconds_bounds(duration: str) -> tuple[int, int] | None:
-    """The shortest and longest a period of `duration` lasts, since a month runs 28 to 31 days.
-
-    None when `duration_in_seconds` cannot read `duration`.
-    """
-    try:
-        seconds: Final = duration_in_seconds(duration)
-    except ValueError:
-        return None
-    value, unit = _extract_from_regex(duration=normalize_duration(duration))
-    if unit == "mo":
-        return value * 28 * 86400, value * 31 * 86400
-    return seconds, seconds
-
-
 def duration_in_seconds_from(start: datetime, duration: str) -> int:
     """How long a period of `duration` lasts when it begins at `start`.
 
