@@ -19,6 +19,11 @@ ignoreUntil = 2026-11-20
 reason = "Windows-only local DoS (CVSS 3.3) in filelock ReadWriteLock, fixed only in 4.2.1, a new major that requires Python >= 3.11 while litellm still supports 3.10 and pins filelock<4.0; litellm never uses ReadWriteLock (only FileLock); bump filelock and remove this entry once 3.10 is dropped or a 3.x fix ships"
 
 [[IgnoredVulns]]
+id = "GHSA-45c3-73f7-pv4m"
+ignoreUntil = 2026-11-27
+reason = "dnspython 2.9.0 (published 2026-10-09) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 2.8.0 while 3.11+ locks 2.9.0; the advisory is CPU use in dns.name.from_wire_parser and litellm only reaches dnspython through pydantic EmailStr, which never does DNS lookups; remove this entry once 3.10 is dropped or a 3.10-compatible fix ships"
+
+[[IgnoredVulns]]
 id = "GHSA-vfj7-8cjw-p6xm"
 ignoreUntil = 2026-11-03
 reason = "braces has no fixed release published (3.0.3, 2024-05-21, is latest and last_affected); dev-only via knip > fast-glob > micromatch; remove this entry once one exists"
