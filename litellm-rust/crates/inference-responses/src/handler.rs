@@ -72,28 +72,29 @@ pub(super) async fn execute(
             let stream = match wire.body.get("stream") {
                 None => false,
                 Some(serde_json::Value::Bool(value)) => *value,
-                Some(_) => return Err(Error::InvalidRequest("stream must be a boolean".into())),
+                Some(_) => {
+                    return Err(Error::invalid_request(
+                        litellm_llms::ErrorDetail::Expected {
+                            subject: "stream",
+                            expected: "a boolean",
+                        },
+                    ));
+                }
             };
             let outbound = litellm_inference::outbound::outbound_request(
                 Authenticated {
                     headers: wire.headers,
                     signer: authenticated.signer,
                 },
-                wire.url,
+                &wire.url,
                 &wire.body,
                 Some(call.timeout.unwrap_or(Duration::from_secs(600))),
             )?;
-            let response = litellm_inference::outbound::send(outbound, &route.http)
-                .await
-                .map_err(network)?;
+            let response = litellm_inference::outbound::send(outbound, &route.http).await?;
             let status = response.status().as_u16();
             if !response.status().is_success() {
-                let body = response.text().await.map_err(network)?;
-                return Err(litellm_http::transport::Error::Http {
-                    status,
-                    body: litellm_http::request::truncate_error_body(&body),
-                }
-                .into());
+                let body = response.text().await.map_err(litellm_http::Error::from)?;
+                return Err(litellm_http::Error::upstream(status, body).into());
             }
             if stream {
                 let headers = response
@@ -105,14 +106,14 @@ pub(super) async fn execute(
                     .collect();
                 let chunks = response
                     .bytes_stream()
-                    .map(|chunk| chunk.map_err(network))
+                    .map(|chunk| chunk.map_err(|error| litellm_http::Error::from(error).into()))
                     .boxed();
                 return Ok(ResponsesOutput::Stream {
                     head: ResponsesStreamHead { headers },
                     chunks,
                 });
             }
-            let body = response.text().await.map_err(network)?;
+            let body = response.text().await.map_err(litellm_http::Error::from)?;
             let raw = RawResponse { body: body.clone() };
             if let Some(observers) = observers {
                 observers.emit(litellm_host::lifecycle::CallEvent::Execution(
@@ -123,17 +124,18 @@ pub(super) async fn execute(
                 .after_provider_response(raw)
                 .await
                 .map_err(Error::post_call)?;
-            let value = serde_json::from_str(&body)
-                .map_err(|error| Error::InvalidResponse(error.to_string().into()))?;
+            let value = serde_json::from_str(&body).map_err(|error| {
+                Error::invalid_response(litellm_llms::ErrorDetail::invalid(
+                    "Responses API response JSON",
+                    error,
+                ))
+            })?;
             config
                 .transform_response_api_response(value)
                 .map(ResponsesOutput::Complete)
                 .map_err(Error::from)
+                .map_err(Error::after_send)
         },
     )
     .await
-}
-
-fn network(error: reqwest::Error) -> Error {
-    litellm_http::transport::Error::Network(error.to_string()).into()
 }

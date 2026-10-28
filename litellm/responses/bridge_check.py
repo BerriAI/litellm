@@ -11,7 +11,7 @@ from litellm.llms.azure_ai.common_utils import (
     foundry_chat_rejects_function_tools_while_reasoning,
     is_foundry_project_agent,
 )
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import OpenAIWebSearchOptions
 from litellm.types.utils import LlmProviders
@@ -176,7 +176,7 @@ def responses_api_bridge_check(
     pinned_mode: Final = (
         None if explicit_responses_prefix else deployment_routing_mode(deployment_model_info, custom_llm_provider)
     )
-    if explicit_responses_prefix or pinned_mode == "responses":
+    if custom_llm_provider == LlmProviders.CHATGPT or explicit_responses_prefix or pinned_mode == "responses":
         model = model.replace("responses/", "")
         model_info["mode"] = "responses"
     elif pinned_mode == "chat" and backend_serves_chat_completions(model_info):

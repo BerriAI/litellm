@@ -1,8 +1,9 @@
-from typing import Any, Final
+from typing import Final
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
@@ -40,7 +41,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict[str, str],
         model: str,
-        messages: list[Any],
+        messages: list[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -113,7 +114,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         if base.endswith("/v1/messages"):
             return base
         base = base.removesuffix("/v1")
-        return f"{base}/v1/messages"
+        return join_api_base(base, "v1/messages")
 
 
 class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
@@ -150,7 +151,7 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         self,
         headers: dict[str, str],
         model: str,
-        messages: list[Any],
+        messages: list[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
