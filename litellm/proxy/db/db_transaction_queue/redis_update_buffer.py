@@ -111,7 +111,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 def _zero_for_non_finite_constant(constant: str) -> float:
     verbose_proxy_logger.warning(
-        "Redis spend buffer - reading a %s spend an older version parked as 0, the spend it held is lost", constant
+        "Redis spend buffer - reading a parked %s spend as 0, the spend it held is lost", constant
     )
     return 0.0
 
@@ -208,7 +208,7 @@ class RedisUpdateBuffer:
         if transactions is None or len(transactions) == 0:
             return
 
-        list_of_transactions: Final = [safe_dumps(transactions, non_finite_as_null=True)]
+        list_of_transactions: Final = [safe_dumps(transactions)]
         if self.redis_cache is None:
             return
         try:
@@ -369,7 +369,7 @@ class RedisUpdateBuffer:
             rpush_list.append(
                 RedisPipelineRpushOperation(
                     key=redis_key,
-                    values=[safe_dumps(transactions, non_finite_as_null=True)],
+                    values=[safe_dumps(transactions)],
                 )
             )
             service_types.append(service_type)
@@ -559,7 +559,7 @@ class RedisUpdateBuffer:
         )
 
         rpush_list: Final = tuple(
-            RedisPipelineRpushOperation(key=redis_key, values=(safe_dumps(transactions, non_finite_as_null=True),))
+            RedisPipelineRpushOperation(key=redis_key, values=(safe_dumps(transactions),))
             for transactions, redis_key in restore_configs
             if transactions
         )

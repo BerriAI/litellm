@@ -824,6 +824,10 @@ class _ListRedis:
     def __init__(self) -> None:
         self.rows: list[str] = []
 
+    async def async_rpush(self, key: str, values: list[str]) -> int:
+        self.rows.extend(values)
+        return len(self.rows)
+
     async def async_rpush_and_trim(self, key: str, values: list[str], max_len: int) -> int:
         self.rows.extend(values)
         pushed_len = len(self.rows)
@@ -850,6 +854,22 @@ async def test_store_spend_logs_in_redis_drops_oldest_rows_past_the_cap():
     parked = await buffer.get_spend_logs_from_redis_buffer(limit=10)
     assert [row["request_id"] for row in parked] == ["mid", "new"]
     assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spend", [float("nan"), float("inf")])
+async def test_a_non_finite_daily_spend_buffered_in_redis_drains_as_zero(spend: float):
+    buffer: Final = RedisUpdateBuffer(redis_cache=_ListRedis())
+    queue: Final = DailySpendUpdateQueue()
+    await queue.add_update(json.loads(_parked_daily_batch(spend)))
+    await queue.add_update(json.loads(_parked_daily_batch(0.0042)))
+
+    await buffer.store_in_memory_daily_tag_spend_updates_in_redis(queue)
+    drained: Final = await buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+
+    assert drained is not None
+    assert drained[PARKED_DAILY_KEY]["spend"] == 0.0
+    assert drained[PARKED_DAILY_KEY]["api_requests"] == 2
 
 
 @pytest.mark.asyncio

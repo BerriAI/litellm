@@ -2198,6 +2198,7 @@ class Logging(LiteLLMLoggingBaseClass):
         verbose_logger.warning(
             "Recording a non-finite response_cost as 0 for litellm_call_id=%s", single_log_line(self.litellm_call_id)
         )
+        self.cost_breakdown = None
         return 0.0
 
     def uncached_price(self, result: object) -> UncachedPrice:
@@ -7465,7 +7466,7 @@ def get_standard_logging_object_payload(
             verbose_logger.warning(
                 "Logging a non-finite response_cost=%s as 0 for litellm_call_id=%s",
                 numeric_response_cost,
-                logging_obj.litellm_call_id,
+                single_log_line(logging_obj.litellm_call_id),
             )
         llm_response_cost: Final[float] = priced_response_cost or 0.0
         guardrail_cost: Final = guardrail_information_cost(metadata.get("standard_logging_guardrail_information"))

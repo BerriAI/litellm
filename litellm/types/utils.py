@@ -2062,7 +2062,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
         if cost is None:
             del self.cost
         elif isinstance(cost, float) and not math.isfinite(cost):
-            verbose_logger.warning("Dropping a non-finite provider usage cost, the cost map prices the request")
+            verbose_logger.warning("Dropping a non-finite provider usage cost")
             del self.cost
         else:
             self.cost = cost
