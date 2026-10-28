@@ -28,9 +28,7 @@ impl NativeGateway {
             let state = match next {
                 None => None,
                 Some(cursor) if seen.contains(&cursor) || seen.len() >= 1000 => {
-                    return Err(Error::InvalidRequest(
-                        "MCP upstream returned invalid pagination".into(),
-                    ));
+                    return Err(Error::InvalidPagination);
                 }
                 Some(cursor) => Some((
                     Some(cursor.clone()),
@@ -95,14 +93,9 @@ impl NativeGateway {
                     Ok(tools) => ServerOutcome::Ok {
                         tool_count: tools.len(),
                     },
-                    Err(Error::Upstream(rmcp::service::ServiceError::Timeout { .. })) => {
-                        ServerOutcome::Timeout
-                    }
-                    Err(Error::Upstream(
-                        rmcp::service::ServiceError::TransportClosed
-                        | rmcp::service::ServiceError::TransportSend(_),
-                    )) => ServerOutcome::Unreachable,
-                    Err(Error::Upstream(_)) => ServerOutcome::UpstreamError,
+                    Err(error) if error.is_timeout() => ServerOutcome::Timeout,
+                    Err(error) if error.is_unreachable() => ServerOutcome::Unreachable,
+                    Err(error) if error.is_upstream() => ServerOutcome::UpstreamError,
                     Err(_) => ServerOutcome::Internal,
                 };
                 (server.prefix(), outcome)

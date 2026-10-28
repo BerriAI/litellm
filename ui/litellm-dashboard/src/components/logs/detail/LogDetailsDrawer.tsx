@@ -1,3 +1,4 @@
+import { copyToClipboard } from "@/utils/dataUtils";
 import { useEffect, useMemo, useState } from "react";
 import { Bot, Check, Copy, Sparkles, Wrench } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -289,12 +290,9 @@ export function LogDetailsDrawer({
 
   const handleCopyLeftPanelId = async () => {
     if (!leftPanelId) return;
-    try {
-      await navigator.clipboard.writeText(leftPanelId);
+    if (await copyToClipboard(leftPanelId)) {
       setCopiedLeftPanelId(true);
       setTimeout(() => setCopiedLeftPanelId(false), 1200);
-    } catch {
-      /* clipboard unavailable in non-secure contexts */
     }
   };
 

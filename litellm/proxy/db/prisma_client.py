@@ -1127,6 +1127,18 @@ class PrismaManager:
         return ProxyExtrasDBManager.build_request_log_indexes()
 
     @staticmethod
+    def migration_data_check_report(use_migrate: bool = True) -> str | None:
+        """The read-only pre-migration row check on its own, for `--check_migrations_against_existing_data`: the
+        refusal the migration step would print, or None when the pending schema changes
+        can be applied to the rows the database has."""
+        from litellm_proxy_extras.utils import (
+            ProxyExtrasDBManager,  # pyright: ignore[reportUnknownVariableType]  # litellm-proxy-extras is an optional install
+        )
+
+        refusal: Final[object] = ProxyExtrasDBManager.migration_data_check_report(use_migrate=use_migrate)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm-proxy-extras is an optional install
+        return refusal if isinstance(refusal, str) else None
+
+    @staticmethod
     def start_request_log_index_build() -> None:
         """Build the request-log indexes on a daemon thread, for a serving proxy that ran the
         migrations itself (`DISABLE_SCHEMA_UPDATE` unset), so a long build never delays

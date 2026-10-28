@@ -30,6 +30,7 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { FieldError } from "@/components/ui/field";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { cn } from "@/lib/cva.config";
 import { hasProxyWideSpendView, isProxyAdminRole } from "@/utils/roles";
 import { getPreferredLiteAdminModel, MAX_INPUT_LENGTH, resolveInferenceTarget } from "./agent";
@@ -45,7 +46,7 @@ type LiteAdminState = {
   toggle: () => void;
   show: () => void;
   access: LiteAdminSession["access"];
-  launcherRef: RefObject<HTMLButtonElement | null>;
+  triggerRef: RefObject<HTMLButtonElement | null>;
   homeContainer: HTMLDivElement | null;
   setHomeContainer: (container: HTMLDivElement | null) => void;
   usageContainer: HTMLDivElement | null;
@@ -78,12 +79,11 @@ function useLiteAdminSession() {
   };
 }
 
-/** Keeps one Aria conversation available from the dashboard and its floating launcher. */
 export function LiteAdminFrame({ children }: { children: ReactNode }) {
   const configured = useLiteAdminSession();
   const sessionKey = configured?.key ?? null;
   const [open, setOpen] = useState(false);
-  const launcherRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const [started, setStarted] = useState(false);
   const [homeContainer, setHomeContainer] = useState<HTMLDivElement | null>(null);
   const [usageContainer, updateUsageContainer] = useState<HTMLDivElement | null>(null);
@@ -128,7 +128,7 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
               toggle,
               show,
               access: configured.session.access,
-              launcherRef,
+              triggerRef,
               homeContainer,
               setHomeContainer,
               usageContainer,
@@ -138,28 +138,10 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
       }
     >
       {children}
-      {configured && !open && <AriaLauncher show={show} buttonRef={launcherRef} />}
       {configured && showPanel && (
         <AriaPopup key={configured.key} session={configured.session} open={open} close={() => setOpen(false)} />
       )}
     </LiteAdminContext.Provider>
-  );
-}
-
-function AriaLauncher({ show, buttonRef }: { show: () => void; buttonRef: RefObject<HTMLButtonElement | null> }) {
-  return (
-    <Button
-      ref={buttonRef}
-      variant="outline"
-      aria-label={`Launch ${ARIA_AGENT_LABEL}`}
-      aria-keyshortcuts="Meta+J Control+J"
-      aria-expanded={false}
-      onClick={show}
-      className="fixed bottom-4 right-4 z-floating h-11 gap-2 rounded-full border-blue-200 bg-background pl-2 pr-4 text-blue-700 shadow-md hover:bg-blue-50 hover:text-blue-800 dark:border-blue-400/30 dark:text-blue-300 dark:hover:bg-blue-400/10"
-    >
-      <AriaAvatar />
-      <span>{ARIA_AGENT_LABEL}</span>
-    </Button>
   );
 }
 
@@ -189,18 +171,20 @@ export function LiteAdminHome() {
 
 export default function LiteAdminTrigger() {
   const state = useContext(LiteAdminContext);
-  if (!state || state.access.mode !== "admin") return null;
+  if (!state) return null;
+  const { triggerRef, open, toggle } = state;
   return (
     <Button
       variant="ghost"
+      ref={triggerRef}
       aria-label={ARIA_AGENT_LABEL}
       aria-keyshortcuts="Meta+J Control+J"
-      aria-expanded={state.open}
-      onClick={state.toggle}
+      aria-expanded={open}
+      onClick={toggle}
       className="gap-2 rounded-full border border-blue-200/70 bg-blue-50/80 pl-1.5 pr-3 text-blue-700 hover:bg-blue-100 hover:text-blue-800 aria-expanded:bg-blue-100 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-300 dark:hover:bg-blue-400/20"
     >
       <AriaAvatar />
-      <span className="md:hidden lg:inline">{ARIA_AGENT_LABEL}</span>
+      <span className="hidden lg:inline">{ARIA_AGENT_LABEL}</span>
       <kbd className="hidden rounded-full border border-info/30 px-1.5 font-sans text-xs lg:inline">⌘J</kbd>
     </Button>
   );
@@ -226,6 +210,7 @@ export function AriaUsageTrigger() {
 
 export function AriaUsageComposer() {
   const state = useContext(LiteAdminContext);
+  const term = useTerminology();
   if (!state) return null;
   const { open, setUsageContainer } = state;
   return (
@@ -234,7 +219,7 @@ export function AriaUsageComposer() {
         <h2 className="flex items-center gap-2 text-sm font-medium">
           <AriaAvatar size={24} /> {ARIA_AGENT_LABEL}
         </h2>
-        <p className="text-sm text-muted-foreground">Your AI usage assistant</p>
+        <p className="text-sm text-muted-foreground">{term("Your AI usage assistant")}</p>
       </div>
       <div ref={setUsageContainer} />
     </section>
@@ -358,7 +343,7 @@ function Panel({
         initialFocus={() =>
           initialFocus?.current ?? ref.current?.querySelector<HTMLElement>("textarea:enabled") ?? ref.current
         }
-        finalFocus={state?.launcherRef}
+        finalFocus={state?.triggerRef}
         className="flex h-[min(48rem,calc(100dvh-2rem))] flex-col gap-0 overflow-hidden p-0 shadow-xl sm:max-w-4xl"
       >
         {children}
@@ -573,6 +558,7 @@ function ModelStatus({ models }: { models: UseQueryResult<ModelGroup[]> }) {
 
 function PanelHeader({ children }: { children?: ReactNode }) {
   const state = useContext(LiteAdminContext);
+  const term = useTerminology();
   return (
     <div className="flex items-start justify-between gap-3 border-b p-4">
       <div className="flex flex-col gap-1 text-sm">
@@ -582,7 +568,7 @@ function PanelHeader({ children }: { children?: ReactNode }) {
         </DialogTitle>
         <DialogDescription>
           {state?.access.mode === "usage"
-            ? "Your AI assistant for usage and spend."
+            ? term("Your AI assistant for usage and spend.")
             : "Ask about your gateway. Review changes in chat."}
         </DialogDescription>
       </div>

@@ -1980,7 +1980,7 @@ def completion_cost(
                         base_pricing_model=(selected_model if base_model is not None and not custom_pricing else None),
                     )
                 elif call_type == _MCP_CALL_TYPE:
-                    from litellm.proxy._experimental.mcp_server.cost_calculator import (
+                    from litellm.proxy.mcp_server.cost_calculator import (
                         MCPCostCalculator,
                     )
 

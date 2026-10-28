@@ -234,6 +234,7 @@ bedrock_neutralize_orphaned_tool_blocks: bool = True
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
 )  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
+anthropic_messages_estimate_initial_input_tokens: bool = False
 # When True, strip the OpenAI-flavored `usage.total_tokens` field that
 # LiteLLM injects into non-streaming /v1/messages responses, bringing the
 # wire response into line with the Anthropic spec (matches the streaming
@@ -709,6 +710,7 @@ transcribe_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
 coralbricks_models: Set[str] = set()
+aiand_models: Set[str] = set()
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
 
@@ -1021,6 +1023,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             llamagate_models.add(key)
         elif value.get("litellm_provider") == "coralbricks":
             coralbricks_models.add(key)
+        elif value.get("litellm_provider") == "aiand":
+            aiand_models.add(key)
         elif value.get("litellm_provider") == "reducto":
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
@@ -1158,6 +1162,7 @@ model_list = list(
     | reducto_models
     | bedrock_mantle_models
     | coralbricks_models
+    | aiand_models
     | set(clarifai_models)
 )
 
@@ -1282,6 +1287,7 @@ def _build_models_by_provider() -> dict:
         "gigachat": gigachat_models,
         "llamagate": llamagate_models,
         "coralbricks": coralbricks_models,
+        "aiand": aiand_models,
         "reducto": reducto_models,
         "bedrock_mantle": bedrock_mantle_models,
     }
@@ -1729,6 +1735,9 @@ if TYPE_CHECKING:
     from .llms.hosted_vllm.decisions.transformation import (
         HostedVLLMDecisionsConfig as HostedVLLMDecisionsConfig,
     )
+    from .llms.lm_studio.decisions.transformation import (
+        LMStudioDecisionsConfig as LMStudioDecisionsConfig,
+    )
     from .llms.laya.decisions.transformation import (
         LayaDecisionsConfig as LayaDecisionsConfig,
     )
@@ -1737,6 +1746,9 @@ if TYPE_CHECKING:
     )
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
+    )
+    from .llms.azure.decisions.transformation import (
+        AzureDecisionsConfig as AzureDecisionsConfig,
     )
     from .llms.azure_ai.decisions.transformation import (
         AzureAIDecisionsConfig as AzureAIDecisionsConfig,
@@ -1782,10 +1794,10 @@ if TYPE_CHECKING:
         SagemakerNovaConfig as SagemakerNovaConfig,
     )
     from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
-    from .llms.anthropic.pass_through.messages.transformation import (
+    from .llms.anthropic.messages.native.transformation import (
         AnthropicMessagesConfig as AnthropicMessagesConfig,
     )
-    from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    from .llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeMessagesConfig as AmazonAnthropicClaudeMessagesConfig,
     )
     from .llms.bedrock.messages.mantle_transformation import (
@@ -1808,7 +1820,7 @@ if TYPE_CHECKING:
     from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
         VertexAIAnthropicConfig as VertexAIAnthropicConfig,
     )
-    from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
+    from .llms.vertex_ai.vertex_ai_partner_models.llama.transformation import (
         VertexAILlama3Config as VertexAILlama3Config,
     )
     from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
@@ -1835,10 +1847,10 @@ if TYPE_CHECKING:
     from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
         AmazonQwen3Config as AmazonQwen3Config,
     )
-    from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
+    from .llms.bedrock.chat.invoke_transformations.anthropic_legacy_text_completions_transformation import (
         AmazonAnthropicConfig as AmazonAnthropicConfig,
     )
-    from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    from .llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeConfig as AmazonAnthropicClaudeConfig,
     )
     from .llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation import (
@@ -2000,7 +2012,7 @@ if TYPE_CHECKING:
         GradientAIConfig as GradientAIConfig,
     )
     from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig as OpenAIGPTConfig
-    from .llms.openai.chat.gpt_5_transformation import (
+    from .llms.openai.chat.gpt_reasoning_transformation import (
         OpenAIGPT5Config as OpenAIGPT5Config,
     )
     from .llms.openai.transcriptions.whisper_transformation import (
@@ -2141,7 +2153,7 @@ if TYPE_CHECKING:
     from .llms.azure.chat.gpt_transformation import (
         AzureOpenAIConfig as AzureOpenAIConfig,
     )
-    from .llms.azure.chat.gpt_5_transformation import (
+    from .llms.azure.chat.gpt_reasoning_transformation import (
         AzureOpenAIGPT5Config as AzureOpenAIGPT5Config,
     )
     from .llms.azure.completion.transformation import (

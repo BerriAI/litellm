@@ -121,6 +121,12 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "input_cost_per_token": 4.2e-08,
         "output_cost_per_token": 0.0,
     },
+    "typesafe/jev-preview": {
+        "litellm_provider": "typesafe",
+        "mode": "evaluation",
+        "input_cost_per_token": 8.4e-08,
+        "output_cost_per_token": 0.0,
+    },
     "fireworks_ai/accounts/fireworks/routers/rune": {
         "litellm_provider": "fireworks_ai",
         "mode": "evaluation",
@@ -137,7 +143,9 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
     "databricks/databricks-openjev-qwen35-4b": {
         "litellm_provider": "databricks",
         "mode": "evaluation",
-        "input_cost_per_token": 0.0,
+        "input_cost_per_token": 4.2e-08,
+        "cache_read_input_token_cost": 4.2e-08,
+        "cache_creation_input_token_cost": 4.2e-08,
         "output_cost_per_token": 0.0,
     },
     "openrouter/typesafe/jev-1.13": {

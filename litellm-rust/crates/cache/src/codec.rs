@@ -41,10 +41,10 @@ where
     type Value = V;
 
     fn encode(&self, value: &Self::Value) -> Result<Vec<u8>, Error> {
-        serde_json::to_vec(value).map_err(|_| Error::InvalidEntry)
+        serde_json::to_vec(value).map_err(Error::invalid_entry)
     }
 
     fn decode(&self, bytes: &[u8]) -> Result<Self::Value, Error> {
-        serde_json::from_slice(bytes).map_err(|_| Error::InvalidEntry)
+        serde_json::from_slice(bytes).map_err(Error::invalid_entry)
     }
 }

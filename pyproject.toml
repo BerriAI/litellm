@@ -1,9 +1,9 @@
 [project]
 name = "litellm"
-version = "1.108.0"
+version = "1.109.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
-requires-python = ">=3.10, <3.15"
+requires-python = ">=3.10, <3.16"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -14,7 +14,7 @@ dependencies = [
     # deps. Reproducibility for our Docker/CI comes from `uv.lock`.
     # When changing a floor, verify it installs + imports on every supported
     # Python with: `uv pip install --resolution=lowest-direct .`
-    "fastuuid>=0.14.0,<1.0",
+    "fastuuid>=0.14.0,<1.0; python_version < '3.15'",
     "filelock>=3.16.1,<4.0",
     "httpx[http2]>=0.28.0,<1.0",
     "openai>=2.20.0,<4.0.0",
@@ -23,7 +23,8 @@ dependencies = [
     "packaging>=24.0",
     "importlib-metadata>=8.0.0,<9.0",
     "tiktoken>=0.8.0,<1.0; python_version < '3.14'",
-    "tiktoken>=0.12.0,<1.0; python_version >= '3.14'",
+    "tiktoken>=0.12.0,<1.0; python_version == '3.14'",
+    "tiktoken>=0.14.0,<1.0; python_version >= '3.15'",
     "tokenizers>=0.21.0,<1.0",
     "huggingface-hub>=0.34.0,<2.0",
     "click>=8.0.0,<9.0",
@@ -32,7 +33,8 @@ dependencies = [
     "anyio>=4.14.0,<5.0",
     "async-timeout>=4.0.3,<6.0; python_version < '3.11'",
     "pydantic>=2.11.0,<3.0.0; python_version < '3.14'",
-    "pydantic>=2.12.0,<3.0.0; python_version >= '3.14'",
+    "pydantic>=2.12.0,<3.0.0; python_version == '3.14'",
+    "pydantic>=2.14.0,<3.0.0; python_version >= '3.15'",
     "pydantic-settings>=2.14.1,<3.0",
     "jsonschema>=4.0.0,<5.0",
     "boto3>=1.43.117,<2.0",
@@ -55,17 +57,20 @@ Documentation = "https://docs.litellm.ai"
 proxy = [
     "gunicorn>=23.0.0,<24.0",
     "uvicorn>=0.33.0,<1.0",
-    "granian>=2.7.4,<3.0",
+    "granian>=2.7.4,<3.0; python_version < '3.15'",
+    "granian>=2.8.0,<3.0; python_version >= '3.15'",
     "uvloop>=0.22.1,<1.0; sys_platform != 'win32'",
     "fastapi>=0.136.3,<1.0",
     "starlette>=1.0.1,<2.0",
     "backoff>=2.2.1,<3.0",
     "pyyaml>=6.0.3,<7.0",
     "rq>=2.7.0,<3.0",
-    "orjson>=3.11.6,<4.0",
+    "orjson>=3.11.6,<4.0; python_version < '3.15'",
+    "orjson>=3.12.0,<4.0; python_version >= '3.15'",
     # redis-py's C response parser. It arrives with redis (via rq) either way; naming
     # it here is what makes redis-py select _HiredisParser instead of the Python one.
-    "hiredis>=3.0.0,<4.0",
+    "hiredis>=3.0.0,<4.0; python_version < '3.15'",
+    "hiredis>=3.5.0,<4.0; python_version >= '3.15'",
     "apscheduler>=3.11.2,<4.0",
     "fastapi-sso>=0.19.0,<1.0",
     "PyJWT>=2.13.0,<3.0",
@@ -80,7 +85,7 @@ proxy = [
     "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
     "litellm-proxy-extras==0.4.111",
-    "litellm-enterprise==0.1.79",
+    "litellm-enterprise==0.1.80",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -210,8 +215,8 @@ dev = [
     "tomli==2.4.1; python_version < '3.11'",
     "pytest-mock==3.15.1",
     "pytest-asyncio==1.3.0",
-    "psycopg==3.3.3",
-    "psycopg-binary==3.3.3",
+    "psycopg==3.3.6",
+    "psycopg-binary==3.3.6",
     "pytest-xdist==3.8.0",
     "requests-mock==1.12.1",
     "responses==0.26.0",
@@ -291,7 +296,7 @@ ci = [
     "anthropic==0.84.0",
     "blockbuster==1.5.26",
     "beautifulsoup4==4.14.3",
-    "pylint==4.0.5",
+    "pylint==4.0.9",
     "langchain-openai==1.1.14",
     "langgraph>=1.2.4,<1.3.0",
     "langgraph-prebuilt>=1.1.0,<1.3.0",
@@ -372,21 +377,8 @@ required-version = ">=0.10.9"
 exclude-newer = "3 days"
 
 [tool.uv.exclude-newer-package]
-# TODO: ryan, remove after 2026-10-23, once certifi 2026.10.19 (drops the compromised eMudhra root) clears the 3-day window
-certifi = "2026-10-20T03:00:00Z"
-# TODO(shrey): remove after 2026-10-25, once grpcio 1.84.1 (drops the compromised eMudhra roots from roots.pem) clears the 3-day window
-grpcio = "2026-10-22T15:00:00Z"
-# TODO(shrey): remove after 2026-10-24, once boto3/botocore 1.43.117 (drops the compromised eMudhra roots from cacert.pem) clear the 3-day window
-boto3 = "2026-10-21T19:31:00Z"
-botocore = "2026-10-21T19:31:00Z"
 # TODO: remove after 2026-10-25, once brotli 1.2.1 (CVE-2026-111497) clears the 3-day window
 brotli = "2026-10-22T14:01:00Z"
-# TODO: ryan, remove after 2026-10-24, once mlflow 3.17.2 (GHSA-wqmh-qccw-pqwf) clears the 3-day window
-mlflow = "2026-10-21T03:00:00Z"
-mlflow-skinny = "2026-10-21T03:00:00Z"
-mlflow-tracing = "2026-10-21T03:00:00Z"
-# TODO: ryan, remove after 2026-10-25, once pypdf 6.21.2 (GHSA-6c7f-9265-g8fw) clears the 3-day window
-pypdf = "2026-10-21T17:00:00Z"
 
 [tool.uv.sources]
 litellm-proxy-extras = { workspace = true }
@@ -396,7 +388,7 @@ litellm-enterprise = { workspace = true }
 members = ["enterprise", "litellm-proxy-extras"]
 
 [tool.commitizen]
-version = "1.108.0"
+version = "1.109.0"
 version_files = [
     "pyproject.toml:^version",
 ]

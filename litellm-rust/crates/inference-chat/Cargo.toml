@@ -6,7 +6,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-futures-util.workspace = true
 litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-cache-response.workspace = true
 litellm-core-utils.workspace = true
@@ -16,11 +15,14 @@ litellm-inference.workspace = true
 litellm-llms.workspace = true
 litellm-llms-types.workspace = true
 litellm-secrets.workspace = true
+
 serde_json = { workspace = true, features = ["preserve_order"] }
+futures-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 litellm-cache-memory.workspace = true
+litellm-error.workspace = true
 litellm-host-native.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-inference-testing.workspace = true

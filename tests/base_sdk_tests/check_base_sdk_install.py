@@ -127,7 +127,7 @@ def check_completion_with_function_tool() -> str:
 
 def check_mcp_install_guidance() -> str:
     try:
-        import litellm.experimental_mcp_client
+        import litellm.mcp_client
     except ImportError as error:
         _require("pip install 'litellm[mcp]'" in str(error), f"missing MCP installation guidance: {error}")
         _require(isinstance(error.__cause__, ModuleNotFoundError), "original missing-dependency cause was lost")
@@ -174,8 +174,8 @@ def check_token_counter() -> str:
 
 def check_tokenizer_dependencies() -> str:
     import litellm
-    from litellm.rust_bridge import tokenizer
     from litellm.litellm_core_utils.tokenizer import HuggingFace, HuggingFaceTokenizer, Tokenizer
+    from litellm.rust_bridge import tokenizer
     from litellm.utils import claude_json_str
 
     _require(isinstance(litellm.encoding, Tokenizer), "runtime alias rejects the default encoding")
