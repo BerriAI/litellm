@@ -1245,6 +1245,10 @@ def _split_reasoning_then_text_chunks() -> tuple[ModelResponseStream, ...]:
     return (_reasoning_chunk("let me "), _reasoning_chunk("think"), _chunk("Hello!", finish_reason="stop"))
 
 
+def _signature_only_thinking_then_text_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_signature_only_thinking_chunk("sig_only"), _chunk("4", finish_reason="stop"))
+
+
 def _streamed_reasoning_text(chunks: Sequence[ModelResponseStream]) -> str:
     return "".join(getattr(chunk.choices[0].delta, "reasoning_content", None) or "" for chunk in chunks)
 
@@ -1277,11 +1281,17 @@ def _reasoning_item(items: Sequence[Mapping[str, object]]) -> Mapping[str, objec
 
 @pytest.mark.parametrize(
     "stream_chunks",
-    [_split_reasoning_then_text_chunks, _reasoning_and_text_in_one_chunk, _signed_thinking_and_text_in_one_chunk],
+    [
+        _split_reasoning_then_text_chunks,
+        _reasoning_and_text_in_one_chunk,
+        _signed_thinking_and_text_in_one_chunk,
+        _signature_only_thinking_then_text_chunks,
+    ],
     ids=[
         "split_reasoning_then_text_chunks",
         "reasoning_and_text_in_one_chunk",
         "signed_thinking_and_text_in_one_chunk",
+        "signature_only_thinking_then_text_chunks",
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -1298,7 +1308,7 @@ async def test_sdk_stream_readers_can_place_every_reasoning_summary_delta(stream
     completed_summary: Final = _reasoning_item(completed_payload["response"]["output"])["summary"]
     assert "".join(part["text"] for part in accumulated) == _streamed_reasoning_text(chunks)
     assert _reasoning_item(done_items)["summary"] == accumulated
-    assert "".join(part["text"] for part in completed_summary) == _streamed_reasoning_text(chunks)
+    assert completed_summary == accumulated
     TypeAdapter(list[OpenAIReasoningSummaryPart]).validate_python([*accumulated, *completed_summary])
 
 

@@ -177,6 +177,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._cached_reasoning_item_id: str | None = None
         self._sent_reasoning_summary_text_done_event: bool = False
         self._sent_reasoning_summary_part_done_event: bool = False
+        self._sent_reasoning_summary_part_added_event: bool = False
         self._reasoning_summary_text: str = ""
         # -- GENERIC RESPONSE-EVENTS PENDING QUEUE as required by fix --
         self._pending_response_events: list[BaseLiteLLMOpenAIResponseObject] = []
@@ -1035,12 +1036,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 **{
                     "id": reasoning_item_id,
                     "type": "reasoning",
-                    "summary": [
-                        {
-                            "type": "summary_text",
-                            "text": reasoning_content,
-                        }
-                    ],
+                    "summary": [{"type": "summary_text", "text": reasoning_content}] if reasoning_content else [],
                 }
             ),
         )
@@ -1157,9 +1153,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 ),
             )
             event.__dict__["sequence_number"] = self._sequence_number
-            self._pending_response_events.extend(
-                [event, self.create_reasoning_summary_part_added_event(self._cached_reasoning_item_id)]
-            )
+            self._pending_response_events.append(event)
             return
 
         # Tool-first
@@ -1186,25 +1180,27 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         reasoning_item_id: Final = self._cached_reasoning_item_id
         self._queue_compaction_item_done()
-        self._sequence_number += 1
-        text_done_event: Final = self.create_reasoning_summary_text_done_event(
-            reasoning_item_id=reasoning_item_id,
-            reasoning_content=reasoning_content,
-            sequence_number=self._sequence_number,
-        )
-        self._sequence_number += 1
-        part_done_event: Final = self.create_reasoning_summary_part_done_event(
-            reasoning_item_id=reasoning_item_id,
-            reasoning_content=reasoning_content,
-            sequence_number=self._sequence_number,
-        )
+        if reasoning_content:
+            self._sequence_number += 1
+            text_done_event: Final = self.create_reasoning_summary_text_done_event(
+                reasoning_item_id=reasoning_item_id,
+                reasoning_content=reasoning_content,
+                sequence_number=self._sequence_number,
+            )
+            self._sequence_number += 1
+            part_done_event: Final = self.create_reasoning_summary_part_done_event(
+                reasoning_item_id=reasoning_item_id,
+                reasoning_content=reasoning_content,
+                sequence_number=self._sequence_number,
+            )
+            self._pending_response_events.extend([text_done_event, part_done_event])
         self._sequence_number += 1
         reasoning_output_item_done_event: Final = self.create_reasoning_output_item_done_event(
             reasoning_item_id=reasoning_item_id,
             reasoning_content=reasoning_content,
             sequence_number=self._sequence_number,
         )
-        self._pending_response_events.extend([text_done_event, part_done_event, reasoning_output_item_done_event])
+        self._pending_response_events.append(reasoning_output_item_done_event)
         self._reasoning_done_emitted = True
         self._reasoning_active = False
 
@@ -1377,6 +1373,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
             if self._cached_reasoning_item_id is None:
                 self._cached_reasoning_item_id = mint_reasoning_item_id()
+            if not self._sent_reasoning_summary_part_added_event:
+                self._sent_reasoning_summary_part_added_event = True
+                self._pending_response_events.append(
+                    self.create_reasoning_summary_part_added_event(self._cached_reasoning_item_id)
+                )
 
             return ReasoningSummaryTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
