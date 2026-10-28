@@ -253,3 +253,23 @@ def test_cost_per_token_bills_the_served_priority_tier(
     prompt_cost, completion_cost = cost_per_token(model="databricks/dbrx-tiered-test", usage=usage)
     assert prompt_cost == pytest.approx(30 * 0.001)
     assert completion_cost == pytest.approx(40 * 0.002)
+
+
+def _is_standard_rate_key(key: str) -> bool:
+    return ("_cost_per_" in key or key.endswith("_token_cost")) and "dbu" not in key and not key.endswith(
+        ("_priority", "_flex", "_batches")
+    )
+
+
+def test_every_databricks_priority_row_prices_every_standard_rate_at_the_priority_tier() -> None:
+    cost_map: Final = json.loads(MAIN_PRICES.read_text())
+    priority_rows: Final = {
+        key: row
+        for key, row in cost_map.items()
+        if key.startswith("databricks/") and "input_cost_per_token_priority" in row
+    }
+
+    assert priority_rows
+    for key, row in priority_rows.items():
+        missing = sorted(f for f in row if _is_standard_rate_key(f) and f"{f}_priority" not in row)
+        assert not missing, f"{key} bills these at the standard rate on priority requests: {missing}"
