@@ -3,6 +3,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
+from itertools import groupby
 from types import MappingProxyType
 from typing import Final, Literal, NoReturn, Protocol
 
@@ -28,6 +29,9 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendData,
     DailySpendMetadata,
     GroupedData,
+    GuardrailKeyMetric,
+    GuardrailMetric,
+    GuardrailSpendMetrics,
     KeyMetadata,
     KeyMetricWithMetadata,
     MetricWithMetadata,
@@ -39,6 +43,7 @@ from litellm.types.repositories.daily_activity import (
     DailyActivityTable,
     EntityRollupRow,
     GroupingSetsRow,
+    GuardrailSpendRow,
     KeyMetadataRow,
     RollupMetricsRow,
     SpendLogsWindow,
@@ -1013,17 +1018,52 @@ def _fold_entity_rollups_sync(
             )
 
 
+def _guardrail_metric(day: DailySpendData, rows: Sequence[GuardrailSpendRow]) -> GuardrailMetric:
+    return GuardrailMetric(
+        metrics=GuardrailSpendMetrics(spend=sum(row.spend for row in rows)),
+        api_key_breakdown={
+            row.api_key: GuardrailKeyMetric(
+                metrics=GuardrailSpendMetrics(spend=row.spend), metadata=day.breakdown.api_keys[row.api_key].metadata
+            )
+            for row in rows
+            if row.api_key in day.breakdown.api_keys
+        },
+    )
+
+
+def _day_with_guardrails(day: DailySpendData, rows: Sequence[GuardrailSpendRow]) -> DailySpendData:
+    by_guardrail: Final = groupby(sorted(rows, key=lambda row: row.guardrail_id), key=lambda row: row.guardrail_id)
+    guardrails: Final = {guardrail_id: _guardrail_metric(day, tuple(group)) for guardrail_id, group in by_guardrail}
+    return day.model_copy(update={"breakdown": day.breakdown.model_copy(update={"guardrails": guardrails})})
+
+
+def _with_guardrail_breakdown(
+    results: Sequence[DailySpendData], rows: Sequence[GuardrailSpendRow]
+) -> tuple[DailySpendData, ...]:
+    """API keys outside the top api_key_limit stay in each guardrail's spend but not in its api_key_breakdown."""
+    rows_by_date: Final = MappingProxyType(
+        {day: tuple(group) for day, group in groupby(sorted(rows, key=lambda row: row.date), key=lambda row: row.date)}
+    )
+    return tuple(_day_with_guardrails(day, rows_by_date.get(day.date.strftime("%Y-%m-%d"), ())) for day in results)
+
+
 async def get_daily_activity_aggregated(
     repository: DailyActivityRepository,
     scope: DailyActivityScope,
     *,
     entity_metadata_field: Mapping[str, dict[str, object]] | None = None,
     include_entity_breakdown: bool = False,
+    include_guardrail_breakdown: bool = False,
     api_key_limit: int = constants.USAGE_TOP_API_KEYS_DEFAULT,
 ) -> SpendAnalyticsPaginatedResponse:
     try:
-        aggregated_rows: Final = await repository.aggregated(
-            scope, include_entity_breakdown=include_entity_breakdown, api_key_limit=api_key_limit
+        aggregated_rows, guardrail_rows = await asyncio.gather(
+            repository.aggregated(
+                scope, include_entity_breakdown=include_entity_breakdown, api_key_limit=api_key_limit
+            ),
+            repository.guardrail_spend(scope)
+            if include_guardrail_breakdown and scope.model is None
+            else asyncio.sleep(0, result=()),
         )
         records: Final = aggregated_rows.grouping_rows
         aggregated: Final = await _aggregate_grouping_sets_records(
@@ -1059,7 +1099,9 @@ async def get_daily_activity_aggregated(
                 entity_metadata_field=entity_metadata_field,
             )
         return SpendAnalyticsPaginatedResponse(
-            results=aggregated["results"],
+            results=list(_with_guardrail_breakdown(aggregated["results"], guardrail_rows))
+            if guardrail_rows
+            else aggregated["results"],
             metadata=DailySpendMetadata(
                 total_spend=aggregated["totals"].spend,
                 total_flat_cost=aggregated["totals"].flat_cost,

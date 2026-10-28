@@ -65,6 +65,26 @@ class MetricWithMetadata(MetricBase):
     api_key_breakdown: dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
 
 
+class GuardrailSpendMetrics(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    spend: float = 0.0
+
+
+class GuardrailKeyMetric(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    metrics: GuardrailSpendMetrics
+    metadata: KeyMetadata
+
+
+class GuardrailMetric(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    metrics: GuardrailSpendMetrics
+    api_key_breakdown: Mapping[str, GuardrailKeyMetric] = Field(default_factory=dict)
+
+
 class BreakdownMetrics(LiteLLMBaseModel):
     """Breakdown of spend by different dimensions"""
 
@@ -75,6 +95,7 @@ class BreakdownMetrics(LiteLLMBaseModel):
     endpoints: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # endpoint -> {metrics, metadata}
     api_keys: dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
     entities: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # entity -> {metrics, metadata}
+    guardrails: Mapping[str, GuardrailMetric] = Field(default_factory=dict)  # guardrail_id -> spend
 
 
 class DailySpendData(LiteLLMBaseModel):

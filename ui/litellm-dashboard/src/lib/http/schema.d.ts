@@ -27719,6 +27719,10 @@ export interface components {
             entities?: {
                 [key: string]: components["schemas"]["MetricWithMetadata"];
             };
+            /** Guardrails */
+            guardrails?: {
+                [key: string]: components["schemas"]["GuardrailMetric"];
+            };
             /** Mcp Servers */
             mcp_servers?: {
                 [key: string]: components["schemas"]["MetricWithMetadata"];
@@ -33221,6 +33225,27 @@ export interface components {
             litellm_params?: components["schemas"]["BaseLitellmParams"] | null;
             /** Updated At */
             updated_at?: string | null;
+        };
+        /** GuardrailKeyMetric */
+        GuardrailKeyMetric: {
+            metadata: components["schemas"]["KeyMetadata"];
+            metrics: components["schemas"]["GuardrailSpendMetrics"];
+        };
+        /** GuardrailMetric */
+        GuardrailMetric: {
+            /** Api Key Breakdown */
+            api_key_breakdown?: {
+                [key: string]: components["schemas"]["GuardrailKeyMetric"];
+            };
+            metrics: components["schemas"]["GuardrailSpendMetrics"];
+        };
+        /** GuardrailSpendMetrics */
+        GuardrailSpendMetrics: {
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
         };
         /** GuardrailSubmissionItem */
         GuardrailSubmissionItem: {

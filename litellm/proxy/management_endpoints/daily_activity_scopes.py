@@ -56,6 +56,7 @@ class EntityScopeResolver:
     resolve: EntityScopeResolve
     include_entity_breakdown: bool
     operation_names: OperationNames
+    include_guardrail_breakdown: bool = False
 
 
 def _query_ids(value: str | None) -> tuple[str, ...] | None:
@@ -364,6 +365,7 @@ USER_RESOLVER = EntityScopeResolver(
     query=_user_query,
     resolve=_resolve_user,
     include_entity_breakdown=False,
+    include_guardrail_breakdown=True,
     operation_names=MappingProxyType(
         {
             "aggregated": "get_user_daily_activity_aggregated",

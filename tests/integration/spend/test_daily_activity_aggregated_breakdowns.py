@@ -243,3 +243,88 @@ async def test_get_daily_activity_aggregated_model_group_rollups_fall_back_to_mo
         assert object_value(object_value(models["gpt-5"])["metrics"])["spend"] == 10.0
     finally:
         _clean(day)
+
+
+def _seed_guardrail_units(day: str, rows: Sequence[tuple[str, str, str, float | None]]) -> None:
+    for guardrail_id, api_key, usage_unit, cost in rows:
+        write_rows(
+            'INSERT INTO "LiteLLM_DailyGuardrailUsageUnits" (guardrail_id, date, team_id, api_key, usage_unit,'
+            " units, cost, updated_at) VALUES (%s, %s, '', %s, %s, 1, %s, now())",
+            (guardrail_id, day, api_key, usage_unit, None if cost is None else str(cost)),
+        )
+
+
+def _guardrail_spend(breakdown: dict[str, JsonValue]) -> dict[str, tuple[float, dict[str, float]]]:
+    return {
+        guardrail_id: (
+            float(object_value(object_value(entry)["metrics"])["spend"]),
+            {
+                api_key: float(object_value(object_value(key_entry)["metrics"])["spend"])
+                for api_key, key_entry in object_value(object_value(entry)["api_key_breakdown"]).items()
+            },
+        )
+        for guardrail_id, entry in object_value(breakdown["guardrails"]).items()
+    }
+
+
+def _day_breakdown(gateway: Gateway, day: str, **params: str) -> dict[str, JsonValue]:
+    results: Final = _RESULTS.validate_python(_activity(gateway, day, **params)["results"])
+    assert len(results) == 1
+    return object_value(object_value(results[0])["breakdown"])
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_breaks_down_guardrail_spend(gateway: Gateway) -> None:
+    """Guardrail cost per guardrail and key follows the request's user, model and api_key_limit scope.
+    orphan-key has guardrail cost but no spend row on the day, so no user scope reaches it. Model spend
+    keeps the guardrail cost it already carries."""
+    day: Final = _unique_day()
+    _seed(
+        day,
+        [
+            (_row_id(), "user-a", day, "key-a", "gpt-5", "", "bedrock", None, "/v1/chat/completions", 10, 1.0, 1, 1),
+            (_row_id(), "user-b", day, "key-b", "gpt-5", "", "bedrock", None, "/v1/chat/completions", 10, 2.0, 1, 1),
+        ],
+    )
+    _seed_guardrail_units(
+        day,
+        [
+            ("pii-filter", "key-a", "contentPolicyUnits", 0.10),
+            ("pii-filter", "key-a", "sensitiveInformationPolicyUnits", 0.05),
+            ("pii-filter", "key-b", "contentPolicyUnits", 0.20),
+            ("topic-filter", "key-a", "topicPolicyUnits", 0.01),
+            ("topic-filter", "key-b", "topicPolicyUnits", None),
+            ("pii-filter", "orphan-key", "contentPolicyUnits", 9.0),
+        ],
+    )
+    try:
+        everyone: Final = _day_breakdown(gateway, day)
+        assert _guardrail_spend(everyone) == {
+            "pii-filter": (pytest.approx(0.35), {"key-a": pytest.approx(0.15), "key-b": pytest.approx(0.20)}),
+            "topic-filter": (pytest.approx(0.01), {"key-a": pytest.approx(0.01), "key-b": 0.0}),
+        }
+        api_keys: Final = object_value(everyone["api_keys"])
+        assert object_value(everyone["guardrails"])["topic-filter"] == {
+            "metrics": {"spend": pytest.approx(0.01)},
+            "api_key_breakdown": {
+                "key-a": {
+                    "metrics": {"spend": pytest.approx(0.01)},
+                    "metadata": object_value(api_keys["key-a"])["metadata"],
+                },
+                "key-b": {"metrics": {"spend": 0.0}, "metadata": object_value(api_keys["key-b"])["metadata"]},
+            },
+        }
+        assert object_value(object_value(object_value(everyone["models"])["gpt-5"])["metrics"])["spend"] == 3.0
+
+        assert _guardrail_spend(_day_breakdown(gateway, day, user_id="user-a")) == {
+            "pii-filter": (pytest.approx(0.15), {"key-a": pytest.approx(0.15)}),
+            "topic-filter": (pytest.approx(0.01), {"key-a": pytest.approx(0.01)}),
+        }
+        assert _guardrail_spend(_day_breakdown(gateway, day, api_key_limit="1")) == {
+            "pii-filter": (pytest.approx(0.35), {"key-b": pytest.approx(0.20)}),
+            "topic-filter": (pytest.approx(0.01), {"key-b": 0.0}),
+        }
+        assert _guardrail_spend(_day_breakdown(gateway, day, model="gpt-5")) == {}
+    finally:
+        _clean(day)
+        write_rows('DELETE FROM "LiteLLM_DailyGuardrailUsageUnits" WHERE date = %s', (day,))

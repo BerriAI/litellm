@@ -3487,6 +3487,13 @@
               "title": "Entities",
               "type": "object"
             },
+            "guardrails": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/GuardrailMetric"
+              },
+              "title": "Guardrails",
+              "type": "object"
+            },
             "mcp_servers": {
               "additionalProperties": {
                 "$ref": "#/components/schemas/MetricWithMetadata"
@@ -3801,6 +3808,52 @@
           ],
           "title": "ExportType",
           "type": "string"
+        },
+        "GuardrailKeyMetric": {
+          "properties": {
+            "metadata": {
+              "$ref": "#/components/schemas/KeyMetadata"
+            },
+            "metrics": {
+              "$ref": "#/components/schemas/GuardrailSpendMetrics"
+            }
+          },
+          "required": [
+            "metrics",
+            "metadata"
+          ],
+          "title": "GuardrailKeyMetric",
+          "type": "object"
+        },
+        "GuardrailMetric": {
+          "properties": {
+            "api_key_breakdown": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/GuardrailKeyMetric"
+              },
+              "title": "Api Key Breakdown",
+              "type": "object"
+            },
+            "metrics": {
+              "$ref": "#/components/schemas/GuardrailSpendMetrics"
+            }
+          },
+          "required": [
+            "metrics"
+          ],
+          "title": "GuardrailMetric",
+          "type": "object"
+        },
+        "GuardrailSpendMetrics": {
+          "properties": {
+            "spend": {
+              "default": 0.0,
+              "title": "Spend",
+              "type": "number"
+            }
+          },
+          "title": "GuardrailSpendMetrics",
+          "type": "object"
         },
         "HTTPAuthSecurityScheme": {
           "description": "Defines a security scheme using HTTP authentication.",
