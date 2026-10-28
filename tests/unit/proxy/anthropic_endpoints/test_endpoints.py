@@ -715,6 +715,86 @@ def test_count_tokens_provider_rejection_logs_its_status_and_answers_the_same_er
     )
 
 
+def _count_on_local_model(monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object]) -> httpx.Response:
+    from fastapi import FastAPI
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.anthropic_endpoints.endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "count-log-local",
+                    "litellm_params": {"model": "hosted_vllm/count-log-local", "api_base": "https://local.test/v1"},
+                    "model_info": {"id": "count-log-local-deployment"},
+                }
+            ]
+        ),
+    )
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    return TestClient(app).post(
+        "/v1/messages/count_tokens", json=dict(body), headers={"x-litellm-call-id": "count-log-local"}
+    )
+
+
+def test_count_tokens_unsupported_content_logs_the_400_it_answers(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+) -> None:
+    response: Final = _count_on_local_model(
+        monkeypatch,
+        {"model": "count-log-local", "messages": [{"role": "user", "content": [{"type": "future_block"}]}]},
+    )
+
+    assert (response.status_code, response.json()["error"]["type"]) == (400, "invalid_request_error"), response.text
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-local",
+            "request_model": "count-log-local",
+            "model_id": "count-log-local-deployment",
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "request_model"),
+    [
+        ({"messages": [{"role": "user", "content": "Hello"}]}, None),
+        ({"model": "count-log-local", "messages": []}, "count-log-local"),
+    ],
+)
+def test_count_tokens_rejected_before_counting_logs_the_400_it_answers(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+    body: Mapping[str, object],
+    request_model: str | None,
+) -> None:
+    response: Final = _count_on_local_model(monkeypatch, body)
+
+    assert response.status_code == 400, response.text
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-local",
+            "request_model": request_model,
+            "model_id": None,
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )
+
+
 class TestEventLoggingBatchEndpoint:
     """Test the stubbed event logging batch endpoint"""
 

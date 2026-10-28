@@ -1,5 +1,6 @@
 import json
 import re
+from asyncio import CancelledError
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -25,6 +26,7 @@ def _logfmt_value(value: str | None) -> str:
 
 
 _Counted: Final = TypeVar("_Counted")
+_Rejection: Final = TypeVar("_Rejection")
 _ProviderCount: Final = TypeVar("_ProviderCount", bound=Mapping[str, object])
 
 
@@ -41,7 +43,7 @@ _FAILED_COUNT: Final = _CountFields(model_used=None, input_tokens=None, count_so
 @dataclass(frozen=True, slots=True)
 class _CountRequest:
     litellm_call_id: str
-    request_model: str
+    request_model: str | None
     model_id: str | None
 
 
@@ -78,12 +80,23 @@ def _log_token_count(request: _CountRequest, fields: _CountFields, status_code: 
     )
 
 
+def rejected_token_count(rejection: _Rejection, litellm_call_id: str, request_model: str | None) -> _Rejection:
+    _log_token_count(
+        _CountRequest(litellm_call_id, request_model, model_id=None),
+        _FAILED_COUNT,
+        error_status_code(rejection, status.HTTP_500_INTERNAL_SERVER_ERROR),
+    )
+    return rejection
+
+
 async def _logged(
     count: Awaitable[_Counted], request: _CountRequest, fields_of: Callable[[_Counted], _CountFields]
 ) -> _Counted:
     try:
         counted: Final = await count
-    except Exception as e:
+    except CancelledError:
+        raise
+    except BaseException as e:
         _log_token_count(request, _FAILED_COUNT, error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR))
         raise
     _log_token_count(request, fields_of(counted), status.HTTP_200_OK)

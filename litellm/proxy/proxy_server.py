@@ -100,7 +100,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError, offload_token_count
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     HUGGING_FACE_SOURCE,
     KimiK3Encodings,
@@ -552,7 +552,11 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
     get_budget_reset_time,
 )
-from litellm.proxy.common_utils.token_count_log import deployment_model_id, logged_token_count
+from litellm.proxy.common_utils.token_count_log import (
+    deployment_model_id,
+    logged_token_count,
+    rejected_token_count,
+)
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     end_user_cache_key,
@@ -15272,24 +15276,37 @@ async def count_request_tokens(
     responses_request: Mapping[str, object] | None = None,
     litellm_call_id: str | None = None,
 ) -> TokenCountResponse:
+    call_id: Final = resolve_litellm_call_id(litellm_call_id)
     if request.prompt is None and request.messages is None and request.contents is None:
-        raise HTTPException(status_code=400, detail="prompt or messages or contents must be provided")
+        raise rejected_token_count(
+            HTTPException(status_code=400, detail="prompt or messages or contents must be provided"),
+            call_id,
+            request.model,
+        )
     routed: Final = await _routed_count_deployment(request.model, responses_request)
+    count: Final = _count_request_tokens(
+        request=request,
+        routed=routed,
+        call_endpoint=call_endpoint,
+        messages_format=messages_format,
+        output_format=output_format,
+        context_management=context_management,
+        request_litellm_params=request_litellm_params,
+        responses_request=responses_request,
+    )
     return await logged_token_count(
-        _count_request_tokens(
-            request=request,
-            routed=routed,
-            call_endpoint=call_endpoint,
-            messages_format=messages_format,
-            output_format=output_format,
-            context_management=context_management,
-            request_litellm_params=request_litellm_params,
-            responses_request=responses_request,
-        ),
-        litellm_call_id=resolve_litellm_call_id(litellm_call_id),
+        _with_anthropic_content_errors(count) if messages_format == "anthropic" else count,
+        litellm_call_id=call_id,
         request_model=request.model,
         model_id=deployment_model_id(routed),
     )
+
+
+async def _with_anthropic_content_errors(count: Awaitable[TokenCountResponse]) -> TokenCountResponse:
+    try:
+        return await count
+    except UnsupportedContentTypeError as e:
+        raise ProxyException(message=str(e), type="invalid_request_error", param="messages", code=400) from e
 
 
 async def _routed_count_deployment(

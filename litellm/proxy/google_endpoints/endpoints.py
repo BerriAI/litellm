@@ -22,6 +22,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     read_request_body,
 )
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
+from litellm.proxy.common_utils.token_count_log import rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
@@ -292,11 +293,18 @@ async def google_count_tokens(request: Request, model_name: str):
     try:
         token_request: Final = _google_count_tokens_request(model_name, data)
     except ValidationError:
-        return _google_error_response(
-            request,
-            ProxyException(
-                message="Invalid Google countTokens request body", type="invalid_request_error", param=None, code=400
+        return rejected_token_count(
+            _google_error_response(
+                request,
+                ProxyException(
+                    message="Invalid Google countTokens request body",
+                    type="invalid_request_error",
+                    param=None,
+                    code=400,
+                ),
             ),
+            litellm_call_id,
+            model_name,
         )
 
     try:

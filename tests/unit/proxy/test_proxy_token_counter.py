@@ -3959,6 +3959,27 @@ def test_utils_token_counter_logs_a_generated_call_id_when_the_client_sends_none
     assert str(uuid.UUID(str(line["litellm_call_id"]))) == line["litellm_call_id"]
 
 
+def test_utils_token_counter_without_messages_logs_the_400_it_answers(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+) -> None:
+    response: Final = _utils_token_counter(
+        monkeypatch, {"model": "count-log-gpt"}, {"x-litellm-call-id": "count-log-utils-empty"}
+    )
+
+    assert response.status_code == 400, response.text
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-utils-empty",
+            "request_model": "count-log-gpt",
+            "model_id": None,
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )
+
+
 def test_utils_token_counter_failed_count_logs_its_status_in_place_of_a_count(
     monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
 ) -> None:
@@ -3986,17 +4007,6 @@ def test_utils_token_counter_failed_count_logs_its_status_in_place_of_a_count(
             "status_code": 400,
         },
     )
-
-
-def test_utils_token_counter_request_with_nothing_to_count_writes_no_line(
-    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
-) -> None:
-    response: Final = _utils_token_counter(
-        monkeypatch, {"model": "count-log-gpt"}, {"x-litellm-call-id": "count-log-utils-empty"}
-    )
-
-    assert response.status_code == 400, response.text
-    assert token_count_log_lines() == ()
 
 
 def test_utils_token_counter_json_line_keeps_its_own_fields_when_the_call_id_is_a_dict(

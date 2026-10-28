@@ -7351,6 +7351,45 @@ async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_cou
     )
 
 
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_without_a_model_logs_the_400_it_answers(
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/bedrock/model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
+            "headers": [(b"x-litellm-call-id", b"bedrock-native-no-model")],
+        }
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await handle_bedrock_count_tokens(
+            endpoint=f"model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(),
+            request_body={"messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert exc_info.value.status_code == 400
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "bedrock-native-no-model",
+            "request_model": None,
+            "model_id": None,
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )
+
+
 class _AzureGroupRouter:
     def __init__(self, captured: list[dict]) -> None:
         self.captured = captured

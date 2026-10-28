@@ -4611,6 +4611,27 @@ class TestResponsesInputTokens:
             },
         )
 
+    def test_count_rejected_before_counting_logs_the_400_it_answers(
+        self, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+    ) -> None:
+        response, counter = self._post_input_tokens(
+            {"model": "count-log-gpt"}, headers={"x-litellm-call-id": "count-log-no-input"}
+        )
+
+        assert response.status_code == 400, response.text
+        counter.assert_not_awaited()
+        assert token_count_log_lines() == (
+            {
+                "litellm_call_id": "count-log-no-input",
+                "request_model": "count-log-gpt",
+                "model_id": None,
+                "model_used": None,
+                "input_tokens": None,
+                "count_source": None,
+                "status_code": 400,
+            },
+        )
+
     def test_a_managed_file_the_key_cannot_read_answers_403_without_a_count(self) -> None:
         from litellm.integrations.custom_logger import CustomLogger
 

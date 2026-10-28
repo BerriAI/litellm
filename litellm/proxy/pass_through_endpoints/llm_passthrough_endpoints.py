@@ -105,7 +105,11 @@ from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
-from litellm.proxy.common_utils.token_count_log import deployment_model_id, logged_provider_token_count
+from litellm.proxy.common_utils.token_count_log import (
+    deployment_model_id,
+    logged_provider_token_count,
+    rejected_token_count,
+)
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
     stream_usage_relay,
@@ -1262,6 +1266,7 @@ async def handle_bedrock_count_tokens(
     from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
     from litellm.proxy.proxy_server import llm_router
 
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     try:
         # Initialize the handler
         handler: Final = BedrockCountTokensHandler()
@@ -1269,7 +1274,11 @@ async def handle_bedrock_count_tokens(
         # Extract model from request body
         model: Final = _optional_str(request_body.get("model"))
         if not model:
-            raise HTTPException(status_code=400, detail={"error": "Model is required in request body"})
+            raise rejected_token_count(
+                HTTPException(status_code=400, detail={"error": "Model is required in request body"}),
+                litellm_call_id,
+                None,
+            )
 
         # Get model parameters from router
         litellm_params: Final = {"user_api_key_dict": user_api_key_dict}
@@ -1298,7 +1307,7 @@ async def handle_bedrock_count_tokens(
                 litellm_params=litellm_params,
                 resolved_model=resolved_model,
             ),
-            litellm_call_id=resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER)),
+            litellm_call_id=litellm_call_id,
             request_model=model,
             model_id=deployment_model_id(deployment),
             model_used=handler.count_tokens_model_id(resolved_model),

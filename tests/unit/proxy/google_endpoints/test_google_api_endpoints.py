@@ -295,3 +295,26 @@ def test_google_count_tokens_logs_one_line_with_the_callers_call_id_model_and_co
             "status_code": 200,
         },
     )
+
+
+def test_google_count_tokens_rejected_body_logs_the_400_it_answers(
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    response: Final = _build_test_client().post(
+        "/v1beta/models/count-log-claude:countTokens",
+        json={"contents": "not a list"},
+        headers={"x-litellm-call-id": "count-log-gemini-bad-body"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-gemini-bad-body",
+            "request_model": "count-log-claude",
+            "model_id": None,
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )
