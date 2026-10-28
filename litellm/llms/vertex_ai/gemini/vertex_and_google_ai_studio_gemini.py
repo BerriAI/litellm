@@ -42,6 +42,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_httpx_client,
 )
 from litellm.types.llms.anthropic import AnthropicThinkingParam
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -687,6 +688,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
     ) -> bool:
         return cls._forward_gemini_function_call_id(model)
+
+    @classmethod
+    def supports_multimodal_function_responses(cls, model: str) -> bool:
+        return cls.is_gemini_3_or_newer(model)
 
     def _supports_penalty_parameters(self, model: str) -> bool:
         # Gemini 3 models do not support penalty parameters
@@ -2364,26 +2369,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 elif modality == "DOCUMENT":
                     cached_text_tokens = (cached_text_tokens or 0) + token_count
 
-        ## Calculate non-cached tokens by subtracting cached from total (per modality)
-        ## This is necessary because promptTokensDetails includes both cached and non-cached tokens
-        ## See: https://github.com/BerriAI/litellm/issues/18750
-        if cached_text_tokens is not None and prompt_text_tokens is not None:
-            # Explicit caching: subtract cached tokens per modality from cacheTokensDetails
-            prompt_text_tokens = prompt_text_tokens - cached_text_tokens
-        elif (
+        if (
             cached_tokens is not None
             and prompt_text_tokens is not None
             and cached_text_tokens is None
             and "cacheTokensDetails" not in usage_metadata
         ):
-            # Implicit caching: only cachedContentTokenCount is provided (no cacheTokensDetails)
-            # Subtract from text tokens since implicit caching is primarily for text content
-            # See: https://github.com/BerriAI/litellm/issues/16341
             prompt_text_tokens = prompt_text_tokens - cached_tokens
-        if cached_audio_tokens is not None and prompt_audio_tokens is not None:
-            prompt_audio_tokens = prompt_audio_tokens - cached_audio_tokens
-        if cached_image_tokens is not None and prompt_image_tokens is not None:
-            prompt_image_tokens = prompt_image_tokens - cached_image_tokens
         if cached_video_tokens is not None and prompt_video_tokens is not None:
             prompt_video_tokens = prompt_video_tokens - cached_video_tokens
 
@@ -2404,9 +2396,24 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         billable_text_tokens: Final = (
             prompt_text_tokens if prompt_text_tokens is None else prompt_text_tokens + billable_tool_use_prompt_tokens
         )
+        cached_tokens_details_fields: Final = MappingProxyType(
+            {
+                key: token_count
+                for key, token_count in (
+                    ("text_tokens", cached_text_tokens),
+                    ("audio_tokens", cached_audio_tokens),
+                    ("image_tokens", cached_image_tokens),
+                )
+                if token_count is not None
+            }
+        )
+        cached_tokens_details: Final = (
+            CachedTokensDetails.model_validate(cached_tokens_details_fields) if cached_tokens_details_fields else None
+        )
 
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cached_tokens,
+            cached_tokens_details=cached_tokens_details,
             audio_tokens=prompt_audio_tokens,
             text_tokens=billable_text_tokens,
             image_tokens=prompt_image_tokens,

@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import copy
 import datetime
 import json
@@ -8640,10 +8641,10 @@ class TestStreamingClientDisconnectBilling:
         through the translate_completion_output_params_streaming result to the
         inner chat stream's collected chunks or a disconnect bills nothing.
         """
-        from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
+        from litellm.llms.anthropic.messages.adapters.streaming_iterator import (
             AnthropicSSEStream,
         )
-        from litellm.llms.anthropic.pass_through.adapters.transformation import (
+        from litellm.llms.anthropic.messages.adapters.transformation import (
             AnthropicAdapter,
         )
         from litellm.router import FallbackAwareAnthropicMessagesStream
@@ -9180,7 +9181,7 @@ def _apply_stream_usage_tracking(
 
     @pytest.mark.asyncio
     async def test_disconnect_bills_partial_default_route_messages_stream_through_the_responses_adapter(self):
-        from litellm.llms.anthropic.pass_through.responses_adapters.streaming_iterator import (
+        from litellm.llms.anthropic.messages.responses_adapters.streaming_iterator import (
             AnthropicResponsesStreamWrapper,
         )
         from litellm.router import FallbackAwareAnthropicMessagesStream
@@ -10175,6 +10176,32 @@ class TestInjectCostIntoUsageDict:
 
 
 class TestProcessChunkWithCostInjection:
+    @pytest.mark.parametrize("model", ["claude-opus-5-5", "vertex_ai/claude-opus-5-5"])
+    @pytest.mark.parametrize("search_requests", [None, "null", 0, 1, 2])
+    def test_claude_search_stream_cost_matches_complete_usage(
+        self, monkeypatch: pytest.MonkeyPatch, model: str, search_requests: int | Literal["null"] | None
+    ) -> None:
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        usage: Final = litellm.Usage(
+            prompt_tokens=10760,
+            completion_tokens=399,
+            total_tokens=11159,
+            server_tool_use={"web_search_requests": search_requests} if isinstance(search_requests, int) else None,
+        )
+        wire_usage: Final = usage.model_dump() | ({"server_tool_use": None} if search_requests == "null" else {})
+        event: Final = {"object": "chat.completion.chunk", "choices": [], "usage": wire_usage}
+        chunk: Final = f"data: {json.dumps(event)}\n\n".encode()
+
+        result: Final = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(chunk, model)
+
+        assert isinstance(result, bytes)
+        payload: Final = json.loads(result.decode().removeprefix("data: "))
+        expected_cost: Final = litellm.completion_cost(
+            model=model, completion_response=litellm.ModelResponse(usage=usage)
+        )
+        assert payload["usage"]["cost"] == pytest.approx(expected_cost)
+        assert "cost" not in event["usage"]
+
     def test_complete_usage_frame_chunk_is_injected(self, monkeypatch):
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
         chunk = (
@@ -10799,12 +10826,19 @@ class TestResolveLitellmCallId:
 class _FailureHookRecorder:
     """Stands in for ProxyLogging.post_call_failure_hook, recording what the detached-failure closure hands it."""
 
-    def __init__(self, raises: Optional[Exception] = None):
+    def __init__(self, raises: Optional[Exception] = None, gate: Optional[asyncio.Event] = None):
         self.calls = []
+        self.entered = asyncio.Event()
+        self.reported = asyncio.Event()
         self._raises = raises
+        self._gate = gate
 
     async def post_call_failure_hook(self, **kwargs):
+        self.entered.set()
+        if self._gate is not None:
+            await self._gate.wait()
         self.calls.append(kwargs)
+        self.reported.set()
         if self._raises is not None:
             raise self._raises
 
@@ -10904,6 +10938,171 @@ class TestDetachedStreamFailureHook:
         await logging_obj.on_detached_stream_failure(failure)
 
         assert [call["original_exception"] for call in recorder.calls] == [failure]
+
+    @staticmethod
+    def _armed_stream(recorder: _FailureHookRecorder, iterator_hook_for, response: Optional[MagicMock] = None):
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-6.1-sol",
+            messages=[{"role": "user", "content": "Write a story."}],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=None,
+            litellm_call_id="call-lit6871",
+            function_id="function-lit6871",
+        )
+        user_api_key_dict = RealUserAPIKeyAuth(api_key="sk-test")
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"litellm_logging_obj": logging_obj})
+        ProxyLogging._callback_capabilities_cache.clear()
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        proxy_logging_obj.post_call_failure_hook = recorder.post_call_failure_hook
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = iterator_hook_for(logging_obj)
+        processing_obj._arm_detached_stream_failure_hook(
+            logging_obj=logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        stream = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=MagicMock() if response is None else response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=processing_obj.data,
+            proxy_logging_obj=proxy_logging_obj,
+            serialize_chunk=lambda chunk: "data: chunk\n\n",
+            serialize_error=lambda error: "data: error\n\n",
+        )
+        return logging_obj, stream
+
+    @staticmethod
+    def _hook_reporting(upstream_failure: Exception, after_report=None):
+        def iterator_hook_for(logging_obj):
+            async def iterator_hook(**_kwargs):
+                yield b"event: message_start\n\n"
+                await logging_obj.on_detached_stream_failure(upstream_failure)
+                yield b"event: error\n\n"
+                yield b"event: message_stop\n\n"
+                if after_report is not None:
+                    raise after_report
+
+            return iterator_hook
+
+        return iterator_hook_for
+
+    @pytest.mark.asyncio
+    async def test_iterator_hook_failure_after_a_bridged_failure_is_the_one_the_failure_hook_gets(self):
+        recorder = _FailureHookRecorder()
+        upstream_failure = RuntimeError("upstream Responses stream failed")
+        hook_failure = RuntimeError("iterator hook rejected the stream")
+
+        _, stream = self._armed_stream(recorder, self._hook_reporting(upstream_failure, after_report=hook_failure))
+
+        frames = [frame async for frame in stream]
+
+        assert frames == ["data: chunk\n\n"] * 3 + ["data: error\n\n"]
+        assert [call["original_exception"] for call in recorder.calls] == [hook_failure]
+
+    @pytest.mark.asyncio
+    async def test_failure_hook_replacing_the_iterator_hook_failure_aborts_the_stream(self):
+        replacement = HTTPException(status_code=418, detail="rejected by a custom failure hook")
+        recorder = _FailureHookRecorder(raises=replacement)
+        upstream_failure = RuntimeError("upstream Responses stream failed")
+        hook_failure = RuntimeError("iterator hook rejected the stream")
+
+        _, stream = self._armed_stream(recorder, self._hook_reporting(upstream_failure, after_report=hook_failure))
+
+        frames = [await stream.__anext__() for _ in range(3)]
+        with pytest.raises(HTTPException) as raised:
+            await stream.__anext__()
+
+        assert raised.value is replacement
+        assert frames == ["data: chunk\n\n"] * 3
+        assert [call["original_exception"] for call in recorder.calls] == [hook_failure]
+
+    @pytest.mark.asyncio
+    async def test_failure_reported_by_the_stream_reaches_the_failure_hook_once_after_the_stream_ends(self):
+        recorder = _FailureHookRecorder()
+        upstream_failure = RuntimeError("upstream Responses stream failed")
+
+        _, stream = self._armed_stream(recorder, self._hook_reporting(upstream_failure))
+
+        frames = []
+        async for frame in stream:
+            frames.append(frame)
+            assert recorder.calls == []
+
+        assert frames == ["data: chunk\n\n"] * 3
+        assert [call["original_exception"] for call in recorder.calls] == [upstream_failure]
+
+    @pytest.mark.asyncio
+    async def test_failure_report_and_stream_cleanup_survive_the_client_task_being_cancelled_mid_report(self):
+        gate = asyncio.Event()
+        recorder = _FailureHookRecorder(gate=gate)
+        upstream_failure = RuntimeError("upstream Responses stream failed")
+        response = MagicMock()
+        response.aclose = AsyncMock()
+
+        _, stream = self._armed_stream(recorder, self._hook_reporting(upstream_failure), response=response)
+
+        async def client_reads_the_whole_stream():
+            return [frame async for frame in stream]
+
+        client = asyncio.create_task(client_reads_the_whole_stream())
+        await asyncio.wait_for(recorder.entered.wait(), timeout=5)
+        client.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await client
+
+        response.aclose.assert_awaited_once()
+        gate.set()
+        await asyncio.wait_for(recorder.reported.wait(), timeout=5)
+        assert [call["original_exception"] for call in recorder.calls] == [upstream_failure]
+
+    @pytest.mark.asyncio
+    async def test_failure_reported_by_the_stream_reaches_the_failure_hook_once_when_the_client_leaves_early(self):
+        recorder = _FailureHookRecorder()
+        upstream_failure = RuntimeError("upstream Responses stream failed")
+
+        _, stream = self._armed_stream(recorder, self._hook_reporting(upstream_failure))
+
+        await stream.__anext__()
+        await stream.__anext__()
+        await stream.aclose()
+
+        assert [call["original_exception"] for call in recorder.calls] == [upstream_failure]
+
+    @pytest.mark.asyncio
+    async def test_failure_reported_after_the_stream_ends_still_reaches_the_failure_hook(self):
+        recorder = _FailureHookRecorder()
+        upstream_failure = RuntimeError("upstream Responses stream failed after the client stream closed")
+
+        async def iterator_hook(**_kwargs):
+            yield b"event: message_start\n\n"
+
+        logging_obj, stream = self._armed_stream(recorder, lambda _logging_obj: iterator_hook)
+
+        frames = [frame async for frame in stream]
+        await logging_obj.on_detached_stream_failure(upstream_failure)
+
+        assert frames == ["data: chunk\n\n"]
+        assert [call["original_exception"] for call in recorder.calls] == [upstream_failure]
+
+    @pytest.mark.asyncio
+    async def test_failure_reported_by_an_iterator_hook_is_not_reported_again_when_the_stream_closes(self):
+        recorder = _FailureHookRecorder()
+        upstream_failure = RuntimeError("upstream Responses stream failed")
+        hook_failure = RuntimeError("iterator hook rejected the error frame")
+
+        async def iterator_hook(**_kwargs):
+            yield b"event: message_start\n\n"
+            raise hook_failure
+
+        logging_obj, stream = self._armed_stream(recorder, lambda _logging_obj: iterator_hook)
+
+        frames = [frame async for frame in stream]
+        await logging_obj.on_detached_stream_failure(upstream_failure)
+
+        assert frames == ["data: chunk\n\n", "data: error\n\n"]
+        assert [call["original_exception"] for call in recorder.calls] == [hook_failure]
 
 
 class TestPostCallMaskedOutputReachesDeferredLogging:
@@ -11897,7 +12096,7 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
 
     def test_recomputed_cost_prices_the_reasoning_tokens_of_the_bridged_chat_completion(self):
         from litellm.types.utils import CompletionTokensDetailsWrapper, ModelResponse, Usage
-        from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+        from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 
         model = "dashscope/qwen-turbo"
         pricing = litellm.get_model_info(model)
@@ -12027,3 +12226,140 @@ class TestResponseCostFromLoggingObjForCacheHits:
         )
 
         assert cost == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["messages", "openai"])
+@pytest.mark.parametrize("keepalive", ["disabled", "fast", "pinged"])
+async def test_completed_synthetic_stream_reuses_capacity_without_freeing_another_request(
+    surface: Literal["messages", "openai"],
+    keepalive: Literal["disabled", "fast", "pinged"],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
+        FakeAnthropicMessagesStreamIterator,
+    )
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.sse_keepalive import SSE_COMMENT_PING_BYTES
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.utils import InternalUsageCache, hash_token
+    from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+
+    def clock() -> datetime.datetime:
+        return datetime.datetime(2026, 1, 1)
+
+    cache: Final = DualCache()
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(cache), time_provider=clock
+    )
+    logger: Final = ProxyLogging(user_api_key_cache=cache)
+    logger.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    auth: Final = ProxyUserAPIKeyAuth(api_key=hash_token("sk-synthetic-stream"), max_parallel_requests=2)
+    counter: Final = f"{{api_key:{auth.api_key}}}:max_parallel_requests"
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", logger)
+
+    async def admit(call_id: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={"model": "test-model", "litellm_call_id": call_id},
+            call_type="anthropic_messages",
+        )
+
+    async def request(call_id: str) -> None:
+        upstream_answers: Final = asyncio.Event()
+        if keepalive != "pinged":
+            upstream_answers.set()
+
+        async def produce() -> StreamingResponse:
+            await admit(call_id)
+            with pytest.raises(HTTPException) as rejected:
+                await contextvars.Context().run(asyncio.create_task, admit("overlapping"))
+            assert rejected.value.status_code == 429
+            await upstream_answers.wait()
+            body: Final = AnthropicMessagesResponse(
+                id=call_id,
+                type="message",
+                role="assistant",
+                model="test-model",
+                content=[{"type": "text", "text": "Search completed"}],
+                stop_reason="end_turn",
+                stop_sequence=None,
+                usage={"input_tokens": 0, "output_tokens": 0},
+            )
+            source: Final = FakeAnthropicMessagesStreamIterator(body)
+            data: Final = {"model": "test-model", "litellm_call_id": call_id}
+            stream: Final = (
+                ProxyBaseLLMRequestProcessing.async_sse_data_generator(source, auth, data, logger)
+                if surface == "messages"
+                else proxy_server.async_data_generator(source, auth, data)
+            )
+            return StreamingResponse(stream)
+
+        response: Final = await open_sse_before_first_byte(
+            produce(), None if keepalive == "disabled" else 0.001 if keepalive == "pinged" else 60.0
+        )
+        first: Final = await anext(response.body_iterator)
+        if keepalive == "pinged":
+            assert first == SSE_COMMENT_PING_BYTES
+            upstream_answers.set()
+        frames: Final = (first, *tuple([frame async for frame in response.body_iterator]))
+        wire: Final = b"".join(frame.encode() if isinstance(frame, str) else frame for frame in frames)
+        assert b'"type": "message_stop"' in wire
+
+    await contextvars.Context().run(asyncio.create_task, admit("still-streaming"))
+    for index in range(4):
+        await contextvars.Context().run(asyncio.create_task, request(f"completed-{index}"))
+        occupied: Final = await cache.async_get_cache(counter)
+        assert isinstance(occupied, dict) and len(occupied) == 1, occupied
+
+
+@pytest.mark.asyncio
+async def test_completed_stream_cleanup_does_not_release_an_unowned_legacy_slot() -> None:
+    from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
+    from litellm.proxy.utils import InternalUsageCache, hash_token
+
+    def clock() -> datetime.datetime:
+        return datetime.datetime(2026, 1, 1)
+
+    cache: Final = DualCache()
+    limiter: Final = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache), clock=clock)
+    logger: Final = ProxyLogging(user_api_key_cache=cache)
+    logger.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    auth: Final = ProxyUserAPIKeyAuth(api_key=hash_token("sk-legacy-stream"), max_parallel_requests=1)
+    await limiter.async_pre_call_hook(auth, cache, {}, "acompletion")
+
+    await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
+        request=None,
+        request_data={},
+        response=None,
+        stream_completed=True,
+        user_api_key_dict=auth,
+        proxy_logging_obj=logger,
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await limiter.async_pre_call_hook(auth, cache, {}, "acompletion")
+    assert rejected.value.status_code == 429
+
+
+def test_maybe_get_model_id_reads_the_chat_metadata_the_router_updated_in_place():
+    processing_obj: Final = ProxyBaseLLMRequestProcessing(data={"metadata": {"model_info": {"id": "declared-text"}}})
+
+    assert processing_obj.maybe_get_model_id(None) == "declared-text"
+
+
+def test_maybe_get_model_id_prefers_litellm_metadata_over_caller_metadata_without_a_deployment():
+    processing_obj: Final = ProxyBaseLLMRequestProcessing(
+        data={
+            "metadata": {"trace_id": "t-1"},
+            "litellm_metadata": {"model_info": {"id": "vision"}},
+        }
+    )
+
+    assert processing_obj.maybe_get_model_id(None) == "vision"
+
+
+def test_maybe_get_model_id_returns_none_before_the_router_picked_a_deployment():
+    assert ProxyBaseLLMRequestProcessing(data={"metadata": {}}).maybe_get_model_id(None) is None
