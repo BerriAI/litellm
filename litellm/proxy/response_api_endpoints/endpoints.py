@@ -56,6 +56,7 @@ from litellm.proxy.common_request_processing import (
     cost_headers,
     create_response,
     resolve_counted_tool_fields,
+    resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.error_body_call_id import error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -69,6 +70,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_type_for_status,
 )
+from litellm.proxy.common_utils.token_count_log import rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
@@ -1407,7 +1409,12 @@ class _TokenCountPayload(TypedDict):
 
 class _TokenCounter(Protocol):
     def __call__(
-        self, *, request: TokenCountRequest, call_endpoint: bool, responses_request: Mapping[str, object] | None
+        self,
+        *,
+        request: TokenCountRequest,
+        call_endpoint: bool,
+        responses_request: Mapping[str, object] | None,
+        litellm_call_id: str | None,
     ) -> Awaitable[TokenCountResponse]: ...
 
 
@@ -1648,18 +1655,23 @@ async def responses_input_tokens(
 
     Returns: `{"object": "response.input_tokens", "input_tokens": <count>}`
     """
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     data: Final = await read_request_body(request=request)
     model_name: Final = data.get("model")
     input_value: Final = data.get("input")
     if not isinstance(model_name, str) or not model_name:
-        return _missing_responses_param_response("model")
+        return rejected_token_count(_missing_responses_param_response("model"), litellm_call_id, None)
     if input_value is None:
-        return _missing_responses_param_response("input")
+        return rejected_token_count(_missing_responses_param_response("input"), litellm_call_id, model_name)
     if isinstance(input_value, (str, list)) and not input_value:
-        return _responses_invalid_request_response(
-            message="""One of "input" or "previous_response_id" or 'prompt' or 'conversation' must be provided.""",
-            param=None,
-            code="missing_required_parameter",
+        return rejected_token_count(
+            _responses_invalid_request_response(
+                message="""One of "input" or "previous_response_id" or 'prompt' or 'conversation' must be provided.""",
+                param=None,
+                code="missing_required_parameter",
+            ),
+            litellm_call_id,
+            model_name,
         )
 
     counted_fields: Final = {
@@ -1667,7 +1679,11 @@ async def responses_input_tokens(
     }
     token_fields: Final = resolve_counted_tool_fields(counted_fields, llm_router, user_api_key_dict.team_id)
     if isinstance(token_fields, ProxyException):
-        return _responses_invalid_request_response(message=token_fields.message, param=token_fields.param, code=None)
+        return rejected_token_count(
+            _responses_invalid_request_response(message=token_fields.message, param=token_fields.param, code=None),
+            litellm_call_id,
+            model_name,
+        )
 
     try:
         payload: Final[_TokenCountPayload] = {
@@ -1680,27 +1696,44 @@ async def responses_input_tokens(
         }
         token_request: Final = TokenCountRequest.model_validate(payload)
     except ValidationError as e:
-        return _responses_invalid_request_response(
-            message=first_validation_error(e), param=str(e.errors(include_url=False)[0]["loc"][0]), code=None
+        return rejected_token_count(
+            _responses_invalid_request_response(
+                message=first_validation_error(e), param=str(e.errors(include_url=False)[0]["loc"][0]), code=None
+            ),
+            litellm_call_id,
+            model_name,
         )
     except Exception as e:
-        return _responses_invalid_request_response(
-            message=f"Invalid request for token counting: {e}", param=None, code=None
+        return rejected_token_count(
+            _responses_invalid_request_response(
+                message=f"Invalid request for token counting: {e}", param=None, code=None
+            ),
+            litellm_call_id,
+            model_name,
         )
 
     request_fields: Final = _PROXY_SERVER_REQUEST_ADAPTER.validate_python(data)
-    responses_request: Final = await _with_managed_file_id_mapping(
-        _with_authorized_previous_response(
-            {**{name: value for name, value in request_fields.items() if name not in counted_fields}, **token_fields},
-            response_id_security,
+    try:
+        responses_request: Final = await _with_managed_file_id_mapping(
+            _with_authorized_previous_response(
+                {
+                    **{name: value for name, value in request_fields.items() if name not in counted_fields},
+                    **token_fields,
+                },
+                response_id_security,
+                user_api_key_dict,
+            ),
+            managed_files,
             user_api_key_dict,
-        ),
-        managed_files,
-        user_api_key_dict,
-    )
+        )
+    except ProxyException as e:
+        raise rejected_token_count(e, litellm_call_id, model_name)
     try:
         token_response: Final = await token_counter(
-            request=token_request, call_endpoint=True, responses_request=responses_request
+            request=token_request,
+            call_endpoint=True,
+            responses_request=responses_request,
+            litellm_call_id=litellm_call_id,
         )
     except ProxyException as e:
         if e.type != _PROVIDER_COUNT_ERROR_TYPE:
