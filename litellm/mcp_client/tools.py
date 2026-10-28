@@ -3,14 +3,14 @@ from typing import Final, Literal
 
 import anyio
 from mcp import ClientSession, MCPError
-from mcp.types import INTERNAL_ERROR, PaginatedRequestParams
+from mcp.types import INTERNAL_ERROR, ListToolsRequest, ListToolsResult, PaginatedRequestParams
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import Tool as MCPTool
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
 from openai.types.shared_params.function_definition import FunctionDefinition
-from pydantic import TypeAdapter
+from pydantic import Field, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -22,6 +22,10 @@ from litellm.types.llms.anthropic import AnthropicMessagesTool
 from litellm.types.utils import ChatCompletionMessageToolCall
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _LenientListToolsResult(ListToolsResult):
+    tools: list[MCPTool] = Field(default_factory=list)  # mutable-ok: MCP result model owns the decoded list
 
 
 ########################################################
@@ -125,10 +129,18 @@ async def list_tools_with_pagination(
 
     with anyio.move_on_after(effective_deadline):
         for _ in range(MCP_TOOL_LISTING_MAX_PAGES):
-            result = (
-                await session.list_tools()
-                if cursor is None
-                else await session.list_tools(params=PaginatedRequestParams(cursor=cursor))
+            params = None if cursor is None else PaginatedRequestParams(cursor=cursor)
+            result = await session.send_request(
+                ListToolsRequest(params=params),
+                _LenientListToolsResult,
+            )
+            # ClientSession.list_tools() normally performs this post-processing
+            # after decoding: it filters invalid x-mcp-header annotations and
+            # records the derived header/output-schema state used by tools/call.
+            # Keep those semantics when injecting the lenient result model.
+            result = session._absorb_tool_listing(  # pyright: ignore[reportPrivateUsage]  # no public equivalent
+                result,
+                complete=cursor is None and result.next_cursor is None,
             )
             tools.extend(result.tools)
 
