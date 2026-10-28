@@ -199,9 +199,6 @@ impl TryFrom<&HttpClientConfig> for ClientConfig {
                 let native = rustls_native_certs::load_native_certs();
                 let mut roots = RootCertStore::empty();
                 roots.add_parsable_certificates(native.certs);
-                if roots.is_empty() {
-                    return Err(Error::Client("no usable native root certificates".into()));
-                }
                 builder.with_root_certificates(roots)
             }
             Verify::CaBundle(path) => {

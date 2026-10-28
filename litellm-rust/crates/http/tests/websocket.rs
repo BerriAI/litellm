@@ -12,7 +12,7 @@ use litellm_http::{
     websocket::connect,
 };
 use rcgen::{BasicConstraints, CertificateParams, CertifiedIssuer, IsCa, KeyPair};
-use rstest::rstest;
+use rstest::{Context, rstest};
 use rustls::{
     RootCertStore, ServerConfig,
     crypto::ring,
@@ -275,24 +275,56 @@ async fn wss_honors_ssl_verify(#[case] verify: fn(&Pki) -> Verify, #[case] trust
 }
 
 #[rstest]
+#[case::plain_without_roots(false, false, true)]
+#[case::tls_with_roots(true, true, true)]
+#[case::tls_without_roots(true, false, false)]
 #[tokio::test]
-async fn wss_uses_system_roots() {
+async fn websocket_uses_system_roots(
+    #[context] context: Context,
+    #[case] tls: bool,
+    #[case] trusted_roots: bool,
+    #[case] connects: bool,
+) {
     const CHILD_URL: &str = "LITELLM_TEST_SYSTEM_ROOTS_WSS_URL";
     if let Ok(url) = std::env::var(CHILD_URL) {
-        let mut socket = open(&config(Verify::BuiltInRoots), &url, HeaderMap::new())
-            .await
-            .unwrap();
-        round_trip(&mut socket).await;
+        let result = open(&config(Verify::BuiltInRoots), &url, HeaderMap::new()).await;
+        match result {
+            Ok(mut socket) if connects => round_trip(&mut socket).await,
+            Err(Error::Connect(_)) if !connects => {}
+            other => panic!("unexpected handshake outcome: {:?}", other.map(drop)),
+        }
         return;
     }
 
     let pki = Pki::new();
-    let (address, _) = serve_tls(&pki, false).await;
-    let url = format!("wss://localhost:{}/responses", address.port());
-    let ca = pki.path("ca.pem");
+    let url = if tls {
+        let (address, _) = serve_tls(&pki, false).await;
+        format!("wss://localhost:{}/responses", address.port())
+    } else {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            echo_once(stream, Arc::new(Mutex::new(None))).await;
+        });
+        format!("ws://{address}/responses")
+    };
+    let ca = if trusted_roots {
+        pki.path("ca.pem")
+    } else {
+        let empty = pki.path("empty.pem");
+        std::fs::write(&empty, "").unwrap();
+        empty
+    };
+    let test = format!(
+        "{}::case_{}_{}",
+        context.name,
+        context.case.unwrap() + 1,
+        context.description.unwrap()
+    );
     let output = tokio::task::spawn_blocking(move || {
         std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "wss_uses_system_roots", "--nocapture"])
+            .args(["--exact", &test, "--nocapture"])
             .env(CHILD_URL, url)
             .env("SSL_CERT_FILE", ca)
             .env("SSL_CERT_DIR", "")
@@ -301,10 +333,10 @@ async fn wss_uses_system_roots() {
     })
     .await
     .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        output.status.success(),
-        "system-root WSS child failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
+        output.status.success() && stdout.contains("1 passed"),
+        "system-root WebSocket child failed:\n{stdout}\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
