@@ -70,6 +70,7 @@ async fn pages_features_and_extra_options_map_to_the_analyze_call() {
 #[case(json!({"pages": "1&&features=bad"}), Error::Pages(PagesFault::Range))]
 #[case(json!({"features": "languages&pages=1"}), Error::Features)]
 #[case(json!({"req_format": "azure"}), Error::RequestFormat)]
+#[case(json!({"outputContentFormat": "html"}), Error::OutputContentFormat)]
 #[tokio::test]
 async fn invalid_pages_features_and_format_are_rejected_before_sending(
     #[case] options: Value,
@@ -128,6 +129,85 @@ async fn an_inline_document_is_sent_as_base64_and_only_page_text_is_kept(#[case]
         assert_eq!(sent.query(field), None, "{field}");
     }
     assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
+}
+
+#[tokio::test]
+async fn markdown_output_is_requested_on_the_analyze_call_and_split_into_pages() {
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {
+            "content": "# Tïtle\n\n<!-- PageBreak -->\n\n| a |",
+            "contentFormat": "markdown",
+            "stringIndexType": "unicodeCodePoint",
+            "pages": [
+                {"pageNumber": 1, "spans": [{"offset": 0, "length": 29}], "lines": [{"content": "Tïtle"}]},
+                {"pageNumber": 2, "spans": [{"offset": 29, "length": 5}], "lines": [{"content": "a"}]}
+            ]
+        }
+    }))])
+    .await;
+
+    let response = perform(read_request(
+        &upstream.uri(),
+        json!({"outputContentFormat": "markdown", "pages": [0, 1]}),
+    ))
+    .await
+    .unwrap();
+
+    let sent = only_request(&upstream).await;
+    assert_eq!(
+        sent.query("outputContentFormat").as_deref(),
+        Some("markdown")
+    );
+    assert_eq!(
+        sent.query("stringIndexType").as_deref(),
+        Some("unicodeCodePoint")
+    );
+    assert_eq!(sent.query("pages").as_deref(), Some("1,2"));
+    assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
+    assert_eq!(
+        response.content.as_deref(),
+        Some("# Tïtle\n\n<!-- PageBreak -->\n\n| a |")
+    );
+    let pages = response
+        .pages
+        .iter()
+        .map(|page| page.markdown.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(pages, ["# Tïtle\n\n<!-- PageBreak -->\n\n", "| a |"]);
+    assert_eq!(
+        response.usage_info.as_ref().unwrap().pages_processed,
+        Some(2)
+    );
+}
+
+#[rstest]
+#[case::native_markdown(json!({"outputContentFormat": "markdown", "req_format": "native"}), Some("markdown"))]
+#[case::text(json!({"outputContentFormat": "text"}), Some("text"))]
+#[case::omitted(json!({}), None)]
+#[tokio::test]
+async fn only_litellm_format_markdown_asks_for_code_point_offsets(
+    #[case] options: Value,
+    #[case] output_content_format: Option<&str>,
+) {
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {"pages": [{"pageNumber": 1, "lines": [{"content": "hello"}]}]}
+    }))])
+    .await;
+
+    let response = perform(read_request(&upstream.uri(), options))
+        .await
+        .unwrap();
+
+    let sent = only_request(&upstream).await;
+    assert_eq!(
+        sent.query("outputContentFormat").as_deref(),
+        output_content_format
+    );
+    assert_eq!(sent.query("stringIndexType"), None);
+    assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
+    assert_eq!(response.pages[0].markdown, "hello");
 }
 
 #[tokio::test]
