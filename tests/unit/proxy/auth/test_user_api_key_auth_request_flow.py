@@ -1577,10 +1577,7 @@ async def test_cached_virtual_key_applies_proxy_default_budget_to_new_end_user(
     mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget)
 
-    mock_cache: Final = AsyncMock()
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
-    mock_cache.delete_cache = MagicMock()
+    user_api_key_cache: Final = UserApiKeyCache()
 
     mock_proxy_logging_obj: Final = MagicMock()
     mock_proxy_logging_obj.internal_usage_cache = MagicMock()
@@ -1591,7 +1588,7 @@ async def test_cached_virtual_key_applies_proxy_default_budget_to_new_end_user(
     import litellm.proxy.proxy_server as _proxy_server_mod
 
     monkeypatch.setattr(_proxy_server_mod, "prisma_client", mock_prisma_client)
-    monkeypatch.setattr(_proxy_server_mod, "user_api_key_cache", mock_cache)
+    monkeypatch.setattr(_proxy_server_mod, "user_api_key_cache", user_api_key_cache)
     monkeypatch.setattr(_proxy_server_mod, "proxy_logging_obj", mock_proxy_logging_obj)
     monkeypatch.setattr(_proxy_server_mod, "master_key", "sk-master-key")
     monkeypatch.setattr(_proxy_server_mod, "general_settings", {})
