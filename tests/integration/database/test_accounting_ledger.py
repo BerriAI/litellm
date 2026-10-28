@@ -1,19 +1,23 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import os
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
+from itertools import chain
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 import psycopg
 import pytest
 import pytest_asyncio
 from psycopg import sql
+from pydantic import JsonValue
 
 from litellm.accounting import (
     CostEvent,
@@ -32,6 +36,13 @@ from litellm.proxy.db.accounting_ledger import AccountingConflictError, Accounti
 from litellm.types.utils import CallTypes
 from tests.integration._support.database import scratch_database
 from tests.integration._support.prisma_clients import connected_proxy_prisma
+
+if TYPE_CHECKING:
+    from prisma import Prisma
+
+    from litellm.proxy.utils import PrismaClient
+
+_Writer: TypeAlias = tuple["PrismaClient", AccountingLedger]
 
 _SCHEMA: Final = Path(__file__).resolve().parents[3] / "litellm-proxy-extras/litellm_proxy_extras/schema.prisma"
 _EVENT_INSERT: Final = (
@@ -149,9 +160,9 @@ def test_new_delivery_defaults_to_pending_with_no_attempts(ledger: psycopg.Conne
     assert row == ("pending", 0)
 
 
-_AT = datetime(2026, 1, 1, tzinfo=timezone.utc)
-_CUTOFF = datetime(2026, 2, 1, tzinfo=timezone.utc)
-_TARGETS = (DeliveryTarget.USER_SPEND, DeliveryTarget.TEAM_SPEND)
+_AT: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+_CUTOFF: Final = datetime(2026, 2, 1, tzinfo=timezone.utc)
+_TARGETS: Final = (DeliveryTarget.USER_SPEND, DeliveryTarget.TEAM_SPEND)
 
 
 def _usage(event_id: str = "usage", *, inbound: bool = False) -> InboundUsageEvent | OutboundUsageEvent:
@@ -187,17 +198,21 @@ def _cost(source: str = "usage", event_id: str = "cost", amount: str = "0.125") 
     )
 
 
-def _envelope(event: AccountingEvent, **context: object) -> str:
-    return json.dumps({"event": event.model_dump(mode="json"), "context": context})
+def _envelope(event: AccountingEvent, *, context: Mapping[str, JsonValue] | None = None) -> str:
+    return json.dumps({"event": event.model_dump(mode="json"), "context": context or {}})
 
 
 async def _insert(
-    store: AccountingLedger, event: AccountingEvent, targets: tuple[DeliveryTarget, ...] = _TARGETS, **context: object
+    store: AccountingLedger,
+    event: AccountingEvent,
+    targets: tuple[DeliveryTarget, ...] = _TARGETS,
+    *,
+    context: Mapping[str, JsonValue] | None = None,
 ) -> str:
-    return await store.insert_event(event, targets, envelope=_envelope(event, **context))
+    return await store.insert_event(event, targets, envelope=_envelope(event, context=context))
 
 
-def _rows(database_url: str, statement: str, parameters: tuple[object, ...] = ()) -> list[tuple[object, ...]]:
+def _rows(database_url: str, statement: str, parameters: tuple[object, ...] = ()) -> Sequence[tuple[object, ...]]:
     with psycopg.connect(database_url) as connection:
         cursor: Final = connection.execute(statement, parameters)
         return cursor.fetchall() if cursor.description is not None else []
@@ -210,7 +225,7 @@ def _complete_and_age(database_url: str) -> None:
 
 
 @pytest_asyncio.fixture(loop_scope="function")
-async def writer(ledger_database, monkeypatch):
+async def writer(ledger_database: str, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Writer]:
     monkeypatch.setenv("DATABASE_URL", ledger_database)
     monkeypatch.delenv("DATABASE_URL_READ_REPLICA", raising=False)
     _rows(ledger_database, 'TRUNCATE "LiteLLM_AccountingDelivery", "LiteLLM_AccountingEvent"')
@@ -219,12 +234,14 @@ async def writer(ledger_database, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_event_and_complete_delivery_set_commit_together(writer, ledger_database):
+async def test_event_and_complete_delivery_set_commit_together(writer: _Writer, ledger_database: str) -> None:
     _, store = writer
     event: Final = _usage()
-    assert await _insert(store, event, requested_region="eu", quantity="1.25") == "inserted"
+    assert await _insert(store, event, context={"requested_region": "eu", "quantity": "1.25"}) == "inserted"
     rows: Final = _rows(ledger_database, 'SELECT kind::text, source_event_id, payload FROM "LiteLLM_AccountingEvent"')
-    assert rows == [("outbound_usage", None, json.loads(_envelope(event, requested_region="eu", quantity="1.25")))]
+    assert rows == [
+        ("outbound_usage", None, json.loads(_envelope(event, context={"requested_region": "eu", "quantity": "1.25"})))
+    ]
     deliveries: Final = _rows(
         ledger_database, 'SELECT target::text, state::text, attempts FROM "LiteLLM_AccountingDelivery"'
     )
@@ -232,7 +249,7 @@ async def test_event_and_complete_delivery_set_commit_together(writer, ledger_da
 
 
 @pytest.mark.asyncio
-async def test_concurrent_duplicates_preserve_completed_deliveries(writer, ledger_database):
+async def test_concurrent_duplicates_preserve_completed_deliveries(writer: _Writer, ledger_database: str) -> None:
     _, store = writer
     event: Final = _usage(inbound=True)
     results: Final = await asyncio.gather(*(_insert(store, event) for _ in range(8)))
@@ -247,7 +264,9 @@ async def test_concurrent_duplicates_preserve_completed_deliveries(writer, ledge
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["payload", "context", "targets", "schema_version", "version"])
-async def test_conflicting_acceptance_cannot_overwrite_or_add_work(writer, ledger_database, change):
+async def test_conflicting_acceptance_cannot_overwrite_or_add_work(
+    writer: _Writer, ledger_database: str, change: str
+) -> None:
     _, store = writer
     event: Final = _usage()
     await _insert(store, event)
@@ -256,7 +275,7 @@ async def test_conflicting_acceptance_cannot_overwrite_or_add_work(writer, ledge
     context: Final = {"override": "0.5"} if change == "context" else {}
     options: Final = {change: 2} if change in ("schema_version", "version") else {}
     with pytest.raises(AccountingConflictError, match="conflicts"):
-        await store.insert_event(altered, targets, envelope=_envelope(altered, **context), **options)
+        await store.insert_event(altered, targets, envelope=_envelope(altered, context=context), **options)
     assert _rows(ledger_database, 'SELECT payload FROM "LiteLLM_AccountingEvent"') == [(json.loads(_envelope(event)),)]
     assert set(_rows(ledger_database, 'SELECT target::text FROM "LiteLLM_AccountingDelivery"')) == {
         (t.value,) for t in _TARGETS
@@ -264,7 +283,9 @@ async def test_conflicting_acceptance_cannot_overwrite_or_add_work(writer, ledge
 
 
 @pytest.mark.asyncio
-async def test_competing_cost_identities_accept_only_one_authoritative_charge(writer, ledger_database):
+async def test_competing_cost_identities_accept_only_one_authoritative_charge(
+    writer: _Writer, ledger_database: str
+) -> None:
     _, store = writer
     await _insert(store, _usage())
     results: Final = await asyncio.gather(
@@ -285,7 +306,7 @@ async def test_competing_cost_identities_accept_only_one_authoritative_charge(wr
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["missing", "inbound", "cost"])
-async def test_cost_requires_an_existing_outbound_source(writer, ledger_database, source):
+async def test_cost_requires_an_existing_outbound_source(writer: _Writer, ledger_database: str, source: str) -> None:
     _, store = writer
     if source == "inbound":
         await _insert(store, _usage("source", inbound=True))
@@ -301,11 +322,13 @@ async def test_cost_requires_an_existing_outbound_source(writer, ledger_database
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["before_commit", "after_commit", "cancellation"])
-async def test_interruption_rolls_back_or_retry_recognizes_commit(writer, ledger_database, failure):
+async def test_interruption_rolls_back_or_retry_recognizes_commit(
+    writer: _Writer, ledger_database: str, failure: str
+) -> None:
     client, store = writer
 
     @asynccontextmanager
-    async def interrupted():
+    async def interrupted() -> AsyncGenerator[Prisma]:
         async with client.writer_db.tx() as tx:
             yield tx
             if failure == "before_commit":
@@ -324,7 +347,7 @@ async def test_interruption_rolls_back_or_retry_recognizes_commit(writer, ledger
 
 
 @pytest.mark.asyncio
-async def test_delivery_insert_failure_rolls_back_event(writer, ledger_database):
+async def test_delivery_insert_failure_rolls_back_event(writer: _Writer, ledger_database: str) -> None:
     from prisma.errors import RawQueryError
 
     _, store = writer
@@ -343,7 +366,9 @@ async def test_delivery_insert_failure_rolls_back_event(writer, ledger_database)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("blocked", ["pending", "parked", "unpriced", "recent_cost", "recovery"])
-async def test_retention_preserves_incomplete_or_recovery_needed_families(writer, ledger_database, blocked):
+async def test_retention_preserves_incomplete_or_recovery_needed_families(
+    writer: _Writer, ledger_database: str, blocked: str
+) -> None:
     _, store = writer
     await _insert(store, _usage())
     if blocked != "unpriced":
@@ -369,7 +394,7 @@ async def test_retention_preserves_incomplete_or_recovery_needed_families(writer
 
 
 @pytest.mark.asyncio
-async def test_retention_removes_completed_family_and_receipts_together(writer, ledger_database):
+async def test_retention_removes_completed_family_and_receipts_together(writer: _Writer, ledger_database: str) -> None:
     _, store = writer
     await _insert(store, _usage())
     await _insert(store, _cost())
@@ -380,7 +405,7 @@ async def test_retention_removes_completed_family_and_receipts_together(writer, 
 
 
 @pytest.mark.asyncio
-async def test_retention_respects_batch_bound_and_skips_locked_families(writer, ledger_database):
+async def test_retention_respects_batch_bound_and_skips_locked_families(writer: _Writer, ledger_database: str) -> None:
     client, store = writer
     for name in ("a", "b", "c"):
         await _insert(store, _usage(name, inbound=True))
@@ -396,7 +421,7 @@ async def test_retention_respects_batch_bound_and_skips_locked_families(writer, 
 
 
 @pytest.mark.asyncio
-async def test_retention_makes_progress_past_pending_and_unpriced_events(writer, ledger_database):
+async def test_retention_makes_progress_past_pending_and_unpriced_events(writer: _Writer, ledger_database: str) -> None:
     _, store = writer
     await _insert(store, _usage("a", inbound=True))
     await _insert(store, _usage("b"))
@@ -411,7 +436,7 @@ async def test_retention_makes_progress_past_pending_and_unpriced_events(writer,
 
 
 @pytest.mark.asyncio
-async def test_zero_cost_and_empty_delivery_sets_are_durable(writer, ledger_database):
+async def test_zero_cost_and_empty_delivery_sets_are_durable(writer: _Writer, ledger_database: str) -> None:
     _, store = writer
     await _insert(store, _usage(), targets=())
     event: Final = _cost(amount="0")
@@ -423,7 +448,9 @@ async def test_zero_cost_and_empty_delivery_sets_are_durable(writer, ledger_data
 
 
 @pytest.mark.asyncio
-async def test_retention_cannot_delete_source_while_cost_acceptance_is_uncommitted(writer, ledger_database):
+async def test_retention_cannot_delete_source_while_cost_acceptance_is_uncommitted(
+    writer: _Writer, ledger_database: str
+) -> None:
     client, store = writer
     await _insert(store, _usage())
     _complete_and_age(ledger_database)
@@ -431,7 +458,7 @@ async def test_retention_cannot_delete_source_while_cost_acceptance_is_uncommitt
     release: Final = asyncio.Event()
 
     @asynccontextmanager
-    async def paused_commit():
+    async def paused_commit() -> AsyncGenerator[Prisma]:
         async with client.writer_db.tx() as tx:
             yield tx
             inserted.set()
@@ -451,13 +478,13 @@ async def test_retention_cannot_delete_source_while_cost_acceptance_is_uncommitt
 
 
 @pytest.mark.asyncio
-async def test_retention_failure_rolls_back_event_and_receipt_deletion(writer, ledger_database):
+async def test_retention_failure_rolls_back_event_and_receipt_deletion(writer: _Writer, ledger_database: str) -> None:
     client, store = writer
     await _insert(store, _usage(inbound=True))
     _complete_and_age(ledger_database)
 
     @asynccontextmanager
-    async def interrupted():
+    async def interrupted() -> AsyncGenerator[Prisma]:
         async with client.writer_db.tx() as tx:
             yield tx
             raise RuntimeError("injected cleanup failure")
@@ -470,7 +497,9 @@ async def test_retention_failure_rolls_back_event_and_receipt_deletion(writer, l
 
 
 @pytest.mark.asyncio
-async def test_ledger_reads_and_writes_use_primary_when_replica_is_configured(writer, ledger_database, monkeypatch):
+async def test_ledger_reads_and_writes_use_primary_when_replica_is_configured(
+    writer: _Writer, ledger_database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with scratch_database("replica") as replica_url:
         monkeypatch.setenv("DATABASE_URL_READ_REPLICA", replica_url)
         async with connected_proxy_prisma(ledger_database) as client:
@@ -483,12 +512,12 @@ async def test_ledger_reads_and_writes_use_primary_when_replica_is_configured(wr
         assert _rows(replica_url, "SELECT to_regclass('public.\"LiteLLM_AccountingEvent\"')") == [(None,)]
 
 
-def _index_conditions(plan: object) -> list[tuple[object, object]]:
+def _index_conditions(plan: object) -> tuple[tuple[object, object], ...]:
     if isinstance(plan, dict):
-        own: Final = [(plan.get("Index Name"), plan.get("Index Cond"))] if "Index Name" in plan else []
-        children: Final = [plan.get("Plan"), *plan.get("Plans", [])]
-        return own + [pair for child in children if child is not None for pair in _index_conditions(child)]
-    return [pair for item in plan for pair in _index_conditions(item)] if isinstance(plan, list) else []
+        own: Final = ((plan.get("Index Name"), plan.get("Index Cond")),) if "Index Name" in plan else ()
+        children: Final = (plan.get("Plan"), *plan.get("Plans", ()))
+        return own + tuple(chain.from_iterable(_index_conditions(child) for child in children if child is not None))
+    return tuple(chain.from_iterable(_index_conditions(item) for item in plan)) if isinstance(plan, list) else ()
 
 
 @pytest.mark.parametrize("statement", [accounting_ledger._DELETE_EVENTS, accounting_ledger._DELETE_DELIVERIES])
