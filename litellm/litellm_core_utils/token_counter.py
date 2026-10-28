@@ -55,6 +55,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesTextParam,
     AnthropicMessagesToolResultParam,
     AnthropicMessagesToolUseParam,
+    AnthropicSearchResultParam,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -65,6 +66,10 @@ from litellm.types.llms.openai import (
     OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import Message, SelectTokenizerResponse
+
+
+class UnsupportedContentTypeError(ValueError):
+    pass
 
 
 def get_modified_max_tokens(
@@ -865,6 +870,7 @@ def _validate_anthropic_content(content: Mapping[str, object]) -> type:
     mapping: Final = {
         "tool_use": AnthropicMessagesToolUseParam,
         "tool_result": AnthropicMessagesToolResultParam,
+        "search_result": AnthropicSearchResultParam,
     }
 
     expected_cls: Final = mapping.get(content_type) if isinstance(content_type, str) else None
@@ -1020,7 +1026,9 @@ def _count_anthropic_content(
         except Exception as e:
             if default_token_count is not None:
                 return default_token_count
-            raise ValueError(f"Error counting field '{field_name}': {e}")
+            raise (UnsupportedContentTypeError if isinstance(e, UnsupportedContentTypeError) else ValueError)(
+                f"Error counting field '{field_name}': {e}"
+            )
     return tokens
 
 
@@ -1034,6 +1042,7 @@ def _count_content_list(
         | AnthropicMessagesTextParam
         | AnthropicMessagesImageParam
         | AnthropicMessagesDocumentParam
+        | AnthropicSearchResultParam
     ],
     use_default_image_token_count: bool,
     default_token_count: int | None,
@@ -1068,7 +1077,7 @@ def _count_content_list(
                     count_function,
                     use_default_image_token_count,
                 )
-            elif c["type"] in ("tool_use", "tool_result"):
+            elif c["type"] in ("tool_use", "tool_result", "search_result"):
                 num_tokens += _count_anthropic_content(
                     c,
                     count_function,
@@ -1094,17 +1103,18 @@ def _count_content_list(
                     num_tokens += count_function(tool_name)
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
-                raise ValueError(
+                raise UnsupportedContentTypeError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"tool_reference)."
+                    f"tool_reference, search_result)."
                 )
         return num_tokens
     except Exception as e:
         if default_token_count is not None:
             return default_token_count
-        raise ValueError(
+        error_type: Final = UnsupportedContentTypeError if isinstance(e, UnsupportedContentTypeError) else ValueError
+        raise error_type(
             f"Error getting number of tokens from content list: {e}, default_token_count={default_token_count}"
         )
 
