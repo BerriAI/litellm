@@ -364,6 +364,8 @@ async def test_anthropic_messages_count_tokens_endpoint():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        require_deployment=False,
+        user_api_key_dict=None,
         client_oauth_token=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
@@ -445,6 +447,8 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        require_deployment=False,
+        user_api_key_dict=None,
         client_oauth_token=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
@@ -482,6 +486,152 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         # Restore original functions
         anthropic_endpoints.read_request_body = original_read_request_body
         proxy_server.count_request_tokens = original_token_counter
+
+
+def _hosted_vllm_count_peer(backend_count: int, calls: list[httpx.Request]):
+    def peer(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"input_tokens": backend_count})
+
+    return peer
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_messages_count_tokens_forwards_to_the_backend_count_endpoint():
+    """
+    A hosted_vllm deployment must count through the backend's own count_tokens route, so the
+    number is the one generation will consume, instead of a local estimate from another tokenizer.
+    """
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    peer_calls: Final[list[httpx.Request]] = []
+    api_base: Final = "https://vllm.example.com/qwen3-06b"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "vllm-counted",
+                "litellm_params": {"model": "hosted_vllm/Qwen/Qwen3-0.6B", "api_base": api_base},
+            }
+        ]
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
+
+    async def mock_read_request_body(request):
+        return {
+            "model": "vllm-counted",
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        }
+
+    with (
+        patch.object(proxy_server, "llm_router", llm_router),
+        patch.object(anthropic_endpoints, "read_request_body", mock_read_request_body),
+        patch.object(
+            anthropic_count_tokens_handler,
+            "get_async_httpx_client",
+            lambda **_: AsyncHTTPHandler(transport=httpx.MockTransport(_hosted_vllm_count_peer(41, peer_calls))),
+        ),
+    ):
+        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+
+    assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
+    assert len(peer_calls) == 1
+    assert str(peer_calls[0].url) == f"{api_base}/v1/messages/count_tokens"
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_count_tokens_missing_backend_route_falls_back_to_a_local_estimate():
+    """
+    A hosted_vllm server without the count route must not fail the count: the local estimate
+    answers instead, so clients that call count_tokens still get a number.
+    """
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "vllm-plain",
+                "litellm_params": {"model": "hosted_vllm/Qwen/Qwen3-0.6B", "api_base": "https://plain.example.com"},
+            }
+        ]
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
+
+    async def mock_read_request_body(request):
+        return {"model": "vllm-plain", "messages": [{"role": "user", "content": "hi"}]}
+
+    def absent_route(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "Not Found"})
+
+    with (
+        patch.object(proxy_server, "llm_router", llm_router),
+        patch.object(anthropic_endpoints, "read_request_body", mock_read_request_body),
+        patch.object(
+            anthropic_count_tokens_handler,
+            "get_async_httpx_client",
+            lambda **_: AsyncHTTPHandler(transport=httpx.MockTransport(absent_route)),
+        ),
+    ):
+        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+
+    assert isinstance(response, dict)
+    assert isinstance(response.get("input_tokens"), int)
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_count_tokens_surfaces_a_backend_auth_failure_as_an_anthropic_error():
+    """
+    A backend rejecting the count credential must reach the client as the Anthropic envelope for
+    the real status, so the fallback estimate never hides a broken key.
+    """
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "vllm-keyed",
+                "litellm_params": {
+                    "model": "hosted_vllm/Qwen/Qwen3-0.6B",
+                    "api_base": "https://keyed.example.com",
+                    "api_key": "wrong-key",
+                },
+            }
+        ]
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
+
+    async def mock_read_request_body(request):
+        return {"model": "vllm-keyed", "messages": [{"role": "user", "content": "hi"}]}
+
+    def unauthorized(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401, json={"type": "error", "error": {"type": "AuthenticationError", "message": "invalid api key"}}
+        )
+
+    with (
+        patch.object(proxy_server, "llm_router", llm_router),
+        patch.object(anthropic_endpoints, "read_request_body", mock_read_request_body),
+        patch.object(
+            anthropic_count_tokens_handler,
+            "get_async_httpx_client",
+            lambda **_: AsyncHTTPHandler(transport=httpx.MockTransport(unauthorized)),
+        ),
+    ):
+        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 401
+    detail = json.loads(bytes(response.body))
+    assert detail["type"] == "error"
+    assert detail["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -1264,6 +1414,8 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        require_deployment=False,
+        user_api_key_dict=None,
         client_oauth_token=None,
     ):
         raise ProxyException(
@@ -1322,6 +1474,8 @@ async def test_anthropic_endpoint_403_permission_error_format():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        require_deployment=False,
+        user_api_key_dict=None,
         client_oauth_token=None,
     ):
         raise ProxyException(
@@ -1380,6 +1534,8 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        require_deployment=False,
+        user_api_key_dict=None,
         client_oauth_token=None,
     ):
         raise ProxyException(
@@ -1534,12 +1690,11 @@ async def test_count_tokens_without_a_count_api_rejects_a_non_string_tool_result
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ("mistral-tool-result", "model-not-in-the-router"))
 async def test_count_tokens_without_a_count_api_counts_a_non_string_tool_result_text_under_drop_params(
-    monkeypatch: pytest.MonkeyPatch, model: str
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     response: Final = await _count_on_a_model_without_a_count_api(
-        monkeypatch, {"model": model, "drop_params": True, "messages": _build_log_messages(None)}
+        monkeypatch, {"model": "mistral-tool-result", "drop_params": True, "messages": _build_log_messages(None)}
     )
 
     assert isinstance(response, dict)
@@ -3231,6 +3386,44 @@ async def test_gemini_messages_count_tokens_reads_the_opt_out_of_the_deployment_
 
 
 @pytest.mark.asyncio
+async def test_gemini_messages_count_tokens_reads_the_opt_out_through_a_key_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A key alias resolves before the context-management lookup, so the target's drop is read.
+
+    With the alias unresolved, `get_routable_deployments` sees no deployment and the request's
+    context management reaches the counter even though the deployment it routes to drops it.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[_gemini_deployment("gemini-agent", {"additional_drop_params": ["context_management"]})]
+    )
+    sent_context_management: Final[list[object]] = []
+
+    async def record(*_args, **kwargs):
+        sent_context_management.append(kwargs["context_management"])
+        return TokenCountResponse(
+            total_tokens=41, request_model="flash-alias", model_used="gemini", tokenizer_type="gemini_tokenizer"
+        )
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    with patch.object(proxy_server, "_try_provider_token_count", record):
+        response: Final = await _count_through_the_anthropic_route(
+            {
+                "model": "flash-alias",
+                "messages": [{"role": "user", "content": "Hello!"}],
+                "context_management": _CLEAR_TOOL_USES,
+            },
+            UserAPIKeyAuth(aliases={"flash-alias": "gemini-agent"}),
+        )
+
+    assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
+    assert sent_context_management == [None]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("requested_model", "completion_model", "expected_tool_outputs_sent"),
     (("gemini-agent", "gemini-dropping", 3), ("gemini-dropping", "gemini-agent", 1)),
@@ -3577,6 +3770,365 @@ async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_need
     )
 
 
+_NONEXISTENT_MODEL_ROUTER_MODEL_LIST: Final = [
+    {
+        "model_name": "claude-counted",
+        "litellm_params": {"model": "anthropic/claude-3-sonnet-20240229", "api_key": "test-key"},
+    },
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model",
+    ["does-not-exist", "openai/gpt-4o-not-served"],
+    ids=["unknown-name", "unknown-passthrough-name"],
+)
+async def test_anthropic_count_tokens_rejects_a_model_the_router_does_not_serve(
+    monkeypatch: pytest.MonkeyPatch, requested_model: str
+) -> None:
+    """The Anthropic count route answers 404 not_found_error for a model the gateway does not serve.
+
+    Before the fix `count_request_tokens` swallowed the router's "no deployments" error and answered
+    HTTP 200 from the generic local tokenizer, so a typo'd or unserved model looked counted.
+    """
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST),
+    )
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = {}
+    body: Final = {"model": requested_model, "messages": [{"role": "user", "content": "Hello!"}]}
+
+    with patch.object(anthropic_endpoints, "read_request_body", AsyncMock(return_value=body)):
+        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 404
+    detail: Final = json.loads(bytes(response.body))
+    assert detail["type"] == "error"
+    assert detail["error"]["type"] == "not_found_error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("make_router", "requested_model"),
+    (
+        (
+            lambda: Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST),
+            "claude-counted",
+        ),
+        (
+            lambda: Router(model_list=[{**_NONEXISTENT_MODEL_ROUTER_MODEL_LIST[0], "model_info": {"id": "dep-1"}}]),
+            "dep-1",
+        ),
+        (
+            lambda: Router(
+                model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST,
+                model_group_alias={"counted-alias": "claude-counted"},
+            ),
+            "counted-alias",
+        ),
+        (
+            lambda: Router(
+                model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "k"}}]
+            ),
+            "openai/gpt-4o",
+        ),
+    ),
+    ids=("group-name", "deployment-id", "model-alias", "wildcard"),
+)
+async def test_anthropic_count_tokens_resolves_aliases_and_wildcards_before_counting(
+    monkeypatch: pytest.MonkeyPatch, make_router: Callable[[], Router], requested_model: str
+) -> None:
+    """A model the router can resolve by group, deployment id, alias, or wildcard is not rejected."""
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", make_router())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = {}
+    mock_request.scope = {}
+    body: Final = {"model": requested_model, "messages": [{"role": "user", "content": "Hello!"}]}
+
+    with (
+        patch.object(anthropic_endpoints, "read_request_body", AsyncMock(return_value=body)),
+        patch.object(
+            litellm.proxy.proxy_server,
+            "_try_provider_token_count",
+            AsyncMock(
+                return_value=TokenCountResponse(
+                    total_tokens=11,
+                    request_model=requested_model,
+                    model_used=requested_model,
+                    tokenizer_type="openai_tokenizer",
+                )
+            ),
+        ),
+    ):
+        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+
+    assert response == {"input_tokens": 11, "litellm_count_source": "provider"}
+
+
+@pytest.mark.asyncio
+async def test_utils_token_counter_keeps_the_local_fallback_for_an_unlisted_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The public /utils/token_counter keeps its documented fallback: an unlisted model counts locally.
+
+    Only the Anthropic count route opts into `require_deployment`, so this route's contract is unchanged.
+    """
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "llm_router", Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST)
+    )
+
+    response: Final = await token_counter(
+        request=TokenCountRequest(model="unlisted-model", messages=[{"role": "user", "content": "hello"}])
+    )
+
+    assert response.model_used == "unlisted-model"
+    assert response.total_tokens > 0
+
+
+_TEAM_MODEL_ROUTER_MODEL_LIST: Final = [
+    {
+        "model_name": "model_name_team-abc_1111",
+        "litellm_params": {"model": "anthropic/claude-3-sonnet-20240229", "api_key": "test-key"},
+        "model_info": {"id": "dep-team", "team_id": "team-abc", "team_public_model_name": "claude-team"},
+    },
+]
+
+
+async def _count_through_the_anthropic_route(body: dict, user_api_key_dict: UserAPIKeyAuth) -> object:
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = {}
+    mock_request.scope = {}
+    with patch.object(anthropic_endpoints, "read_request_body", AsyncMock(return_value=body)):
+        return await anthropic_count_tokens(mock_request, user_api_key_dict)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_resolves_a_team_scoped_model_the_messages_route_serves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A team's public model name counts from the team deployment's provider counter.
+
+    The gate and the router call both carry the caller's team id, so a team-scoped deployment
+    (public name `claude-team`, internal name `model_name_<team>_<uuid>`) is resolved instead of
+    being reported as unserved.
+    """
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", Router(model_list=_TEAM_MODEL_ROUTER_MODEL_LIST))
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    counted: Final = TokenCountResponse(
+        total_tokens=11, request_model="claude-team", model_used="claude-sonnet", tokenizer_type="anthropic_tokenizer"
+    )
+    seen_deployments: Final[list[object]] = []
+
+    async def fake_provider_count(*_args, **kwargs):
+        seen_deployments.append(kwargs["deployment"])
+        return counted
+
+    with patch.object(litellm.proxy.proxy_server, "_try_provider_token_count", fake_provider_count):
+        response: Final = await _count_through_the_anthropic_route(
+            {"model": "claude-team", "messages": [{"role": "user", "content": "Hello!"}]},
+            UserAPIKeyAuth(team_id="team-abc"),
+        )
+
+    assert response == {"input_tokens": 11, "litellm_count_source": "provider"}
+    assert seen_deployments and seen_deployments[0]["model_info"]["id"] == "dep-team"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_resolves_a_key_alias_before_counting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A name that is only a key alias resolves to the group it targets, as on the completion routes."""
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "llm_router", Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST)
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+    with patch.object(
+        litellm.proxy.proxy_server,
+        "_try_provider_token_count",
+        AsyncMock(
+            return_value=TokenCountResponse(
+                total_tokens=11,
+                request_model="counted-alias",
+                model_used="claude-counted",
+                tokenizer_type="openai_tokenizer",
+            )
+        ),
+    ):
+        response: Final = await _count_through_the_anthropic_route(
+            {"model": "counted-alias", "messages": [{"role": "user", "content": "Hello!"}]},
+            UserAPIKeyAuth(aliases={"counted-alias": "claude-counted"}),
+        )
+
+    assert response == {"input_tokens": 11, "litellm_count_source": "provider"}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_chains_the_global_alias_into_the_key_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The global alias resolves first, then the key alias, matching the completion routes.
+
+    A request whose global alias points at a name the key then aliases to a served group is
+    counted, not rejected for the intermediate name.
+    """
+    monkeypatch.setattr(litellm, "model_alias_map", {"public-name": "intermediate"})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "llm_router", Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST)
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+    with patch.object(
+        litellm.proxy.proxy_server,
+        "_try_provider_token_count",
+        AsyncMock(
+            return_value=TokenCountResponse(
+                total_tokens=11,
+                request_model="public-name",
+                model_used="claude-counted",
+                tokenizer_type="openai_tokenizer",
+            )
+        ),
+    ):
+        response: Final = await _count_through_the_anthropic_route(
+            {"model": "public-name", "messages": [{"role": "user", "content": "Hello!"}]},
+            UserAPIKeyAuth(aliases={"intermediate": "claude-counted"}),
+        )
+
+    assert response == {"input_tokens": 11, "litellm_count_source": "provider"}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_counts_a_served_model_whose_deployments_are_in_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Routing-availability errors fall back to the local count, so a cooldown never fails a count.
+
+    Token counting consumes no generation capacity; only an unserved model is a 404.
+    """
+    router: Final = Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST)
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id=router.model_list[0]["model_info"]["id"],
+        original_exception=Exception("upstream 429"),
+        exception_status=429,
+        cooldown_time=120,
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+    response: Final = await _count_through_the_anthropic_route(
+        {"model": "claude-counted", "messages": [{"role": "user", "content": "Hello!"}]},
+        UserAPIKeyAuth(),
+    )
+
+    assert isinstance(response, dict)
+    assert response["input_tokens"] > 0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_still_counts_any_name_when_passing_through_all_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`pass_through_all_models` opts out of the served-model requirement, as on the completion routes."""
+    router: Final = Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST)
+    router.router_general_settings.pass_through_all_models = True
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+    response: Final = await _count_through_the_anthropic_route(
+        {"model": "unlisted-model", "messages": [{"role": "user", "content": "Hello!"}]},
+        UserAPIKeyAuth(),
+    )
+
+    assert isinstance(response, dict)
+    assert response["input_tokens"] > 0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_reads_a_sibling_replicas_model_through_before_rejecting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model this replica has not loaded but the registry has counts instead of 404ing.
+
+    With `store_model_in_db`, a row created on a sibling replica is absent from this replica's
+    router until the next reload. `/v1/messages` recovers through the model registry read-through,
+    so the count route does too rather than reporting a model the gateway serves as not found.
+    """
+    from litellm.proxy.common_utils import registry_read_through
+    from litellm.proxy.common_utils.registry_read_through import RegistryReadThrough
+
+    router: Final = Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST)
+    sibling_deployment: Final[dict[str, object]] = {
+        "model_name": "claude-sibling",
+        "litellm_params": {"model": "anthropic/claude-3-sonnet-20240229", "api_key": "k"},
+    }
+
+    async def resync(_model: str) -> bool:
+        router.set_model_list([*router.model_list, sibling_deployment])
+        return True
+
+    read_through: Final = RegistryReadThrough(resync=resync, is_loaded=lambda name: name in router.model_names)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+    counted: Final = TokenCountResponse(
+        total_tokens=7, request_model="claude-sibling", model_used="claude-sonnet", tokenizer_type="anthropic_tokenizer"
+    )
+    with (
+        patch.object(registry_read_through, "model_registry_read_through", read_through),
+        patch.object(litellm.proxy.proxy_server, "_try_provider_token_count", AsyncMock(return_value=counted)),
+    ):
+        response: Final = await _count_through_the_anthropic_route(
+            {"model": "claude-sibling", "messages": [{"role": "user", "content": "Hello!"}]},
+            UserAPIKeyAuth(),
+        )
+
+    assert response == {"input_tokens": 7, "litellm_count_source": "provider"}
+
+
+_DELETABLE_ROUTER_MODEL_LIST: Final = [
+    {
+        "model_name": "claude-sonnet-4-5",
+        "litellm_params": {"model": "claude-sonnet-4-5", "api_key": "test-key"},
+        "model_info": {"id": "dep-deleted"},
+    },
+]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_rejects_a_model_whose_only_deployment_was_deleted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deleting the last deployment makes the name unserved, so the count route 404s.
+
+    When the public name equals the deployment's litellm model, `Router.deployment_names` keeps
+    the entry after `delete_deployment` rebuilds the other indices, so a served check that reads
+    that list answers 200 for a name `acompletion` no longer serves.
+    """
+    router: Final = Router(model_list=_DELETABLE_ROUTER_MODEL_LIST)
+    router.delete_deployment(id="dep-deleted")
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+    response: Final = await _count_through_the_anthropic_route(
+        {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "Hello!"}]},
+        UserAPIKeyAuth(),
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 404
+    assert json.loads(bytes(response.body))["error"]["type"] == "not_found_error"
 _PINNED_COUNTS: Final = MappingProxyType({"deployment-a.test": 11, "deployment-b.test": 22})
 
 

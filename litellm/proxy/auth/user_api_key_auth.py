@@ -268,7 +268,9 @@ def _get_model_from_request_context(
 
 
 _CLAUDE_MODEL_ROUTES: Final = frozenset(
-    f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
+    f"/{prefix}{endpoint}"
+    for prefix in ("", "v1/")
+    for endpoint in ("messages", "messages/count_tokens", "chat/completions", "responses")
 )
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])

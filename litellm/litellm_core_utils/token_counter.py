@@ -906,6 +906,45 @@ def _anthropic_rendered_page_image_tokens(width: float, height: float) -> int:
     return math.ceil(min(float(ANTHROPIC_IMAGE_MAX_PIXELS), area_at_max_edge) / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
 
 
+def _anthropic_image_pixels(width: float, height: float) -> float:
+    """The pixel area Anthropic bills for an image: downscaled to its limits, never upscaled."""
+    if width <= 0 or height <= 0:
+        return 0.0
+    scale: Final = min(
+        1.0,
+        ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX / max(width, height),
+        math.sqrt(ANTHROPIC_IMAGE_MAX_PIXELS / (width * height)),
+    )
+    return width * height * scale * scale
+
+
+def _anthropic_image_tokens(data: str, use_default_image_token_count: bool) -> int:
+    """An Anthropic `image` is billed by its pixel area (w * h / 750), not a flat per-image cost.
+
+    The image is downscaled when it exceeds Anthropic's limits, but a small image keeps its own area
+    (Anthropic does not upscale), so this differs from the PDF page rule in
+    `_anthropic_rendered_page_image_tokens`. An image whose dimensions cannot be read keeps the flat
+    estimate the block used before.
+    https://platform.claude.com/docs/en/build-with-claude/vision
+
+    Only inline `data:` images are measured. Any other source (an `http(s)` URL, an empty file id) is
+    left to `calculate_img_tokens`, which returns the flat base without fetching, so a token count
+    never adds an outbound request the previous code did not make.
+    """
+    if use_default_image_token_count or not data.startswith("data:"):
+        return calculate_img_tokens(
+            data=data,
+            mode="auto",
+            use_default_image_token_count=use_default_image_token_count,
+        )
+    try:
+        width, height = get_image_dimensions(data)
+    except Exception as e:  # noqa: BLE001  # any decode failure keeps the flat estimate, never fails a count
+        verbose_logger.debug("Could not read the image's dimensions (%s), keeping the flat estimate", e)
+        return calculate_img_tokens(data=data, mode="auto")
+    return math.ceil(_anthropic_image_pixels(width, height) / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
+
+
 def _count_inline_pdf_tokens(data_url: str, count_function: TokenCounterFunction) -> int | None:
     if not data_url.startswith(PDF_DATA_URL_PREFIX):
         return None
@@ -934,11 +973,7 @@ def _count_opaque_document_tokens(
     pdf_tokens: Final = _count_inline_pdf_tokens(data_url, count_function)
     if pdf_tokens is not None:
         return pdf_tokens
-    return calculate_img_tokens(
-        data=data_url,
-        mode="auto",
-        use_default_image_token_count=use_default_image_token_count,
-    )
+    return _anthropic_image_tokens(data_url, use_default_image_token_count)
 
 
 def _count_document_tokens(
@@ -1059,10 +1094,8 @@ def _count_content_list(
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
             elif c["type"] == "image":
-                num_tokens += calculate_img_tokens(
-                    data=_anthropic_image_source_data(c["source"]),
-                    mode="auto",
-                    use_default_image_token_count=use_default_image_token_count,
+                num_tokens += _anthropic_image_tokens(
+                    _anthropic_image_source_data(c["source"]), use_default_image_token_count
                 )
             elif c["type"] == "document":
                 num_tokens += _count_document_tokens(

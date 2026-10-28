@@ -5,6 +5,7 @@ import base64
 import importlib
 import io
 import json
+import math
 import os
 import subprocess
 import sys
@@ -1724,42 +1725,122 @@ def test_token_counter_with_anthropic_image_block(source: dict[str, str]):
     )
 
 
-def test_anthropic_image_block_matches_equivalent_image_url():
-    """An Anthropic `image` block prices identically to the OpenAI `image_url` carrying the same bytes."""
+def _count_image_tokens_for_anthropic(data_url: str) -> int:
+    """Count a single Anthropic `image` block through the real tokenizer (no default-count short-circuit)."""
+    return token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": data_url.split(",", 1)[1],
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+
+
+def _anthropic_image_contribution(width: int, height: int) -> int:
+    """The image's own token cost, isolated from the surrounding conversation's fixed overhead.
+
+    A 1x1 image contributes exactly one token under the area rule, so subtracting its message's count
+    and adding that one token removes the per-message overhead.
+    """
+    return _count_image_tokens_for_anthropic(_png_data_url(width, height)) - _count_image_tokens_for_anthropic(
+        _png_data_url(1, 1)
+    ) + 1
+
+
+@pytest.mark.parametrize(("width", "height"), [(64, 64), (200, 200), (400, 400), (612, 792)])
+def test_anthropic_image_block_scales_with_pixel_area(width: int, height: int):
+    """An Anthropic `image` block is billed by its pixel area, so a bigger image costs more.
+
+    Anthropic bills `ceil(w * h / pixels_per_token)` for an image that fits its limits.
+    https://platform.claude.com/docs/en/build-with-claude/vision
+
+    Before the fix the block went through `calculate_img_tokens(mode="auto")`, which returns the flat
+    85-token OpenAI base regardless of dimensions, so every image counted the same.
+    """
+    from litellm.constants import ANTHROPIC_IMAGE_PIXELS_PER_TOKEN
+
+    smaller_width: Final = width // 2
+    smaller_height: Final = height // 2
+
+    tokens: Final = _anthropic_image_contribution(width, height)
+    smaller_tokens: Final = _anthropic_image_contribution(smaller_width, smaller_height)
+
+    assert tokens > smaller_tokens
+    assert tokens == math.ceil(width * height / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
+    assert tokens - smaller_tokens == math.ceil(width * height / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN) - math.ceil(
+        smaller_width * smaller_height / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN
+    )
+
+
+@pytest.mark.parametrize(("width", "height"), [(8000, 3072), (4000, 1568), (1568, 8000), (100_000, 100_000)])
+def test_anthropic_image_block_is_capped_by_anthropic_image_limits(width: int, height: int):
+    """Downscaling to Anthropic's image limits caps the count at the largest billable image's area."""
+    from litellm.constants import ANTHROPIC_IMAGE_MAX_PIXELS, ANTHROPIC_IMAGE_PIXELS_PER_TOKEN
+
+    assert _anthropic_image_contribution(100, 100) < _anthropic_image_contribution(width, height)
+    assert _anthropic_image_contribution(width, height) <= math.ceil(
+        ANTHROPIC_IMAGE_MAX_PIXELS / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN
+    )
+
+
+def test_anthropic_image_block_keeps_a_small_images_own_area():
+    """A small image is billed by its own area, not upscaled to the long-edge limit the way a PDF page is."""
+    from litellm.constants import ANTHROPIC_IMAGE_PIXELS_PER_TOKEN
+
+    small: Final = _anthropic_image_contribution(100, 100)
+    page_sized: Final = _anthropic_image_contribution(1568, 1568)
+
+    assert small < page_sized
+    assert small == math.ceil(100 * 100 / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
+    assert page_sized < math.ceil(1568 * 1568 / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
+
+
+def test_anthropic_image_block_url_source_matches_openai_image_url():
+    """A URL image block keeps the pre-existing parity with OpenAI's `image_url` and fetches nothing.
+
+    Only inline `data:` images are measured, so a URL source counts the flat base instead of adding an
+    outbound request that the budget and context pre-calls would each pay for.
+    """
+    url: Final = "https://example.com/image.png"
     anthropic_messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/png",
-                        "data": "iVBORw0KGgo=",
-                    },
-                }
-            ],
-        }
+        {"role": "user", "content": [{"type": "image", "source": {"type": "url", "url": url}}]}
     ]
     openai_messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
-                }
-            ],
-        }
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}
     ]
 
-    anthropic_tokens = token_counter(
+    anthropic_tokens: Final = token_counter(
         model="anthropic/claude-sonnet-4-5-20250929", messages=anthropic_messages
     )
-    openai_tokens = token_counter(
+    openai_tokens: Final = token_counter(
         model="anthropic/claude-sonnet-4-5-20250929", messages=openai_messages
     )
     assert anthropic_tokens == openai_tokens
+
+
+def test_anthropic_image_block_prices_differently_from_openai_image_url():
+    """The Anthropic area rule and the OpenAI tile `image_url` rule are different contracts and must diverge."""
+    data_url: Final = _png_data_url(612, 792)
+    openai_messages = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": data_url}}]}
+    ]
+
+    anthropic_tokens: Final = _count_image_tokens_for_anthropic(data_url)
+    openai_tokens: Final = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=openai_messages
+    )
+    assert anthropic_tokens != openai_tokens
 
 
 def test_anthropic_image_block_nested_in_tool_result():

@@ -415,6 +415,8 @@ async def count_tokens(
             request=token_request,
             call_endpoint=True,
             messages_format="anthropic",
+            require_deployment=True,
+            user_api_key_dict=user_api_key_dict,
             client_oauth_token=forwarded_anthropic_oauth_token(request.headers),
             **_count_tokens_body_options(data, auto_drop_params),
         )
