@@ -1,10 +1,10 @@
-import { resolveLogoSrc } from "@/lib/assetPaths";
+import ariaAgentImage from "../../../public/assets/aria-agent.png";
 import { cn } from "@/lib/cva.config";
 
 export function AriaAvatar({ size = 28, className }: { size?: number; className?: string }) {
   return (
     <img
-      src={resolveLogoSrc("/ui/assets/aria-agent.png")}
+      src={ariaAgentImage.src}
       width={size}
       height={size}
       alt=""
