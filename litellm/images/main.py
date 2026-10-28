@@ -68,6 +68,11 @@ from litellm.utils import (
 )
 
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
+_PROVIDERS_RESOLVING_THEIR_OWN_IMAGE_BASE: Final = (
+    LlmProviders.DASHSCOPE,
+    LlmProviders.QWENCLOUD,
+    LlmProviders.QWEN_AI_PLATFORM,
+)
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: type["ImageEditRequestUtils"] | None = None
@@ -271,6 +276,7 @@ def image_generation(
     """
     try:
         args: Final = locals()
+        requested_api_base: Final = api_base
         aimg_generation: Final = kwargs.get("aimg_generation", False)
         litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         logger_fn: Final = kwargs.get("logger_fn", None)
@@ -465,7 +471,11 @@ def image_generation(
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
 
             # Resolve api_base from litellm.api_base if not explicitly provided
-            _api_base: Final = api_base or litellm.api_base
+            _api_base: Final = (
+                requested_api_base
+                if custom_llm_provider in _PROVIDERS_RESOLVING_THEIR_OWN_IMAGE_BASE
+                else api_base or litellm.api_base
+            )
             litellm_params_dict["api_base"] = _api_base
 
             return llm_http_handler.image_generation_handler(

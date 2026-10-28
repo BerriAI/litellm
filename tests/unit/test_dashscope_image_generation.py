@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from pydantic import ValidationError
 
 import litellm
@@ -68,15 +69,24 @@ class TestDashScopeImageGenerationConfig:
         assert url == custom
 
     @pytest.mark.parametrize(
+        "chat_api_base",
+        [
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/",
+        ],
+    )
+    def test_get_complete_url_ignores_chat_compatible_mode_base(
+        self, chat_api_base: str
+    ):
+        url = self.cfg.get_complete_url(chat_api_base, None, "qwen-image-3.0", {}, {})
+        assert url == DEFAULT_API_BASE
+
+    @pytest.mark.parametrize(
         ("api_base", "expected"),
         [
             (
-                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "https://dashscope.aliyuncs.com",
                 "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
-            ),
-            (
-                "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/",
-                DEFAULT_API_BASE,
             ),
             (
                 "https://llm-abc123.cn-beijing.maas.aliyuncs.com",
@@ -464,7 +474,7 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
         called_url = (
             call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
         )
-        assert called_url == f"{DASHSCOPE_DEFAULT_ORIGIN}{DASHSCOPE_IMAGE_PATH}"
+        assert called_url == DEFAULT_API_BASE
 
         # Verify request body contains DashScope format
         call_kwargs = call_args[1] if call_args[1] else {}
@@ -473,6 +483,38 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
             assert "input" in body
             assert "messages" in body["input"]
             assert body["parameters"]["size"] == "1024*1024"
+
+
+
+@pytest.mark.parametrize(
+    ("api_base", "image_base_env", "expected_url"),
+    [
+        (None, "", DEFAULT_API_BASE),
+        ("https://dashscope.aliyuncs.com", "", f"{DASHSCOPE_DEFAULT_ORIGIN}{DASHSCOPE_IMAGE_PATH}"),
+        (None, "https://images.example.com/generate", "https://images.example.com/generate"),
+        (
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "https://images.example.com/generate",
+            "https://images.example.com/generate",
+        ),
+    ],
+)
+def test_image_generation_resolves_from_the_callers_base_not_the_chat_default(
+    monkeypatch: pytest.MonkeyPatch, api_base: str | None, image_base_env: str, expected_url: str
+):
+    monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
+    monkeypatch.setenv("DASHSCOPE_API_BASE_IMAGE", image_base_env)
+    image_url = "https://dashscope-result.oss.aliyuncs.com/t.png"
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(expected_url).respond(
+            200, json={"output": {"choices": [{"message": {"content": [{"image": image_url}]}}]}}
+        )
+        response = litellm.image_generation(
+            model="dashscope/qwen-image-3.0", prompt="a puppy", api_key="sk-test-key", api_base=api_base
+        )
+
+    assert response.data[0].url == image_url
 
 
 def _transform_response(payload: object) -> ImageResponse:

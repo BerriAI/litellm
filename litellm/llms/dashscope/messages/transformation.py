@@ -7,12 +7,15 @@ from typing import ClassVar, Final
 import litellm
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.url_utils import ensure_api_route
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.secret_managers.main import get_secret_str
 
-from ..common_utils import resolve_dashscope_anthropic_api_base
+from ..common_utils import (
+    dashscope_base_selects_anthropic_messages,
+    resolve_dashscope_anthropic_api_base,
+)
 
 
 class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
@@ -30,6 +33,12 @@ class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def should_strip_billing_metadata(self) -> bool:
         return True
+
+    def handles_web_search_natively(self) -> bool:
+        return False
+
+    def serves_api_base(self, model: str, api_base: str | None) -> bool:
+        return dashscope_base_selects_anthropic_messages(api_base)
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:

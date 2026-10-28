@@ -120,10 +120,36 @@ def resolve_dashscope_anthropic_api_base(
     return candidate or default
 
 
-def resolve_dashscope_family_rerank_api_base(api_base: str | None, env_var: str, default_rerank_base: str) -> str:
+def dashscope_base_selects_anthropic_messages(api_base: str | None) -> bool:
+    candidate: Final = api_base or get_secret_str("DASHSCOPE_API_BASE")
+    if not candidate:
+        return False
+    path: Final = urlparse(candidate).path.rstrip("/")
+    if path.endswith(DASHSCOPE_ANTHROPIC_PATH) or f"{DASHSCOPE_ANTHROPIC_PATH}/" in path:
+        return True
+    return not path and resolve_dashscope_endpoints(candidate) is not None
+
+
+def _chat_shaped_aliyun_origin(api_base: str | None) -> str | None:
+    if api_base is None:
+        return None
+    parsed: Final = urlparse(api_base)
+    host: Final = parsed.hostname or ""
+    on_aliyun_host: Final = host == "aliyuncs.com" or host.endswith(".aliyuncs.com")
+    if not on_aliyun_host or parsed.path.rstrip("/") != DASHSCOPE_CHAT_COMPATIBLE_PATH:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _rerank_origin(api_base: str | None) -> str | None:
     endpoints: Final = resolve_dashscope_endpoints(api_base)
-    if endpoints is not None:
-        return get_secret_str(env_var) or f"{endpoints.origin}{DASHSCOPE_RERANK_PATH}"
+    return endpoints.origin if endpoints is not None else _chat_shaped_aliyun_origin(api_base)
+
+
+def resolve_dashscope_family_rerank_api_base(api_base: str | None, env_var: str, default_rerank_base: str) -> str:
+    origin: Final = _rerank_origin(api_base)
+    if origin is not None:
+        return get_secret_str(env_var) or f"{origin}{DASHSCOPE_RERANK_PATH}"
     if api_base is not None:
         return api_base
     return get_secret_str(env_var) or default_rerank_base

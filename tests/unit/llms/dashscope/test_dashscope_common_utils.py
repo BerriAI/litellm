@@ -134,3 +134,18 @@ def test_rerank_base_uses_the_configured_default(monkeypatch: pytest.MonkeyPatch
         resolve_dashscope_family_rerank_api_base(None, "DASHSCOPE_API_BASE_RERANK", "https://default/reranks")
         == "https://default/reranks"
     )
+
+
+@pytest.mark.parametrize(
+    "origin",
+    ["https://cn-hongkong.dashscope.aliyuncs.com", "https://token-plan.cn-beijing.maas.aliyuncs.com"],
+)
+def test_rerank_keeps_remapping_chat_bases_on_other_aliyun_hosts(monkeypatch: pytest.MonkeyPatch, origin: str):
+    monkeypatch.delenv("DASHSCOPE_API_BASE_RERANK", raising=False)
+
+    assert (
+        resolve_dashscope_family_rerank_api_base(
+            f"{origin}/compatible-mode/v1", "DASHSCOPE_API_BASE_RERANK", "https://default/reranks"
+        )
+        == f"{origin}/compatible-api/v1/reranks"
+    )

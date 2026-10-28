@@ -2,7 +2,10 @@
 Unit tests for DashScope's Anthropic-compatible Messages endpoint.
 """
 
+from typing import Final
+
 import pytest
+import respx
 
 import litellm
 from litellm.exceptions import AuthenticationError
@@ -13,6 +16,26 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 WORKSPACE = "https://llm-abc123.cn-beijing.maas.aliyuncs.com"
+INTL: Final = "https://dashscope-intl.aliyuncs.com"
+CODING_PLAN: Final = "https://coding-intl.dashscope.aliyuncs.com"
+CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1792227137,
+    "model": "qwen3.7-plus",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+}
+MESSAGE: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "qwen3.7-plus",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 9, "output_tokens": 1},
+}
 
 
 @pytest.mark.parametrize(
@@ -162,3 +185,38 @@ def test_dashscope_prefix_reaches_the_provider():
 
     assert provider == "dashscope"
     assert model == "qwen3.7-plus"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api_base", "expected_url"),
+    [
+        (INTL, f"{INTL}/apps/anthropic/v1/messages"),
+        (f"{INTL}/apps/anthropic", f"{INTL}/apps/anthropic/v1/messages"),
+        (WORKSPACE, f"{WORKSPACE}/apps/anthropic/v1/messages"),
+        (f"{CODING_PLAN}/apps/anthropic", f"{CODING_PLAN}/apps/anthropic/v1/messages"),
+        (None, "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"),
+        (f"{INTL}/compatible-mode/v1", f"{INTL}/compatible-mode/v1/chat/completions"),
+        (f"{CODING_PLAN}/v1", f"{CODING_PLAN}/v1/chat/completions"),
+        ("https://gateway.example.com/anthropic", "https://gateway.example.com/anthropic/chat/completions"),
+    ],
+)
+async def test_only_a_domain_root_or_anthropic_base_leaves_the_chat_bridge(
+    monkeypatch: pytest.MonkeyPatch, api_base: str | None, expected_url: str
+):
+    monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.route(path__regex=r".*/chat/completions$").respond(200, json=CHAT_COMPLETION)
+        upstream.route(path__regex=r".*/v1/messages$").respond(200, json=MESSAGE)
+
+        await litellm.anthropic.messages.acreate(
+            model="dashscope/qwen3.7-plus",
+            messages=[{"role": "user", "content": "say ok"}],
+            max_tokens=16,
+            api_key="sk-dashscope",
+            api_base=api_base,
+        )
+
+        assert [str(call.request.url) for call in upstream.calls] == [expected_url]

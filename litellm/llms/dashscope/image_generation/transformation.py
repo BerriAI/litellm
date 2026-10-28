@@ -118,14 +118,12 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
+        if api_base and api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH):
+            return self._resolve_image_api_base(None)
         endpoints: Final = resolve_dashscope_endpoints(api_base)
         if endpoints is not None:
             return f"{endpoints.origin}{DASHSCOPE_IMAGE_PATH}"
-
-        image_api_base: Final = (
-            None if api_base and api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH) else api_base
-        )
-        return self._resolve_image_api_base(image_api_base)
+        return self._resolve_image_api_base(api_base)
 
     def validate_environment(
         self,
