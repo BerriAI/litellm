@@ -1035,6 +1035,32 @@
         "generateContent": false
       }
     },
+    "tokenify": {
+      "display_name": "Tokenify (`tokenify`)",
+      "url": "https://docs.litellm.ai/docs/providers/tokenify",
+      "endpoints": {
+        "chat_completions": true,
+        "responses": true,
+        "text_completion": true,
+        "embeddings": false,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": true,
+        "interactions": true,
+        "systemone": false,
+        "a2a": true,
+        "generateContent": true
+      }
+    },
     "crusoe": {
       "display_name": "Crusoe (`crusoe`)",
       "url": "https://docs.litellm.ai/docs/providers/crusoe",
@@ -1059,24 +1085,6 @@
         "systemone": false,
         "a2a": true,
         "generateContent": true
-      }
-    },
-    "tokenify": {
-      "display_name": "Tokenify (`tokenify`)",
-      "url": "https://docs.litellm.ai/docs/providers/tokenify",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "a2a": false,
-        "interactions": false
       }
     },
     "custom": {

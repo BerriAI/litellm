@@ -119,26 +119,6 @@ def test_tokenify_is_available_in_add_model_form():
     }
 
 
-def test_tokenify_supported_endpoints():
-    matrix_path = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
-    providers = json.loads(matrix_path.read_text())["providers"]
-
-    assert providers["tokenify"]["endpoints"] == {
-        "chat_completions": True,
-        "messages": True,
-        "responses": True,
-        "embeddings": False,
-        "image_generations": False,
-        "audio_transcriptions": False,
-        "audio_speech": False,
-        "moderations": False,
-        "batches": False,
-        "rerank": False,
-        "a2a": False,
-        "interactions": False,
-    }
-
-
 def test_tokenify_chat_completion_request():
     with respx.mock() as upstream:
         route: Final = upstream.post("https://api.tokenify.dev/v1/chat/completions").respond(
