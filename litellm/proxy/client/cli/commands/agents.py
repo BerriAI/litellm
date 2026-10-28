@@ -909,7 +909,9 @@ def run_agent(
         (verify_subscription if subscription else verify)(base_url, api_key)
 
     env_before_sync: Final = base_env if base_env is not None else os.environ
-    synced: Final = sync_models(binary, env_before_sync, base_url, api_key, skip_verify)
+    synced: Final = (
+        _NO_EXTRA_ENV if subscription else sync_models(binary, env_before_sync, base_url, api_key, skip_verify)
+    )
     if isinstance(synced, ModelSyncSkipped):
         warn(f"litellm: not syncing {display_name} models from the proxy: {synced.reason}")
 

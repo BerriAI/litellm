@@ -1726,6 +1726,28 @@ class TestRunAgent:
         assert launched["env"]["LITELLM_PROXY_API_KEY"] == "sk-key"
         assert "OPENAI_API_KEY" not in launched["env"]
 
+    @pytest.mark.parametrize(
+        "sync_result",
+        [ModelSyncArgs(("-c", 'model_catalog_json="/tmp/c.json"')), ModelSyncSkipped("lists no chat models")],
+    )
+    def test_codex_subscription_launch_leaves_the_model_list_to_codex(self, sync_result):
+        warnings = []
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["codex"],
+            subscription=True,
+            base_env={},
+            which=lambda name: "/usr/local/bin/codex",
+            verify_subscription=lambda *a: None,
+            sync_models=lambda *a: sync_result,
+            warn=warnings.append,
+            launcher=lambda p, a, e: launched.update(args=tuple(a)),
+        )
+        assert warnings == []
+        assert "model_catalog_json" not in json.dumps(launched["args"])
+
     def test_default_launch_still_probes_with_the_bearer(self):
         probed = []
         run_agent(
