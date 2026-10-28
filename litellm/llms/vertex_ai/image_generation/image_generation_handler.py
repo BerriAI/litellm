@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _PREDICTIONS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class VertexImageGeneration(VertexLLM):
@@ -169,7 +168,7 @@ class VertexImageGeneration(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        json_response: Final = _JSON_OBJECT.validate_python(response.json())
+        json_response: Final[Mapping[str, object]] = response.json()
         return self.process_image_generation_response(json_response, model_response, model)
 
     async def aimage_generation(
@@ -273,7 +272,7 @@ class VertexImageGeneration(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        json_response: Final = _JSON_OBJECT.validate_python(response.json())
+        json_response: Final[Mapping[str, object]] = response.json()
         return self.process_image_generation_response(json_response, model_response, model)
 
     def is_image_generation_response(self, json_response: dict[str, Any]) -> bool:

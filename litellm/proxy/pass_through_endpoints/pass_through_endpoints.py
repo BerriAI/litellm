@@ -119,6 +119,8 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+    redact_credential_headers,
+    strip_client_guardrail_information,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.route_priority import (
@@ -149,6 +151,7 @@ from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
 from .upstream_usage_headers import (
     UpstreamReportedUsage,
+    apply_upstream_reported_model,
     apply_upstream_reported_usage,
 )
 
@@ -419,6 +422,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     @staticmethod
     def get_endpoint_type(url: str, custom_llm_provider: str | None = None) -> EndpointType:
         parsed_url: Final = urlparse(url)
+        if custom_llm_provider == "chatgpt":
+            return EndpointType.OPENAI
         if custom_llm_provider in ("typesafe", "laya", "bespoke") and parsed_url.path.removesuffix("/").endswith(
             "/v1/systemone"
         ):
@@ -733,7 +738,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                     "url": str(request.url),
                     "method": request.method,
                     "body": copy.copy(_parsed_body),  # use copy instead of deepcopy
-                    "headers": request.headers,
+                    "headers": redact_credential_headers(request.headers),
                 },
             },
             "call_type": "pass_through_endpoint",
@@ -862,6 +867,7 @@ def _build_passthrough_failure_request_payload(
     logging_obj: LiteLLMLoggingObj | None,
     custom_llm_provider: str | None,
     upstream_usage: UpstreamReportedUsage | None = None,
+    upstream_model: str | None = None,
 ) -> dict:
     """Build the ``request_data`` dict passed to ``post_call_failure_hook``.
 
@@ -872,6 +878,8 @@ def _build_passthrough_failure_request_payload(
     ``upstream_usage`` carries the cost and tokens an upstream reported on an
     error response. Spend tracking only attributes a recovered cost when it
     comes paired with a usage object, so both keys are written together.
+    ``upstream_model`` is the model name the upstream reported, which replaces
+    the body's ``model`` on the failure row just as it does on a success row.
     """
     request_payload: Final[dict] = dict(cast(Mapping[str, object], parsed_body or {}))  # cast-ok: json body
     if kwargs:
@@ -885,13 +893,15 @@ def _build_passthrough_failure_request_payload(
     if upstream_usage is not None:
         request_payload["response_cost"] = upstream_usage.response_cost or 0.0
         request_payload["combined_usage_object"] = Usage(total_tokens=upstream_usage.total_tokens or 0)
+    if upstream_model is not None:
+        request_payload["model"] = upstream_model
     return request_payload
 
 
 @dataclass(frozen=True, slots=True)
 class _TeamCallbackWiring:
-    success_callbacks: "list[str | Callable | CustomLogger] | None" = None  # mutable-ok: Logging.__init__ arg
-    failure_callbacks: "list[str | Callable | CustomLogger] | None" = None  # mutable-ok: Logging.__init__ arg
+    success_callbacks: "list[str | Callable[..., object] | CustomLogger] | None" = None  # mutable-ok: Logging init arg
+    failure_callbacks: "list[str | Callable[..., object] | CustomLogger] | None" = None  # mutable-ok: Logging init arg
     logging_kwargs: dict[str, str | dict[str, str]] | None = None  # mutable-ok: Logging.__init__ arg
 
 
@@ -1230,10 +1240,11 @@ async def pass_through_request(
             _parsed_body,
         )
 
+        client_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
+        strip_client_guardrail_information(client_body)
         if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
-            pricing_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
-            _strip_client_pricing_overrides(pricing_body)
-            _parsed_body = pricing_body
+            _strip_client_pricing_overrides(client_body)
+        _parsed_body = client_body
         if custom_llm_provider in ("laya", "bespoke"):
             decision_request: Final = TypeAdapter(Mapping[str, object]).validate_python(_parsed_body)
             checkpoint: Final = validate_oss_request(custom_llm_provider, decision_request)
@@ -1500,7 +1511,7 @@ async def pass_through_request(
             additional_args={
                 "complete_input_dict": _parsed_body,
                 "api_base": str(logging_url),
-                "headers": upstream_headers,
+                "headers": redact_credential_headers(upstream_headers),
             },
         )
         stream = HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
@@ -1548,6 +1559,10 @@ async def pass_through_request(
                 logging_obj=logging_obj,
                 headers=response.headers,
             )
+            upstream_model = apply_upstream_reported_model(  # rebind-ok: bound once per branch, like upstream_usage
+                logging_obj=logging_obj,
+                headers=response.headers,
+            )
 
             relay_response: Final = await _log_passthrough_upstream_failure(
                 response=response,
@@ -1558,6 +1573,7 @@ async def pass_through_request(
                     logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
                     upstream_usage=upstream_usage,
+                    upstream_model=upstream_model,
                 ),
                 logging_obj=logging_obj,
             )
@@ -1571,7 +1587,7 @@ async def pass_through_request(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
                 response=relay_response,
-                request_headers=dict(request.headers),
+                request_headers=dict(redact_credential_headers(request.headers)),
             )
             if callback_headers:
                 _response_headers.update(callback_headers)
@@ -1636,6 +1652,10 @@ async def pass_through_request(
             logging_obj=logging_obj,
             headers=response.headers,
         )
+        upstream_model = apply_upstream_reported_model(  # rebind-ok: bound once per branch, like upstream_usage
+            logging_obj=logging_obj,
+            headers=response.headers,
+        )
 
         if _is_streaming_response(response) is True:
             logging_obj.stream = True
@@ -1650,6 +1670,7 @@ async def pass_through_request(
                     logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
                     upstream_usage=upstream_usage,
+                    upstream_model=upstream_model,
                 ),
                 logging_obj=logging_obj,
             )
@@ -1663,7 +1684,7 @@ async def pass_through_request(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
                 response=detected_relay_response,
-                request_headers=dict(request.headers),
+                request_headers=dict(redact_credential_headers(request.headers)),
             )
             if callback_headers:
                 _response_headers.update(callback_headers)
@@ -1713,7 +1734,7 @@ async def pass_through_request(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
                 response=response,
-                request_headers=dict(request.headers),
+                request_headers=dict(redact_credential_headers(request.headers)),
             )
             if relay_callback_headers:
                 relay_custom_headers.update(relay_callback_headers)
@@ -1750,6 +1771,7 @@ async def pass_through_request(
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
             upstream_usage=upstream_usage,
+            upstream_model=upstream_model,
         )
         failure_request_payload["response_body"] = response_body
         await _log_passthrough_upstream_failure(
@@ -1888,7 +1910,7 @@ async def pass_through_request(
             data=_parsed_body or {},
             user_api_key_dict=user_api_key_dict,
             response=response,
-            request_headers=dict(request.headers),
+            request_headers=dict(redact_credential_headers(request.headers)),
         )
         if callback_headers:
             custom_headers.update(callback_headers)
@@ -2031,6 +2053,9 @@ def _apply_key_team_project_controls(
     )
 
 
+_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
 def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:
     """
     If tags are in the request headers, add them to the metadata
@@ -2056,7 +2081,12 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
             tags_to_add=tags_to_add,
         )
 
-    return metadata
+    restored_metadata: Final = _METADATA_ADAPTER.validate_python(metadata)
+    request_data: Final[dict[str, object]] = {  # mutable-ok: legacy enrichment writes this wrapper
+        "metadata": restored_metadata
+    }
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_data)
+    return restored_metadata
 
 
 class _PassThroughRequestEnvelope(TypedDict, total=False):

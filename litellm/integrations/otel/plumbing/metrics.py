@@ -419,9 +419,8 @@ class GenAIMetricRecorder:
         api_call_start_time: Final = kwargs.get("api_call_start_time")
         if api_call_start_time is None:
             return
-        _end_time = kwargs.get("end_time") or end_time
         api_call_start: Final = to_seconds(api_call_start_time)
-        end_ts: Final = to_seconds(_end_time)
+        end_ts: Final = to_seconds(kwargs.get("end_time") or end_time)
         if api_call_start is None or end_ts is None:
             return
         duration: Final = end_ts - api_call_start

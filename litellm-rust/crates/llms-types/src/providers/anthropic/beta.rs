@@ -235,7 +235,10 @@ impl AnthropicBeta {
                 BetaProvider::Databricks,
             ],
             Self::Compact20260112 => &[BetaProvider::AzureAi, BetaProvider::BedrockConverse],
-            Self::ComputerUse20250124 | Self::ComputerUse20251124 | Self::Context1m20250807 => &[],
+            Self::ComputerUse20250124
+            | Self::ComputerUse20251124
+            | Self::Context1m20250807
+            | Self::ThinkingBindingControls20260801 => &[],
             Self::DangerousToolUse20260903 => &[BetaProvider::BedrockConverse],
             Self::Effort20251124 => &[BetaProvider::VertexAi],
             Self::FastMode20260201 | Self::Oauth20250420 => &[
@@ -272,7 +275,6 @@ impl AnthropicBeta {
                 BetaProvider::Databricks,
             ],
             Self::StructuredOutputs20251113 => &[BetaProvider::Bedrock, BetaProvider::VertexAi],
-            Self::ThinkingBindingControls20260801 => &[BetaProvider::AzureAi],
             Self::ThinkingDisplayUpdates20260818 => &[BetaProvider::Databricks],
             Self::ToolSearchTool20251019 => &[
                 BetaProvider::Anthropic,
