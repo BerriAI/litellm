@@ -1882,6 +1882,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return status_mapping.get(status, "stop")
 
 
+def _with_inner_bill_as_usage_cost(event: BaseModel) -> dict[str, object]:
+    """The inner Responses call already billed its spend row and left the bill in hidden ``response_cost``. The
+    chat stream built on top of it reads that bill from ``usage.cost``, where a priced upstream would put it."""
+    dumped: Final = event.model_dump()
+    response: Final = getattr(event, "response", None)
+    bill: Final = (get_hidden_params(response) or {}).get("response_cost") if response is not None else None
+    usage: Final = dumped.get("response", {}).get("usage") if isinstance(dumped.get("response"), dict) else None
+    if not isinstance(usage, dict) or usage.get("cost") is not None:
+        return dumped
+    if isinstance(bill, bool) or not isinstance(bill, (int, float)):
+        return dumped
+    return {**dumped, "response": {**dumped["response"], "usage": {**usage, "cost": float(bill)}}}
+
+
 class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def __init__(
         self,
@@ -1903,7 +1917,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         from pydantic import BaseModel
 
         if isinstance(str_line, BaseModel):
-            return self.chunk_parser(str_line.model_dump())
+            return self.chunk_parser(_with_inner_bill_as_usage_cost(str_line))
 
         if not str_line or str_line.startswith("event:"):
             # ignore.

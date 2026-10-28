@@ -930,6 +930,7 @@ from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
 from litellm.proxy.ui_crud_endpoints.user_banner_endpoints import (
     router as user_banner_endpoints_router,
 )
+from litellm.proxy.usage_cost_egress import with_client_stream_usage_cost
 from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     PrismaClient,
     ProxyLogging,
@@ -10563,7 +10564,7 @@ async def async_data_generator(
                 error_state.observe_chunk(chunk)
             raw_passthrough = False
             if isinstance(chunk, BaseModel):
-                chunk = _serialize_streaming_chunk(chunk)
+                chunk = _serialize_streaming_chunk(with_client_stream_usage_cost(chunk))
             elif isinstance(chunk, bytes):
                 chunk = chunk.decode("utf-8", errors="replace")
                 if is_raw_sse_stream:

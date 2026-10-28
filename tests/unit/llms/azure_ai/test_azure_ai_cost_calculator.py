@@ -14,7 +14,6 @@ import litellm
 from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure_ai.cost_calculator import (
-    calculate_azure_model_router_flat_cost,
     cost_per_token,
     is_azure_model_router,
 )
@@ -263,7 +262,14 @@ class TestAzureModelRouterCostBreakdown:
         assert route.call_count == 1
         assert json.loads(route.calls.last.request.content)["model"] == "model-router"
         assert (final_usage.prompt_tokens, final_usage.completion_tokens) == (5000, 2000)
-        assert final_usage.cost == pytest.approx(routed_prompt_cost + routed_completion_cost + ROUTED_FEE, rel=1e-9)
+        assert getattr(final_usage, "cost", None) is None, "the bill reaches a client through the proxy egress only"
+        assembled: Final = litellm.stream_chunk_builder(
+            chunks=list(chunks), messages=messages, logging_obj=stream.logging_obj
+        )
+        assert assembled is not None
+        assert assembled._hidden_params["response_cost"] == pytest.approx(
+            routed_prompt_cost + routed_completion_cost + ROUTED_FEE, rel=1e-9
+        )
 
     @pytest.mark.respx(assert_all_called=True)
     def test_model_router_completion_reports_routed_cost_plus_flat_fee(self, respx_mock: respx.MockRouter) -> None:
