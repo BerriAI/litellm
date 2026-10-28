@@ -374,6 +374,8 @@ LITELLM_METADATA_ROUTES: Final = (
     "responses",
     "files",
     "interactions",
+    "/decisions",
+    "/systemone",
 )
 
 LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(

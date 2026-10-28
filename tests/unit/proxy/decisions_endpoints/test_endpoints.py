@@ -577,6 +577,53 @@ _OPENAI_FORMAT_ANSWERS: Final = [
 ]
 
 
+@pytest.mark.parametrize(
+    ("endpoint", "request_body"),
+    (
+        ("/v1/decisions", _OPENAI_FORMAT_REQUEST),
+        ("/decisions", _OPENAI_FORMAT_REQUEST),
+        ("/v1/systemone", _REQUEST),
+        ("/systemone", _REQUEST),
+    ),
+)
+def test_proxy_decisions_routes_apply_tag_routing(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    request_body: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "decider",
+                    "litellm_params": {
+                        "model": "perplexity/pplx-decider-v1-27b",
+                        "api_key": "test-key",
+                        "tags": ["provider:perplexity"],
+                    },
+                }
+            ],
+            enable_tag_filtering=True,
+        ),
+    )
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    rejected: Final = client.post(endpoint, json=request_body, headers={"x-litellm-tags": "&inference:bedrock"})
+
+    assert rejected.status_code == 401, rejected.text
+    assert "Not allowed to access model due to tags configuration" in rejected.text
+    assert not upstream.called
+
+    accepted: Final = client.post(endpoint, json=request_body, headers={"x-litellm-tags": "provider:perplexity"})
+
+    assert accepted.status_code == 200, accepted.text
+    assert upstream.called
+
+
 @pytest.mark.parametrize("endpoint", ("/v1/decisions", "/decisions"))
 def test_openai_format_decisions_translate_through_systemone(
     client: TestClient,

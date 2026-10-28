@@ -116,6 +116,11 @@ class TestGetMetadataVariableName:
         request = self._make_request(path)
         assert get_metadata_variable_name(request) == "litellm_metadata"
 
+    @pytest.mark.parametrize("path", ["/v1/decisions", "/decisions", "/v1/systemone", "/systemone"])
+    def test_returns_litellm_metadata_for_decisions_routes(self, path):
+        request = self._make_request(path)
+        assert get_metadata_variable_name(request) == "litellm_metadata"
+
     def test_returns_metadata_for_chat_completions(self):
         request = self._make_request("/chat/completions")
         assert get_metadata_variable_name(request) == "metadata"
