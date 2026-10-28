@@ -1329,7 +1329,7 @@ def test_streaming_surfaces_fireworks_response_fields():
     raw_response = MagicMock()
     raw_response.status_code = 200
     raw_response.headers = {}
-    raw_response.iter_lines = lambda: iter(sse_lines)
+    raw_response.iter_text = lambda: iter(f"{line}\n" for line in sse_lines)
 
     client = HTTPHandler()
     with patch.object(client, "post", return_value=raw_response):
@@ -1788,7 +1788,7 @@ def test_streaming_preserves_selected_model_for_private_accounting():
     raw_response = MagicMock()
     raw_response.status_code = 200
     raw_response.headers = {}
-    raw_response.iter_lines = lambda: iter(sse_lines)
+    raw_response.iter_text = lambda: iter(f"{line}\n" for line in sse_lines)
 
     client = HTTPHandler()
     with patch.object(client, "post", return_value=raw_response):
@@ -2275,7 +2275,7 @@ def test_completion_forwards_litellm_user_id_as_user(call_kwargs: dict[str, obje
 
 def test_completion_forwards_litellm_user_id_when_streaming() -> None:
     client: Final = _fireworks_chat_client()
-    client.post.return_value.iter_lines = lambda: iter(())
+    client.post.return_value.iter_text = lambda: iter(())
     litellm.completion(
         model="fireworks_ai/accounts/fireworks/models/kimi-k3",
         messages=[{"role": "user", "content": "hi"}],

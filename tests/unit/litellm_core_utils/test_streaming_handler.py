@@ -503,6 +503,89 @@ def test_multi_chunk_reasoning_and_content(
     assert initialized_custom_stream_wrapper.sent_last_thinking_block is True
 
 
+def _stream_chunk(delta: dict[str, object], finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(choices=[{"index": 0, "delta": delta, "finish_reason": finish_reason}])
+
+
+_GET_WEATHER_CALL: Final = {
+    "index": 0,
+    "id": "call_1",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chunks,expected_content,expected_tool_calls",
+    [
+        (
+            (
+                _stream_chunk({"reasoning_content": "Check the weather"}),
+                _stream_chunk({"tool_calls": [_GET_WEATHER_CALL]}),
+                _stream_chunk({}, "tool_calls"),
+            ),
+            "<think>Check the weather</think>",
+            1,
+        ),
+        (
+            (
+                _stream_chunk({"reasoning_content": "Step one"}),
+                _stream_chunk({"reasoning_content": ", step two"}),
+                _stream_chunk({}, "length"),
+            ),
+            "<think>Step one, step two</think>",
+            0,
+        ),
+        (
+            (
+                _stream_chunk({"reasoning_content": "a"}),
+                _stream_chunk({"content": "b"}),
+                _stream_chunk({"reasoning_content": "c"}),
+                _stream_chunk({"content": "d"}),
+                _stream_chunk({}, "stop"),
+            ),
+            "<think>a</think>b<think>c</think>d",
+            0,
+        ),
+        (
+            (_stream_chunk({"reasoning_content": "Still thinking"}),),
+            "<think>Still thinking</think>",
+            0,
+        ),
+        (
+            (_stream_chunk({"content": "hi"}), _stream_chunk({}, "stop")),
+            "hi",
+            0,
+        ),
+    ],
+    ids=[
+        "reasoning_then_tool_call",
+        "reasoning_cut_by_length",
+        "reasoning_after_answer",
+        "stream_ends_mid_reasoning",
+        "answer_without_reasoning",
+    ],
+)
+async def test_merged_reasoning_stream_keeps_think_tags_balanced(
+    logging_obj: Logging,
+    chunks: tuple[ModelResponseStream, ...],
+    expected_content: str,
+    expected_tool_calls: int,
+):
+    response: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="deepseek-reasoner",
+        logging_obj=logging_obj,
+    )
+    response.merge_reasoning_content_in_choices = True
+
+    deltas: Final = tuple([chunk.choices[0].delta async for chunk in response])
+
+    assert "".join(delta.content or "" for delta in deltas) == expected_content
+    assert sum(len(delta.tool_calls or ()) for delta in deltas) == expected_tool_calls
+
+
 def test_strip_sse_data_from_chunk():
     """Test the static method that strips 'data: ' prefix from SSE chunks"""
     # Test with string inputs
