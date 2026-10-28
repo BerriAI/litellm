@@ -102,6 +102,9 @@ class AmazonAnthropicClaudeMessagesConfig(
     def should_strip_billing_metadata(self) -> bool:
         return True
 
+    def hoists_wrapped_defer_loading(self, model: str) -> bool:
+        return True
+
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return True
 

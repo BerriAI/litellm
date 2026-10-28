@@ -132,29 +132,40 @@ def is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
     return False
 
 
-def _tool_without_custom_field(tool: object, hoist_defer_loading: bool) -> object:
+def is_claude_model_target(custom_llm_provider: str | None, model: str) -> bool:
+    return "claude" in model.lower() and is_claude_tool_target(custom_llm_provider, model)
+
+
+def _hoistable_defer_loading(tool_dict: Mapping[object, object], custom: object) -> bool | None:
+    if not isinstance(custom, dict) or "defer_loading" in tool_dict:
+        return None
+    defer_loading: Final = OBJECT_MAPPING_ADAPTER.validate_python(custom).get("defer_loading")
+    return defer_loading if isinstance(defer_loading, bool) else None
+
+
+def _tool_without_custom_field(tool: object, hoist_defer_loading: bool, drop_custom: bool) -> object:
     if not isinstance(tool, dict):
         return tool
 
     tool_dict: Final = OBJECT_MAPPING_ADAPTER.validate_python(tool)
     if "custom" not in tool_dict:
-        return tool
+        return tool_dict
 
-    without_custom: Final = {key: value for key, value in tool_dict.items() if key != "custom"}
     custom: Final = tool_dict["custom"]
-    if not hoist_defer_loading or not isinstance(custom, dict) or "defer_loading" in tool_dict:
-        return without_custom
+    without_custom: Final = {key: value for key, value in tool_dict.items() if key != "custom"}
+    defer_loading: Final = _hoistable_defer_loading(tool_dict, custom) if hoist_defer_loading else None
+    if defer_loading is None:
+        return without_custom if drop_custom else tool_dict
 
-    custom_dict: Final = OBJECT_MAPPING_ADAPTER.validate_python(custom)
-    defer_loading: Final = custom_dict.get("defer_loading")
-    if not isinstance(defer_loading, bool):
-        return without_custom
+    unhoisted: Final = {
+        key: value for key, value in OBJECT_MAPPING_ADAPTER.validate_python(custom).items() if key != "defer_loading"
+    }
+    kept_custom: Final = {"custom": unhoisted} if unhoisted and not drop_custom else {}
+    return {**without_custom, "defer_loading": defer_loading, **kept_custom}
 
-    return {**without_custom, "defer_loading": defer_loading}
 
-
-def tools_without_custom_field(tools: Sequence[object], hoist_defer_loading: bool) -> list[object]:
-    return [_tool_without_custom_field(tool, hoist_defer_loading) for tool in tools]
+def tools_without_custom_field(tools: Sequence[object], hoist_defer_loading: bool, drop_custom: bool) -> list[object]:
+    return [_tool_without_custom_field(tool, hoist_defer_loading, drop_custom) for tool in tools]
 
 
 def is_anthropic_messages_url(url: str) -> bool:

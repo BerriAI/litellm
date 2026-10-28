@@ -593,7 +593,7 @@ def normalize_custom_field_on_tools(request_body: dict) -> None:
     from litellm.llms.anthropic.common_utils import OBJECT_LIST_ADAPTER, tools_without_custom_field
 
     normalized_tools: Final = tools_without_custom_field(
-        OBJECT_LIST_ADAPTER.validate_python(tools), hoist_defer_loading=True
+        OBJECT_LIST_ADAPTER.validate_python(tools), hoist_defer_loading=True, drop_custom=True
     )
     request_body["tools"] = normalized_tools  # rebind-ok: out-param
 

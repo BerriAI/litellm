@@ -32,7 +32,7 @@ from ...common_utils import (
     OBJECT_LIST_ADAPTER,
     AnthropicError,
     AnthropicModelInfo,
-    is_claude_tool_target,
+    is_claude_model_target,
     merge_anthropic_beta_headers,
     optionally_handle_anthropic_oauth,
     requires_native_compaction_beta,
@@ -183,6 +183,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         base config keeps them. Providers that reject them override this to True.
         """
         return False
+
+    def hoists_wrapped_defer_loading(self, model: str) -> bool:
+        return is_claude_model_target(self._resolved_provider, model)
 
     @staticmethod
     def _filter_billing_headers_from_system(system_param):
@@ -723,7 +726,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             **anthropic_messages_request,
             "tools": tools_without_custom_field(
                 OBJECT_LIST_ADAPTER.validate_python(tools),
-                hoist_defer_loading=is_claude_tool_target(self._resolved_provider, model),
+                hoist_defer_loading=self.hoists_wrapped_defer_loading(model),
+                drop_custom=drops_unsupported_params(litellm_params.drop_params),
             ),
         }
 

@@ -171,22 +171,52 @@ def test_transform_includes_tools():
     assert result["tools"] == tools
 
 
-def test_transform_drops_tool_custom_object_and_keeps_wrapped_defer_loading():
-    schema: Final[dict[str, JsonValue]] = {"type": "object", "properties": {"path": {"type": "string"}}}
+_PATH_SCHEMA: Final[dict[str, JsonValue]] = {"type": "object", "properties": {"path": {"type": "string"}}}
 
+
+@pytest.mark.parametrize(
+    ("model", "drop_params", "expected_tools"),
+    [
+        (
+            "claude-haiku-5-5",
+            True,
+            [
+                {"name": "read_file", "input_schema": _PATH_SCHEMA},
+                {"name": "list_files", "input_schema": _PATH_SCHEMA, "defer_loading": True},
+            ],
+        ),
+        (
+            "claude-haiku-5-5",
+            False,
+            [
+                {"name": "read_file", "input_schema": _PATH_SCHEMA, "custom": {"eager_input_streaming": True}},
+                {"name": "list_files", "input_schema": _PATH_SCHEMA, "defer_loading": True},
+            ],
+        ),
+        (
+            "deepseek-chat",
+            True,
+            [
+                {"name": "read_file", "input_schema": _PATH_SCHEMA},
+                {"name": "list_files", "input_schema": _PATH_SCHEMA},
+            ],
+        ),
+    ],
+)
+def test_transform_counts_tools_the_way_messages_sends_them(
+    model: str, drop_params: bool, expected_tools: list[dict[str, JsonValue]]
+):
     result: Final = AnthropicCountTokensConfig().transform_request_to_count_tokens(
-        model="claude-haiku-5-5",
+        model=model,
         messages=[{"role": "user", "content": "Hello"}],
         tools=[
-            {"name": "read_file", "input_schema": schema, "custom": {"eager_input_streaming": True}},
-            {"name": "list_files", "input_schema": schema, "custom": {"defer_loading": True}},
+            {"name": "read_file", "input_schema": _PATH_SCHEMA, "custom": {"eager_input_streaming": True}},
+            {"name": "list_files", "input_schema": _PATH_SCHEMA, "custom": {"defer_loading": True}},
         ],
+        drop_params=drop_params,
     )
 
-    assert result["tools"] == [
-        {"name": "read_file", "input_schema": schema},
-        {"name": "list_files", "input_schema": schema, "defer_loading": True},
-    ]
+    assert result["tools"] == expected_tools
 
 
 def test_transform_includes_system_and_tools():
