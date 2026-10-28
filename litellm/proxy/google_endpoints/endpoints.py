@@ -1,20 +1,29 @@
 from collections.abc import Mapping
 from itertools import chain
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import JSONResponse, ORJSONResponse
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types
 from litellm.proxy._types import *
-from litellm.proxy._types import TokenCountRequest
+from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    log_llm_api_exception,
+    proxy_exception_from_http_exception,
+    resolve_litellm_call_id,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
+from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
+from litellm.proxy.common_utils.token_count_log import rejected_token_count
+from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
 
@@ -61,6 +70,37 @@ def _input_schema(declaration: _GoogleCountTokensFunctionDeclaration) -> object:
     if declaration.parameters is not None:
         return normalize_json_schema_types(declaration.parameters)
     return {"type": "object", "properties": {}}
+
+
+_GOOGLE_RPC_STATUS: Final = MappingProxyType(
+    {
+        400: "INVALID_ARGUMENT",
+        401: "UNAUTHENTICATED",
+        403: "PERMISSION_DENIED",
+        404: "NOT_FOUND",
+        409: "ABORTED",
+        429: "RESOURCE_EXHAUSTED",
+        499: "CANCELLED",
+        501: "UNIMPLEMENTED",
+        503: "UNAVAILABLE",
+        504: "DEADLINE_EXCEEDED",
+    }
+)
+
+
+def _google_error_response(request: Request, error: ProxyException) -> JSONResponse:
+    from litellm.proxy.proxy_server import (
+        _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; error JSONResponses returned by the route must stamp the OTel server span like the global ProxyException handler does
+    )
+
+    status_code: Final = int(error.code) if error.code is not None and error.code.isdigit() else 500
+    _close_dangling_otel_server_span(request, status_code, exc=error)
+    status: Final = _GOOGLE_RPC_STATUS.get(status_code, "INTERNAL" if status_code >= 500 else "FAILED_PRECONDITION")
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": status_code, "message": error.message, "status": status}},
+        headers=error.headers,
+    )
 
 
 def _google_count_tokens_request(model_name: str, data: object) -> TokenCountRequest:
@@ -248,24 +288,46 @@ async def google_count_tokens(request: Request, model_name: str):
     from litellm.proxy.common_utils.http_parsing_utils import read_request_body
     from litellm.proxy.proxy_server import token_counter as internal_token_counter
 
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     data: Final = await read_request_body(request=request)
     try:
         token_request: Final = _google_count_tokens_request(model_name, data)
-    except ValidationError as error:
-        raise HTTPException(status_code=400, detail="Invalid Google countTokens request body") from error
+    except ValidationError:
+        return rejected_token_count(
+            _google_error_response(
+                request,
+                ProxyException(
+                    message="Invalid Google countTokens request body",
+                    type="invalid_request_error",
+                    param=None,
+                    code=400,
+                ),
+            ),
+            litellm_call_id,
+            model_name,
+        )
 
-    # Call the internal token counter function with direct request flag set to False
-    token_response: Final = await internal_token_counter(
-        request=token_request,
-        call_endpoint=True,
-    )
-    if token_response is None:
-        return TokenCountDetailsResponse(totalTokens=0, promptTokensDetails=[])
+    try:
+        token_response: Final = await internal_token_counter(
+            request=token_request, call_endpoint=True, litellm_call_id=litellm_call_id
+        )
+    except ProxyException as error:
+        return _google_error_response(request, error)
+    except HTTPException as error:
+        return _google_error_response(request, proxy_exception_from_http_exception(error, {}))
+    except Exception as error:
+        log_llm_api_exception(error, litellm_call_id)
+        return _google_error_response(
+            request,
+            ProxyException(message="Internal server error", type="internal_server_error", param=None, code=500),
+        )
     original_response: Final[dict] = token_response.original_response or {}
-    return TokenCountDetailsResponse(
-        totalTokens=original_response.get("totalTokens") or token_response.total_tokens or 0,
-        promptTokensDetails=original_response.get("promptTokensDetails", []),
-    )
+    counted: Final[TokenCountDetailsResponse] = {
+        "totalTokens": original_response.get("totalTokens") or token_response.total_tokens or 0,
+        "promptTokensDetails": original_response.get("promptTokensDetails", []),
+        **count_source_fields(token_response),
+    }
+    return counted
 
 
 # ============================================================
@@ -517,7 +579,7 @@ async def cancel_interaction(
     """
     Cancel an interaction by ID.
 
-    Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}:cancel
+    Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}/cancel
     """
     from litellm.proxy.proxy_server import (
         general_settings,

@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -75,6 +76,7 @@ else:
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_CHOICE_MAPPINGS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
@@ -285,7 +287,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self,
         content_item: OpenAIMessageContentListBlock,
     ) -> OpenAIMessageContentListBlock:
-        litellm_specific_params: Final = {"format"}
+        litellm_specific_params: Final = {"format", "detail", "video_metadata"}
         if content_item.get("type") == "image_url":
             content_item = cast(ChatCompletionImageObject, content_item)
             if isinstance(content_item["image_url"], str):
@@ -293,8 +295,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                     "url": content_item["image_url"],
                 }
             elif isinstance(content_item["image_url"], dict):
-                new_image_url_obj: Final = ChatCompletionImageUrlObject(
-                    **{k: v for k, v in content_item["image_url"].items() if k not in litellm_specific_params}
+                new_image_url_obj: Final = cast(
+                    ChatCompletionImageUrlObject,
+                    {k: v for k, v in content_item["image_url"].items() if k not in {"format", "video_metadata"}},
                 )
                 content_item["image_url"] = new_image_url_obj
         elif content_item.get("type") == "file":
@@ -807,7 +810,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if endpoint in api_base:
             return api_base
 
-        return f"{api_base}/{endpoint}"
+        return join_api_base(api_base, endpoint)
 
     def validate_environment(
         self,
@@ -956,11 +959,18 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                     status_code=error_status_code,
                     message=error_message,
                 )
-            choices = chunk.get("choices", [])
-            choices = self._map_reasoning_to_reasoning_content(choices)
+            raw_choices: Final = chunk.get("choices") or []
+            if any(choice.get("finish_reason") == "abort" for choice in _CHOICE_MAPPINGS.validate_python(raw_choices)):
+                raise OpenAIError(
+                    status_code=500,
+                    message="Upstream generation aborted (finish_reason=abort)",
+                )
+            choices: Final = self._map_reasoning_to_reasoning_content(raw_choices)
+            fingerprint: Final = _OBJECT_MAPPING.validate_python(chunk).get("system_fingerprint")
 
             kwargs: Final[dict[str, Any]] = {
                 "id": chunk.get("id"),
+                "system_fingerprint": fingerprint,
                 "object": "chat.completion.chunk",
                 "created": chunk.get("created"),
                 "model": chunk.get("model"),

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -6,7 +7,8 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.anthropic.count_tokens.transformation import AnthropicCountTokensConfig
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, AnthropicCountTokensConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError, build_mantle_messages_url
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
@@ -23,6 +25,7 @@ class MantleCountTokensRequest(TypedDict):
 
 _COUNT_REQUEST: Final = TypeAdapter(MantleCountTokensRequest)
 _COUNT_RESPONSE: Final = TypeAdapter(dict[str, JsonValue])
+_COUNT_OPTIONS: Final[TypeAdapter[Mapping[str, JsonValue]]] = TypeAdapter(Mapping[str, JsonValue])
 
 
 class BedrockMantleCountTokensHandler(BaseAWSLLM):
@@ -41,7 +44,7 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
         messages_url: Final = build_mantle_messages_url(
             api_base=None, aws_bedrock_runtime_endpoint=None, region=aws_region_name
         )
-        return f"{messages_url}{MANTLE_COUNT_TOKENS_SUFFIX}"
+        return join_api_base(messages_url, MANTLE_COUNT_TOKENS_SUFFIX)
 
     async def handle_count_tokens_request(
         self,
@@ -52,15 +55,18 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
     ) -> dict[str, JsonValue]:
         try:
             request: Final = _COUNT_REQUEST.validate_python(request_data)
-            aws_region_name: Final = self._get_aws_region_name(
-                optional_params=litellm_params, model=resolved_model, model_id=None
+            aws_region_name: Final = await run_aws_signing(
+                self.get_aws_region_name, optional_params=litellm_params, model=resolved_model, model_id=None
             )
-            endpoint_url: Final = self.get_mantle_count_tokens_endpoint(aws_region_name)
+            endpoint_url: Final = await run_aws_signing(self.get_mantle_count_tokens_endpoint, aws_region_name)
             body: Final = self._anthropic_config.transform_request_to_count_tokens(
                 model=resolved_model,
                 messages=request["messages"],
                 tools=request.get("tools"),
                 system=request.get("system"),
+                optional_params=_COUNT_OPTIONS.validate_python(
+                    {name: value for name, value in request_data.items() if name in COUNT_TOKEN_OPTION_NAMES}
+                ),
             )
             verbose_logger.debug("Making bedrock-mantle count_tokens request to: %s", endpoint_url)
             api_key: Final = litellm_params.get("api_key")

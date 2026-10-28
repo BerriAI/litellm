@@ -194,8 +194,9 @@ class TestDashScopeVideoInputReference:
             lambda tmp_path: ("first.png", PNG_BYTES, "image/png"),
             lambda tmp_path: ("first.png", io.BytesIO(PNG_BYTES)),
             lambda tmp_path: _write_png(tmp_path),
+            lambda tmp_path: ("first.png", ("inner.png", PNG_BYTES)),
         ],
-        ids=["filename-bytes-content-type", "filename-file", "path"],
+        ids=["filename-bytes-content-type", "filename-file", "path", "nested-tuple"],
     )
     def test_file_tuple_and_path_references_are_encoded(self, make_reference, tmp_path):
         """Regression: tuples and paths are valid FileTypes but raised before reaching DashScope."""

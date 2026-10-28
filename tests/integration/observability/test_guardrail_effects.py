@@ -3,15 +3,18 @@ import json
 import re
 import socket
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from contextlib import contextmanager
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
+from urllib.parse import urlsplit
 
 import anthropic
 import httpx
@@ -22,8 +25,12 @@ from integration._support.database import read_rows
 from integration._support.mcp import mcp_peer, register_mcp, tool_names
 from integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
-from openai import AsyncOpenAI, OpenAI
+from integration._support.ports import allocate_port
+from openai import APIError, AsyncOpenAI, OpenAI
+from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, JsonValue
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 
 @pytest.mark.covers("other.observability.guardrails.rewrite_reaches_correct_anthropic_positions")
@@ -223,7 +230,7 @@ def test_guardrail_denial_prevents_provider_and_preserves_allowed_control(gatewa
             model: Final = scenario.model()
             key: Final = scenario.key(models=[model])
             with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
-                observed.get("/__observations")
+                observed.delete("/__observations").raise_for_status()
                 denied: Final = candidate.request(
                     "POST",
                     "/v1/chat/completions",
@@ -1179,7 +1186,7 @@ def test_responses_pre_call_denial_streams_sse_with_typed_message_item(gateway: 
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
         model: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
-            observed.get("/__observations")
+            observed.delete("/__observations").raise_for_status()
             response: Final = candidate.request(
                 "POST",
                 "/v1/responses",
@@ -1221,7 +1228,7 @@ def test_responses_pre_call_denial_returns_json_with_typed_message_item(gateway:
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
         model: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
-            observed.get("/__observations")
+            observed.delete("/__observations").raise_for_status()
             response: Final = candidate.request(
                 "POST", "/v1/responses", {"model": model, "input": "say hi", "guardrails": [identity]}
             )
@@ -1285,10 +1292,7 @@ def _blocked_stream_events(text: str) -> tuple[dict[str, object], ...]:
 
 
 def _dead_api_base() -> str:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        port: Final = reserve.getsockname()[1]
-    return f"http://127.0.0.1:{port}/v1"
+    return f"http://127.0.0.1:{allocate_port()}/v1"
 
 
 @pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_openai_sdk_streams_typed_message")
@@ -1396,7 +1400,7 @@ def test_responses_pre_call_denial_stream_event_vocabulary(gateway: Gateway, tmp
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
         model: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
-            observed.get("/__observations")
+            observed.delete("/__observations").raise_for_status()
             response: Final = candidate.request(
                 "POST",
                 "/v1/responses",
@@ -1452,7 +1456,7 @@ def test_responses_pre_call_denial_stream_requests_have_distinct_ids(gateway: Ga
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
         model: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
-            observed.get("/__observations")
+            observed.delete("/__observations").raise_for_status()
             responses: Final = tuple(
                 candidate.request(
                     "POST",
@@ -1588,7 +1592,7 @@ def test_responses_unguarded_stream_reaches_upstream(gateway: Gateway, tmp_path:
         assert denied.status_code == 200, denied.text
         model: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
-            observed.get("/__observations")
+            observed.delete("/__observations").raise_for_status()
             response: Final = candidate.request(
                 "POST",
                 "/v1/responses",
@@ -1935,7 +1939,7 @@ def test_responses_pre_call_denial_stream_survives_worker_burst(gateway: Gateway
         model: Final = scenario.model(api_base=_dead_api_base())
         healthy: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
-            observed.get("/__observations")
+            observed.delete("/__observations").raise_for_status()
 
             def burst(index: int) -> httpx.Response:
                 if index % 3 == 0:
@@ -2574,9 +2578,15 @@ def _scanned_while_upstream_is_held(
         rig.gate.set()
 
 
-def _post_call_statuses(rig: _DisconnectRig, model: str, rows: int = 1) -> tuple[tuple[str, ...], ...]:
+def _post_call_rows(
+    rig: _DisconnectRig, model: str, rows: int = 1, call_types: frozenset[str] | None = None
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
     found: Final = eventually(
-        lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)),
+        lambda: tuple(
+            row
+            for row in read_rows('SELECT call_type, metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,))
+            if call_types is None or row["call_type"] in call_types
+        ),
         lambda values: len(values) == rows,
         seconds=70,
     )
@@ -2591,7 +2601,11 @@ def _post_call_statuses(rig: _DisconnectRig, model: str, rows: int = 1) -> tuple
         )
         return tuple(str(entry["guardrail_status"]) for entry in post_call)
 
-    return tuple(statuses(row["metadata"]) for row in found)
+    return tuple((str(row["call_type"]), statuses(row["metadata"])) for row in found)
+
+
+def _post_call_statuses(rig: _DisconnectRig, model: str, rows: int = 1) -> tuple[tuple[str, ...], ...]:
+    return tuple(statuses for _, statuses in _post_call_rows(rig, model, rows))
 
 
 _ENDPOINT_CLIENTS: Final = (
@@ -2624,7 +2638,7 @@ def test_client_disconnect_mid_stream_still_scans_the_content_it_already_receive
     (
         pytest.param(_chat_httpx, id="chat-httpx"),
         pytest.param(_chat_async_openai_sdk, id="chat-async-openai-sdk"),
-        pytest.param(_responses_httpx, id="responses-httpx", marks=_NO_DISCONNECT_ROW_LIT_8603),
+        pytest.param(_responses_httpx, id="responses-httpx"),
         pytest.param(_messages_anthropic_sdk, id="messages-anthropic-sdk", marks=_NO_DISCONNECT_ROW_LIT_8603),
         pytest.param(
             _gemini_httpx,
@@ -2835,9 +2849,9 @@ def test_client_disconnect_before_any_content_sends_no_response_scan(gateway: Ga
     with _disconnect_rig(gateway, tmp_path, shape="empty") as rig:
         try:
             _stream_and_close(rig, "/v1/chat/completions", _chat_body(rig, 0), "data: ")
+            rows: Final = _post_call_statuses(rig, rig.model)
         finally:
             rig.gate.set()
-        rows: Final = _post_call_statuses(rig, rig.model)
         assert rig.scans.response_scans(rig.secret()) == (), rig.scans.seen
         assert len(rows) == 1 and "success" not in rows[0], rows
 
@@ -2859,6 +2873,281 @@ def test_a_fully_read_stream_is_scanned_exactly_once(
         assert rig.secret() in response.text and "[DONE]" in response.text, response.text
         assert _post_call_statuses(rig, rig.model) == (("success",),)
         assert len(rig.scans.response_scans(rig.secret())) == 1, rig.scans.seen
+
+
+def _pre_call_progress_config(tmp_path: Path, identity: str, policy_url: str, *, store_prompts: bool) -> Path:
+    path: Final = _post_call_config(tmp_path, identity, policy_url, {**_END_OF_STREAM_ONLY, "mode": "pre_call"}, True)
+    if store_prompts:
+        config: Final = yaml.safe_load(path.read_text())
+        settings: Final = {**config["general_settings"], "store_prompts_in_spend_logs": True}
+        path.write_text(yaml.safe_dump({**config, "general_settings": settings}))
+    return path
+
+
+def _openai_chat_chunks(candidate: Gateway, model: str, prompt: str) -> tuple[ChatCompletionChunk, ...]:
+    with OpenAI(
+        base_url=str(candidate.client.base_url) + "/v1", api_key=candidate.key, max_retries=0, timeout=30
+    ) as client:
+        return tuple(
+            client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                stream=True,
+                extra_headers={"x-litellm-call-id": prompt},
+            )
+        )
+
+
+def _async_openai_chat_chunks(candidate: Gateway, model: str, prompt: str) -> tuple[ChatCompletionChunk, ...]:
+    async def consume() -> tuple[ChatCompletionChunk, ...]:
+        async with AsyncOpenAI(
+            base_url=str(candidate.client.base_url) + "/v1", api_key=candidate.key, max_retries=0, timeout=30
+        ) as client:
+            stream: Final = await client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                stream=True,
+                extra_headers={"x-litellm-call-id": prompt},
+            )
+            return tuple([chunk async for chunk in stream])
+
+    return asyncio.run(consume())
+
+
+_PROGRESS_STREAM_READERS: Final = (
+    pytest.param(_openai_chat_chunks, id="sync-openai-sdk"),
+    pytest.param(_async_openai_chat_chunks, id="async-openai-sdk"),
+)
+
+
+@pytest.mark.parametrize("read_stream", _PROGRESS_STREAM_READERS)
+@pytest.mark.parametrize("index_fields", ({}, {"index": None}), ids=("omitted-index", "null-index"))
+@pytest.mark.parametrize("progress_content", (None, "progress "), ids=("null-content", "text-content"))
+def test_progress_chunk_without_choice_index_streams_and_logs_served_answer(
+    gateway: Gateway,
+    tmp_path: Path,
+    record_property: Callable[[str, object], None],
+    index_fields: dict[str, JsonValue],
+    progress_content: str | None,
+    read_stream: Callable[[Gateway, str, str], tuple[ChatCompletionChunk, ...]],
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    record_property("litellm_call_id", identity)
+    answer: Final = "synthetic answer " + identity
+    reasoning: Final = "backend progress " + identity
+    expected: Final = (progress_content or "") + answer
+    frames: Final = (
+        _chat_frame(
+            identity,
+            (
+                {
+                    **index_fields,
+                    "delta": {"reasoning_content": reasoning, "content": progress_content},
+                    "finish_reason": None,
+                },
+            ),
+        ),
+        _chat_frame(identity, (_chat_choice(0, {"content": answer}),)),
+        _chat_frame(identity, (_chat_choice(0, {}, "stop"),)),
+        b"data: [DONE]\n\n",
+    )
+
+    def provider(request: Request) -> Reply:
+        assert request.target == "/v1/chat/completions", request.target
+        body: Final = json.loads(request.body)
+        assert body["stream"] is True, body
+        assert body["messages"] == [{"role": "user", "content": identity}], body
+        return Reply(content_type="text/event-stream", chunks=frames)
+
+    with wire_server(_allowing_guardrail) as policy, wire_server(provider) as upstream:
+        path: Final = _pre_call_progress_config(tmp_path, identity, policy.url, store_prompts=True)
+        with (
+            owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned,
+            owned.gateway.scenario() as scenario,
+        ):
+            candidate: Final = owned.gateway
+            model: Final = scenario.model(model_info={"id": identity}, api_base=upstream.url + "/v1")
+            eventually(lambda: owned.serves_only_on_every_worker(model, identity), bool, seconds=70)
+            chunks: Final = read_stream(candidate, model, identity)
+            choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in chunks))
+            actual: Final = "".join(choice.delta.content or "" for choice in choices)
+            assert actual == expected, chunks
+            assert tuple(choice.index for choice in choices if choice.finish_reason == "stop") == (0,), chunks
+            assert reasoning in json.dumps([chunk.model_dump() for chunk in chunks]), chunks
+            assert len(upstream.drain()) == 1
+            rows: Final = eventually(
+                lambda: read_rows(
+                    'SELECT request_id, status, response, metadata FROM "LiteLLM_SpendLogs" '
+                    "WHERE model_group=%s AND (request_id=%s OR metadata->>'litellm_call_id'=%s)",
+                    (model, identity, identity),
+                ),
+                lambda values: len(values) == 1,
+                seconds=70,
+            )
+            record_property("spend_request_id", rows[0]["request_id"])
+            assert rows[0]["status"] == "success", rows
+            logged_choices: Final = object_value(rows[0]["response"])["choices"]
+            assert isinstance(logged_choices, list), rows
+            assert tuple(object_value(object_value(choice)["message"])["content"] for choice in logged_choices) == (
+                expected,
+            ), rows
+            entries: Final = object_value(rows[0]["metadata"])["guardrail_information"]
+            assert isinstance(entries, list), rows
+            assert tuple(
+                (entry["guardrail_name"], entry["guardrail_mode"], entry["guardrail_status"])
+                for entry in map(object_value, entries)
+            ) == ((identity, "pre_call", "success"),), rows
+            scans: Final = tuple(json.loads(request.body) for request in policy.drain())
+            assert len(scans) == 1 and scans[0]["input_type"] == "request", scans
+            assert scans[0]["texts"] == [identity], scans
+
+
+@pytest.mark.parametrize("read_stream", _PROGRESS_STREAM_READERS)
+def test_progress_chunk_without_choice_index_preserves_upstream_stream_error(
+    gateway: Gateway,
+    tmp_path: Path,
+    record_property: Callable[[str, object], None],
+    read_stream: Callable[[Gateway, str, str], tuple[ChatCompletionChunk, ...]],
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    record_property("litellm_call_id", identity)
+    message: Final = "synthetic upstream failure marker " + identity
+    frames: Final = (
+        _chat_frame(
+            identity,
+            ({"delta": {"reasoning_content": "backend progress", "content": None}, "finish_reason": None},),
+        ),
+        b"data: "
+        + json.dumps({"error": {"message": message, "type": "server_error", "code": "upstream_failed"}}).encode()
+        + b"\n\n",
+        b"data: [DONE]\n\n",
+    )
+
+    def provider(request: Request) -> Reply:
+        assert request.target == "/v1/chat/completions", request.target
+        body: Final = json.loads(request.body)
+        assert body["stream"] is True, body
+        assert body["messages"] == [{"role": "user", "content": identity}], body
+        return Reply(content_type="text/event-stream", chunks=frames)
+
+    with wire_server(_allowing_guardrail) as policy, wire_server(provider) as upstream:
+        path: Final = _pre_call_progress_config(tmp_path, identity, policy.url, store_prompts=False)
+        with (
+            owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned,
+            owned.gateway.scenario() as scenario,
+        ):
+            candidate: Final = owned.gateway
+            model: Final = scenario.model(model_info={"id": identity}, api_base=upstream.url + "/v1", num_retries=0)
+            eventually(lambda: owned.serves_only_on_every_worker(model, identity), bool, seconds=70)
+            with pytest.raises(APIError, match=message) as raised:
+                read_stream(candidate, model, identity)
+            assert "NoneType" not in str(raised.value), raised.value
+            assert len(upstream.drain()) == 1
+            rows: Final = eventually(
+                lambda: read_rows(
+                    'SELECT request_id, status, metadata FROM "LiteLLM_SpendLogs" '
+                    "WHERE model_group=%s AND (request_id=%s OR metadata->>'litellm_call_id'=%s)",
+                    (model, identity, identity),
+                ),
+                lambda values: len(values) == 1,
+                seconds=70,
+            )
+            record_property("spend_request_id", rows[0]["request_id"])
+            assert rows[0]["status"] == "failure", rows
+            error: Final = object_value(rows[0]["metadata"])["error_information"]
+            assert message in str(object_value(error)["error_message"]), rows
+            scans: Final = tuple(json.loads(request.body) for request in policy.drain())
+            assert len(scans) == 1 and scans[0]["texts"] == [identity], scans
+
+
+@pytest.mark.parametrize("index_fields", ({}, {"index": None}), ids=("omitted-index", "null-index"))
+def test_disconnect_after_progress_without_choice_index_logs_only_the_received_prefix(
+    gateway: Gateway,
+    tmp_path: Path,
+    index_fields: dict[str, JsonValue],
+    record_property: Callable[[str, object], None],
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    record_property("litellm_call_id", identity)
+    prefix: Final = "synthetic received prefix " + identity
+    tail: Final = "synthetic withheld tail " + identity
+    gate: Final = threading.Event()
+    frames: Final = (
+        _chat_frame(
+            identity,
+            (
+                {
+                    **index_fields,
+                    "delta": {"reasoning_content": "backend progress", "content": prefix},
+                    "finish_reason": None,
+                },
+            ),
+        ),
+        _chat_frame(identity, (_chat_choice(0, {"content": tail}, "stop"),)),
+        b"data: [DONE]\n\n",
+    )
+
+    def provider(request: Request) -> Reply:
+        assert request.target == "/v1/chat/completions", request.target
+        body: Final = json.loads(request.body)
+        assert body["stream"] is True, body
+        assert body["messages"] == [{"role": "user", "content": identity}], body
+        return Reply(content_type="text/event-stream", chunks=frames, gate_after_first=gate)
+
+    with wire_server(_allowing_guardrail) as policy, wire_server(provider) as upstream:
+        path: Final = _pre_call_progress_config(tmp_path, identity, policy.url, store_prompts=True)
+        with (
+            owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned,
+            owned.gateway.scenario() as scenario,
+        ):
+            candidate: Final = owned.gateway
+            model: Final = scenario.model(model_info={"id": identity}, api_base=upstream.url + "/v1", num_retries=0)
+            eventually(lambda: owned.serves_only_on_every_worker(model, identity), bool, seconds=70)
+
+            try:
+
+                async def disconnect() -> str:
+                    async with AsyncOpenAI(
+                        base_url=str(candidate.client.base_url) + "/v1",
+                        api_key=candidate.key,
+                        max_retries=0,
+                        timeout=30,
+                    ) as client:
+                        stream: Final = await client.chat.completions.create(
+                            model=model,
+                            messages=[{"role": "user", "content": identity}],
+                            stream=True,
+                            extra_headers={"x-litellm-call-id": identity},
+                        )
+                        async for chunk in stream:
+                            for choice in chunk.choices:
+                                if choice.delta.content == prefix:
+                                    await stream.close()
+                                    return choice.delta.content
+                    raise AssertionError("The stream ended before the SDK received the provider prefix")
+
+                assert asyncio.run(disconnect()) == prefix
+                rows: Final = eventually(
+                    lambda: read_rows(
+                        'SELECT request_id, status, response FROM "LiteLLM_SpendLogs" '
+                        "WHERE model_group=%s AND (request_id=%s OR metadata->>'litellm_call_id'=%s)",
+                        (model, identity, identity),
+                    ),
+                    lambda values: len(values) == 1,
+                    seconds=70,
+                )
+                record_property("spend_request_id", rows[0]["request_id"])
+                assert rows[0]["status"] == "success", rows
+                logged_choices: Final = object_value(rows[0]["response"])["choices"]
+                assert isinstance(logged_choices, list), rows
+                assert tuple(object_value(object_value(choice)["message"])["content"] for choice in logged_choices) == (
+                    prefix,
+                ), rows
+                assert len(upstream.drain()) == 1
+                scans: Final = tuple(json.loads(request.body) for request in policy.drain())
+                assert len(scans) == 1 and scans[0]["texts"] == [identity], scans
+            finally:
+                gate.set()
 
 
 def _cached_twin_rows(rig: _DisconnectRig) -> tuple[tuple[str, ...], ...]:
@@ -2905,10 +3194,10 @@ def test_concurrent_disconnects_during_a_guardrail_outage_each_record_exactly_on
             seconds=20,
         )
         assert scanned == (1,) * 30, scanned
-        chat_rows: Final = _post_call_statuses(rig, rig.model, rows=10)
-        assert sorted(chat_rows) == sorted(
-            ("guardrail_failed_to_respond",) if index % 3 == 0 else ("success",) for index in range(0, 30, 3)
-        ), chat_rows
+        rows: Final = _post_call_rows(rig, rig.model, rows=20, call_types=frozenset({"acompletion", "aresponses"}))
+        assert sorted(rows) == sorted(
+            (("acompletion", ("guardrail_failed_to_respond",)),) * 10 + (("aresponses", ("success",)),) * 10
+        ), rows
 
 
 def test_disconnect_scans_keep_recording_after_a_worker_is_killed(gateway: Gateway, tmp_path: Path) -> None:
@@ -2921,3 +3210,60 @@ def test_disconnect_scans_keep_recording_after_a_worker_is_killed(gateway: Gatew
         assert all(rig.secret(index) in line for index, line in enumerate(received)), received
         assert _post_call_statuses(rig, rig.model, rows=8) == (("success",),) * 8
         assert rig.owned.process.poll() is None
+
+
+def _openai_upstream(request: Request) -> Reply:
+    if request.target.endswith("/vector_stores"):
+        return Reply(body=json.dumps({"id": "vs_" + uuid.uuid4().hex, "object": "vector_store", "name": None}).encode())
+    return Reply(body=_chat_completion_body("control-reply"))
+
+
+def _post_half_of_the_body_then_hang_up(gateway: Gateway, path: str, body: bytes) -> None:
+    address: Final = urlsplit(str(gateway.client.base_url))
+    assert address.hostname is not None and address.port is not None, address
+    head: Final = (
+        f"POST {path} HTTP/1.1\r\nHost: {address.netloc}\r\nAuthorization: Bearer {gateway.key}\r\n"
+        f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n"
+    ).encode()
+    with socket.create_connection((address.hostname, address.port)) as connection:
+        connection.sendall(head + body[: len(body) // 2])
+        time.sleep(0.5)
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    (
+        pytest.param(
+            "/v1/chat/completions",
+            b'{"model": "MODEL", "messages": [{"role": "user", "content": "Say OK"}], "max_tokens": 16}',
+            id="chat-completions-where-an-empty-body-is-invalid",
+        ),
+        pytest.param(
+            "/v1/vector_stores",
+            b'{"name": "integration-store", "metadata": {"owner": "integration", "purpose": "half upload"}}',
+            id="vector-stores-where-an-empty-body-is-valid",
+        ),
+    ),
+)
+def test_client_disconnect_during_the_body_upload_runs_no_endpoint_and_writes_no_spend_row(
+    gateway: Gateway, tmp_path: Path, path: str, body: bytes
+) -> None:
+    with (
+        wire_server(_openai_upstream) as upstream,
+        owned_proxy_process(
+            gateway, tmp_path, {"OPENAI_BASE_URL": upstream.url + "/v1", "OPENAI_API_KEY": "synthetic-openai-key"}
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(api_base=upstream.url + "/v1", api_key="synthetic-openai-key")
+        _post_half_of_the_body_then_hang_up(owned.gateway, path, body.replace(b"MODEL", model.encode()))
+        control: Final = owned.gateway.chat(model)
+        rows: Final = eventually(
+            lambda: owned.gateway.rows('SELECT request_id, call_type, status FROM "LiteLLM_SpendLogs"', ()),
+            lambda values: any(row["request_id"] == control["id"] for row in values),
+            seconds=70,
+        )
+        assert [(row["call_type"], row["status"]) for row in rows] == [("acompletion", "success")], rows
+        assert [request.target for request in upstream.drain()] == ["/v1/chat/completions"], (
+            "the half-uploaded request must never reach the provider"
+        )

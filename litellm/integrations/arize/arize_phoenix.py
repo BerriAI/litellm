@@ -354,17 +354,16 @@ class ArizePhoenixLogger(OpenTelemetry):
         _project_name, tracer = self._resolve_tracer_for_kwargs(kwargs)
         ctx, parent_span = self._get_phoenix_context(kwargs, tracer=tracer)
 
-        status: Final = Status(StatusCode.OK if success else StatusCode.ERROR)
+        status_code: Final = StatusCode.OK if success else StatusCode.ERROR
 
         span: Final = tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
             context=ctx,
         )
-        span.set_status(status)
         self.set_attributes(span, kwargs, response_obj)
-        if not success:
-            self._record_exception_on_span(span=span, kwargs=kwargs)
+        span_error_message: Final = None if success else self._record_exception_on_span(span=span, kwargs=kwargs)
+        span.set_status(Status(status_code, span_error_message))
 
         if success:
             self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, span)
@@ -373,10 +372,11 @@ class ArizePhoenixLogger(OpenTelemetry):
         self._create_guardrail_span(kwargs=kwargs, context=ctx)
 
         if parent_span is not None:
-            parent_span.set_status(status)
             self.set_attributes(parent_span, kwargs, response_obj)
-            if not success:
-                self._record_exception_on_span(span=parent_span, kwargs=kwargs)
+            parent_error_message: Final = (
+                None if success else self._record_exception_on_span(span=parent_span, kwargs=kwargs)
+            )
+            parent_span.set_status(Status(status_code, parent_error_message))
             parent_span.end(end_time=self._to_ns(end_time))
 
         if success:

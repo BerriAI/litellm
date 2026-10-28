@@ -389,7 +389,7 @@ def test_fallback_output_file_details_refresh_once_provider_recovers(gateway: Ga
         assert details["bytes"] == OUTPUT_BYTES, details
         assert (details["filename"], details["purpose"]) == ("output.jsonl", "batch_output"), details
         assert "litellm_details_fallback" not in details, details
-        assert _metadata_hit_count(gateway, batch.scenario) == 1
+        assert _metadata_hit_count(gateway, batch.scenario) - metadata_hits_before_recovery == 1
 
         refreshed_files: Final = _list_files(gateway, batch.owner_key, purpose="batch_output")
         refreshed_output: Final = next((file for file in refreshed_files if file.get("id") == output_id), None)
@@ -647,5 +647,5 @@ def test_repeated_batch_retrieve_does_not_refetch_saved_file_details(gateway: Ga
             None,
         )
         assert output_after == output_before, output_after
-        additional_hits: Final = _metadata_hit_count(gateway, batch.scenario)
+        additional_hits: Final = _metadata_hit_count(gateway, batch.scenario) - hits_before
         assert additional_hits == 0, f"Repeated batch retrieval fetched metadata {additional_hits} more times"

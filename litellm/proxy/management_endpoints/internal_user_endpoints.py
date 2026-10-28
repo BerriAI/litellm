@@ -425,7 +425,7 @@ async def add_new_user_to_default_team(
     user_id: str,
     user_email: str | None,
     user_api_key_dict: UserAPIKeyAuth,
-    teams: list[str] | list[NewUserRequestTeam],
+    teams: Sequence[str | NewUserRequestTeam],
     prisma_client: "PrismaClient",
 ):
     tasks: Final[list[Awaitable[object]]] = []
@@ -499,7 +499,7 @@ async def new_user(
     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
     - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-    - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
+    - model_max_budget: Optional[dict] - Model-specific max budget for user, keyed by model name, `*` pattern, or model access group. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
     - mcp_rpm_limit: Optional[dict] - Per-MCP-server rpm limit, keyed by MCP server name {"github": 100, "slack": 200}. Enforced for keys and teams only; values set on a user are stored but not enforced per user.
@@ -1702,7 +1702,7 @@ async def user_update(
         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
         - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-        - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
+        - model_max_budget: Optional[dict] - Model-specific max budget for user, keyed by model name, `*` pattern, or model access group. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
         - mcp_rpm_limit: Optional[dict] - Per-MCP-server rpm limit, keyed by MCP server name {"github": 100, "slack": 200}. Enforced for keys and teams only; values set on a user are stored but not enforced per user.
@@ -2093,7 +2093,9 @@ async def get_user_key_counts(
     return result
 
 
-def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str] | None:
+def _validate_sort_params(
+    sort_by: str | None, sort_order: str
+) -> Mapping[str, object] | Sequence[Mapping[str, object]] | None:
     order_by: Final[dict[str, str]] = {}
 
     if sort_by is None:
@@ -2106,6 +2108,11 @@ def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str
         "spend",
         "user_alias",
         "user_role",
+        "max_budget",
+        "updated_at",
+        "sso_user_id",
+        "status",
+        "key_count",
     ]
     if sort_by not in valid_columns:
         raise HTTPException(
@@ -2120,6 +2127,11 @@ def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str
             detail={"error": "Invalid sort order. Must be 'asc' or 'desc'"},
         )
 
+    if sort_by in {"status", "key_count"}:
+        return None
+    if sort_by in {"max_budget", "updated_at", "sso_user_id"}:
+        nulls: Final = "first" if sort_by == "max_budget" and sort_order.lower() == "desc" else "last"
+        return ({sort_by: {"sort": sort_order.lower(), "nulls": nulls}}, {"user_id": "asc"})
     order_by[sort_by] = sort_order.lower()
 
     return order_by
@@ -2338,16 +2350,40 @@ async def get_users(
 
     # Build order_by conditions
 
-    order_by: Final[dict[str, str] | None] = (
+    order_by: Final = (
         _validate_sort_params(sort_by, sort_order) if sort_by is not None and isinstance(sort_by, str) else None
     )
 
-    users: Final[Sequence[prisma_models.LiteLLM_UserTable]] = await UserRepository(prisma_client).table.find_many(
-        where=where,
-        skip=skip,
-        take=page_size,
-        order=(order_by if order_by else {"created_at": "desc"}),  # Default to created_at desc if no sort specified
+    from litellm.proxy.management_helpers.user_list_sorting import sorted_user_ids
+
+    computed_sort: Final = sort_by in ("status", "key_count")
+    sorted_ids: Final = (
+        await sorted_user_ids(
+            prisma_client,
+            sort_by="status" if sort_by == "status" else "key_count",
+            descending=sort_order.lower() == "desc",
+            skip=skip,
+            take=page_size,
+            role=role,
+            user_ids=user_ids,
+            user_email=user_email,
+            team=team,
+            sso_user_ids=sso_user_ids,
+            organization_ids=organization_ids,
+            search=search,
+        )
+        if computed_sort
+        else ()
     )
+    page_users: Final = await UserRepository(prisma_client).table.find_many(
+        # bounded-ok: sorted_ids comes from LIMIT page_size, capped at 100 by the route
+        where={"AND": (where, {"user_id": {"in": sorted_ids}})} if computed_sort else where,
+        skip=0 if computed_sort else skip,
+        take=page_size,
+        order=order_by if order_by else {"created_at": "desc"},
+    )
+    positions: Final = {user_id: index for index, user_id in enumerate(sorted_ids)}
+    users: Final = sorted(page_users, key=lambda user: positions[user.user_id]) if computed_sort else page_users
 
     # Get total count of user rows
     total_count: Final[int] = await UserRepository(prisma_client).table.count(where=where)

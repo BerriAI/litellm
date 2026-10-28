@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Final
 
 from litellm.exceptions import ContentPolicyViolationError
 
@@ -54,7 +54,7 @@ class AzureOpenAIExceptionMapping:
     @staticmethod
     def _extract_azure_error(
         original_exception: Exception,
-    ) -> tuple[dict[str, object], dict | None]:
+    ) -> tuple[dict[str, object], object]:
         """Extract Azure OpenAI error payload and inner error details.
 
         Azure error formats can vary by endpoint/version. Common shapes:
@@ -67,13 +67,13 @@ class AzureOpenAIExceptionMapping:
             return {}, None
 
         # Some SDKs place the payload under "error".
-        azure_error: dict[str, Any]
+        azure_error: dict[str, object]
         if isinstance(body_dict.get("error"), dict):
             azure_error = body_dict.get("error", {})
         else:
             azure_error = body_dict
 
-        inner_error: Final = (
+        inner_error: Final[object] = (
             azure_error.get("inner_error")
             or azure_error.get("innererror")
             or body_dict.get("innererror")

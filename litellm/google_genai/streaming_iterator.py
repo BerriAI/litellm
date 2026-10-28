@@ -71,7 +71,7 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
     ):
         self.litellm_logging_obj = litellm_logging_obj
         self.request_body = request_body
-        self.start_time = datetime.now()
+        self.start_time = litellm_logging_obj.start_time
         self.collected_chunks: list[bytes] = []
         self.model = model
         self.custom_llm_provider = custom_llm_provider
@@ -192,6 +192,8 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
     async def __anext__(self):
         try:
             chunk: Final = await _anext_google_genai_sse_chunk(self.stream_iterator)
+            if self.litellm_logging_obj.completion_start_time is None:
+                self.litellm_logging_obj.update_completion_start_time(completion_start_time=datetime.now())
             self.collected_chunks.append(chunk)
             return chunk
         except StopAsyncIteration:
