@@ -15480,7 +15480,9 @@ async def count_request_tokens(
                 system=system,
                 messages_format=messages_format,
                 output_format=output_format,
-                context_management=_count_context_management(context_management, resolution_model, request_litellm_params),
+                context_management=_count_context_management(
+                    context_management, resolution_model, request_litellm_params
+                ),
                 chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
             ),
             model_to_use=model_to_use,
