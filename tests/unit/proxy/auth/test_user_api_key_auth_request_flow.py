@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -5266,6 +5266,89 @@ def _jwt_token_naming_the_end_user_only_in_the_body() -> UserAPIKeyAuth:
     return _jwt_token(end_user_id=None, end_user_object=None)
 
 
+async def _run_centralized_checks_for_end_user(
+    monkeypatch: pytest.MonkeyPatch,
+    token: UserAPIKeyAuth,
+    end_user: LiteLLM_EndUserTable | None,
+    gpt_4o_spend: float,
+    model: str,
+    route: str,
+    default_budget_id: str | None,
+    user_custom_auth: Callable[[Request, str], Awaitable[UserAPIKeyAuth]] | None,
+) -> None:
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", default_budget_id)
+    user_api_key_cache: Final = UserApiKeyCache()
+    if end_user is not None:
+        await user_api_key_cache.async_set_cache(
+            key=end_user_cache_key("eu-1"),
+            value=end_user,
+            model_type=LiteLLM_EndUserTable,
+        )
+    await user_api_key_cache.async_set_cache(
+        key="default_end_user_budget:eu-default",
+        value=LiteLLM_BudgetTable(budget_id="eu-default", model_max_budget=_END_USER_MODEL_CAPS),
+        model_type=LiteLLM_BudgetTable,
+    )
+    await user_api_key_cache.async_set_cache(
+        key="admin",
+        value=LiteLLM_UserTable(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        model_type=LiteLLM_UserTable,
+    )
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    await limiter.dual_cache.async_set_cache(
+        key=model_budget_spend_cache_key(
+            entity_type=Litellm_EntityType.END_USER,
+            entity_id="eu-1",
+            budget_model="gpt-4o",
+            budget_duration="1d",
+        ),
+        value=gpt_4o_spend,
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}},
+            {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+        ],
+    )
+    attrs: Final = {
+        **_proxy_attrs_for_centralized_checks(user_custom_auth=user_custom_auth),
+        "general_settings": {
+            "disable_budget_reservation": True,
+            "custom_auth_run_common_checks": user_custom_auth is not None,
+        },
+        "llm_model_list": router.model_list,
+        "llm_router": router,
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": user_api_key_cache,
+        "spend_counter_cache": DualCache(),
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=user_api_key_cache),
+        "model_max_budget_limiter": limiter,
+    }
+    originals: Final = {attribute: getattr(_proxy_server_mod, attribute, None) for attribute in attrs}
+    request: Final = Request(scope={"type": "http"})
+    request._url = URL(url=route)
+    try:
+        for attribute, value in attrs.items():
+            setattr(_proxy_server_mod, attribute, value)
+        await run_centralized_common_checks(
+            user_api_key_auth_obj=token,
+            request=request,
+            request_data={"model": model, "user": "eu-1", "messages": [{"role": "user", "content": "hi"}]},
+            route=route,
+        )
+    finally:
+        for attribute, value in originals.items():
+            setattr(_proxy_server_mod, attribute, value)
+
+
+
+
 @pytest.mark.parametrize(
     ("make_token", "make_end_user", "gpt_4o_spend", "model", "route", "must_raise"),
     [
@@ -5362,76 +5445,78 @@ async def test_centralized_common_checks_enforces_the_end_users_model_max_budget
     route: str,
     must_raise: bool,
 ) -> None:
-    from starlette.datastructures import URL
-
-    import litellm.proxy.proxy_server as _proxy_server_mod
-    from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
-    from litellm.proxy.utils import ProxyLogging
-
-    monkeypatch.setattr(litellm, "max_end_user_budget_id", "eu-default")
-    user_api_key_cache: Final = UserApiKeyCache()
-    end_user: Final = make_end_user()
-    if end_user is not None:
-        await user_api_key_cache.async_set_cache(
-            key=end_user_cache_key("eu-1"),
-            value=end_user,
-            model_type=LiteLLM_EndUserTable,
-        )
-    await user_api_key_cache.async_set_cache(
-        key="default_end_user_budget:eu-default",
-        value=LiteLLM_BudgetTable(budget_id="eu-default", model_max_budget=_END_USER_MODEL_CAPS),
-        model_type=LiteLLM_BudgetTable,
-    )
-    await user_api_key_cache.async_set_cache(
-        key="admin",
-        value=LiteLLM_UserTable(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
-        model_type=LiteLLM_UserTable,
-    )
-    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
-    await limiter.dual_cache.async_set_cache(
-        key=model_budget_spend_cache_key(
-            entity_type=Litellm_EntityType.END_USER,
-            entity_id="eu-1",
-            budget_model="gpt-4o",
-            budget_duration="1d",
-        ),
-        value=gpt_4o_spend,
-    )
-    router: Final = litellm.Router(
-        model_list=[
-            {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}},
-            {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini"}},
-        ],
-    )
-    attrs: Final = {
-        **_proxy_attrs_for_centralized_checks(),
-        "general_settings": {"disable_budget_reservation": True},
-        "llm_model_list": router.model_list,
-        "llm_router": router,
-        "prisma_client": MagicMock(),
-        "user_api_key_cache": user_api_key_cache,
-        "spend_counter_cache": DualCache(),
-        "proxy_logging_obj": ProxyLogging(user_api_key_cache=user_api_key_cache),
-        "model_max_budget_limiter": limiter,
-    }
-    originals: Final = {attribute: getattr(_proxy_server_mod, attribute, None) for attribute in attrs}
-    request: Final = Request(scope={"type": "http"})
-    request._url = URL(url=route)
     token: Final = make_token()
-    try:
-        for attribute, value in attrs.items():
-            setattr(_proxy_server_mod, attribute, value)
-        with pytest.raises(litellm.BudgetExceededError) if must_raise else nullcontext():
-            await run_centralized_common_checks(
-                user_api_key_auth_obj=token,
-                request=request,
-                request_data={"model": model, "user": "eu-1", "messages": [{"role": "user", "content": "hi"}]},
-                route=route,
-            )
-    finally:
-        for attribute, value in originals.items():
-            setattr(_proxy_server_mod, attribute, value)
+    with pytest.raises(litellm.BudgetExceededError) if must_raise else nullcontext():
+        await _run_centralized_checks_for_end_user(
+            monkeypatch=monkeypatch,
+            token=token,
+            end_user=make_end_user(),
+            gpt_4o_spend=gpt_4o_spend,
+            model=model,
+            route=route,
+            default_budget_id="eu-default",
+            user_custom_auth=None,
+        )
     assert token.end_user_model_max_budget == _END_USER_MODEL_CAPS
+
+
+async def _custom_auth_that_is_never_called(request: Request, api_key: str) -> UserAPIKeyAuth:
+    raise AssertionError("the shared checks never call custom auth")
+
+
+def _token_built_by_custom_auth_with_its_own_cap() -> UserAPIKeyAuth:
+    token: Final = UserAPIKeyAuth(api_key="sk-custom", end_user_id="eu-1", end_user_model_max_budget=_END_USER_MODEL_CAPS)
+    token.authenticated_by_custom_auth = True
+    return token
+
+
+def _master_key_token_custom_auth_handed_back_with_another_end_users_cap() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key=LITELLM_PROXY_MASTER_KEY_ALIAS,
+        user_id="admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        end_user_id="eu-1",
+        end_user_model_max_budget=_END_USER_MODEL_CAPS,
+    )
+
+
+@pytest.mark.parametrize(
+    ("make_token", "must_raise", "expected_cap"),
+    [
+        pytest.param(
+            _token_built_by_custom_auth_with_its_own_cap,
+            True,
+            _END_USER_MODEL_CAPS,
+            id="custom-auth-token-keeps-its-own-cap",
+        ),
+        pytest.param(
+            _master_key_token_custom_auth_handed_back_with_another_end_users_cap,
+            False,
+            None,
+            id="key-auth-token-behind-custom-auth-drops-another-end-users-cap",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_centralized_common_checks_keeps_only_a_cap_custom_auth_set(
+    monkeypatch: pytest.MonkeyPatch,
+    make_token: Callable[[], UserAPIKeyAuth],
+    must_raise: bool,
+    expected_cap: Mapping[str, object] | None,
+) -> None:
+    token: Final = make_token()
+    with pytest.raises(litellm.BudgetExceededError) if must_raise else nullcontext():
+        await _run_centralized_checks_for_end_user(
+            monkeypatch=monkeypatch,
+            token=token,
+            end_user=_end_user_on_the_proxy_default_budget(),
+            gpt_4o_spend=0.0001,
+            model="gpt-4o",
+            route="/v1/chat/completions",
+            default_budget_id=None,
+            user_custom_auth=_custom_auth_that_is_never_called,
+        )
+    assert token.end_user_model_max_budget == expected_cap
 
 
 @pytest.mark.asyncio

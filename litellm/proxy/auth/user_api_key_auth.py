@@ -3825,7 +3825,10 @@ async def run_centralized_common_checks(
         user_api_key_cache=user_api_key_cache,
         parent_otel_span=parent_otel_span,
     )
-    if end_user_id and (user_custom_auth is None or user_api_key_auth_obj.end_user_model_max_budget is None):
+    if end_user_id and (
+        not user_api_key_auth_obj.authenticated_by_custom_auth
+        or user_api_key_auth_obj.end_user_model_max_budget is None
+    ):
         user_api_key_auth_obj.end_user_model_max_budget = (  # rebind-ok: the spend hook charges from this token
             dict(end_user_model_max_budget) if end_user_model_max_budget else None
         )
