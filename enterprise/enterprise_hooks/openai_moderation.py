@@ -20,7 +20,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_OPENAI_MODERATIONS_MODEL
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import iter_message_text
+from litellm.proxy.guardrails._content_utils import (
+    is_non_conversational_call_type,
+    iter_message_text,
+)
 from litellm.types.utils import CallTypesLiteral
 
 
@@ -37,6 +40,8 @@ class ENTERPRISE_OpenAI_Moderation(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ):
+        if is_non_conversational_call_type(call_type):
+            return
         # Covers multimodal list content + Responses-API input.
         text = "".join(iter_message_text(data))
 

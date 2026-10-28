@@ -15,7 +15,10 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import iter_message_text
+from litellm.proxy.guardrails._content_utils import (
+    is_non_conversational_call_type,
+    iter_message_text,
+)
 from litellm.types.utils import CallTypesLiteral
 
 _THRESHOLD_VALUE: Final = TypeAdapter(object)
@@ -102,6 +105,8 @@ class ENTERPRISE_GoogleTextModeration(CustomLogger):
         - Calls Google's Text Moderation API
         - Rejects request if it fails safety check
         """
+        if is_non_conversational_call_type(call_type):
+            return data
         # Covers multimodal list content + Responses-API input.
         text = "".join(iter_message_text(data))
         if text:
