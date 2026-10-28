@@ -401,3 +401,21 @@ def test_score_probabilities_preserve_missing_entries_and_explicit_zeros(
         ir_to_systemone_response(response, ir).model_dump(mode="json")["answers"]["score"]["probabilities"]
         == probabilities
     )
+
+
+@pytest.mark.parametrize("raw_content", (b"", b"not-json", b'{"answers":'))
+@pytest.mark.parametrize("provider", ("nace", "openrouter", "fireworks_ai", "typesafe", "openai"))
+def test_non_json_provider_response_is_an_api_error(raw_content: bytes, provider: str) -> None:
+    config: Final = ProviderConfigManager.get_provider_decisions_config("drex-v2.0", LlmProviders(provider))
+    assert config is not None
+    request: Final = systemone_request_to_ir(
+        DecisionsRequestBody.model_validate(
+            {
+                "state": "text",
+                "questions": {"a": {"type": "score", "criteria": ["low", "high"]}},
+            }
+        )
+    )
+    with pytest.raises(BaseLLMException, match="unexpected response") as error:
+        config.transform_decisions_response("drex-v2.0", provider, httpx.Response(200, content=raw_content), request)
+    assert error.value.status_code == 500
