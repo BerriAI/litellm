@@ -5695,3 +5695,16 @@ async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
             await client.close()
         else:
             client.client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_stream_answered_with_one_json_body_is_not_replayed_for_a_provider_that_does_not_opt_in(
+    httpx_transport: None,
+) -> None:
+    with respx.mock(assert_all_called=True) as router:
+        router.post("https://api.openai.com/v1/responses").respond(json={"error": {"message": "quota exceeded"}})
+        stream: Final = await litellm.aresponses(
+            model="openai/gpt-5.5", input="Hello", api_key="fake-key", stream=True
+        )
+        with pytest.raises(litellm.exceptions.MidStreamFallbackError, match="before any terminal event"):
+            _ = tuple([event async for event in stream])

@@ -1,8 +1,9 @@
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import Never
 
 from litellm.exceptions import AuthenticationError, UnsupportedParamsError
@@ -43,8 +44,39 @@ _SUPPORTED_PARAMS: Final = (
 )
 
 
+_STATUS_BY_BUSINESS_CODE: Final = MappingProxyType(
+    {
+        **dict.fromkeys((1000, 1001, 1003, 1005), 401),
+        **dict.fromkeys((1210, 1211, 1212, 1213, 1214, 1215, 1221, 1222, 1261, 1301), 400),
+        1220: 403,
+        **dict.fromkeys(
+            (1113, 1302, 1305, 1308, 1309, 1310, 1311, 1313, 1314, 1315, 1316, 1317, 1318, 1319, 1320, 1321),
+            429,
+        ),
+    }
+)
+
+
+class _RequestedTools(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    tools: JsonValue = None
+    tool_choice: JsonValue = None
+
+
+def _requested_tools(logging_obj: Logging) -> _RequestedTools:
+    try:
+        return _RequestedTools.model_validate(logging_obj.model_call_details.get("optional_params") or {})
+    except ValidationError:
+        return _RequestedTools()
+
+
 def _envelope_status_code(code: JsonValue) -> int:
-    return code if isinstance(code, int) and not isinstance(code, bool) and 400 <= code <= 599 else 500
+    if not isinstance(code, int) or isinstance(code, bool):
+        return 500
+    if 400 <= code <= 599:
+        return code
+    return _STATUS_BY_BUSINESS_CODE.get(code, 500)
 
 
 def _normalize_output_item(item: JsonValue) -> JsonValue:
@@ -59,6 +91,7 @@ def _normalize_output_item(item: JsonValue) -> JsonValue:
 
 def _normalize_response(
     body: Mapping[str, JsonValue],
+    requested: _RequestedTools,
 ) -> dict[str, JsonValue]:  # mutable-ok: JSON serialization boundary
     usage: Final = body.get("usage")
     output: Final = body.get("output")
@@ -77,8 +110,8 @@ def _normalize_response(
     normalized: Final[JsonValue] = {
         "parallel_tool_calls": False,
         **body,
-        "tools": [] if tools is None else tools,
-        "tool_choice": "auto" if tool_choice is None else tool_choice,
+        "tools": (requested.tools or []) if tools is None else tools,
+        "tool_choice": (requested.tool_choice or "auto") if tool_choice is None else tool_choice,
         **({"usage": normalized_usage} if "usage" in body else {}),
         **({"output": [_normalize_output_item(item) for item in output]} if isinstance(output, list) else {}),
     }
@@ -114,6 +147,9 @@ class BigModelResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self, model: str | None, stream: bool | None, custom_llm_provider: str | None = None
     ) -> bool:
         return False
+
+    def may_answer_stream_with_json(self) -> bool:
+        return True
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: inherited API requires a list
         return list(_SUPPORTED_PARAMS)
@@ -153,7 +189,7 @@ class BigModelResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 status_code=_envelope_status_code(body.get("code")),
                 headers=raw_response.headers,
             )
-        normalized: Final = _normalize_response(body)
+        normalized: Final = _normalize_response(body, _requested_tools(logging_obj))
         normalized_response: Final = httpx.Response(
             status_code=raw_response.status_code,
             headers={
@@ -179,7 +215,11 @@ class BigModelResponsesAPIConfig(OpenAIResponsesAPIConfig):
         item: Final = chunk.get("item")
         normalized: Final[JsonValue] = {
             **chunk,
-            **({"response": _normalize_response(response)} if isinstance(response, dict) else {}),
+            **(
+                {"response": _normalize_response(response, _requested_tools(logging_obj))}
+                if isinstance(response, dict)
+                else {}
+            ),
             **({"item": _normalize_output_item(item)} if "item" in chunk else {}),
         }
         event_model: Final = self.get_event_model_class(str(normalized.get("type")))

@@ -432,7 +432,12 @@ def test_openai_routes_bigmodel_does_not_serve_send_no_request(
 
 @pytest.mark.parametrize(
     ("code", "error_class", "status_code"),
-    ((401, litellm.AuthenticationError, 401), (1113, litellm.InternalServerError, 500)),
+    (
+        (401, litellm.AuthenticationError, 401),
+        (1113, litellm.RateLimitError, 429),
+        (1301, litellm.BadRequestError, 400),
+        (1200, litellm.InternalServerError, 500),
+    ),
 )
 @respx.mock
 def test_responses_failure_envelope_raises_its_status_instead_of_a_parse_error(
@@ -442,6 +447,27 @@ def test_responses_failure_envelope_raises_its_status_instead_of_a_parse_error(
     with pytest.raises(error_class, match="Token expired") as raised:
         litellm.responses(model=f"bigmodel/{MODEL}", input="Hello")
     assert getattr(raised.value, "status_code", None) == status_code
+
+
+@pytest.mark.parametrize("stream", (False, True))
+@respx.mock
+def test_responses_without_tools_in_the_answer_echo_the_requested_tools(stream: bool) -> None:
+    tools: Final = [{"type": "function", "name": "weather", "parameters": {"type": "object", "properties": {}}}]
+    completed: Final = {"type": "response.completed", "sequence_number": 0, "response": response_payload()}
+    respx.post(f"{BASE}/api/v1/responses").respond(
+        **(
+            {"content": f"event: response.completed\ndata: {json.dumps(completed)}\n\n"}
+            if stream
+            else {"json": response_payload()}
+        )
+    )
+    answer: Final = litellm.responses(
+        model=f"bigmodel/{MODEL}", input="Hello", tools=tools, tool_choice="required", stream=stream
+    )
+    response: Final = tuple(answer)[-1].response if stream else answer
+    validated: Final = OpenAIResponse.model_validate(response.model_dump())
+    assert validated.tools[0].name == "weather"
+    assert validated.tool_choice == "required"
 
 
 @pytest.mark.asyncio

@@ -56,6 +56,8 @@ GLM-5.3, GLM-5.3-Flash, and GLM-5.3-FlashX use always-on thinking. GLM-5.3 suppo
 
 Set `store=True` when creating a Responses request if you need continuation, retrieval, or deletion. Use the response ID returned by LiteLLM. BigModel documents a seven-day retention period and does not support cancel, compact, native WebSocket, or file_search
 
+Codex sends `include` and `parallel_tool_calls` on every Responses request, and LiteLLM does not forward either to BigModel. Set `drop_params: true` on the deployment so LiteLLM drops them instead of answering 400
+
 The model catalog and packaged backup include GLM-5.3, GLM-5.3-Flash, and GLM-5.3-FlashX. Prices are expressed in USD/token using a static 7.0 CNY/USD conversion, with the source and verification date in each entry's metadata. Use existing `litellm_params` cost fields for contract-specific deployment prices
 
 API references: [Chat Completions](https://docs.bigmodel.cn/cn/guide/develop/openai/introduction), [Responses](https://docs.bigmodel.cn/cn/guide/develop/responses/introduction), [Messages](https://docs.bigmodel.cn/cn/guide/develop/claude/introduction), and [pricing](https://docs.bigmodel.cn/cn/guide/start/pricing), checked on 2026-10-27

@@ -3035,7 +3035,11 @@ class BaseLLMHTTPHandler:
                     **body_kwargs,
                 )
                 if caller_requested_stream:
-                    if fake_stream is True or (_is_sized_json_body(response) and _is_json_document(response.read())):
+                    if fake_stream is True or (
+                        responses_api_provider_config.may_answer_stream_with_json()
+                        and _is_sized_json_body(response)
+                        and _is_json_document(response.read())
+                    ):
                         return MockResponsesAPIStreamingIterator(
                             response=response,
                             model=model,
@@ -3239,7 +3243,9 @@ class BaseLLMHTTPHandler:
 
                 if caller_requested_stream:
                     if fake_stream is True or (
-                        _is_sized_json_body(response) and _is_json_document(await response.aread())
+                        responses_api_provider_config.may_answer_stream_with_json()
+                        and _is_sized_json_body(response)
+                        and _is_json_document(await response.aread())
                     ):
                         return MockResponsesAPIStreamingIterator(
                             response=response,
