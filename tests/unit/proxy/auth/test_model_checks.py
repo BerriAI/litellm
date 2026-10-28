@@ -481,6 +481,54 @@ def test_hosted_vllm_wildcard_sends_the_configured_api_key_as_a_bearer_token(mon
     assert models_route.call_count == 1
 
 
+@respx.mock
+def test_hosted_vllm_wildcard_without_api_base_lists_the_server_chat_would_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.setenv("HOSTED_VLLM_API_BASE", "http://hosted-vllm-env.test:8000/v1")
+    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "hosted-vllm-env-key")
+    monkeypatch.setenv("VLLM_API_BASE", "http://vllm-passthrough-env.test:8000")
+    passthrough_server_route: Final = respx.get("http://vllm-passthrough-env.test:8000/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "model-on-the-passthrough-server"}]})
+    )
+    respx.get(
+        "http://hosted-vllm-env.test:8000/v1/models", headers={"Authorization": "Bearer hosted-vllm-env-key"}
+    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
+
+    listed: Final = get_known_models_from_wildcard(
+        "hosted_vllm/*", LiteLLM_Params(model="hosted_vllm/*", custom_llm_provider="hosted_vllm")
+    )
+
+    assert listed == ["hosted_vllm/qwen2.5"]
+    assert not passthrough_server_route.called
+
+
+@respx.mock
+def test_hosted_vllm_wildcard_listing_does_not_wait_the_completion_timeout_on_a_hung_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.constants import NON_LLM_CONNECTION_TIMEOUT
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    models_route: Final = respx.get("http://vllm-timeout.test:8000/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+    )
+
+    get_known_models_from_wildcard(
+        "hosted_vllm/*", LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-timeout.test:8000/v1")
+    )
+
+    read_timeout: Final = models_route.calls.last.request.extensions["timeout"]["read"]
+    assert read_timeout is not None
+    assert read_timeout <= NON_LLM_CONNECTION_TIMEOUT
+
+
 def test_wildcard_custom_prefix_does_not_stack_provider_prefix(monkeypatch):
     """Regression test for #30358.
 

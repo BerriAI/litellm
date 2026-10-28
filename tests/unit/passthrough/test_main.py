@@ -51,3 +51,24 @@ async def test_allm_passthrough_route_hosted_vllm_sends_normalized_model(respx_m
     outbound: Final = json.loads(route.calls[0].request.content)
     assert outbound["model"] == "my-deployment"
     assert outbound["messages"] == [{"role": "user", "content": "Hello"}]
+
+
+@pytest.mark.asyncio
+async def test_allm_passthrough_route_hosted_vllm_sends_the_deployment_api_key(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_API_BASE}/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    response: Final = await allm_passthrough_route(
+        method="POST",
+        endpoint="v1/chat/completions",
+        model="hosted_vllm/my-deployment",
+        api_base=_API_BASE,
+        api_key="deployment-key",
+        json={"model": "anything", "messages": [{"role": "user", "content": "Hello"}]},
+        client=AsyncHTTPHandler(),
+    )
+    assert response.status_code == 200
+    sent_headers: Final = route.calls[0].request.headers
+    assert sent_headers["authorization"] == "Bearer deployment-key"
+    assert sent_headers["x-api-key"] == "deployment-key"
+
