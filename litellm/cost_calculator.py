@@ -1757,11 +1757,13 @@ def completion_cost(
                         custom_llm_provider = (
                             candidate_pricing_provider
                             or pricing_provider
-                            or hidden_params.get("custom_llm_provider")
-                            or candidate_custom_llm_provider
+                            or hidden_params.get(
+                                "custom_llm_provider",
+                                candidate_custom_llm_provider or custom_llm_provider or None,
+                            )
                         )
                         region_name = hidden_params.get("region_name", region_name)
-                    else:
+                    elif candidate_pricing_provider or candidate_custom_llm_provider:
                         custom_llm_provider = candidate_pricing_provider or candidate_custom_llm_provider
 
                 else:

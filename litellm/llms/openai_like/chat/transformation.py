@@ -153,11 +153,11 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         resolved_custom_llm_provider = (
             litellm_params.get("custom_llm_provider") if isinstance(litellm_params, dict) else None
         ) or (
-            getattr(model_response, "_hidden_params", {}).get("custom_llm_provider")
-            if hasattr(model_response, "_hidden_params") and isinstance(getattr(model_response, "_hidden_params"), dict)
+            model_response._hidden_params.get("custom_llm_provider")
+            if isinstance(model_response._hidden_params, dict)
             else None
         )
-        return OpenAILikeChatConfig._transform_response(
+        transformed_response = OpenAILikeChatConfig._transform_response(
             model=model,
             response=raw_response,
             model_response=model_response,
@@ -170,9 +170,18 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
             print_verbose=None,
             encoding=None,
             json_mode=json_mode,
-            custom_llm_provider=resolved_custom_llm_provider,
+            custom_llm_provider=None,
             base_model=None,
         )
+        if resolved_custom_llm_provider is not None and isinstance(transformed_response._hidden_params, dict):
+            transformed_response._hidden_params.setdefault("custom_llm_provider", resolved_custom_llm_provider)
+            if (
+                transformed_response.model
+                and "/" in transformed_response.model
+                and not transformed_response.model.startswith(f"{resolved_custom_llm_provider}/")
+            ):
+                transformed_response.model = f"{resolved_custom_llm_provider}/{transformed_response.model}"
+        return transformed_response
 
     def map_openai_params(
         self,
