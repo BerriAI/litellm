@@ -1,15 +1,15 @@
-"""A key's or team's own Langfuse project gets the Langfuse trace fields when the operator has no Langfuse keys,
-whether or not ``langfuse_otel`` is listed in ``litellm_settings.callbacks``."""
+"""A key's or team's own Langfuse project gets one copy of the call with the Langfuse trace fields when the operator
+has no Langfuse keys, whether or not ``langfuse_otel`` is listed in ``litellm_settings.callbacks``."""
 
 from __future__ import annotations
 
 import json
 import uuid
 from collections.abc import Iterator
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 import pytest
-from integration._support.client import Gateway, eventually, gateway_from_environment
+from integration._support.client import Gateway, gateway_from_environment, held
 from integration._support.otlp_sink import (
     AuditConfigWriter,
     Span,
@@ -24,10 +24,10 @@ from pydantic import JsonValue
 
 OPERATION: Final = "gen_ai.operation.name"
 TAGS: Final = ["agent:orders", "run:r1"]
+LEGACY_SPANS: Final = frozenset({"litellm_request", "raw_gen_ai_request"})
 
 
-def _chat(request: Request) -> Reply:
-    marker: Final = json.loads(request.body)["messages"][-1]["content"]
+def _chat(_request: Request) -> Reply:
     return Reply(
         body=json.dumps(
             {
@@ -35,7 +35,7 @@ def _chat(request: Request) -> Reply:
                 "object": "chat.completion",
                 "created": 1,
                 "model": "gpt-4o-mini",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": marker}, "finish_reason": "stop"}],
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9},
             }
         ).encode()
@@ -67,7 +67,7 @@ def proxy(
                 "OTEL_EXPORTER": "otlp_http",
                 "OTEL_ENDPOINT": audit_sinks.operator,
             },
-            config=otel_audit_config(directory, {"callbacks": request.param}),
+            config=otel_audit_config(directory, {"callbacks": cast("list[JsonValue]", request.param)}),
             remove_environment=("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"),
             workers=2,
         ) as owned,
@@ -75,10 +75,16 @@ def proxy(
         yield owned.gateway
 
 
-def _model_spans(url: str, since: int, trace_id: str) -> tuple[Span, ...]:
-    return tuple(
-        span for span in spans_for_trace(recorded_spans(url, since)[1], trace_id) if OPERATION in span["attributes"]
-    )
+def _trace_spans(url: str, since: int, trace_id: str) -> tuple[Span, ...]:
+    return spans_for_trace(recorded_spans(url, since)[1], trace_id)
+
+
+def _model_spans(spans: tuple[Span, ...]) -> tuple[Span, ...]:
+    return tuple(span for span in spans if OPERATION in span["attributes"])
+
+
+def _one_model_span(spans: tuple[Span, ...]) -> bool:
+    return len(_model_spans(spans)) == 1 and not LEGACY_SPANS & {str(span["name"]) for span in spans}
 
 
 @pytest.mark.parametrize("level", ["key", "team"])
@@ -103,24 +109,25 @@ def test_a_tenant_langfuse_project_gets_user_session_and_tags_without_operator_k
         since: Final = (recorded_spans(audit_sinks.tenant)[0], recorded_spans(audit_sinks.operator)[0])
         trace_id: Final = uuid.uuid4().hex
         session: Final = f"sess-{trace_id}"
+        body: Final[dict[str, JsonValue]] = {
+            "model": model,
+            "messages": [{"role": "user", "content": f"lf-tenant-only-{trace_id}"}],
+            "metadata": {"tags": [*TAGS], "session_id": session, "trace_user_id": "user-42"},
+        }
         response: Final = proxy.request(
             "POST",
             "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": f"lf-tenant-only-{trace_id}"}],
-                "metadata": {"tags": TAGS, "session_id": session, "trace_user_id": "user-42"},
-            },
+            body,
             key=key,
             headers={"traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01"},
         )
         assert response.status_code == 200, response.text
 
-        tenant: Final = eventually(
-            lambda: _model_spans(audit_sinks.tenant, since[0], trace_id), lambda spans: bool(spans), seconds=40
+        tenant: Final = _model_spans(
+            held(lambda: _trace_spans(audit_sinks.tenant, since[0], trace_id), _one_model_span, holding=3, seconds=40)
         )
-        operator: Final = eventually(
-            lambda: _model_spans(audit_sinks.operator, since[1], trace_id), lambda spans: bool(spans), seconds=40
+        operator: Final = _model_spans(
+            held(lambda: _trace_spans(audit_sinks.operator, since[1], trace_id), _one_model_span, holding=3, seconds=40)
         )
 
     assert [

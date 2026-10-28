@@ -6,7 +6,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from types import SimpleNamespace
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -20,11 +20,12 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import Span
 
 import litellm
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL, REDACTED_BY_LITELLM
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME, OpenTelemetry, OpenTelemetryConfig
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.integrations.otel.plumbing.context import set_request_destinations
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import Choices, ModelResponse, StandardCallbackDynamicParams
 
@@ -1516,23 +1517,26 @@ def test_langfuse_otel_does_not_start_proxy_request_span() -> None:
         generic_provider.shutdown()
 
 
-def _spans_the_legacy_logger_exports(destinations: tuple[OtelDestination, ...]) -> tuple[str, ...]:
+_HOOK_CALL: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _spans_the_legacy_logger_exports(
+    destinations: tuple[OtelDestination, ...], call: Mapping[str, object] = _HOOK_CALL
+) -> tuple[str, ...]:
     exporter: Final = InMemorySpanExporter()
     provider: Final = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     with patch.dict(os.environ, LANGFUSE_ENV_ONLY, clear=True):
         logger: Final = LangfuseOtelLogger(tracer_provider=provider)
     at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    kwargs: Final = {**CHAT_KWARGS, "litellm_params": {"metadata": {}}}
+    kwargs: Final[dict[str, object]] = {**CHAT_KWARGS, **call, "litellm_params": {"metadata": {}}}
     server_span: Final = provider.get_tracer("proxy").start_span("POST /v1/chat/completions")
 
     async def log() -> None:
         set_request_destinations(destinations)
-        logger.log_success_event(dict(kwargs), _chat_response("ok"), at, at)
-        await logger.async_log_failure_event({**kwargs, "exception": ValueError("boom")}, None, at, at)
-        await logger.async_post_call_failure_hook(
-            {}, ValueError("boom"), SimpleNamespace(parent_otel_span=server_span, team_id=None, team_alias=None)
-        )
+        logger.log_success_event(dict(kwargs), _chat_response("ok"), at, at)  # pyright: ignore[reportUnknownMemberType]  # the v1 logger hooks are untyped
+        await logger.async_log_failure_event({**kwargs, "exception": ValueError("boom")}, None, at, at)  # pyright: ignore[reportUnknownMemberType]  # the v1 logger hooks are untyped
+        await logger.async_post_call_failure_hook({}, ValueError("boom"), UserAPIKeyAuth(parent_otel_span=server_span))
 
     try:
         contextvars.copy_context().run(asyncio.run, log())
@@ -1548,8 +1552,26 @@ _LANGFUSE_DESTINATION: Final = OtelDestination(
 )
 
 
-def test_a_request_with_a_langfuse_destination_exports_nothing_through_the_legacy_logger() -> None:
-    assert _spans_the_legacy_logger_exports((_LANGFUSE_DESTINATION,)) == ()
+_PROVIDER_CALL: Final[Mapping[str, object]] = MappingProxyType(
+    {"standard_logging_object": {"id": "c1"}, "api_call_start_time": datetime(2026, 1, 1, tzinfo=timezone.utc)}
+)
+
+
+@pytest.mark.parametrize("call", [_HOOK_CALL, _PROVIDER_CALL], ids=["hook", "provider-call"])
+def test_a_request_with_a_langfuse_destination_exports_nothing_through_the_legacy_logger(
+    call: Mapping[str, object],
+) -> None:
+    assert _spans_the_legacy_logger_exports((_LANGFUSE_DESTINATION,), call) == ()
+
+
+def test_a_call_rejected_before_any_provider_still_exports_through_the_legacy_logger() -> None:
+    rejected: Final = {"standard_logging_object": {"id": "c1"}, LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: True}
+
+    assert _spans_the_legacy_logger_exports((_LANGFUSE_DESTINATION,), rejected) == (
+        "litellm_request",
+        "raw_gen_ai_request",
+        "litellm_request",
+    )
 
 
 def test_a_request_without_a_langfuse_destination_still_exports_through_the_legacy_logger() -> None:

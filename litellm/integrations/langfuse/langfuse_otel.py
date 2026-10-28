@@ -128,6 +128,17 @@ def _starts_its_own_trace(span: object, kwargs: Mapping[str, object]) -> bool:
     )
 
 
+def _a_destination_records_the_call(kwargs: Mapping[str, object]) -> bool:
+    """Whether a key's or team's ``langfuse_otel`` destination gets this call from the OTel v2 fan-out, which records
+    every call but one whose logging payload shows it never reached a provider."""
+    from litellm.integrations.otel.model.metadata import LLMCallEvent
+
+    if not _a_destination_carries_the_trace():
+        return False
+    call: Final = LLMCallEvent.from_dict(kwargs)
+    return call.payload is None or call.reached_a_provider
+
+
 def _a_destination_carries_the_trace() -> bool:
     """Whether this request resolved a key's or team's ``langfuse_otel`` destination, whose fan-out sends it the whole
     trace."""
@@ -557,8 +568,8 @@ class LangfuseOtelLogger(OpenTelemetry):
         kwargs: dict[str, object],  # mutable-ok: the v1 dedupe marker is written into the request's kwargs
         *scope: object,
     ) -> bool:
-        """Whether to emit this span: once per request, and never for a request a Langfuse destination carries."""
-        return not _a_destination_carries_the_trace() and super()._emit_once(kwargs, *scope)  # pyright: ignore[reportUnknownMemberType]  # the v1 hook takes a bare dict
+        """Whether to emit this span: once per request, and never for a call a Langfuse destination records."""
+        return not _a_destination_records_the_call(kwargs) and super()._emit_once(kwargs, *scope)  # pyright: ignore[reportUnknownMemberType]  # the v1 hook takes a bare dict
 
     async def async_post_call_failure_hook(
         self,
