@@ -9,12 +9,15 @@ https://github.com/caozhiyuan/copilot-api
 """
 
 import os
+from collections.abc import Mapping
 from typing import (
     TYPE_CHECKING,
     Any,
     Final,
     cast,  # noqa: TID251  # narrows untyped request dicts at the session boundary
 )
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -46,6 +49,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[object, object])
 
 
 def github_copilot_supports_responses_api(model: str) -> bool:
@@ -387,7 +393,9 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         return self._contains_vision_content(input_param)
 
-    def _contains_vision_content(self, value: Any, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> bool:
+    def _contains_vision_content(
+        self, value: object, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH
+    ) -> bool:
         """
         Recursively check if a value contains vision content.
 
@@ -404,22 +412,28 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         # Check arrays
         if isinstance(value, list):
-            return any(self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in value)
+            items: Final = _OBJECT_LIST.validate_python(value)
+            return any(self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in items)
 
         # Only check dict/object types
         if not isinstance(value, dict):
             return False
 
+        fields: Final = _OBJECT_MAPPING.validate_python(value)
+
         # Check if this item is an input_image
-        item_type: Final = value.get("type")
+        item_type: Final = fields.get("type")
         if isinstance(item_type, str) and item_type.lower() == "input_image":
             return True
 
         # Check content field recursively
-        if "content" in value and isinstance(value["content"], list):
-            return any(
-                self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in value["content"]
-            )
+        if "content" in fields:
+            content: Final = fields["content"]
+            if isinstance(content, list):
+                content_items: Final = _OBJECT_LIST.validate_python(content)
+                return any(
+                    self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in content_items
+                )
 
         return False
 

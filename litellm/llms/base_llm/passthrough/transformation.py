@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 
 RELAYED_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class PassthroughMetadata(LiteLLMBaseModel):
@@ -71,7 +72,7 @@ def relayed_json_object(httpx_response: Response) -> Mapping[str, object] | None
 
 def relayed_body(httpx_response: Response) -> str | dict:
     try:
-        body: Final[object] = httpx_response.json()
+        body: Final = _DECODED_JSON.validate_python(httpx_response.json())
     except ValueError:
         return httpx_response.text
     return body if isinstance(body, dict) else httpx_response.text

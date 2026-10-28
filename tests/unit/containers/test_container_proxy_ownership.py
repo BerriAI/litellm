@@ -1,6 +1,7 @@
 import json
 import sys
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -10,6 +11,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.container_endpoints import ownership
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.containers.main import ContainerListResponse, ContainerObject
+from tests.unit.litellm_core_utils.attribute_forwarder import AttributeForwarder
 
 
 @pytest.fixture(autouse=True)
@@ -95,6 +97,23 @@ async def test_should_not_mutate_dict_container_response_when_recording_owner(
     file_obj = json.loads(data["file_object"])
     assert file_obj["custom_llm_provider"] == "openai"
     assert file_obj["provider_container_id"] == "cntr_provider"
+
+
+@pytest.mark.asyncio
+async def test_should_store_the_full_container_of_a_response_that_forwards_its_fields(monkeypatch):
+    table: Final = AsyncMock()
+    table.find_unique.return_value = None
+    prisma_client: Final = SimpleNamespace(db=SimpleNamespace(litellm_managedobjecttable=table))
+    monkeypatch.setattr(ownership, "_get_prisma_client", AsyncMock(return_value=prisma_client))
+
+    await ownership.record_container_owner(
+        response=AttributeForwarder(_container("cntr_provider")),
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        custom_llm_provider="openai",
+    )
+
+    file_obj: Final = json.loads(table.create.await_args.kwargs["data"]["file_object"])
+    assert file_obj["status"] == "active"
 
 
 @pytest.mark.asyncio
