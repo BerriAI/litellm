@@ -616,16 +616,13 @@ def test_prompt_cache_key_keeps_one_session_header_across_requests(
             "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
         },
     }
-    sent: Final[list[httpx.Request]] = []
-
-    def upstream(request: httpx.Request) -> httpx.Response:
-        sent.append(request)
-        return httpx.Response(
+    upstream: Final = MagicMock(
+        side_effect=lambda _request: httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
             content=f"event: response.completed\ndata: {json.dumps(completed)}\n\n".encode(),
         )
-
+    )
     client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream)))
     for _ in range(2):
         if call == "responses":
@@ -638,4 +635,4 @@ def test_prompt_cache_key_keeps_one_session_header_across_requests(
                 client=client,
             )
 
-    assert [request.headers["session_id"] for request in sent] == ["conv-123", "conv-123"]
+    assert [call.args[0].headers["session_id"] for call in upstream.call_args_list] == ["conv-123", "conv-123"]
