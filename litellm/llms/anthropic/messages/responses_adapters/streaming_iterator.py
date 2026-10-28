@@ -131,7 +131,6 @@ class AnthropicResponsesStreamWrapper:
         applied_edits: Sequence[AppliedEdit] | None = None,
     ) -> None:
         self.responses_stream = responses_stream
-        # The gateway polyfill's edits, reported on the final message_delta as on the chat completions path
         self._applied_edits: Final = tuple(applied_edits or ())
         self.model = model
         self.safeguards_evaluator: Final = safeguards_evaluator

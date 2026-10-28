@@ -217,6 +217,47 @@ def test_cleared_input_tokens_is_nonnegative():
     assert applied["cleared_input_tokens"] >= 0
 
 
+SERVER_TOOL_TURN: Final = {
+    "role": "assistant",
+    "content": [
+        {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "Mumbai rain"}},
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_01",
+            "content": [{"type": "web_search_result", "url": "https://example.com", "title": "rain " * 300}],
+        },
+    ],
+}
+COMPACTION_TURN: Final = {"role": "assistant", "content": [{"type": "compaction", "content": "summary " * 300}]}
+
+
+@pytest.mark.parametrize(
+    "turn", [pytest.param(SERVER_TOOL_TURN, id="server_tool"), pytest.param(COMPACTION_TURN, id="compaction")]
+)
+def test_an_input_tokens_trigger_counts_blocks_the_token_counter_cannot_read(turn: dict[str, object]) -> None:
+    history: Final = _make_history(n_pairs=3)
+    threshold: Final = litellm.token_counter(model=MODEL, messages=history) + 100
+    messages: Final = [history[0], turn, *history[1:]]
+
+    new_messages, applied = apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "input_tokens", "value": threshold},
+            "keep": {"type": "tool_uses", "value": 1},
+        },
+    )
+
+    assert applied is not None
+    assert applied["cleared_tool_uses"] == 2
+    assert applied["cleared_input_tokens"] > 0
+    assert _cleared_ids(new_messages) == {"toolu_00", "toolu_01"}
+    assert new_messages[1] == turn
+
+
 def _blocks_of(messages: list[dict[str, object]], block_type: str) -> tuple[dict[str, object], ...]:
     contents: Final = (message["content"] for message in messages)
     blocks: Final = chain.from_iterable(content for content in contents if isinstance(content, list))

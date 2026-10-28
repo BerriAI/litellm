@@ -49,7 +49,6 @@ from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 AnthropicRequestMessages: TypeAlias = list[AllAnthropicMessageValues] | list[dict[str, object]]
 BlockRewrite: TypeAlias = Callable[[Mapping[str, object]], Mapping[str, object]]
 _BLOCK_LIST: Final = TypeAdapter(list[dict[str, object]])
-# (native spec for the Responses API, edits for the gateway polyfill)
 _SplitEdits: TypeAlias = tuple[dict[str, object] | None, Sequence[Mapping[str, object]]]
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
@@ -86,6 +85,7 @@ async def _polyfilled(
     """Run the edits the Responses API can't run natively; raise like the chat completions path does."""
     if not edits:
         return None
+    reject_malformed_tool_result_text(messages, model, kwargs)
     drop_invalid_edits: Final = drops_unsupported_params(kwargs.get("drop_params"))
     try:
         return await apply_context_management(
@@ -97,8 +97,6 @@ async def _polyfilled(
             drop_invalid_edits=drop_invalid_edits,
         )
     except AnthropicContextManagementError:
-        if drop_invalid_edits:
-            return None
         raise
     except Exception as e:
         verbose_logger.exception("context_management polyfill failed on the Responses API path: %s", e)
@@ -355,7 +353,6 @@ class LiteLLMMessagesToResponsesAPIHandler:
         )
         responses_kwargs: Final = _build_responses_kwargs(
             max_tokens=max_tokens,
-            # clear_tool_uses edits only rewrite messages; system stays as sent
             messages=polyfill_result.messages if polyfill_result is not None else messages,
             model=model,
             context_management=native_context_management,
@@ -457,11 +454,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
             if polyfilled_edits
             else None
         )
-        # run_async_function is untyped: check what it returned rather than assume it
         polyfill_result: Final = ran if isinstance(ran, PolyfillResult) else None
         responses_kwargs: Final = _build_responses_kwargs(
             max_tokens=max_tokens,
-            # clear_tool_uses edits only rewrite messages; system stays as sent
             messages=polyfill_result.messages if polyfill_result is not None else messages,
             model=model,
             context_management=native_context_management,

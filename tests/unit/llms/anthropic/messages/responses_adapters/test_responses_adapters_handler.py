@@ -3,6 +3,7 @@ import json
 import os
 import sys
 from collections.abc import AsyncIterator, Mapping
+from itertools import chain
 from typing import Final, cast
 from unittest.mock import AsyncMock, patch
 
@@ -769,26 +770,30 @@ CLEAR_EDIT: Final = {
 COMPACT_EDIT: Final = {"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 150000}}
 
 
+def _read(i: int) -> tuple[dict[str, object], dict[str, object]]:
+    return (
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": f"toolu_{i}", "name": "Bash", "input": {"command": f"cat {i}"}}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": f"toolu_{i}", "content": f"log {i} " * 40}],
+        },
+    )
+
+
 def _three_reads() -> list[dict[str, object]]:
-    messages: Final[list[dict[str, object]]] = [{"role": "user", "content": "Read the logs."}]
-    for i in range(3):
-        messages.append(
-            {
-                "role": "assistant",
-                "content": [{"type": "tool_use", "id": f"toolu_{i}", "name": "Bash", "input": {"command": f"cat {i}"}}],
-            }
-        )
-        messages.append(
-            {
-                "role": "user",
-                "content": [{"type": "tool_result", "tool_use_id": f"toolu_{i}", "content": f"log {i} " * 40}],
-            }
-        )
-    return messages
+    return [{"role": "user", "content": "Read the logs."}, *chain.from_iterable(_read(i) for i in range(3))]
 
 
 async def _cleared_bridge(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, *, stream: bool, edits: list[dict[str, object]]
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    stream: bool,
+    edits: list[dict[str, object]],
+    drop_params: bool = False,
 ) -> tuple[object, Mapping[str, object]]:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-clear-test")
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
@@ -806,6 +811,7 @@ async def _cleared_bridge(
         stream=stream,
         custom_llm_provider="openai",
         context_management={"edits": edits},
+        drop_params=drop_params,
     )
     body: Final = json.loads(upstream.calls.last.request.content)
     if not stream:
@@ -817,7 +823,7 @@ async def _cleared_bridge(
 async def test_clear_tool_uses_clears_old_results_before_the_responses_api_call(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from litellm.llms.anthropic.pass_through.context_management.constants import CLEARED_TOOL_RESULT_PLACEHOLDER
+    from litellm.llms.anthropic.messages.context_management.constants import CLEARED_TOOL_RESULT_PLACEHOLDER
 
     served, body = await _cleared_bridge(respx_mock, monkeypatch, stream=False, edits=[dict(CLEAR_EDIT)])
 
@@ -862,7 +868,7 @@ async def test_compact_stays_native_while_clear_tool_uses_runs_in_the_gateway(
 async def test_a_malformed_clear_tool_uses_edit_is_a_400_before_the_responses_api_call(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from litellm.llms.anthropic.pass_through.context_management import AnthropicContextManagementError
+    from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 
     upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
         status_code=200, json=TEXT_RESPONSE
@@ -880,8 +886,35 @@ async def test_a_malformed_clear_tool_uses_edit_is_a_400_before_the_responses_ap
     assert not upstream.called
 
 
+@pytest.mark.asyncio
+async def test_a_malformed_text_in_a_result_clearing_would_drop_is_still_a_400(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        status_code=200, json=TEXT_RESPONSE
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-clear-test")
+    reads: Final = _three_reads()
+    malformed_oldest_result: Final = {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "toolu_0", "content": [{"type": "text", "text": None}]}],
+    }
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+            max_tokens=1024,
+            messages=[*reads[:2], malformed_oldest_result, *reads[3:]],
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+            custom_llm_provider="openai",
+            context_management={"edits": [dict(CLEAR_EDIT)]},
+        )
+    assert rejected.value.status_code == 400
+    assert "tool_result toolu_0 content.0.text: Input should be a valid string" in rejected.value.message
+    assert not upstream.called
+
+
 def test_the_sync_path_clears_old_results_too(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.llms.anthropic.pass_through.context_management.constants import CLEARED_TOOL_RESULT_PLACEHOLDER
+    from litellm.llms.anthropic.messages.context_management.constants import CLEARED_TOOL_RESULT_PLACEHOLDER
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-clear-test")
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
@@ -916,8 +949,8 @@ def test_the_sync_path_clears_old_results_too(respx_mock: respx.MockRouter, monk
 async def test_a_polyfill_crash_is_a_500_before_the_responses_api_call(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from litellm.llms.anthropic.pass_through.context_management import AnthropicContextManagementError
-    from litellm.llms.anthropic.pass_through.responses_adapters import handler
+    from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
+    from litellm.llms.anthropic.messages.responses_adapters import handler
 
     upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
         status_code=200, json=TEXT_RESPONSE
@@ -937,31 +970,25 @@ async def test_a_polyfill_crash_is_a_500_before_the_responses_api_call(
 
 
 @pytest.mark.asyncio
-async def test_under_drop_params_a_rejected_edit_is_skipped_and_the_request_goes_out(
+async def test_under_drop_params_a_malformed_edit_still_clears_without_its_bad_field(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from litellm.llms.anthropic.pass_through.context_management import AnthropicContextManagementError
-    from litellm.llms.anthropic.pass_through.responses_adapters import handler
+    from litellm.llms.anthropic.messages.context_management.constants import CLEARED_TOOL_RESULT_PLACEHOLDER
 
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-clear-test")
-    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
-    litellm.in_memory_llm_clients_cache.flush_cache()
-    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
-        status_code=200, json=TEXT_RESPONSE
+    served, body = await _cleared_bridge(
+        respx_mock, monkeypatch, stream=False, edits=[{**CLEAR_EDIT, "exclude_tools": "Bash"}], drop_params=True
     )
-    rejected: Final = AnthropicContextManagementError(status_code=400, message="bad edit")
-    monkeypatch.setattr(handler, "apply_context_management", AsyncMock(side_effect=rejected))
 
-    served: Final = await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
-        max_tokens=1024,
-        messages=_three_reads(),
-        model="openai/gpt-5.6-luna",
-        custom_llm_provider="openai",
-        context_management={"edits": [dict(CLEAR_EDIT)]},
-        drop_params=True,
-    )
-    assert upstream.called
-    assert isinstance(served, dict) and "context_management" not in served
+    outputs: Final = {
+        item["call_id"]: item["output"] for item in body["input"] if item.get("type") == "function_call_output"
+    }
+    assert [CLEARED_TOOL_RESULT_PLACEHOLDER in json.dumps(outputs[f"toolu_{i}"]) for i in range(3)] == [
+        True,
+        True,
+        False,
+    ]
+    assert isinstance(served, dict)
+    assert served["context_management"]["applied_edits"][0]["cleared_tool_uses"] == 2
 
 
 @pytest.mark.asyncio

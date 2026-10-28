@@ -10,6 +10,7 @@ the way the API's 400 does, so the dispatcher can reject the edit, or drop only 
 runs.
 """
 
+import json
 from collections.abc import Mapping, Sequence, Set
 from dataclasses import dataclass
 from functools import reduce
@@ -38,6 +39,21 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 # api.anthropic.com, measured 2026-10-19: text results of 1 to 46 bytes are never cleared or counted toward keep
 _TINY_RESULT_BYTES: Final = 46
+_TOKEN_COUNTER_BLOCK_TYPES: Final = frozenset(
+    {
+        "text",
+        "image_url",
+        "image",
+        "document",
+        "file",
+        "tool_use",
+        "tool_result",
+        "thinking",
+        "redacted_thinking",
+        "tool_reference",
+        "search_result",
+    }
+)
 ToolNames = Literal["all"] | frozenset[str]
 
 
@@ -198,6 +214,29 @@ def _select_in_batches(candidates: Sequence[str], tokens: Mapping[str, int], cle
     return tuple(candidates[:batch_end])
 
 
+def _countable_block(block: Mapping[str, object]) -> Mapping[str, object]:
+    if block.get("type") in _TOKEN_COUNTER_BLOCK_TYPES:
+        return block
+    return {"type": "text", "text": json.dumps(block, default=str)}
+
+
+def _countable_message(message: Mapping[str, object]) -> Mapping[str, object]:
+    blocks: Final = _parse(_BLOCKS, message.get("content"))
+    if blocks is None:
+        return message
+    return {**message, "content": [_countable_block(block) for block in blocks]}
+
+
+def _count_tokens(
+    model: str, messages: Sequence[Mapping[str, object]], tools: Sequence[Mapping[str, object]] | None
+) -> int:
+    return litellm.token_counter(
+        model=model,
+        messages=[_countable_message(message) for message in messages],
+        tools=cast("list[ChatCompletionToolParam] | None", tools),
+    )
+
+
 def _trigger_met(
     trigger: dict[str, object],
     model: str,
@@ -216,11 +255,7 @@ def _trigger_met(
 
     if not isinstance(threshold, int):
         threshold = DEFAULT_INPUT_TOKENS_TRIGGER
-    current_tokens: Final = litellm.token_counter(
-        model=model,
-        messages=messages,
-        tools=cast("list[ChatCompletionToolParam] | None", tools),
-    )
+    current_tokens: Final = _count_tokens(model, messages, tools)
     verbose_logger.debug("context_management polyfill: current_tokens: %s", current_tokens)
     verbose_logger.debug("context_management polyfill: threshold: %s", threshold)
     return current_tokens > threshold, current_tokens
@@ -366,16 +401,8 @@ def apply_clear_tool_uses_20250919(
         [_message_without_inputs(message, ids_to_clear, input_tools) for message in edited] if input_tools else edited
     )
 
-    tokens_before: Final = (
-        counted_tokens
-        if counted_tokens is not None
-        else litellm.token_counter(
-            model=model, messages=messages, tools=cast("list[ChatCompletionToolParam] | None", tools)
-        )
-    )
-    tokens_after: Final = litellm.token_counter(
-        model=model, messages=final_messages, tools=cast("list[ChatCompletionToolParam] | None", tools)
-    )
+    tokens_before: Final = counted_tokens if counted_tokens is not None else _count_tokens(model, messages, tools)
+    tokens_after: Final = _count_tokens(model, final_messages, tools)
     cleared_input_tokens: Final = max(tokens_before - tokens_after, 0)
 
     return final_messages, {
