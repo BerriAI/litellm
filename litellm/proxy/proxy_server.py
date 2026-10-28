@@ -14839,6 +14839,7 @@ async def _try_native_responses_count(
 async def _provider_token_count(
     count_with: Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]],
     model_to_use: str,
+    request_model: str,
     settings: TokenCountSettings,
     local_estimate_allowed: bool,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
@@ -14861,24 +14862,26 @@ async def _provider_token_count(
         if count_model is None:
             return counted.model_copy(update={"count_source": "provider"})
         return counted.model_copy(update={"count_source": "token_count_model", "model_used": count_model.model})
+    pinned_count_model: Final = None if count_model is None or count_model.region is None else count_model
     region_hint: Final = (
         None
-        if count_model is None or count_model.region is None
-        else f"This model counts tokens with {count_model.model} in {count_model.region}. "
+        if pinned_count_model is None
+        else f"This model counts tokens with {pinned_count_model.model} in {pinned_count_model.region}. "
         "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
     )
     failure: Final = counted if region_hint is None else counted.with_hint(region_hint)
-    framing_can_stand_in: Final = count_model is None or not count_model.configured
-    if not (
-        framing_can_stand_in and failure.cannot_count_model and settings.framing is not None and local_estimate_allowed
-    ):
+    framing_can_stand_in: Final = (count_model is None or not count_model.configured) and (
+        failure.cannot_count_model or (pinned_count_model is not None and failure.denied_in_region)
+    )
+    if not (framing_can_stand_in and settings.framing is not None and local_estimate_allowed):
         raise failure.to_proxy_exception()
-    if region_hint is not None:
+    if pinned_count_model is not None:
         verbose_proxy_logger.warning(
-            "Token count for %s answered %s, so the framed local estimate stands in. %s",
-            model_to_use,
+            "Token count for %s answered %s from %s in %s, so it falls back to the framed local estimate",
+            request_model,
             failure.status_code,
-            region_hint,
+            pinned_count_model.model,
+            pinned_count_model.region,
         )
     return failure
 
@@ -15398,6 +15401,7 @@ async def count_request_tokens(
                 chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
             ),
             model_to_use=model_to_use,
+            request_model=request.model,
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
         )

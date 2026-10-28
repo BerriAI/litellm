@@ -13,6 +13,7 @@ from litellm.types.token_count import TokenCountProvider, TokenCountSourceFields
 from litellm.types.utils import TokenCountResponse
 
 CANNOT_COUNT_MODEL_STATUSES: Final = frozenset({400, 404})
+REGION_DENIED_STATUSES: Final = frozenset({401, 403})
 TOKENIZER_LOAD_WAIT_SECONDS: Final = 5.0
 TOKENIZER_LOAD_REUSE_SECONDS: Final = 60.0
 TOKENIZER_LOAD_MAX_RUNNING: Final = 4
@@ -66,6 +67,10 @@ class ProviderCountFailure:
     @property
     def cannot_count_model(self) -> bool:
         return not self.rejected_before_provider_call and self.status_code in CANNOT_COUNT_MODEL_STATUSES
+
+    @property
+    def denied_in_region(self) -> bool:
+        return not self.rejected_before_provider_call and self.status_code in REGION_DENIED_STATUSES
 
     def with_hint(self, hint: str) -> "ProviderCountFailure":
         return replace(self, message=_with_hint(self.message, hint))
