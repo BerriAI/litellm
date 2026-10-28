@@ -44,7 +44,7 @@ from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kw
 from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
@@ -9989,8 +9989,6 @@ async def _converse_with_a_strict_tools_limit_rejection_first(
     drop_params: bool | None,
     tool: Mapping[str, object] = _STRICT_LOOKUP_TOOL,
 ) -> tuple[tuple[tuple[str, dict[str, object]], ...], litellm.BadRequestError | None]:
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
     respond: Final = _StrictToolsLimitRejectionFirst(stream)
     kwargs: Final = {
         "model": "bedrock/us.anthropic.claude-sonnet-4-6",
@@ -10005,20 +10003,31 @@ async def _converse_with_a_strict_tools_limit_rejection_first(
         "fake_stream": stream == "fake",
     }
     try:
-        if asynchronous:
-            response = await litellm.acompletion(
-                client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)), **kwargs
+        chunks: Final = (
+            await _acompletion_chunks(AsyncHTTPHandler(transport=httpx.MockTransport(respond)), kwargs, stream)
+            if asynchronous
+            else _completion_chunks(
+                HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))), kwargs, stream
             )
-            chunks = [chunk async for chunk in response] if stream == "fake" else [response]
-        else:
-            response = litellm.completion(
-                client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))), **kwargs
-            )
-            chunks = list(response) if stream == "fake" else [response]
+        )
     except litellm.BadRequestError as error:
         return respond.sent, error
     assert chunks
     return respond.sent, None
+
+
+async def _acompletion_chunks(
+    client: AsyncHTTPHandler, kwargs: Mapping[str, object], stream: Literal["off", "fake", "real"]
+) -> tuple[object, ...]:
+    response: Final = await litellm.acompletion(client=client, **kwargs)
+    return tuple([chunk async for chunk in response]) if stream == "fake" else (response,)
+
+
+def _completion_chunks(
+    client: HTTPHandler, kwargs: Mapping[str, object], stream: Literal["off", "fake", "real"]
+) -> tuple[object, ...]:
+    response: Final = litellm.completion(client=client, **kwargs)
+    return tuple(response) if stream == "fake" else (response,)
 
 
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
