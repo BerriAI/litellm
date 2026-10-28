@@ -74,7 +74,7 @@ def patched_models(monkeypatch):
     monkeypatch.setattr(
         litellm,
         "get_llm_provider",
-        lambda model: (model, "openai", None, None),
+        lambda model, **kwargs: (model, "openai", None, None),
     )
 
     return router
