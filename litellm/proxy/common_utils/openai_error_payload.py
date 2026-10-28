@@ -82,6 +82,8 @@ def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyExcept
 
 
 def _is_database_outage(exc: Exception) -> bool:
+    if PrismaDBExceptionHandler.is_prisma_engine_internal_error(exc):
+        return True
     raised_by_prisma: Final = type(exc).__module__.partition(".")[0] == "prisma"
     return raised_by_prisma and PrismaDBExceptionHandler.is_database_service_unavailable_error(exc)
 

@@ -4,6 +4,8 @@ import httpx
 import prisma.errors
 import pytest
 from fastapi import HTTPException
+from prisma._async_http import Response
+from prisma.engine.utils import handle_response_errors
 
 import litellm
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
@@ -292,6 +294,16 @@ def test_a_database_outage_answers_503_so_callers_retry_instead_of_fixing_their_
     wrapped = proxy_exception_for(
         prisma.errors.PrismaError("Can't reach database server at `db:5432`"), default_status_code=400
     )
+
+    assert (wrapped.code, wrapped.type) == ("503", "no_db_connection")
+
+
+def test_a_database_dropped_mid_query_answers_503_though_prisma_fails_to_name_the_error():
+    engine_reply_with_null_meta = [{"user_facing_error": {"error_code": "P1001", "message": "", "meta": None}}]
+    with pytest.raises(AttributeError) as raised:
+        handle_response_errors(Response(httpx.Response(500)), engine_reply_with_null_meta)
+
+    wrapped = proxy_exception_for(raised.value, default_status_code=500)
 
     assert (wrapped.code, wrapped.type) == ("503", "no_db_connection")
 
