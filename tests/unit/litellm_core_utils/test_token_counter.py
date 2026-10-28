@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, sentinel
 import anyio.to_thread
 import pytest
 import tiktoken
+from openai.types.chat import ChatCompletionContentPartRefusalParam
 from PIL import Image
 from tokenizers import Regex, Tokenizer, models, pre_tokenizers
 
@@ -32,6 +33,7 @@ import litellm.constants
 from litellm.constants import HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS, TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
+    _count_content_list,
     _encoding_count,
     _get_exact_count_function,
     _get_extrapolating_count_function,
@@ -42,7 +44,7 @@ from litellm.litellm_core_utils.token_counter import (
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionTextObject, ChatCompletionToolParam
 from tests.large_text import text
 from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
@@ -82,6 +84,28 @@ def test_token_counter_basic():
             ],
         )
         == 19
+    )
+
+
+@pytest.mark.parametrize("refusal_text", ["I cannot help with that request.", "", "抱歉，我无法帮助处理该请求。"])
+@pytest.mark.parametrize("default_token_count", [None, 0])
+def test_content_list_counts_refusal_text(refusal_text: str, default_token_count: int | None) -> None:
+    encoding: Final = tiktoken.get_encoding("cl100k_base")
+    count_function: Final[Callable[[str], int]] = lambda text: _encoding_count(encoding, text)
+    content: Final[list[ChatCompletionTextObject | ChatCompletionContentPartRefusalParam]] = [
+        {"type": "text", "text": "Safety notice."},
+        {"type": "refusal", "refusal": refusal_text},
+    ]
+    expected: Final = count_function("Safety notice.") + count_function(refusal_text)
+
+    assert (
+        _count_content_list(
+            count_function=count_function,
+            content_list=content,
+            use_default_image_token_count=False,
+            default_token_count=default_token_count,
+        )
+        == expected
     )
 
 
