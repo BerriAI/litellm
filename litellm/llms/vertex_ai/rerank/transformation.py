@@ -10,7 +10,6 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -29,19 +28,15 @@ from litellm.types.rerank import (
 )
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
-class _VertexRankRecord(TypedDict):
-    id: ReadOnly[str | int | float]
-    score: ReadOnly[NotRequired[int | float]]
+class _VertexRankedRecord(TypedDict):
+    id: ReadOnly[str]
+    score: NotRequired[ReadOnly[float]]
+    title: NotRequired[ReadOnly[str]]
+    content: NotRequired[ReadOnly[str]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
-class _VertexRankResponse(TypedDict):
-    records: ReadOnly[NotRequired[Sequence[_VertexRankRecord]]]
-
-
-_JSON_BODY: Final = TypeAdapter(object, config=ConfigDict(hide_input_in_errors=True))
-_VERTEX_RANK_RESPONSE: Final = TypeAdapter(_VertexRankResponse)
+class _VertexRankResponse(TypedDict, total=False):
+    records: ReadOnly[Sequence[_VertexRankedRecord]]
 
 
 class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
@@ -189,10 +184,9 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         Transform Vertex AI Discovery Engine response to Cohere format
         """
         try:
-            raw_response_body: Final = _JSON_BODY.validate_python(raw_response.json())
+            raw_response_json: Final[_VertexRankResponse] = raw_response.json()
         except Exception as e:
             raise ValueError(f"Failed to parse response: {e}")
-        raw_response_json: Final = _VERTEX_RANK_RESPONSE.validate_python(raw_response_body)
 
         # Extract records from response
         records: Final = raw_response_json.get("records", [])

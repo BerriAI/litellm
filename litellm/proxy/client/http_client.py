@@ -1,9 +1,14 @@
 """HTTP client for making requests to the LiteLLM proxy server."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any, Final
 
 import requests
+from typing_extensions import TypedDict, Unpack
+
+
+class _RequestOptions(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class HTTPClient:
@@ -27,9 +32,9 @@ class HTTPClient:
         uri: str,
         *,
         data: Mapping[str, object] | list | bytes | None = None,
-        json: Mapping[str, object] | Sequence[object] | None = None,
-        headers: Mapping[str, str] | None = None,
-        **kwargs: Any,
+        json: Mapping[str, object] | list | None = None,
+        headers: dict[str, str] | None = None,
+        **kwargs: Unpack[_RequestOptions],
     ) -> Any:
         """Make an HTTP request to the LiteLLM proxy server.
 

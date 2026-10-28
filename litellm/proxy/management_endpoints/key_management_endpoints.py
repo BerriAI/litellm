@@ -26,8 +26,8 @@ from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, c
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._internal_context import service_target, with_service_target
@@ -44,14 +44,6 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.credentials import CredentialItem
 from litellm.models.project import LiteLLM_ProjectTable
-from litellm.proxy._experimental.mcp_server.db import (
-    rotate_mcp_server_credentials_master_key,
-    rotate_mcp_user_credentials_master_key,
-    rotate_mcp_user_env_vars_master_key,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
-    rotate_sso_identity_assertions_master_key,
-)
 from litellm.proxy._types import *
 from litellm.proxy._types import Litellm_EntityType, LiteLLM_VerificationToken, hash_token
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
@@ -153,6 +145,14 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.mcp_server.db import (
+    rotate_mcp_server_credentials_master_key,
+    rotate_mcp_user_credentials_master_key,
+    rotate_mcp_user_env_vars_master_key,
+)
+from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
+    rotate_sso_identity_assertions_master_key,
+)
 from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
@@ -167,6 +167,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     handle_exception_on_proxy,
     hash_token_if_needed,
     is_valid_api_key,
+    require_enterprise_license,
 )
 from litellm.repositories.base_repository import BaseRepository, record_to_dict
 from litellm.repositories.budget_repository import BudgetRepository
@@ -211,21 +212,7 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 _RepositoryModelT = TypeVar("_RepositoryModelT", bound=BaseModel)
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _KeyAliasCountRow(TypedDict):
-    count: ReadOnly[int | float | str]
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _KeyAliasRow(TypedDict):
-    key_alias: NotRequired[ReadOnly[str | None]]
-
-
-_KEY_ALIAS_COUNT_ROWS: Final = TypeAdapter(list[_KeyAliasCountRow])
-_KEY_ALIAS_ROWS: Final = TypeAdapter(list[_KeyAliasRow])
-_KEY_TOKEN_HASH: Final = TypeAdapter[str | None](str | None, config=ConfigDict(strict=True, hide_input_in_errors=True))
+_RawRowT = TypeVar("_RawRowT")
 
 
 class _UserRowLike(Protocol):
@@ -247,6 +234,12 @@ class _UserRowLike(Protocol):
 
 class _TxTables(Protocol):
     litellm_proxymodeltable: TableActions[object]
+
+
+class _ModelReencryptTransaction(Protocol):
+    async def __aenter__(self) -> _TxTables: ...
+
+    async def __aexit__(self, *exc_info: object) -> None: ...
 
 
 class _ModelParamsUpdate(TypedDict):
@@ -347,6 +340,14 @@ def _credentials_table(prisma_client: PrismaClient) -> TableActions[CredentialIt
     return cast(  # cast-ok: the rotation loop reads and rewrites these rows through CredentialItem names only
         "TableActions[CredentialItem]", CredentialsRepository(prisma_client).table
     )
+
+
+async def _query_raw_rows(prisma_client: PrismaClient, query: str, *args: object) -> Sequence[_RawRowT]:
+    return await prisma_client.db.query_raw(query, *args)
+
+
+def _model_reencrypt_transaction(prisma_client: PrismaClient) -> _ModelReencryptTransaction:
+    return prisma_client.db.tx(timeout=timedelta(minutes=2))
 
 
 def _config_table(prisma_client: PrismaClient, *, use_writer: bool = False) -> _ConfigTableActions:
@@ -1328,11 +1329,6 @@ async def validate_team_id_used_in_service_account_request(
     return True
 
 
-_BUDGET_NUMERIC_KEYS = frozenset(
-    ["max_budget", "soft_budget", "max_parallel_requests", "tpm_limit", "rpm_limit", "tpd_limit"]
-)
-
-
 def _enforce_upperbound_key_params(
     data: GenerateKeyRequest | UpdateKeyRequest,
     fill_defaults: bool = True,
@@ -1347,13 +1343,20 @@ def _enforce_upperbound_key_params(
     # (GHSA-2rv4-xv66-fpjg): float('nan') passes every `< 0` check because
     # nan < 0 is False, and spend >= nan is always False, permanently disabling
     # budget enforcement for any key that carries it.
-    for elem in data:
-        key, value = elem
-        if key in _BUDGET_NUMERIC_KEYS and value is not None:
-            if not math.isfinite(value):
+    budget_numeric_fields: Final = (
+        ("max_budget", data.max_budget),
+        ("max_parallel_requests", data.max_parallel_requests),
+        ("tpm_limit", data.tpm_limit),
+        ("rpm_limit", data.rpm_limit),
+        ("tpd_limit", data.tpd_limit),
+        ("soft_budget", data.soft_budget),
+    )
+    for field_name, field_value in budget_numeric_fields:
+        if field_value is not None:
+            if not math.isfinite(field_value):
                 raise HTTPException(
                     status_code=400,
-                    detail={"error": f"{key} must be a finite number. Received: {value}"},
+                    detail={"error": f"{field_name} must be a finite number. Received: {field_value}"},
                 )
 
     if litellm.upperbound_key_generate_params is None:
@@ -4937,7 +4940,7 @@ async def info_key_fn(
             )
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
         key_info_dict: Final = key_info.model_dump()
-        key_token_hash: Final[str | None] = _KEY_TOKEN_HASH.validate_python(key_info_dict.pop("token"))
+        key_token_hash: Final[str | None] = key_info_dict.pop("token")
         key_info_dict["status"] = (
             "deleted" if live_key_info is None else _derive_key_status(key_info_dict, now=datetime.now(timezone.utc))
         )
@@ -5257,10 +5260,13 @@ async def generate_key_helper_fn(
         if isinstance(saved_token["metadata"], str):
             saved_token["metadata"] = json.loads(saved_token["metadata"])
         if isinstance(saved_token["permissions"], str):
-            if "get_spend_routes" in saved_token["permissions"] and premium_user is not True:
-                raise ValueError("get_spend_routes permission is only available for LiteLLM Enterprise users")
-
             saved_token["permissions"] = json.loads(saved_token["permissions"])
+        if (
+            isinstance(saved_token["permissions"], dict)
+            and "get_spend_routes" in saved_token["permissions"]
+            and premium_user is not True
+        ):
+            require_enterprise_license("get_spend_routes")
         if isinstance(saved_token["model_max_budget"], str):
             saved_token["model_max_budget"] = json.loads(saved_token["model_max_budget"])
         router_settings = cast(dict | None, saved_token.get("router_settings"))
@@ -5761,8 +5767,7 @@ async def rotate_master_key(
             ]
         )
         verbose_proxy_logger.debug("Re-encrypting litellm_params on %s model rows", len(reencrypted_models))
-        async with prisma_client.db.tx(timeout=timedelta(minutes=2)) as tx_ctx:
-            tx: Final[_TxTables] = tx_ctx
+        async with _model_reencrypt_transaction(prisma_client) as tx:
             for reencrypted_model in reencrypted_models:
                 await tx.litellm_proxymodeltable.update_many(
                     data=_ModelParamsUpdate(litellm_params=prisma.Json(reencrypted_model.litellm_params)),
@@ -7359,9 +7364,7 @@ async def key_aliases(
         where_sql: Final = " AND ".join(where_parts)
 
         count_sql: Final = f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
-        count_rows: Final = _KEY_ALIAS_COUNT_ROWS.validate_python(
-            await prisma_client.db.query_raw(count_sql, *query_params)
-        )
+        count_rows: Final[Sequence[Mapping[str, int]]] = await _query_raw_rows(prisma_client, count_sql, *query_params)
         total_count: Final = int(count_rows[0]["count"]) if count_rows else 0
 
         aliases_params: Final = query_params + [size, (page - 1) * size]
@@ -7374,10 +7377,10 @@ async def key_aliases(
             f" ORDER BY key_alias ASC"
             f" LIMIT ${limit_idx} OFFSET ${offset_idx}"
         )
-        alias_rows: Final = _KEY_ALIAS_ROWS.validate_python(
-            await prisma_client.db.query_raw(aliases_sql, *aliases_params)
+        alias_rows: Final[Sequence[Mapping[str, str]]] = await _query_raw_rows(
+            prisma_client, aliases_sql, *aliases_params
         )
-        aliases: Final[list[str]] = [alias for row in alias_rows if (alias := row.get("key_alias"))]
+        aliases: Final[list[str]] = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
 
         total_pages: Final = -(-total_count // size) if total_count > 0 else 0
         verbose_proxy_logger.debug(
@@ -7416,20 +7419,26 @@ async def key_aliases(
         )
 
 
-def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str] | None:
-    order_by: Final[dict[str, str]] = {}
-
+def _validate_sort_params(
+    sort_by: str | None, sort_order: str
+) -> Mapping[str, object] | Sequence[Mapping[str, object]] | None:
     if sort_by is None:
         return None
     # Validate sort_by is a valid column
-    valid_columns: Final = [
+    valid_columns: Final = (
         "spend",
         "max_budget",
         "created_at",
         "updated_at",
         "token",
         "key_alias",
-    ]
+        "expires",
+        "last_active",
+        "budget_reset_at",
+        "total_spend",
+        "tpm_limit",
+        "rpm_limit",
+    )
     if sort_by not in valid_columns:
         raise HTTPException(
             status_code=400,
@@ -7443,9 +7452,14 @@ def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str
             detail={"error": "Invalid sort order. Must be 'asc' or 'desc'"},
         )
 
-    order_by[sort_by] = sort_order.lower()
-
-    return order_by
+    direction: Final = sort_order.lower()
+    nullable_sort_columns: Final = ("expires", "last_active", "budget_reset_at", "tpm_limit", "rpm_limit")
+    if sort_by not in (*nullable_sort_columns, "total_spend"):
+        return {sort_by: direction}
+    return [
+        {sort_by: {"sort": direction, "nulls": "last"}} if sort_by in nullable_sort_columns else {sort_by: direction},
+        {"token": "asc"},
+    ]
 
 
 def _build_expires_where_clause(expires_filter: str, now: datetime) -> dict[str, object]:
@@ -7687,7 +7701,7 @@ async def list_key_helper(
 
     verbose_proxy_logger.debug("Pagination: skip=%s, take=%s", skip, size)
 
-    order_by: Final[dict[str, str] | None] = (
+    order_by: Final = (
         _validate_sort_params(sort_by, sort_order) if sort_by is not None and isinstance(sort_by, str) else None
     )
 

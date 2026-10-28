@@ -13,8 +13,7 @@ from openai import (
     BadRequestError,
     OpenAI,
 )
-from pydantic import BaseModel, ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
@@ -60,13 +59,7 @@ from .image_generation import (
 )
 from .image_generation.http_utils import azure_deployment_image_generation_json_body
 
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _AzureImageGenerationSuccessResponse(TypedDict):
-    result: ReadOnly[object]
-
-
-_AZURE_IMAGE_GENERATION_SUCCESS_RESPONSE: Final = TypeAdapter(_AzureImageGenerationSuccessResponse)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AzureOpenAIAssistantsAPIConfig:
@@ -970,8 +963,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     body=error_data,
                 )
 
-            success_response: Final = _AZURE_IMAGE_GENERATION_SUCCESS_RESPONSE.validate_python(response.json())
-            result: Final = success_response["result"]
+            result: Final = _DECODED_JSON.validate_python(response.json()["result"])
             return httpx.Response(
                 status_code=200,
                 headers=response.headers,
@@ -1088,8 +1080,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     body=error_data,
                 )
 
-            success_response: Final = _AZURE_IMAGE_GENERATION_SUCCESS_RESPONSE.validate_python(response.json())
-            result: Final = success_response["result"]
+            result: Final = _DECODED_JSON.validate_python(response.json()["result"])
             return httpx.Response(
                 status_code=200,
                 headers=response.headers,
@@ -1369,7 +1360,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         except AzureOpenAIError as e:
             raise e
         except Exception as e:
-            error_code: Final = getattr(e, "status_code", None)
+            error_code: Final[object] = getattr(e, "status_code", None)
             if error_code is not None:
                 raise AzureOpenAIError(status_code=error_code, message=str(e))
             else:

@@ -94,8 +94,10 @@ def _is_ephemeral_mark(mark: object) -> bool:
     return mark_map.get("type") == "ephemeral"
 
 
-def _tool_carries_ephemeral_mark(tool: ChatCompletionToolParam) -> bool:
-    tool_map: Final = cast(  # cast-ok: TypedDict.get rejects keys the type does not declare
+def _tool_carries_ephemeral_mark(tool: object) -> bool:
+    if not isinstance(tool, dict):
+        return False
+    tool_map: Final = cast(  # cast-ok: tools are plain JSON dicts
         Mapping[str, object], tool
     )
     if _is_ephemeral_mark(tool_map.get("cache_control")):

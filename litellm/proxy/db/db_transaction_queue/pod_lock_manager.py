@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -12,6 +12,13 @@ from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logg
 from litellm.types.services import ServiceTypes
 
 POD_LOCK_TARGET: Final = "pod_lock"
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import ProxyLogging as _ProxyLogging
+
+    ProxyLogging: TypeAlias = _ProxyLogging
+else:
+    ProxyLogging = Any
 
 
 class PodLockManager:
