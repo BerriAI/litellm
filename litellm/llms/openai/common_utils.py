@@ -3,6 +3,7 @@ Common helpers / utils across al OpenAI endpoints
 """
 
 import asyncio
+import copy
 import hashlib
 import inspect
 import json
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 
 import litellm
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -39,6 +40,49 @@ from litellm.llms.custom_httpx.http_handler import (
     get_ssl_configuration,
     http2_enabled,
 )
+
+
+def _is_plain_dict(value: object) -> bool:
+    return isinstance(value, dict)
+
+
+def _is_list(value: object) -> bool:
+    return isinstance(value, list)
+
+
+def _contains_cache_control(value: object) -> bool:
+    # Iterative rather than recursive: the code-quality gate bans unignored recursion here,
+    # and request payloads are attacker-shaped, so an explicit worklist has no stack depth to blow.
+    pending: Final[list[object]] = [value]  # mutable-ok: a local worklist, never returned or stored
+    while pending:
+        node = pending.pop()
+        mapping = as_str_mapping(node)
+        if mapping is not None:
+            if "cache_control" in mapping:
+                return True
+            pending.extend(mapping.values())
+        elif _is_list(node):
+            pending.extend(iter_items(node))
+    return False
+
+
+def without_cache_control(item: object) -> object:
+    """Return `item` with every `cache_control` key removed, without touching the original.
+
+    `filter_value_from_dict` deletes the key in place and recurses into nested dicts and
+    lists, so the caller's own message, tool or input object has to be copied first: it
+    may reuse the same list on a provider that does support prompt caching. The copy is
+    skipped when there is nothing to strip, which keeps the object identity the
+    pass-through paths rely on and avoids a deep copy on every request.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import filter_value_from_dict
+
+    if not _is_plain_dict(item) or not _contains_cache_control(item):
+        return item
+    copied: Final = copy.deepcopy(item)
+    if isinstance(copied, dict):
+        filter_value_from_dict(copied, "cache_control")
+    return copied
 
 
 def _get_client_init_params(cls: type) -> tuple[str, ...]:

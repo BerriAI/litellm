@@ -46,7 +46,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
-from ..common_utils import OpenAIError
+from ..common_utils import OpenAIError, without_cache_control
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS: Final = 16
@@ -625,24 +625,29 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         the chat path. Strips Anthropic-only `cache_control` markers from
         Responses API input content blocks and tools.
 
-        `filter_value_from_dict` mutates each dict in place, so the same
-        objects are returned.
+        `filter_value_from_dict` deletes the key in place and recurses, so each
+        item is copied first: the caller keeps its own input list and may reuse
+        it on a provider that does support prompt caching.
         """
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            filter_value_from_dict,
+        new_input: Final = (
+            cast(  # cast-ok: the comprehension rebuilds the input item for item
+                ResponseInputParam,
+                [without_cache_control(item) for item in input],
+            )
+            if isinstance(input, list)
+            else input
         )
 
-        if isinstance(input, list):
-            for item in input:
-                if isinstance(item, dict):
-                    filter_value_from_dict(cast(dict, item), "cache_control")
+        new_tools: Final = (
+            cast(  # cast-ok: the comprehension rebuilds the tool list item for item
+                Sequence[ALL_RESPONSES_API_TOOL_PARAMS],
+                [without_cache_control(tool) for tool in tools],
+            )
+            if tools is not None
+            else None
+        )
 
-        if tools is not None:
-            for tool in tools:
-                if isinstance(tool, dict):
-                    filter_value_from_dict(cast(dict, tool), "cache_control")
-
-        return input, tools
+        return new_input, new_tools
 
     def _drop_bridge_minted_reasoning_items(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
         if self.custom_llm_provider not in _PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING or not isinstance(input, list):
