@@ -1,4 +1,4 @@
-use std::{io, path::PathBuf, sync::Arc};
+use std::{borrow::Cow, fmt, io, path::PathBuf, sync::Arc};
 
 use tokio::time::error::Elapsed;
 use tokio_tungstenite::tungstenite;
@@ -59,7 +59,7 @@ pub(crate) enum Repr {
     #[error("upstream request timed out")]
     Timeout(#[source] reqwest::Error),
     #[error("upstream request failed with status {status}: {body}")]
-    Status { status: u16, body: String },
+    Status { status: u16, body: UpstreamBody },
 
     #[error("invalid WebSocket URL")]
     WebSocketUrl(#[source] url::ParseError),
@@ -138,7 +138,7 @@ impl Error {
     pub fn upstream(status: u16, body: String) -> Self {
         Repr::Status {
             status,
-            body: bounded(body),
+            body: UpstreamBody(body),
         }
         .into()
     }
@@ -392,7 +392,7 @@ impl Error {
 
     pub fn upstream_response(&self) -> Option<(u16, &str)> {
         match &*self.0 {
-            Repr::Status { status, body } => Some((*status, body)),
+            Repr::Status { status, body } => Some((*status, &body.0)),
             Repr::Read { .. }
             | Repr::InvalidPem { .. }
             | Repr::Client(_)
@@ -509,10 +509,24 @@ impl Error {
     }
 }
 
-fn bounded(body: String) -> String {
+pub(crate) struct UpstreamBody(String);
+
+impl fmt::Display for UpstreamBody {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&bounded(&self.0), f)
+    }
+}
+
+impl fmt::Debug for UpstreamBody {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&bounded(&self.0), f)
+    }
+}
+
+fn bounded(body: &str) -> Cow<'_, str> {
     match body.char_indices().nth(UPSTREAM_BODY_MAX_CHARS) {
-        None => body,
-        Some((cut, _)) => format!("{}{TRUNCATION_MARKER}", &body[..cut]),
+        None => Cow::Borrowed(body),
+        Some((cut, _)) => Cow::Owned(format!("{}{TRUNCATION_MARKER}", &body[..cut])),
     }
 }
 
@@ -634,17 +648,30 @@ mod tests {
     }
 
     #[rstest]
+    #[case::empty(String::new(), String::new())]
     #[case::short("slow down".to_owned(), "slow down".to_owned())]
+    #[case::ascii_over_the_limit(
+        format!("{}private-tail", "a".repeat(UPSTREAM_BODY_MAX_CHARS)),
+        format!("{}{TRUNCATION_MARKER}", "a".repeat(UPSTREAM_BODY_MAX_CHARS))
+    )]
     #[case::at_the_limit("\u{00e9}".repeat(UPSTREAM_BODY_MAX_CHARS), "\u{00e9}".repeat(UPSTREAM_BODY_MAX_CHARS))]
     #[case::over_the_limit(
-        "\u{00e9}".repeat(UPSTREAM_BODY_MAX_CHARS + 1),
+        format!("{}private-tail", "\u{00e9}".repeat(UPSTREAM_BODY_MAX_CHARS)),
         format!("{}{TRUNCATION_MARKER}", "\u{00e9}".repeat(UPSTREAM_BODY_MAX_CHARS))
     )]
-    fn upstream_bounds_the_provider_body_by_characters(
+    fn upstream_preserves_the_body_and_bounds_only_diagnostics(
         #[case] body: String,
         #[case] expected: String,
     ) {
-        let error = crate::Error::upstream(429, body);
-        assert_eq!(error.upstream_response(), Some((429, expected.as_str())));
+        let error = crate::Error::upstream(429, body.clone());
+        let expected_message = format!("upstream request failed with status 429: {expected}");
+        assert_eq!(error.to_string(), expected_message);
+        assert_eq!(Report::new(&error).to_string(), expected_message);
+        let debug = format!("{error:?}");
+        assert!(debug.contains(&format!("{expected:?}")), "{debug}");
+        assert!(!debug.contains("private-tail"), "{debug}");
+        assert!(!format!("{error:#?}").contains("private-tail"));
+        assert_eq!(error.upstream_response(), Some((429, body.as_str())));
+        assert_eq!(error.status(), Some(429));
     }
 }

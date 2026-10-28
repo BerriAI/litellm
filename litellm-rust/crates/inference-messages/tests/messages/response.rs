@@ -173,9 +173,13 @@ async fn a_json_error_envelope_is_kept_verbatim(call: MessagesCall) {
 }
 
 #[rstest]
+#[case::ascii(format!("{}private-tail", "x".repeat(600)))]
+#[case::unicode(format!("{}private-tail", "é".repeat(600)))]
 #[tokio::test]
-async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall) {
-    let long = "x".repeat(600);
+async fn a_long_error_body_is_preserved_with_bounded_diagnostics(
+    call: MessagesCall,
+    #[case] long: String,
+) {
     let upstream = upstream([ResponseTemplate::new(500).set_body_string(long.clone())]).await;
 
     let error = run(MessagesCall {
@@ -186,10 +190,13 @@ async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall
     .await
     .expect_err("upstream error propagates");
 
-    assert_eq!(
-        error.upstream_response(),
-        Some((500, format!("{}... (truncated)", &long[..256]).as_str()))
-    );
+    assert_eq!(error.upstream_response(), Some((500, long.as_str())));
+    let diagnostic_body: String = long.chars().take(256).collect();
+    let report = litellm_error::Report::new(&error).to_string();
+    assert!(report.ends_with(&format!("{diagnostic_body}... (truncated)")));
+    assert_eq!(report.matches(&diagnostic_body).count(), 1, "{report}");
+    assert!(!report.contains("private-tail"), "{report}");
+    assert!(!format!("{error:?}").contains("private-tail"));
 }
 
 #[rstest]

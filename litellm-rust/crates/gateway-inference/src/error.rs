@@ -269,6 +269,26 @@ mod tests {
     }
 
     #[rstest]
+    #[case::ascii("busy ".repeat(80))]
+    #[case::unicode("é".repeat(300))]
+    fn long_provider_errors_preserve_the_messages_envelope(#[case] message: String) {
+        let body = json!({
+            "type": "error",
+            "error": {"type": "overloaded_error", "message": message},
+            "request_id": "provider-request",
+        });
+        let error = upstream(529, &body.to_string());
+        let report = litellm_error::Report::new(&error).to_string();
+        let diagnostic_body: String = body.to_string().chars().take(256).collect();
+        assert_eq!(report.matches(&diagnostic_body).count(), 1, "{report}");
+        assert!(report.ends_with("... (truncated)"), "{report}");
+        assert!(!report.contains(&message), "{report}");
+        assert!(!format!("{error:?}").contains(&message));
+        assert_eq!(error.status(), StatusCode::from_u16(529).unwrap());
+        assert_eq!(error.body(Some("gateway-request")), body);
+    }
+
+    #[rstest]
     #[case::bedrock_detail(
         upstream(403, r#"{"detail":{"message":"denied"}}"#),
         "permission_error",

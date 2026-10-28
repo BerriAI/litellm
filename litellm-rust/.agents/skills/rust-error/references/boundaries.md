@@ -36,7 +36,7 @@ Anything after the send is terminal, never a decline. `declined()` answers `None
 
 A boundary renders anything that is not a provider answer with `litellm_error::Report`, so the reader sees every layer of the chain once. That is why messages are written for a reader, each layer leaves its cause to `source()`, and reqwest URLs are stripped on entry. A boundary that must not show the chain, such as the bridge's TLS settings error that names the setting but not the file, renders fixed text of its own and says so in its test
 
-Provider bodies are passed through, so they are bounded where they enter our types. `litellm_http::Error::upstream(status, body)` keeps the first 256 characters and marks the cut, so no caller can forget. OCR's `Provider` error keeps the whole body for Python's `get_error_class`, bounded by the connection's response size limit instead
+Provider bodies are passed through intact for gateway and Python error mapping. `litellm_http::Error::upstream(status, body)` retains the complete body, but its `Display`, `Debug` and `Report` diagnostics show only the first 256 characters and mark the cut. Do not log the raw body or `RustUpstreamError` args. OCR's `Provider` error also keeps the whole body for Python's `get_error_class`, bounded by the connection's response size limit
 
 Never format `Debug` of an error into a response or a Python exception. A type whose sources may hold secrets derives `veil::Redact`, so its `Debug` is safe to log
 
