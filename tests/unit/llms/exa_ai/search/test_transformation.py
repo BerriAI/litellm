@@ -1,17 +1,26 @@
+import asyncio
 import json
+import uuid
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import Mock
 
 import httpx
 import pytest
 import respx
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
+from litellm.llms.exa_ai.search.cost_calculator import EXA_AI_COST_DOLLARS_PARAM, exa_ai_reported_cost
 from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
+from litellm.search.cost_calculator import search_provider_cost_per_query
 
 EXA_SEARCH_URL: Final = "https://api.exa.ai/search"
+EXA_REPORTED_COST: Final = 0.022
+_LOGGED: Final = TypeAdapter(Mapping[str, object])
 
 
 @pytest.fixture
@@ -41,7 +50,7 @@ def test_transform_search_response_snippet_falls_back_through_content_modes(
         json={"results": [{"title": "Title", "url": "https://example.com", **content_fields}]},
     )
 
-    response: Final = ExaAISearchConfig().transform_search_response(raw_response, logging_obj=Mock())
+    response: Final = ExaAISearchConfig().transform_search_response(raw_response, logging_obj=Mock(optional_params={}))
 
     assert response.results[0].snippet == expected_snippet
 
@@ -93,7 +102,9 @@ def test_search_sends_max_results_as_num_results(respx_mock: respx.MockRouter) -
 
 
 def _transform(payload: object) -> SearchResponse:
-    return ExaAISearchConfig().transform_search_response(httpx.Response(200, json=payload), logging_obj=Mock())
+    return ExaAISearchConfig().transform_search_response(
+        httpx.Response(200, json=payload), logging_obj=Mock(optional_params={})
+    )
 
 
 def test_transform_search_response_maps_every_exa_result_in_provider_order():
@@ -125,13 +136,16 @@ def test_transform_search_response_maps_every_exa_result_in_provider_order():
     assert response.results == [
         SearchResult.model_validate(
             {
+                "id": "https://example.com/first",
                 "title": "First",
                 "url": "https://example.com/first",
                 "snippet": "First text",
                 "date": "2024-01-05T00:00:00.000Z",
+                "author": "Ada",
                 "highlights": ["ignored when text is present"],
                 "highlight_scores": [0.5],
                 "score": 0.42,
+                "image": None,
             }
         ),
         SearchResult.model_validate(
@@ -142,7 +156,9 @@ def test_transform_search_response_maps_every_exa_result_in_provider_order():
                 "highlights": ["one", "two"],
             }
         ),
-        SearchResult(title="Third", url="https://example.com/third", snippet="Summary"),
+        SearchResult.model_validate(
+            {"title": "Third", "url": "https://example.com/third", "snippet": "Summary", "summary": "Summary"}
+        ),
     ]
     assert response.model_extra == {
         "provider_metadata": {
@@ -162,7 +178,15 @@ def test_transform_search_response_maps_every_exa_result_in_provider_order():
         ({"highlightScores": [0.1]}, {"highlight_scores": [0.1]}),
         ({"score": None}, {"score": None}),
         ({"highlights": [], "highlightScores": [], "score": 0}, {"highlights": [], "highlight_scores": [], "score": 0}),
-        ({"id": "https://example.com", "author": "Ada", "image": None, "summary": "a summary"}, {}),
+        ({"publishedDate": "2024-01-05T00:00:00.000Z"}, {}),
+        (
+            {"id": "https://example.com", "author": "Ada", "image": None, "summary": "a summary"},
+            {"id": "https://example.com", "author": "Ada", "image": None, "summary": "a summary"},
+        ),
+        (
+            {"favicon": "https://example.com/favicon.ico", "subpages": []},
+            {"favicon": "https://example.com/favicon.ico", "subpages": []},
+        ),
     ],
 )
 def test_transform_search_response_attaches_only_the_exa_result_fields_it_returned(
@@ -283,3 +307,127 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str) ->
         ExaAISearchConfig().get_complete_url(api_base=api_base, optional_params={})
         == "https://gateway.example.com/exa/search"
     )
+
+
+def _catalog_price(max_results: int) -> float:
+    price, _ = search_provider_cost_per_query(
+        model="exa_ai/search", custom_llm_provider="exa_ai", optional_params={"max_results": max_results}
+    )
+    return price
+
+
+@pytest.mark.usefixtures("exa_api_key")
+@pytest.mark.parametrize("reported_cost", [EXA_REPORTED_COST, 0, 3])
+def test_search_bills_the_cost_exa_reports(respx_mock: respx.MockRouter, reported_cost: float) -> None:
+    respx_mock.post(EXA_SEARCH_URL).respond(
+        json={"results": [], "costDollars": {"total": reported_cost, "search": {"neural": reported_cost}}}
+    )
+    assert _catalog_price(25) != reported_cost
+
+    response: Final = litellm.search(query="asyncio TaskGroup", search_provider="exa_ai", max_results=25)
+
+    assert response.hidden_params["response_cost"] == reported_cost
+
+
+@pytest.mark.usefixtures("exa_api_key")
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"results": []}',
+        '{"results": [], "costDollars": {}}',
+        '{"results": [], "costDollars": {"total": null}}',
+        '{"results": [], "costDollars": {"total": -0.01}}',
+        '{"results": [], "costDollars": {"total": "0.022"}}',
+        '{"results": [], "costDollars": {"total": true}}',
+        '{"results": [], "costDollars": {"total": NaN}}',
+        '{"results": [], "costDollars": {"total": Infinity}}',
+        '{"results": [], "costDollars": "0.022"}',
+        '{"results": [], "costDollars": [0.022]}',
+    ],
+)
+def test_search_without_a_usable_exa_cost_bills_the_catalog_price(respx_mock: respx.MockRouter, body: str) -> None:
+    respx_mock.post(EXA_SEARCH_URL).respond(content=body, headers={"content-type": "application/json"})
+
+    response: Final = litellm.search(query="asyncio TaskGroup", search_provider="exa_ai", max_results=25)
+
+    assert response.hidden_params["response_cost"] == pytest.approx(_catalog_price(25))
+
+
+@pytest.mark.usefixtures("exa_api_key")
+@pytest.mark.parametrize(
+    ("config", "expected_cost"),
+    [("cost_discount_config", EXA_REPORTED_COST * 0.9), ("cost_margin_config", EXA_REPORTED_COST * 1.1)],
+)
+def test_an_exa_discount_or_margin_applies_on_top_of_the_cost_exa_reports(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, config: str, expected_cost: float
+) -> None:
+    monkeypatch.setattr(litellm, config, {"exa_ai": 0.1})
+    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [], "costDollars": {"total": EXA_REPORTED_COST}})
+
+    response: Final = litellm.search(query="asyncio TaskGroup", search_provider="exa_ai", max_results=25)
+
+    assert response.hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+@pytest.mark.usefixtures("exa_api_key")
+def test_a_caller_cannot_set_the_cost_exa_reports(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(EXA_SEARCH_URL).respond(json={"results": []})
+
+    response: Final = litellm.search(
+        query="asyncio TaskGroup",
+        search_provider="exa_ai",
+        max_results=25,
+        **{EXA_AI_COST_DOLLARS_PARAM: {"total": 0}},
+    )
+
+    assert EXA_AI_COST_DOLLARS_PARAM not in json.loads(route.calls.last.request.content)
+    assert response.hidden_params["response_cost"] == pytest.approx(_catalog_price(25))
+
+
+def test_a_reply_without_a_cost_does_not_keep_an_earlier_replys_cost() -> None:
+    logging_obj: Final = Mock(optional_params={})
+    config: Final = ExaAISearchConfig()
+
+    config.transform_search_response(
+        httpx.Response(200, json={"results": [], "costDollars": {"total": EXA_REPORTED_COST}}), logging_obj=logging_obj
+    )
+    assert exa_ai_reported_cost(logging_obj.optional_params) == EXA_REPORTED_COST
+    config.transform_search_response(httpx.Response(200, json={"results": []}), logging_obj=logging_obj)
+
+    assert exa_ai_reported_cost(logging_obj.optional_params) is None
+
+
+class _SpendCapture(CustomLogger):
+    def __init__(self, call_id: str) -> None:
+        super().__init__()
+        self.call_id: Final = call_id
+        self.costs: Final[list[object]] = []  # mutable-ok: the logging worker appends one entry per logged call
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        if kwargs.get("litellm_call_id") == self.call_id:
+            self.costs.append(_LOGGED.validate_python(kwargs.get("standard_logging_object") or {}).get("response_cost"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("exa_api_key")
+async def test_async_search_logs_the_cost_exa_reports_as_spend(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    GLOBAL_LOGGING_WORKER.start()
+    capture: Final = _SpendCapture(call_id=f"exa-{uuid.uuid4()}")
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [], "costDollars": {"total": EXA_REPORTED_COST}})
+    assert _catalog_price(25) != EXA_REPORTED_COST
+
+    response: Final = await litellm.asearch(
+        query="asyncio TaskGroup", search_provider="exa_ai", max_results=25, litellm_call_id=capture.call_id
+    )
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+
+    assert response.hidden_params["response_cost"] == EXA_REPORTED_COST
+    assert capture.costs == [EXA_REPORTED_COST]

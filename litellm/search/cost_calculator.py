@@ -10,6 +10,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.llms.exa_ai.search.cost_calculator import exa_ai_reported_cost
 from litellm.utils import get_model_info
 
 PROVIDER_USAGE_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
@@ -70,7 +71,8 @@ def search_provider_cost_per_query(
 
     Returns (input_cost, output_cost) where input_cost = queries * cost_per_query
     Supports tiered pricing based on max_results parameter, and per-mode price entries selected by the
-    provider's mode parameter (Tavily `search_depth`, Linkup `depth`).
+    provider's mode parameter (Tavily `search_depth`, Linkup `depth`). An Exa request is billed the
+    `costDollars.total` Exa reported for it, when there is one.
 
     Args:
         model: Model name (e.g., "exa_ai/search", "tavily/search")
@@ -92,6 +94,14 @@ def search_provider_cost_per_query(
             usage=_provider_usage(optional_params, PARALLEL_AI_USAGE_PARAM),
         )
         return (input_cost, 0.0)
+
+    reported_cost: Final = (
+        exa_ai_reported_cost(optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS)
+        if custom_llm_provider == "exa_ai"
+        else None
+    )
+    if reported_cost is not None:
+        return (reported_cost, 0.0)
 
     model_info: Final = get_model_info(
         model=_pricing_model(model, custom_llm_provider, optional_params),

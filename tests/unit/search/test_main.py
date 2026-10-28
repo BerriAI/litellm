@@ -15,6 +15,11 @@ from litellm.search.cost_calculator import search_provider_cost_per_query
 EXA_SEARCH_URL: Final = "https://api.exa.ai/search"
 TAVILY_SEARCH_URL: Final = "https://api.tavily.com/search"
 LINKUP_SEARCH_URL: Final = "https://api.linkup.so/v1/search"
+EXA_REPORTED_COST: Final = 0.022
+EXA_REPLY_WITH_COST: Final = {
+    "results": [{"title": "t", "url": "https://example.com"}],
+    "costDollars": {"total": EXA_REPORTED_COST},
+}
 SEARCH_MODE_PRICES: Final = {
     "tavily/search": 0.002,
     "tavily/search-advanced": 0.007,
@@ -113,6 +118,71 @@ def test_unpriced_fallback_search_tool_is_billed_at_its_own_price_not_the_failed
     )
 
     assert fallback._hidden_params["response_cost"] == pytest.approx(map_price)
+
+
+@pytest.mark.usefixtures("_local_model_cost_map")
+def test_a_search_tool_price_overrides_the_cost_exa_reports(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(EXA_SEARCH_URL).respond(json=EXA_REPLY_WITH_COST)
+    configured_price: Final = 0.05
+    assert configured_price != EXA_REPORTED_COST
+
+    reported: Final = litellm.search(
+        query="litellm release notes",
+        search_provider="exa_ai",
+        api_key="test-exa-key",
+        litellm_logging_obj=_proxy_style_logging_obj(),
+    )
+    tool_priced: Final = litellm.search(
+        query="litellm release notes",
+        search_provider="exa_ai",
+        api_key="test-exa-key",
+        input_cost_per_query=configured_price,
+        litellm_logging_obj=_proxy_style_logging_obj(),
+    )
+
+    assert reported.hidden_params["response_cost"] == pytest.approx(EXA_REPORTED_COST)
+    assert tool_priced.hidden_params["response_cost"] == pytest.approx(configured_price)
+
+
+@pytest.mark.usefixtures("_local_model_cost_map")
+def test_unpriced_fallback_search_tool_bills_the_cost_exa_reports_not_the_failed_primarys_price(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(EXA_SEARCH_URL).mock(
+        side_effect=(httpx.Response(500, json={"error": "primary down"}), httpx.Response(200, json=EXA_REPLY_WITH_COST))
+    )
+    primary_price: Final = 0.05
+    shared_by_every_fallback_attempt: Final = _proxy_style_logging_obj()
+
+    with pytest.raises(litellm.InternalServerError):
+        litellm.search(
+            query="litellm release notes",
+            search_provider="exa_ai",
+            api_key="test-exa-key",
+            input_cost_per_query=primary_price,
+            litellm_logging_obj=shared_by_every_fallback_attempt,
+        )
+    fallback: Final = litellm.search(
+        query="litellm release notes",
+        search_provider="exa_ai",
+        api_key="test-exa-key",
+        litellm_logging_obj=shared_by_every_fallback_attempt,
+    )
+
+    assert fallback.hidden_params["response_cost"] == pytest.approx(EXA_REPORTED_COST)
+
+
+@pytest.mark.usefixtures("_local_model_cost_map")
+def test_the_cost_exa_reports_wins_over_a_price_registered_in_the_cost_map(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(EXA_SEARCH_URL).respond(json=EXA_REPLY_WITH_COST)
+    registered_price: Final = 0.123
+    litellm.register_model(
+        {"exa_ai/search": {"input_cost_per_query": registered_price, "litellm_provider": "exa_ai", "mode": "search"}}
+    )
+
+    response: Final = litellm.search(query="litellm release notes", search_provider="exa_ai", api_key="test-exa-key")
+
+    assert response.hidden_params["response_cost"] == pytest.approx(EXA_REPORTED_COST)
 
 
 @pytest.mark.usefixtures("_search_mode_prices")

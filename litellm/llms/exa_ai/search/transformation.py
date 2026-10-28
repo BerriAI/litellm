@@ -17,12 +17,13 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResponse,
     SearchResult,
 )
+from litellm.llms.exa_ai.search.cost_calculator import EXA_AI_COST_DOLLARS_PARAM
 from litellm.secret_managers.main import get_secret_str
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 _STRS: Final = TypeAdapter(Iterable[str], config=ConfigDict(hide_input_in_errors=True))
-_RESULT_EXTRAS: Final = (("highlights", "highlights"), ("highlightScores", "highlight_scores"), ("score", "score"))
+_RENAMED_RESULT_FIELDS: Final = frozenset({"text", "publishedDate", "highlightScores"})
 
 
 class _ExaAISearchRequestRequired(TypedDict):
@@ -171,9 +172,11 @@ class ExaAISearchConfig(BaseSearchConfig):
         - results[].summary → SearchResult.snippet (fallback when "text" and "highlights" are absent)
         - results[].publishedDate → SearchResult.date
         - No last_updated field in Exa AI response (set to None)
-        - results[].highlights / highlightScores / score → SearchResult.highlights / highlight_scores / score,
-          each set only when Exa returned it
+        - results[].highlightScores → SearchResult.highlight_scores, set only when Exa returned it
+        - every other results[] field Exa returned (id, author, image, summary, highlights, score, ...)
+          → the SearchResult as is
         - every top-level key except results (requestId, costDollars, ...) → SearchResponse.provider_metadata
+        - costDollars → the logging object's optional_params, where search cost tracking reads Exa's reported total
 
         Args:
             raw_response: Raw httpx response from Exa AI API
@@ -183,30 +186,35 @@ class ExaAISearchConfig(BaseSearchConfig):
             SearchResponse with standardized format
         """
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
-
-        # Transform results to SearchResult objects
-        results: Final = []
-        for raw_result in _JSON_VALUES.validate_python(response_json.get("results", [])):
-            result = _JSON_OBJECT.validate_python(raw_result)
-            search_result = SearchResult.model_validate(
-                {
-                    "title": result.get("title", ""),
-                    "url": result.get("url", ""),
-                    "snippet": result.get("text")
-                    or "\n\n".join(_STRS.validate_python(result.get("highlights") or []))
-                    or result.get("summary")
-                    or "",
-                    "date": result.get("publishedDate"),  # ISO 8601 datetime string
-                    "last_updated": None,  # Exa AI doesn't provide last_updated in response
-                    **{field: result[key] for key, field in _RESULT_EXTRAS if key in result},
-                }
-            )
-            results.append(search_result)
-
-        return SearchResponse.model_validate(
+        response: Final = SearchResponse.model_validate(
             {
-                "results": results,
+                "results": [
+                    _transform_result(value) for value in _JSON_VALUES.validate_python(response_json.get("results", []))
+                ],
                 "object": "search",
                 "provider_metadata": {key: value for key, value in response_json.items() if key != "results"},
             }
         )
+        logging_obj.optional_params = {  # rebind-ok: the logging object is the adapter's only channel to cost tracking
+            **logging_obj.optional_params,
+            EXA_AI_COST_DOLLARS_PARAM: response_json.get("costDollars"),
+        }
+        return response
+
+
+def _transform_result(raw_result: object) -> SearchResult:
+    result: Final = _JSON_OBJECT.validate_python(raw_result)
+    return SearchResult.model_validate(
+        {
+            **{key: value for key, value in result.items() if key not in _RENAMED_RESULT_FIELDS},
+            "title": result.get("title", ""),
+            "url": result.get("url", ""),
+            "snippet": result.get("text")
+            or "\n\n".join(_STRS.validate_python(result.get("highlights") or []))
+            or result.get("summary")
+            or "",
+            "date": result.get("publishedDate"),
+            "last_updated": None,
+            **({"highlight_scores": result["highlightScores"]} if "highlightScores" in result else {}),
+        }
+    )
