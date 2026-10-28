@@ -576,13 +576,26 @@ def test_upstream_errors_keep_their_status_and_log_an_unbilled_failure(gateway: 
         )
 
 
-def test_upstream_success_without_answers_is_a_gateway_side_server_error(gateway: Gateway) -> None:
+@pytest.mark.parametrize(
+    ("reply", "field"),
+    (
+        pytest.param({"model": _PERPLEXITY.body_model, "usage": _USAGE}, "answers", id="missing_answers"),
+        pytest.param(
+            {"model": _PERPLEXITY.body_model, "answers": {"defect": {"type": "Request timed out"}}, "usage": _USAGE},
+            "answers.defect",
+            id="answer_type_timeout_text",
+        ),
+    ),
+)
+def test_a_malformed_upstream_success_is_a_server_error_naming_the_field(
+    gateway: Gateway, reply: dict[str, JsonValue], field: str
+) -> None:
     with gateway.scenario() as scenario:
-        handle: Final = _register(scenario, {"model": _PERPLEXITY.body_model, "usage": _USAGE})
+        handle: Final = _register(scenario, reply)
         model: Final = _deployment(scenario, handle, _PERPLEXITY)
         response: Final = _decide(gateway, model, num_retries=0)
-        assert 500 <= response.status_code < 600, response.text
-        assert "answers" in response.text
+        assert response.status_code == 500, response.text
+        assert field in response.text
         assert _spend_row(response.headers["x-litellm-call-id"])["status"] == "failure"
 
 
