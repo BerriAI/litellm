@@ -59144,7 +59144,8 @@
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 4096,
         "input_cost_per_token_batches": 5e-07,
-        "output_cost_per_token_batches": 2.5e-06
+        "output_cost_per_token_batches": 2.5e-06,
+        "token_count_model": {"model":"anthropic.claude-haiku-4-5-20251001-v1:0","litellm_provider":"bedrock"}
     },
     "bedrock_mantle/anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -66336,7 +66337,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
+        "token_count_model": {"model":"anthropic.claude-sonnet-5-5","litellm_provider":"bedrock_mantle","region":"us-gov-west-1"}
     },
     "bedrock_mantle/us-gov-east-1/openai.gpt-5.4": {
         "litellm_provider": "bedrock_mantle",
@@ -72893,7 +72895,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-5-5.html"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-5-5.html",
+        "token_count_model": {"model":"anthropic.claude-haiku-5-5","litellm_provider":"bedrock_mantle","region":"us-gov-west-1"}
     },
     "anthropic.claude-haiku-5-5": {
         "input_cost_per_token_above_100k_tokens": 5e-07,
