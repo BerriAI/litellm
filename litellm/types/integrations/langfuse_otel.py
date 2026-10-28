@@ -32,6 +32,8 @@ class LangfuseSpanAttributes(str, Enum):
     OBSERVATION_COMPLETION_START_TIME = "langfuse.observation.completion_start_time"
 
     # ---- Trace-level metadata ----
+    TRACE_INPUT = "langfuse.trace.input"
+    TRACE_OUTPUT = "langfuse.trace.output"
     TRACE_USER_ID = "user.id"
     SESSION_ID = "session.id"
     TAGS = "langfuse.trace.tags"

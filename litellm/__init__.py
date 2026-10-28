@@ -234,6 +234,7 @@ bedrock_neutralize_orphaned_tool_blocks: bool = True
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
 )  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
+anthropic_messages_estimate_initial_input_tokens: bool = False
 # When True, strip the OpenAI-flavored `usage.total_tokens` field that
 # LiteLLM injects into non-streaming /v1/messages responses, bringing the
 # wire response into line with the Anthropic spec (matches the streaming
@@ -709,6 +710,7 @@ transcribe_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
 coralbricks_models: Set[str] = set()
+aiand_models: Set[str] = set()
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
 
@@ -1021,6 +1023,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             llamagate_models.add(key)
         elif value.get("litellm_provider") == "coralbricks":
             coralbricks_models.add(key)
+        elif value.get("litellm_provider") == "aiand":
+            aiand_models.add(key)
         elif value.get("litellm_provider") == "reducto":
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
@@ -1158,6 +1162,7 @@ model_list = list(
     | reducto_models
     | bedrock_mantle_models
     | coralbricks_models
+    | aiand_models
     | set(clarifai_models)
 )
 
@@ -1282,6 +1287,7 @@ def _build_models_by_provider() -> dict:
         "gigachat": gigachat_models,
         "llamagate": llamagate_models,
         "coralbricks": coralbricks_models,
+        "aiand": aiand_models,
         "reducto": reducto_models,
         "bedrock_mantle": bedrock_mantle_models,
     }
@@ -1788,7 +1794,7 @@ if TYPE_CHECKING:
         SagemakerNovaConfig as SagemakerNovaConfig,
     )
     from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
-    from .llms.anthropic.pass_through.messages.transformation import (
+    from .llms.anthropic.messages.native.transformation import (
         AnthropicMessagesConfig as AnthropicMessagesConfig,
     )
     from .llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (

@@ -602,6 +602,27 @@ describe("uiSpendLogsCall exclude_internal_health_checks serialization", () => {
   });
 });
 
+describe("uiSpendLogDetailsCall", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each(["chatcmpl-123#a1", "chatcmpl-123?a=1", "chatcmpl-123%41b", "chatcmpl-123 a&b"])(
+    "requests the details of %s with the full request id and start date",
+    async (logId) => {
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({ id: logId }) });
+      vi.stubGlobal("fetch", mockFetch);
+
+      await Networking.uiSpendLogDetailsCall("token", logId, "2026-01-01 00:00:00");
+
+      const url = new URL(String(mockFetch.mock.calls.at(-1)?.[0]), "http://example.com");
+      expect(decodeURIComponent(url.pathname.split("/spend/logs/ui/")[1])).toBe(logId);
+      expect(url.hash).toBe("");
+      expect([...url.searchParams.entries()]).toEqual([["start_date", "2026-01-01 00:00:00"]]);
+    },
+  );
+});
+
 describe("sessionSpendLogsCall", () => {
   const originalFetch = global.fetch;
 

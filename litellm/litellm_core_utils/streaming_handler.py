@@ -1624,11 +1624,7 @@ class CustomStreamWrapper:
                     setattr(
                         model_response,
                         "usage",
-                        litellm.Usage(
-                            prompt_tokens=response_obj["usage"].get("prompt_tokens", None) or None,
-                            completion_tokens=response_obj["usage"].get("completion_tokens", None) or None,
-                            total_tokens=response_obj["usage"].get("total_tokens", None) or None,
-                        ),
+                        _usage_from_payload(response_obj["usage"]),
                     )
                 elif isinstance(response_obj["usage"], Usage):
                     setattr(
@@ -1645,6 +1641,8 @@ class CustomStreamWrapper:
         return _ProviderChunkParsed(response_obj)
 
     def chunk_creator(self, chunk: Any):
+        if isinstance(chunk, ModelResponseStream) and chunk.provider_specific_fields:
+            self.logging_obj.record_native_bedrock_guardrail(chunk.provider_specific_fields)
         if self.custom_llm_provider != "cached_response" and isinstance(
             chunk, (ChatCompletionChunk, ModelResponseStream)
         ):
@@ -1752,6 +1750,8 @@ class CustomStreamWrapper:
                 model_response.usage = Usage(**chunk_usage.model_dump())
 
             ## RETURN ARG
+            if isinstance(chunk, ModelResponseStream) and chunk.provider_specific_fields:
+                self.copy_model_response_level_provider_specific_fields(chunk, model_response)
             result: Final = self.return_processed_chunk_logic(
                 completion_obj=completion_obj,
                 model_response=model_response,
@@ -2699,6 +2699,11 @@ class CustomStreamWrapper:
         return chunk
 
     _strip_sse_data_from_chunk = strip_sse_data_from_chunk
+
+
+def _usage_from_payload(payload: Mapping[str, Any]) -> Usage:
+    """Build ``Usage`` from a wire-shaped usage dict, forwarding every key."""
+    return litellm.Usage(**payload)
 
 
 def _cache_token_count(details: PromptTokensDetailsWrapper | None, keys: tuple[str, ...]) -> int:

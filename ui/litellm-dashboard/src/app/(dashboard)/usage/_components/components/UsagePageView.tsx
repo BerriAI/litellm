@@ -19,7 +19,6 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
-import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
@@ -138,9 +137,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
     clientStartTime?.getTime() === dateValue.from?.getTime() && clientEndTime?.getTime() === dateValue.to?.getTime();
 
   const [fetchedTags, setFetchedTags] = useState<FetchedForRange<EntityList[]> | null>(null);
-  // No [] default: an unresolved query must stay undefined so the customer
-  // filter reads as loading rather than as a range with no customers.
-  const { data: customers } = useCustomers();
   const { data: agentsResponse } = useAgents();
   const { data: currentUser } = useCurrentUser();
   const isAdmin = hasProxyWideSpendView(userRole);
@@ -719,12 +715,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
               {...entitySelection("customer")}
               userID={userID}
               userRole={userRole}
-              entityList={
-                customers?.map((customer) => ({
-                  label: customer.alias || customer.user_id,
-                  value: customer.user_id,
-                })) || null
-              }
+              entityList={null}
               premiumUser={premiumUser}
               dateValue={dateValue}
             />

@@ -4026,3 +4026,127 @@ async def test_lm_studio_decisions_sends_inline_images_to_systemone(
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
     assert response.answers[0].probability == 0.9
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remote_image", (False, True), ids=("inline", "remote"))
+async def test_hosted_vllm_decisions_sends_input_images_to_systemone(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    remote_image: bool,
+    async_only_image_fetch: AsyncOnlyImageFetch,
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    image: Final[str] = "https://images.example/input.png" if remote_image else "data:image/png;base64,AA=="
+    expected_image: Final[str] = async_only_image_fetch.data_url if remote_image else image
+    route: Final = respx_mock.post("http://vllm.local:8000/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        input=[
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "review"}, {"type": "input_image", "image_url": image}],
+            }
+        ],
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_base="http://vllm.local:8000/v1",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "Qwen/Qwen3-0.6B",
+        "state": "review",
+        "images": [expected_image],
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert response.answers[0].probability == 0.9
+    assert async_only_image_fetch.fetched == (["https://images.example/input.png"] if remote_image else [])
+
+
+def test_hosted_vllm_systemone_forwards_images(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    image: Final[str] = "data:image/png;base64,AA=="
+    route: Final = respx_mock.post("http://vllm.local:8000/v1/systemone").respond(json=_RESPONSE)
+
+    litellm.systemone(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        state="review",
+        images=[image],
+        questions={
+            "is_defect": {
+                "type": "choice",
+                "instructions": "Is this a defect?",
+                "criteria": {"yes": "defective", "no": "intact"},
+            }
+        },
+        api_base="http://vllm.local:8000",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "Qwen/Qwen3-0.6B",
+        "state": "review",
+        "images": [image],
+        "questions": {
+            "is_defect": {
+                "type": "choice",
+                "instructions": "Is this a defect?",
+                "criteria": {"yes": "defective", "no": "intact"},
+            }
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_decisions_sends_image_only_input_to_systemone(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    image: Final[str] = "data:image/png;base64,AA=="
+    route: Final = respx_mock.post("http://vllm.local:8000/v1/systemone").respond(json=_RESPONSE)
+
+    await litellm.adecisions(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        input=[{"role": "user", "content": [{"type": "input_image", "image_url": image}]}],
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_base="http://vllm.local:8000",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "Qwen/Qwen3-0.6B",
+        "state": "",
+        "images": [image],
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+def test_hosted_vllm_systemone_maps_image_rejection_to_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    message: Final[str] = "this model does not take image inputs"
+    route: Final = respx_mock.post("http://vllm.local:8000/v1/systemone").respond(
+        status_code=400,
+        json={"error": {"message": message, "type": "BadRequestError", "code": 400}},
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape(message)) as caught:
+        litellm.systemone(
+            model="hosted_vllm/Qwen/Qwen3-0.6B",
+            state="review",
+            images=["data:image/png;base64,AA=="],
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            api_base="http://vllm.local:8000",
+            num_retries=0,
+        )
+
+    assert caught.value.status_code == 400
+    assert route.call_count == 1

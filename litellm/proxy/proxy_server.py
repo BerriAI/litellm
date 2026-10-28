@@ -274,25 +274,27 @@ def generate_feedback_box():
     # Select a random message
     message: Final = random.choice(list_of_messages)
 
-    print()  # noqa: T201
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa: T201
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa: T201
-    print("\033[1;37m" + f"# {message:^59} #\033[0m")  # noqa: T201
-    print(  # noqa: T201
-        "\033[1;37m" + "# {:^59} #\033[0m".format("https://github.com/BerriAI/litellm/issues/new")
+    print_startup_message(
+        "\n".join(
+            (
+                "",
+                "\033[1;37m" + "#" + "-" * box_width + "#\033[0m",
+                "\033[1;37m" + "#" + " " * box_width + "#\033[0m",
+                "\033[1;37m" + f"# {message:^59} #\033[0m",
+                "\033[1;37m" + "# {:^59} #\033[0m".format("https://github.com/BerriAI/litellm/issues/new"),
+                "\033[1;37m" + "#" + " " * box_width + "#\033[0m",
+                "\033[1;37m" + "#" + "-" * box_width + "#\033[0m",
+                "",
+                " Thank you for using LiteLLM! - Krrish & Ishaan",
+                "",
+                "",
+                "",
+                "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m",
+                "",
+                "",
+            )
+        )
     )
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa: T201
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa: T201
-    print()  # noqa: T201
-    print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa: T201
-    print()  # noqa: T201
-    print()  # noqa: T201
-    print()  # noqa: T201
-    print(  # noqa: T201
-        "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
-    )
-    print()  # noqa: T201
-    print()  # noqa: T201
 
 
 import contextlib
@@ -305,6 +307,7 @@ import litellm._redis
 from litellm import Router
 from litellm._internal_context import service_target, with_service_target
 from litellm._logging import (
+    print_startup_message,
     redact_string,
     verbose_proxy_logger,
     verbose_router_logger,
@@ -375,7 +378,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_keys,
 )
-from litellm.llms.anthropic.pass_through.convertible_blocks import (
+from litellm.llms.anthropic.messages.convertible_blocks import (
     deployment_drops_params,
     drop_non_string_tool_result_texts,
     malformed_tool_result_count_error,
@@ -384,9 +387,6 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-from litellm.proxy._experimental.mcp_server.byok_credential_cache import byok_credential_cache
-from litellm.proxy._experimental.mcp_server.catalog import public_catalog_operation
-from litellm.proxy._experimental.mcp_server.stdio_gate import MCP_STDIO_ENABLED_ENV_VAR, is_mcp_stdio_flag_key
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
@@ -787,6 +787,9 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
     TEAM_METADATA_VALIDATOR_REGISTRY,
     parse_team_metadata_schema,
 )
+from litellm.proxy.mcp_server.byok_credential_cache import byok_credential_cache
+from litellm.proxy.mcp_server.catalog import public_catalog_operation
+from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_ENABLED_ENV_VAR, is_mcp_stdio_flag_key
 from litellm.proxy.memory.memory_endpoints import router as memory_router
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
     BillableRequestMetricsMiddleware,
@@ -6413,17 +6416,13 @@ class ProxyConfig:
 
         search_tools_parsed: Final[list[SearchToolTypedDict]] = []
 
-        print(  # noqa: T201
-            "\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m"
-        )
+        print_startup_message("\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m")
 
         for search_tool in search_tools_raw:
             # Display loaded search tool
             search_tool_name = search_tool.get("search_tool_name", "")
             search_provider = search_tool.get("litellm_params", {}).get("search_provider", "")
-            print(  # noqa: T201
-                f"\033[32m    {search_tool_name} ({search_provider})\033[0m"
-            )
+            print_startup_message(f"\033[32m    {search_tool_name} ({search_provider})\033[0m")
 
             # Handle os.environ/ variables in litellm_params
             litellm_params = search_tool.get("litellm_params", {})
@@ -6599,7 +6598,7 @@ class ProxyConfig:
             reset_color_code: Final = "\033[0m"
             for key, value in litellm_settings.items():
                 if key == "cache" and value is True:
-                    print(f"{blue_color_code}\nSetting Cache on Proxy")  # noqa: T201
+                    print_startup_message(f"{blue_color_code}\nSetting Cache on Proxy")
                     from litellm.caching.caching import Cache
 
                     cache_params = {}
@@ -6790,7 +6789,7 @@ class ProxyConfig:
                                 if PrometheusLogger is not None:
                                     verbose_proxy_logger.debug("mounting metrics endpoint")
                                     PrometheusLogger._mount_metrics_endpoint()
-                    print(  # noqa: T201
+                    print_startup_message(
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )
                 elif key == "failure_callback":
@@ -6809,7 +6808,7 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             litellm.logging_callback_manager.add_litellm_failure_callback(callback)
-                    print(  # noqa: T201
+                    print_startup_message(
                         f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )
                 elif key == "audit_log_callbacks":
@@ -6834,7 +6833,7 @@ class ProxyConfig:
 
                     _store_audit_logs = litellm_settings.get("store_audit_logs", litellm.store_audit_logs)
                     if is_audit_logging_enabled(store_audit_logs=_store_audit_logs):
-                        print(  # noqa: T201
+                        print_startup_message(
                             f"{blue_color_code} Initialized Audit Log Callbacks - {litellm.audit_log_callbacks} {reset_color_code}"
                         )
                     else:
@@ -7233,9 +7232,7 @@ class ProxyConfig:
         if model_list:
             router_params["model_list"] = model_list
             validate_auto_router_capability_limits(model_list, limit=_license_check.auto_router_capability_limit())
-            print(  # noqa: T201
-                "\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
-            )
+            print_startup_message("\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")
             for model in model_list:
                 ### LOAD FROM os.environ/ ###
                 for k, v in model["litellm_params"].items():
@@ -7252,7 +7249,7 @@ class ProxyConfig:
                         complexity_router_config=complexity_router_config,
                         config_file_path=config_file_path,
                     )
-                print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa: T201
+                print_startup_message(f"\033[32m    {model.get('model_name', '')}\033[0m")
                 litellm_model_name = model["litellm_params"]["model"]
                 litellm_model_api_base = model["litellm_params"].get("api_base", None)
                 if "ollama" in litellm_model_name and litellm_model_api_base is None:
@@ -7382,7 +7379,7 @@ class ProxyConfig:
         ## MCP TOOLS
         mcp_tools_config: Final = config.get("mcp_tools", None)
         if mcp_tools_config:
-            from litellm.proxy._experimental.mcp_server.tool_registry import (
+            from litellm.proxy.mcp_server.tool_registry import (
                 global_mcp_tool_registry,
             )
 
@@ -7399,7 +7396,7 @@ class ProxyConfig:
 
         mcp_servers_config: Final = config.get("mcp_servers", None)
         if mcp_servers_config:
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            from litellm.proxy.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
 
@@ -9403,19 +9400,19 @@ class ProxyConfig:
             )
 
     async def _init_mcp_servers_in_db(self):
-        from litellm.proxy._experimental.mcp_server.utils import is_mcp_available
+        from litellm.proxy.mcp_server.utils import is_mcp_available
 
         if not is_mcp_available():
             verbose_proxy_logger.debug("MCP module not available, skipping MCP server initialization")
             return
 
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from litellm.proxy._experimental.mcp_server.oauth2_flow_backfill import (
+        from litellm.proxy.mcp_server.oauth2_flow_backfill import (
             backfill_null_oauth2_flows,
         )
-        from litellm.proxy._experimental.mcp_server.oauth_issuer_stamp_backfill import (
+        from litellm.proxy.mcp_server.oauth_issuer_stamp_backfill import (
             backfill_discovery_stamped_issuers,
         )
 
@@ -9454,11 +9451,11 @@ class ProxyConfig:
         """
         if not self._should_load_db_object(object_type="mcp"):
             return
-        from litellm.proxy._experimental.mcp_server.utils import is_mcp_available
+        from litellm.proxy.mcp_server.utils import is_mcp_available
 
         if not is_mcp_available():
             return
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
 
@@ -9673,9 +9670,12 @@ async def initialize(
         master_key, \
         user_custom_auth, \
         prisma_client
-    from litellm.proxy.common_utils.banner import show_banner
+    from litellm.proxy.common_utils.banner import LITELLM_BANNER, show_banner
 
-    show_banner()
+    if litellm.json_logs:
+        print_startup_message(LITELLM_BANNER)
+    else:
+        show_banner()
     if os.getenv("LITELLM_DONT_SHOW_FEEDBACK_BOX", "").lower() != "true":
         generate_feedback_box()
     user_model = model
@@ -11940,7 +11940,7 @@ class ProxyStartupEvent:
             and proxy_logging_obj.slack_alerting_instance.alerting is not None
             and prisma_client is not None
         ):
-            print("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa: T201
+            print_startup_message("Alerting: Initializing Weekly/Monthly Spend Reports")
             spend_report_frequency: Final[str] = general_settings.get("spend_report_frequency", "7d") or "7d"
 
             days: Final = int(spend_report_frequency[:-1])
@@ -14638,6 +14638,7 @@ async def run_thread(
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
+from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
@@ -14657,6 +14658,14 @@ from litellm.responses.litellm_completion_transformation.count_request import (
     chat_count_request,
     with_provider_file_ids,
 )
+
+
+def _with_client_oauth_token(
+    counter: BaseTokenCounter | None, client_oauth_token: str | None
+) -> BaseTokenCounter | None:
+    if client_oauth_token is None or not isinstance(counter, AnthropicTokenCounter):
+        return counter
+    return AnthropicTokenCounter(client_oauth_token=client_oauth_token)
 
 
 def _get_provider_token_counter(
@@ -15181,7 +15190,7 @@ def _router_default_litellm_params(router: Router | None) -> Mapping[str, object
 def _count_context_management(
     context_management: JsonValue, model: str, request_litellm_params: Mapping[str, JsonValue]
 ) -> CountContextManagement | None:
-    from litellm.llms.anthropic.pass_through.adapters.handler import context_management_explicitly_dropped
+    from litellm.llms.anthropic.messages.adapters.handler import context_management_explicitly_dropped
 
     if context_management is None or llm_router is None:
         return None
@@ -15274,6 +15283,7 @@ async def count_request_tokens(
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
     responses_request: Mapping[str, object] | None = None,
+    client_oauth_token: str | None = None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -15331,7 +15341,8 @@ async def count_request_tokens(
     custom_llm_provider: str | None = None
     if call_endpoint is True and deployment is not None:
         # Auto-route to the correct provider based on model
-        provider_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
+        routed_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
+        provider_counter = _with_client_oauth_token(routed_counter, client_oauth_token)
         if _model is not None:
             model_to_use = _model
 
@@ -21774,11 +21785,11 @@ async def _stream_mcp_asgi_response(handle_fn, scope: dict, receive) -> "Streami
 )
 async def proxy_mcp_route(request: Request) -> Response:
     """Serve the fixed three-tool MCP proxy surface."""
-    from litellm.proxy._experimental.mcp_server.mcp_context import (  # pyright: ignore[reportPrivateUsage]  # route-owned mode
+    from litellm.proxy.mcp_server.mcp_context import (  # pyright: ignore[reportPrivateUsage]  # route-owned mode
         _mcp_proxy_mode,  # pyright: ignore[reportPrivateUsage]  # route-owned mode
     )
-    from litellm.proxy._experimental.mcp_server.server import handle_streamable_http_mcp
-    from litellm.proxy._experimental.mcp_server.utils import is_mcp_available
+    from litellm.proxy.mcp_server.server import handle_streamable_http_mcp
+    from litellm.proxy.mcp_server.utils import is_mcp_available
 
     if not is_mcp_available():
         raise HTTPException(status_code=404, detail="Not Found")
@@ -21801,12 +21812,12 @@ async def aggregate_mcp_route(request: Request):
     """Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
     MCP clients behind TLS-terminating proxies."""
-    from litellm.proxy._experimental.mcp_server.utils import is_mcp_available
+    from litellm.proxy.mcp_server.utils import is_mcp_available
 
     if not is_mcp_available():
         raise HTTPException(status_code=404, detail="Not Found")
 
-    from litellm.proxy._experimental.mcp_server.server import (
+    from litellm.proxy.mcp_server.server import (
         handle_streamable_http_mcp,
     )
 
@@ -21832,10 +21843,10 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
     will be rejected with a 403.
     """
     try:
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from litellm.proxy._experimental.mcp_server.server import (
+        from litellm.proxy.mcp_server.server import (
             handle_streamable_http_mcp,
             mcp_active_toolset_id,
         )
@@ -21867,7 +21878,7 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
 
 async def _mcp_forward_as_path(path_segment: str, request: Request):
     """Rewrite path to /mcp/{path_segment} and stream the response."""
-    from litellm.proxy._experimental.mcp_server.server import (
+    from litellm.proxy.mcp_server.server import (
         handle_streamable_http_mcp,
     )
 
@@ -21900,11 +21911,11 @@ async def _resolve_mcp_csv_tokens(csv_segment: str, client_ip: str | None) -> li
     all-unmatched server filter falls back to the full ``allowed_mcp_servers``
     list and silently broadens the request scope).
     """
-    from litellm.proxy._experimental.mcp_server.catalog import global_manager
+    from litellm.proxy.mcp_server.catalog import global_manager
 
     async with global_manager().catalog.operation():
         from litellm.constants import DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
 
@@ -21934,7 +21945,7 @@ async def _is_mcp_access_group_cached(name: str) -> bool:
     list) cannot hide a real group for long.
     """
     from litellm.constants import DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL
-    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
 
@@ -21967,10 +21978,10 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
     4. MCP access group tag (DB lookup, cached)
     """
     try:
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
         client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
 
@@ -21997,7 +22008,7 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
 
         # 3. Toolset name (cached)
         if prisma_client is not None:
-            from litellm.proxy._experimental.mcp_server.server import (
+            from litellm.proxy.mcp_server.server import (
                 handle_streamable_http_mcp,
                 mcp_active_toolset_id,
             )
