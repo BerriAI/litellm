@@ -3,22 +3,118 @@ import json
 import os
 from datetime import datetime
 from io import BytesIO
-from typing import Dict
+from typing import Dict, Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from pydantic import ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.gemini.common_utils import map_openai_size_to_gemini_image_config
 from litellm.llms.vertex_ai.image_edit.vertex_gemini_transformation import (
     VertexAIGeminiImageEditConfig,
 )
 from litellm.llms.vertex_ai.image_edit.vertex_imagen_transformation import (
     VertexAIImagenImageEditConfig,
 )
+from litellm.types.router import GenericLiteLLMParams
+
+
+@pytest.mark.parametrize("size", ("1536x1024", "1024x1536", "3072x2048", "256x256", "512x512", "4096x4096"))
+@pytest.mark.parametrize("model", ("gemini-3.1-flash-image", "gemini-3-pro-image", "gemini-3.1-flash-lite-image"))
+def test_vertex_gemini_edit_size_reaches_request(size: str, model: str) -> None:
+    config: Final = VertexAIGeminiImageEditConfig()
+    payload, _ = config.transform_image_edit_request(
+        model,
+        "mountains",
+        BytesIO(b"image"),
+        config.map_openai_params({"size": size}, model, False),
+        GenericLiteLLMParams(),
+        {},
+    )
+    request: Final = TypeAdapter(dict[str, JsonValue]).validate_json(TypeAdapter(str).validate_python(payload))
+    expected: Final = map_openai_size_to_gemini_image_config(size, model) or {}
+    assert request["generationConfig"] == {
+        "response_modalities": ["IMAGE"],
+        **(
+            {"image_config": {"aspect_ratio": expected["aspectRatio"], "image_size": expected["imageSize"]}}
+            if expected
+            else {}
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "size, expected_ratio",
+    (("1536x1024", "4:3"), ("1024x1536", "3:4"), ("100000x1", "16:9")),
+)
+def test_vertex_imagen_edit_size_reaches_request(size: str, expected_ratio: str | None) -> None:
+    model: Final = "imagen-3.0-capability-001"
+    config: Final = VertexAIImagenImageEditConfig()
+    payload, _ = config.transform_image_edit_request(
+        model,
+        "mountains",
+        BytesIO(b"image"),
+        config.map_openai_params({"size": size, "n": 2}, model, False),
+        GenericLiteLLMParams(),
+        {},
+    )
+    request: Final = TypeAdapter(dict[str, JsonValue]).validate_json(TypeAdapter(str).validate_python(payload))
+    assert request["parameters"] == {
+        "sampleCount": 2,
+        "editMode": "EDIT_MODE_INPAINT_INSERTION",
+        "editConfig": {"baseSteps": 50},
+        "guidanceScale": 7.5,
+        "seed": None,
+        **({"aspectRatio": expected_ratio} if expected_ratio is not None else {}),
+    }
+
+
+@pytest.mark.parametrize("size", ("auto", "unknown", "0x1024", "-1x1024", "1024x", "3:2"))
+@pytest.mark.parametrize(
+    "config_type, model, config_key, expected",
+    (
+        (
+            VertexAIGeminiImageEditConfig,
+            "gemini-3.1-flash-image",
+            "generationConfig",
+            {"response_modalities": ["IMAGE"], "image_config": {"aspect_ratio": "1:1"}},
+        ),
+        (
+            VertexAIImagenImageEditConfig,
+            "imagen-3.0-capability-001",
+            "parameters",
+            {
+                "sampleCount": 1,
+                "editMode": "EDIT_MODE_INPAINT_INSERTION",
+                "editConfig": {"baseSteps": 50},
+                "guidanceScale": 7.5,
+                "seed": None,
+            },
+        ),
+    ),
+)
+def test_vertex_edit_preserves_legacy_size_fallback(
+    size: str,
+    config_type: type[VertexAIGeminiImageEditConfig] | type[VertexAIImagenImageEditConfig],
+    model: str,
+    config_key: str,
+    expected: dict[str, object],
+) -> None:
+    config: Final = config_type()
+    payload, _ = config.transform_image_edit_request(
+        model,
+        "mountains",
+        BytesIO(b"image"),
+        config.map_openai_params({"size": size}, model, False),
+        GenericLiteLLMParams(),
+        {},
+    )
+    request: Final = TypeAdapter(dict[str, JsonValue]).validate_json(TypeAdapter(str).validate_python(payload))
+    assert request[config_key] == expected
 
 
 class TestVertexAIGeminiImageEditTransformation:
