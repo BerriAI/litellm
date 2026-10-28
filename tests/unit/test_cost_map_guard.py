@@ -60,6 +60,7 @@ def _snapshot(cost_map: dict[str, object], backup: str | None = None, pins: str 
 
 
 BASE: Final = _snapshot(BASE_MAP)
+UP_TO_DATE: Final = object()
 
 
 def _failures(
@@ -68,10 +69,12 @@ def _failures(
     bot: bool = True,
     evaluation_output_price_sources: Mapping[str, str] = guard.EVALUATION_OUTPUT_PRICE_SOURCES,
     base: object = BASE,
+    merged: object = UP_TO_DATE,
 ) -> tuple[str, ...]:
     return guard.guard_failures(
         base,
         head,
+        head if merged is UP_TO_DATE else merged,
         changed_files,
         bot,
         evaluation_output_price_sources=evaluation_output_price_sources,
@@ -220,13 +223,16 @@ def test_a_pinned_capability_that_holds_passes_for_humans_and_bots() -> None:
     assert _failures(head, bot=True) == ()
 
 
+LOWERED: Final = (
+    f"{guard.COST_MAP_PATH}: openrouter/a.supports_vision must stay true (verified 2026-09-26: {PINNED_SOURCE}); "
+    f"change {guard.PINS_PATH} with new evidence first"
+)
+NO_VISION_MAP: Final = {**BASE_MAP, "openrouter/a": _entry(supports_vision=False)}
+
+
 @pytest.mark.parametrize("bot", [False, True])
 def test_lowering_a_pinned_capability_fails_with_its_evidence(bot: bool) -> None:
-    head = _snapshot({**BASE_MAP, "openrouter/a": _entry(supports_vision=False)}, pins=PINS)
-    assert _failures(head, bot=bot) == (
-        f"{guard.COST_MAP_PATH}: openrouter/a.supports_vision must stay true (verified 2026-09-26: {PINNED_SOURCE}); "
-        f"change {guard.PINS_PATH} with new evidence first",
-    )
+    assert _failures(_snapshot(NO_VISION_MAP, pins=PINS), bot=bot) == (LOWERED,)
 
 
 def test_dropping_a_pinned_field_or_model_is_reported() -> None:
@@ -267,10 +273,37 @@ def test_a_pr_that_deletes_the_pins_file_fails(bot: bool) -> None:
 
 
 @pytest.mark.parametrize("bot", [False, True])
-def test_a_branch_cut_before_the_pins_file_existed_skips_the_pin_checks(bot: bool) -> None:
-    lowered: Final = {**BASE_MAP, "openrouter/a": _entry(supports_vision=False)}
-    assert _failures(_snapshot(lowered, pins=""), bot=False, base=_snapshot(BASE_MAP, pins="")) == ()
-    assert _failures(_snapshot(BASE_MAP, pins=""), bot=bot, base=_snapshot(BASE_MAP, pins="")) == ()
+def test_pin_checks_are_skipped_when_no_side_of_the_merge_has_the_pins_file(bot: bool) -> None:
+    assert _failures(_snapshot(NO_VISION_MAP, pins=""), bot=bot, base=_snapshot(NO_VISION_MAP, pins="")) == ()
+
+
+@pytest.mark.parametrize("bot", [False, True])
+def test_a_branch_cut_before_a_pin_was_added_cannot_lower_it(bot: bool) -> None:
+    head: Final = _snapshot(NO_VISION_MAP, pins="")
+    merged: Final = _snapshot(NO_VISION_MAP, pins=PINS)
+    assert _failures(head, bot=bot, base=_snapshot(BASE_MAP, pins=""), merged=merged) == (LOWERED,)
+
+
+@pytest.mark.parametrize("bot", [False, True])
+def test_a_branch_cut_before_a_pin_was_added_passes_when_merging_keeps_the_pinned_value(bot: bool) -> None:
+    repriced: Final = {"openrouter/b": _entry(3e-06)}
+    head: Final = _snapshot({**NO_VISION_MAP, **repriced}, pins="")
+    merged: Final = _snapshot({**BASE_MAP, **repriced}, pins=PINS)
+    assert _failures(head, bot=bot, base=_snapshot(NO_VISION_MAP, pins=""), merged=merged) == ()
+
+
+def test_a_pr_that_does_not_merge_cleanly_is_told_to_merge_the_base_branch_in() -> None:
+    assert _failures(BASE, bot=False, merged=None) == (
+        "the pull request does not merge cleanly into its base branch; merge the base branch in first",
+    )
+
+
+def test_a_merge_result_that_is_not_valid_json_is_reported() -> None:
+    merged: Final = guard.Snapshot(cost_map="{broken", backup="{broken", pins=PINS)
+    assert _failures(BASE, bot=False, merged=merged) == (
+        f"after merging into the base branch, {guard.COST_MAP_PATH} is not valid JSON: "
+        "Expecting property name enclosed in double quotes: line 1 column 2 (char 1)",
+    )
 
 
 def test_a_pr_that_adds_the_pins_file_gets_its_pins_checked() -> None:
@@ -287,6 +320,26 @@ def test_bot_may_not_touch_the_pins_file() -> None:
     assert _failures(head, changed_files=changed) == (
         f"bot PRs may only change the cost map files, not {guard.PINS_PATH}",
     )
+
+
+@pytest.mark.parametrize(
+    ("head_ref", "changed", "expected"),
+    [
+        (
+            "litellm-providers/price-sync-fireworks-ai",
+            (*MAP_FILES, guard.PINS_PATH),
+            (
+                f"price sync PRs may not change {guard.PINS_PATH}; a pin moves only in a human PR with new evidence",
+            ),
+        ),
+        ("litellm-providers/price-sync-fireworks-ai", MAP_FILES, ()),
+        ("fix-openrouter-price-sync", (*MAP_FILES, guard.PINS_PATH), ()),
+    ],
+)
+def test_price_sync_prs_may_not_touch_the_pins_file(
+    head_ref: str, changed: tuple[str, ...], expected: tuple[str, ...]
+) -> None:
+    assert guard.price_sync_failures(head_ref, changed) == expected
 
 
 def test_checked_in_pins_hold_in_the_checked_in_cost_map() -> None:
@@ -328,7 +381,18 @@ def _git_commit(repo: Path, message: str) -> str:
 
 def _run_guard(repo: Path, base: str, head: str, head_ref: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        (sys.executable, str(CI_CD / "cost_map_guard.py"), "--base", base, "--head", head, "--head-ref", head_ref),
+        (
+            sys.executable,
+            str(CI_CD / "cost_map_guard.py"),
+            "--base",
+            base,
+            "--head",
+            head,
+            "--target",
+            base,
+            "--head-ref",
+            head_ref,
+        ),
         cwd=repo,
         capture_output=True,
         text=True,

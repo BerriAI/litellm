@@ -3,12 +3,13 @@
 Every pull request whose diff against its merge base touches one of the two cost map files or the pins file gets the
 file checks: the files parse, the backup copy matches the root file, and every capability pinned in
 ci_cd/cost_map_pins.json (a value verified against a live provider call where the provider's model listing says
-otherwise) still holds in the map, so a pull request that deletes the pins file fails too, while a branch cut before
-the pins file existed skips the pin checks, since merging it keeps the base branch's pins. A pull request that leaves
+otherwise) still holds in the tree that merging the pull request into its base branch produces, so a branch cut before
+a pin was added cannot lower it, and a pull request that deletes the pins file fails too. A pull request that leaves
 all three untouched skips them, since merging it keeps the base branch's copies and its head tree only carries
 whatever state the branch was cut from. Pull requests from the cost map sync bot (branches named
 litellm_cost_map_sync_*) always get the file checks and additionally may only touch the two cost map files and may
-only add or update models, so a sync can never lower a pinned capability or edit the pins.
+only add or update models, so a sync can never lower a pinned capability or edit the pins. Price sync pull requests
+(branches named litellm-providers/price-sync*) get the human checks and may not touch the pins file either.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ PINS_PATH: Final = "ci_cd/cost_map_pins.json"
 GUARDED_PATHS: Final = (COST_MAP_PATH, BACKUP_PATH)
 CHECKED_PATHS: Final = (*GUARDED_PATHS, PINS_PATH)
 BOT_BRANCH_PREFIX: Final = "litellm_cost_map_sync_"
+PRICE_SYNC_BRANCH_PREFIX: Final = "litellm-providers/price-sync"
 SPECIAL_ROOT_KEYS: Final = frozenset({"sample_spec", "fallback_generalizations"})
 EVALUATION_OUTPUT_PRICE_SOURCES: Final[Mapping[str, str]] = MappingProxyType({})
 
@@ -179,6 +181,12 @@ def _bot_failures(base: Snapshot, head_map: CostMap, changed_files: Sequence[str
     )
 
 
+def price_sync_failures(head_ref: str, changed_files: Sequence[str]) -> tuple[str, ...]:
+    if not head_ref.startswith(PRICE_SYNC_BRANCH_PREFIX) or PINS_PATH not in changed_files:
+        return ()
+    return (f"price sync PRs may not change {PINS_PATH}; a pin moves only in a human PR with new evidence",)
+
+
 def touches_cost_map(changed_files: Sequence[str]) -> bool:
     return any(path in CHECKED_PATHS for path in changed_files)
 
@@ -189,9 +197,21 @@ def contract_for(bot: bool, changed_files: Sequence[str]) -> str:
     return "human PR, file checks only" if touches_cost_map(changed_files) else "human PR, cost map untouched"
 
 
+def _merged_pin_failures(base: Snapshot, merged: Snapshot | None) -> tuple[str, ...]:
+    if merged is None:
+        return ("the pull request does not merge cleanly into its base branch; merge the base branch in first",)
+    if not merged.pins and not base.pins:
+        return ()
+    merged_map: Final = _parse_object(merged.cost_map, COST_MAP_PATH)
+    if isinstance(merged_map, str):
+        return (f"after merging into the base branch, {merged_map}",)
+    return pin_failures(merged.pins, merged_map)
+
+
 def guard_failures(
     base: Snapshot,
     head: Snapshot,
+    merged: Snapshot | None,
     changed_files: Sequence[str],
     bot: bool,
     *,
@@ -206,7 +226,7 @@ def guard_failures(
         *_file_failures(
             head, head_map, evaluation_output_price_sources=evaluation_output_price_sources
         ),
-        *(pin_failures(head.pins, head_map) if head.pins or base.pins else ()),
+        *_merged_pin_failures(base, merged),
         *(_bot_failures(base, head_map, changed_files) if bot else ()),
     )
 
@@ -220,6 +240,11 @@ def snapshot(revision: str) -> Snapshot:
     return Snapshot(*(_git("show", f"{revision}:{path}") or "" for path in CHECKED_PATHS))
 
 
+def merged_tree(merge_base: str, target: str, head: str) -> str | None:
+    output: Final = _git("merge-tree", "--write-tree", f"--merge-base={merge_base}", target, head)
+    return None if output is None else output.split("\n", 1)[0]
+
+
 def changed_files(base: str, head: str) -> tuple[str, ...] | None:
     diff: Final = _git("diff", "--name-only", "--no-renames", base, head)
     return None if diff is None else tuple(diff.splitlines())
@@ -229,6 +254,7 @@ def main(argv: Sequence[str]) -> int:
     parser: Final = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True, help="merge base of the pull request")
     parser.add_argument("--head", required=True, help="head commit of the pull request")
+    parser.add_argument("--target", required=True, help="tip of the base branch the pull request merges into")
     parser.add_argument("--head-ref", required=True, help="head branch name of the pull request")
     args: Final = parser.parse_args(argv)
     bot: Final = args.head_ref.startswith(BOT_BRANCH_PREFIX)
@@ -236,7 +262,13 @@ def main(argv: Sequence[str]) -> int:
     if changed is None:
         print(f"cost map guard failed: git diff {args.base} {args.head} failed, so the changed files are unknown")
         return 1
-    failures: Final = guard_failures(snapshot(args.base), snapshot(args.head), changed, bot)
+    merged: Final = merged_tree(args.base, args.target, args.head)
+    failures: Final = (
+        *guard_failures(
+            snapshot(args.base), snapshot(args.head), None if merged is None else snapshot(merged), changed, bot
+        ),
+        *price_sync_failures(args.head_ref, changed),
+    )
     contract: Final = contract_for(bot, changed)
     if failures:
         print(f"cost map guard failed ({contract}):")
