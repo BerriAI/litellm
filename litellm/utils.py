@@ -1904,7 +1904,15 @@ def client(original_function):
             return result
 
         # Prints Exactly what was passed to litellm function - don't execute any logic here - it should just print
-        print_args_passed_to_litellm(original_function, args, kwargs)
+        if is_debugging_on():
+            try:
+                print_args_passed_to_litellm(
+                    original_function,
+                    TypeAdapter(tuple[object, ...]).validate_python(args, strict=True),
+                    TypeAdapter(Mapping[str, object]).validate_python(kwargs, strict=True),
+                )
+            except Exception:
+                pass
         start_time: Final = datetime.datetime.now()
         result = None
         logging_obj: LiteLLMLoggingObject | None = kwargs.get("litellm_logging_obj", None)
@@ -2173,7 +2181,15 @@ def client(original_function):
 
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):
-        print_args_passed_to_litellm(original_function, args, kwargs)
+        if is_debugging_on():
+            try:
+                print_args_passed_to_litellm(
+                    original_function,
+                    TypeAdapter(tuple[object, ...]).validate_python(args, strict=True),
+                    TypeAdapter(Mapping[str, object]).validate_python(kwargs, strict=True),
+                )
+            except Exception:
+                pass
         start_time: Final = datetime.datetime.now()
         call_type: Final = _get_call_type_from_public_name(original_function.__name__)
         result = None
@@ -8574,30 +8590,30 @@ def _redact_positional_request_args(
     return tuple(redacted[name] for name in names[: len(args)]) + (REDACTED,) * max(0, len(args) - len(names))
 
 
-def print_args_passed_to_litellm(
-    original_function: Callable[..., object], args: tuple[object, ...], kwargs: Mapping[str, object]
-) -> None:
+def print_args_passed_to_litellm(original_function: Callable[..., object], args: object, kwargs: object) -> None:
     if not is_debugging_on():
         return
     try:
+        request_args: Final = TypeAdapter(tuple[object, ...]).validate_python(args, strict=True)
+        request_kwargs: Final = TypeAdapter(Mapping[str, object]).validate_python(kwargs, strict=True)
         # we've already printed this for acompletion, don't print for completion
         if (
-            "acompletion" in kwargs
-            and kwargs["acompletion"] is True
+            "acompletion" in request_kwargs
+            and request_kwargs["acompletion"] is True
             and original_function.__name__ == "completion"
-            or "aembedding" in kwargs
-            and kwargs["aembedding"] is True
+            or "aembedding" in request_kwargs
+            and request_kwargs["aembedding"] is True
             and original_function.__name__ == "embedding"
             or (
-                "aimg_generation" in kwargs
-                and kwargs["aimg_generation"] is True
+                "aimg_generation" in request_kwargs
+                and request_kwargs["aimg_generation"] is True
                 and original_function.__name__ == "img_generation"
             )
         ):
             return
 
-        args_str: Final = ", ".join(map(repr, _redact_positional_request_args(original_function, args)))
-        redacted_kwargs: Final = redact_credentials_in_request(kwargs)
+        args_str: Final = ", ".join(map(repr, _redact_positional_request_args(original_function, request_args)))
+        redacted_kwargs: Final = redact_credentials_in_request(request_kwargs)
         kwargs_str: Final = ", ".join(f"{key}={value!r}" for key, value in redacted_kwargs.items())
         print_verbose(
             "\n",
@@ -8605,11 +8621,11 @@ def print_args_passed_to_litellm(
         print_verbose(
             "\033[92mRequest to litellm:\033[0m",
         )
-        if args and kwargs:
+        if request_args and request_kwargs:
             print_verbose(f"\033[92mlitellm.{original_function.__name__}({args_str}, {kwargs_str})\033[0m")
-        elif args:
+        elif request_args:
             print_verbose(f"\033[92mlitellm.{original_function.__name__}({args_str})\033[0m")
-        elif kwargs:
+        elif request_kwargs:
             print_verbose(f"\033[92mlitellm.{original_function.__name__}({kwargs_str})\033[0m")
         else:
             print_verbose(f"\033[92mlitellm.{original_function.__name__}()\033[0m")

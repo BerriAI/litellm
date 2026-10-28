@@ -6947,6 +6947,61 @@ class TestVerboseRequestLineRedaction:
 
     FAKE_API_KEY: Final = "sk-fake-lit6823-0000000000000000"
 
+    @pytest.mark.parametrize("verbose", [False, True])
+    @pytest.mark.parametrize(
+        "args, kwargs",
+        [
+            (["synthetic-model", "SYNTHETIC-BOUNDARY-SECRET"], {"api_key": "SYNTHETIC-BOUNDARY-SECRET"}),
+            ("SYNTHETIC-BOUNDARY-SECRET", {"model": "synthetic-model"}),
+            (None, {"api_key": "SYNTHETIC-BOUNDARY-SECRET"}),
+            ((), [("api_key", "SYNTHETIC-BOUNDARY-SECRET")]),
+            ((), {123: "SYNTHETIC-BOUNDARY-SECRET"}),
+            ((), {b"api_key": "SYNTHETIC-BOUNDARY-SECRET"}),
+        ],
+    )
+    def test_malformed_request_containers_do_not_emit_or_raise(
+        self,
+        args: object,
+        kwargs: object,
+        verbose: bool,
+        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from litellm.utils import print_args_passed_to_litellm
+
+        monkeypatch.setattr(litellm, "set_verbose", verbose)
+        monkeypatch.setattr("litellm._logging.set_verbose", verbose)
+        with caplog.at_level(logging.DEBUG if not verbose else logging.WARNING, logger=verbose_logger.name):
+            print_args_passed_to_litellm(litellm.completion, args, kwargs)
+        captured: Final = capsys.readouterr()
+        output: Final = caplog.text + captured.out + captured.err
+        assert "litellm.completion(" not in output
+        assert "SYNTHETIC-BOUNDARY-SECRET" not in output
+
+    def test_disabled_logging_does_not_validate_or_emit_request_containers(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from litellm.utils import print_args_passed_to_litellm
+
+        adapter: Final = Mock(side_effect=RuntimeError("Disabled logging constructed a validator"))
+        monkeypatch.setattr(litellm, "set_verbose", False)
+        monkeypatch.setattr("litellm._logging.set_verbose", False)
+        with monkeypatch.context() as validation:
+            validation.setattr("litellm.utils.TypeAdapter", adapter)
+            with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+                print_args_passed_to_litellm(
+                    litellm.completion, (self.FAKE_API_KEY,), {"api_key": self.FAKE_API_KEY}
+                )
+        captured: Final = capsys.readouterr()
+        output: Final = caplog.text + captured.out + captured.err
+        assert adapter.call_count == 0
+        assert "litellm.completion(" not in output
+        assert self.FAKE_API_KEY not in output
+
     @pytest.mark.parametrize(
         "function_name", ["speech", "aspeech", "embedding", "aembedding", "completion", "acompletion"]
     )
