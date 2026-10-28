@@ -1,4 +1,5 @@
 import base64
+import os
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import reduce
@@ -1382,3 +1383,20 @@ def auto_reasoning_summary(model: str, custom_llm_provider: object) -> Reasoning
         provider, model.removeprefix(f"{provider}/")
     )
     return "detailed" if responses_config is None else responses_config.auto_reasoning_summary()
+
+
+def opt_in_auto_reasoning_summary(model: str | None, custom_llm_provider: object) -> ReasoningSummaryLevel | None:
+    if not (litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"):
+        return None
+    return "detailed" if model is None else auto_reasoning_summary(model, custom_llm_provider)
+
+
+def reasoning_with_summary_default(
+    reasoning: Mapping[str, object], summary_alias: object, model: str, custom_llm_provider: object
+) -> Mapping[str, object]:
+    if "summary" in reasoning:
+        return {**reasoning}
+    summary: Final = (
+        summary_alias if summary_alias is not None else opt_in_auto_reasoning_summary(model, custom_llm_provider)
+    )
+    return {**reasoning} if summary is None else {**reasoning, "summary": summary}

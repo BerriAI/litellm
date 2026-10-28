@@ -3,7 +3,6 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 """
 
 import json
-import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from itertools import accumulate, chain
 from types import MappingProxyType
@@ -43,8 +42,8 @@ from litellm.responses.sse_output_recovery import (
 )
 from litellm.responses.utils import (
     ResponsesAPIRequestUtils,
-    auto_reasoning_summary,
     normalize_responses_api_stream_options,
+    opt_in_auto_reasoning_summary,
 )
 from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
@@ -1745,19 +1744,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 **cast(Reasoning, reasoning_effort)  # cast-ok: dict is forwarded verbatim to the provider
             )
 
-        # Check if auto-summary is enabled via flag or environment variable
-        # Priority: litellm.reasoning_auto_summary flag > LITELLM_REASONING_AUTO_SUMMARY env var
-        auto_summary_enabled: Final = (
-            litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
-        )
-
+        summary: Final = opt_in_auto_reasoning_summary(model, custom_llm_provider)
         return (
-            Reasoning(
-                effort=reasoning_effort,
-                summary="detailed" if model is None else auto_reasoning_summary(model, custom_llm_provider),
-            )
-            if auto_summary_enabled
-            else Reasoning(effort=reasoning_effort)
+            Reasoning(effort=reasoning_effort)
+            if summary is None
+            else Reasoning(effort=reasoning_effort, summary=summary)
         )
 
     _map_reasoning_effort = map_reasoning_effort

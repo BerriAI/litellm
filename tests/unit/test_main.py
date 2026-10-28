@@ -2126,6 +2126,145 @@ def test_responses_bridge_preserves_reasoning_effort_with_drop_params(
     assert request_body["reasoning"] == {"effort": "high"}
 
 
+@pytest.fixture
+def openai_responses_route(
+    restore_model_registry, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> respx.Route:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
+    litellm.register_model(
+        {
+            "gpt-6.1-terra": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "supports_minimal_reasoning_effort": False,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    return respx_mock.post("https://api.openai.com/v1/responses").respond(
+        json={
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 1734366691,
+            "status": "completed",
+            "model": "gpt-6.1-terra",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Done.", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("reasoning_effort", "summary_alias", "expected_reasoning"),
+    [
+        (
+            {"effort": "low", "mode": "pro", "context": "current_turn"},
+            {},
+            {"effort": "low", "mode": "pro", "context": "current_turn"},
+        ),
+        (
+            {"effort": "low", "mode": "pro", "context": "current_turn"},
+            {"reasoning_summary": "auto"},
+            {"effort": "low", "mode": "pro", "context": "current_turn", "summary": "auto"},
+        ),
+        (
+            {"effort": "low", "mode": "pro", "summary": "concise"},
+            {"reasoningSummary": "auto"},
+            {"effort": "low", "mode": "pro", "summary": "concise"},
+        ),
+        (
+            {"effort": "low", "context": "current_turn", "summary": None},
+            {"reasoning_summary": "auto"},
+            {"effort": "low", "context": "current_turn", "summary": None},
+        ),
+        ("low", {}, {"effort": "low"}),
+    ],
+)
+def test_openai_responses_bridge_sends_the_whole_reasoning_effort_dict(
+    reasoning_effort: str | dict[str, str | None],
+    summary_alias: dict[str, str],
+    expected_reasoning: dict[str, str | None],
+    openai_responses_route: respx.Route,
+):
+    caller_reasoning_effort: Final = copy.deepcopy(reasoning_effort)
+
+    litellm.completion(
+        model="openai/responses/gpt-6.1-terra",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort=reasoning_effort,
+        api_key="fake-key",
+        **summary_alias,
+    )
+
+    request_body: Final = json.loads(openai_responses_route.calls[0].request.content)
+    assert request_body["reasoning"] == expected_reasoning
+    assert reasoning_effort == caller_reasoning_effort
+
+
+@pytest.mark.parametrize(
+    "reasoning_effort",
+    [
+        {"effort": "minimal", "mode": "pro", "context": "current_turn"},
+        {"effort": "minimal", "mode": "pro", "summary": "auto"},
+    ],
+)
+def test_openai_responses_bridge_keeps_a_dropped_reasoning_effort_dict_dropped(
+    reasoning_effort: dict[str, str],
+    openai_responses_route: respx.Route,
+):
+    litellm.completion(
+        model="openai/responses/gpt-6.1-terra",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort=reasoning_effort,
+        drop_params=True,
+        api_key="fake-key",
+    )
+
+    request_body: Final = json.loads(openai_responses_route.calls[0].request.content)
+    assert "reasoning" not in request_body
+
+
+def test_openai_responses_bridge_gives_a_reasoning_effort_dict_the_auto_summary_a_string_gets(
+    openai_responses_route: respx.Route, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+    litellm.completion(
+        model="openai/responses/gpt-6.1-terra",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort="low",
+        api_key="fake-key",
+    )
+    litellm.completion(
+        model="openai/responses/gpt-6.1-terra",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "mode": "pro", "context": "current_turn"},
+        api_key="fake-key",
+    )
+
+    string_reasoning, dict_reasoning = (
+        json.loads(call.request.content)["reasoning"] for call in openai_responses_route.calls
+    )
+    assert string_reasoning["summary"] is not None
+    assert dict_reasoning == {
+        "effort": "low",
+        "mode": "pro",
+        "context": "current_turn",
+        "summary": string_reasoning["summary"],
+    }
+
+
 _BRIDGED_RESPONSE_ANSWER: Final = json.dumps(
     {
         "id": "resp_slow",
