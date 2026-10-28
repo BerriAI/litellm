@@ -135,9 +135,12 @@ _AUDIO_OUTPUT_PROBE_PROVIDERS: Final[frozenset[str]] = frozenset({"openai", "azu
 
 
 def _health_check_requires_audio_output(
-    model_info: Mapping[str, object], probe_params: Mapping[str, object], mode: str | None, deployment_model: object
+    model_info: Mapping[str, object], probe_params: Mapping[str, object], mode: str | None, deployment_model: str | None
 ) -> bool:
     if (mode or "chat") != "chat":
+        return False
+    operator_modalities: Final = probe_params.get("modalities")
+    if isinstance(operator_modalities, list) and "audio" not in operator_modalities:
         return False
     model: Final = probe_params.get("model")
     if not isinstance(model, str):
@@ -152,14 +155,16 @@ def _health_check_requires_audio_output(
     if provider not in _AUDIO_OUTPUT_PROBE_PROVIDERS:
         return False
     base_model: Final = model_info.get("base_model") or probe_params.get("base_model")
+    checked_model: Final = base_model if isinstance(base_model, str) and model == deployment_model else model
+    checked_model_prefix: Final = checked_model.partition("/")[0]
     return litellm.supports_audio_output(
-        model=base_model if isinstance(base_model, str) and model == deployment_model else model,
-        custom_llm_provider=provider,
+        model=checked_model,
+        custom_llm_provider=checked_model_prefix if checked_model_prefix in _AUDIO_OUTPUT_PROBE_PROVIDERS else provider,
     )
 
 
 def _health_check_audio_output_params(
-    model_info: Mapping[str, object], probe_params: Mapping[str, object], mode: str | None, deployment_model: object
+    model_info: Mapping[str, object], probe_params: Mapping[str, object], mode: str | None, deployment_model: str | None
 ) -> Mapping[str, object]:
     if not _health_check_requires_audio_output(model_info, probe_params, mode, deployment_model):
         return MappingProxyType({})
@@ -848,9 +853,11 @@ def update_litellm_params_for_health_check(
       `audio` in the `health_check_voice` (default "alloy"), since those models reject text-only requests.
       `base_model` (from `model_info`, then `litellm_params`) decides it only while the probe still targets
       `deployment_model` (default: the incoming `litellm_params` model), so a `health_check_model` or a `model`
-      in `health_check_params` is judged on its own. Keys already set through `health_check_params` are kept
+      in `health_check_params` is judged on its own. Keys already set through `health_check_params` are kept,
+      and `modalities` set there without "audio" turns the audio fields off
     """
-    base_model_owner: Final = deployment_model or _PROBE_PARAMS_ADAPTER.validate_python(litellm_params).get("model")
+    incoming_model: Final = _PROBE_PARAMS_ADAPTER.validate_python(litellm_params).get("model")
+    base_model_owner: Final = deployment_model or (incoming_model if isinstance(incoming_model, str) else None)
     mode: Final = resolve_health_check_mode(
         model_info,
         litellm_params,  # any-ok: untyped router config dict

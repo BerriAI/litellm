@@ -394,7 +394,7 @@ async def test_test_model_connection_loads_config_from_router():
     mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
 
     # Mock _update_litellm_params_for_health_check
-    def mock_update_params(model_info, litellm_params, deployment_model=None):
+    def mock_update_params(model_info, litellm_params, deployment_model: str | None = None):
         # Just return params with messages added
         params = litellm_params.copy()
         params["messages"] = [{"role": "user", "content": "test"}]
@@ -545,7 +545,7 @@ async def test_test_model_connection_uses_model_info_id_to_disambiguate_duplicat
     mock_ahealth_check = AsyncMock(return_value=mock_health_check_result)
     mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
 
-    def mock_update_params(model_info, litellm_params, deployment_model=None):
+    def mock_update_params(model_info, litellm_params, deployment_model: str | None = None):
         params = litellm_params.copy()
         params["messages"] = [{"role": "user", "content": "test"}]
         return params
@@ -656,7 +656,7 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
     mock_ahealth_check = AsyncMock(return_value=mock_health_check_result)
     mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
 
-    def mock_update_params(model_info, litellm_params, deployment_model=None):
+    def mock_update_params(model_info, litellm_params, deployment_model: str | None = None):
         params = litellm_params.copy()
         params["messages"] = [{"role": "user", "content": "test"}]
         return params

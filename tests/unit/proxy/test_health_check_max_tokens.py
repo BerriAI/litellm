@@ -855,6 +855,7 @@ def test_health_check_params_apply_to_non_chat_modes():
             {"base_model": "gpt-4o-mini", "health_check_params": {"model": "openai/gpt-audio-mini"}},
             {"model": "openai/my-text-model"},
         ),
+        ({"base_model": "openai/gpt-audio-1.5"}, {"model": "azure/my-audio-deployment"}),
     ],
 )
 def test_openai_and_azure_audio_chat_probe_asks_for_audio_output(
@@ -875,6 +876,8 @@ def test_openai_and_azure_audio_chat_probe_asks_for_audio_output(
         ({}, {"model": "azure/my-audio-deployment"}),
         ({}, {"model": "unmapped-model-name"}),
         ({"mode": "responses"}, {"model": "openai/gpt-audio-mini"}),
+        ({"mode": "completion"}, {"model": "openai/gpt-audio-mini"}),
+        ({"base_model": "gemini/lyria-3-clip-preview"}, {"model": "azure/my-audio-deployment"}),
         (
             {"base_model": "azure/gpt-audio-mini", "health_check_model": "azure/gpt-4o-mini"},
             {"model": "azure/my-audio-deployment"},
@@ -937,6 +940,15 @@ def test_every_audio_output_chat_model_in_the_cost_map_gets_the_audio_probe(cost
     )
 
     assert updated["modalities"] == ["text", "audio"]
+
+
+def test_text_only_modalities_in_health_check_params_get_no_default_audio():
+    updated: Final = update_litellm_params_for_health_check(
+        {"health_check_params": {"modalities": ["text"]}}, {"model": "openai/gpt-audio-mini"}
+    )
+
+    assert updated["modalities"] == ["text"]
+    assert "audio" not in updated
 
 
 def test_audio_chat_probe_uses_health_check_voice():
