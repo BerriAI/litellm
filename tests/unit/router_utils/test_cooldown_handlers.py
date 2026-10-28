@@ -25,6 +25,7 @@ from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callba
 from litellm.router_utils.cooldown_handlers import (
     _get_deployment_cooldown_policy,
     _has_explicit_allowed_fails_policy_for_exception,
+    _has_fallback_group,
     _increment_allowed_fails,
     _is_cooldown_required,
     _resolve_allowed_fails_from_policy,
@@ -3149,6 +3150,8 @@ BENCHED: Final = (litellm.Timeout, litellm.Timeout, RouterRateLimitError, Router
             {},
             BENCHED,
         ),
+        ({"allowed_fails": 1, "fallbacks": [{"test-model": "backup-model"}]}, {}, BENCHED),
+        ({"allowed_fails": 1, "default_fallbacks": "backup-model"}, {}, BENCHED),
     ],
     ids=[
         "allowed_fails",
@@ -3157,6 +3160,8 @@ BENCHED: Final = (litellm.Timeout, litellm.Timeout, RouterRateLimitError, Router
         "policy_names_timeout",
         "allowed_fails_with_a_fallback_group",
         "allowed_fails_with_a_dict_fallback_target",
+        "allowed_fails_with_a_string_fallback_target",
+        "allowed_fails_with_a_string_default_fallbacks",
     ],
 )
 @pytest.mark.asyncio
@@ -3178,6 +3183,33 @@ async def test_router_allowed_fails_benches_a_lone_deployment_only_when_the_poli
 
     assert seen == outcomes
     assert len(route.calls) == outcomes.count(litellm.Timeout)
+
+
+@pytest.mark.parametrize(
+    ("fallbacks", "expected"),
+    [
+        ([{"test-model": "backup-model"}], True),
+        ([{"*": "backup-model"}], True),
+        ([{"test-model": ["backup-model"]}], True),
+        ([{"test-model": 5}, {"*": "backup-model"}], True),
+        ([{"test-model": 5}], False),
+        ([{"other-model": ["backup-model"]}], False),
+    ],
+    ids=[
+        "string_target",
+        "string_catch_all_from_default_fallbacks",
+        "list_target",
+        "unparseable_entry_does_not_hide_the_catch_all",
+        "unparseable_entry_alone",
+        "another_groups_chain",
+    ],
+)
+def test_has_fallback_group_reads_string_targets_and_skips_unparseable_entries(
+    fallbacks: Sequence[Mapping[str, object]], expected: bool
+) -> None:
+    router: Final = Router(model_list=[TIMED_OUT_DEPLOYMENT], fallbacks=list(fallbacks))
+
+    assert _has_fallback_group(router, "test-model") is expected
 
 
 async def _group_call_outcome(router: Router) -> str:
