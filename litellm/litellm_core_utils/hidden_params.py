@@ -63,7 +63,8 @@ def stored_attribute(obj: object, name: str) -> object:
 def _get_hidden_params_storage(obj: object) -> object | None:
     if isinstance(obj, dict):
         return obj.get(_HIDDEN_PARAMS_ATTR)
-    if isinstance(obj, BaseModel) and _HIDDEN_PARAMS_ATTR in type(obj).__private_attributes__:
+    model_type: Final = type(obj)
+    if issubclass(model_type, BaseModel) and _HIDDEN_PARAMS_ATTR in model_type.__private_attributes__:
         return getattr(obj, _HIDDEN_PARAMS_ATTR, None)
     return stored_attribute(obj, _HIDDEN_PARAMS_ATTR)
 
