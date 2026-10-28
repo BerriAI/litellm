@@ -17,7 +17,7 @@ from litellm.types.caching import CachePingResponse, HealthCheckCacheParams
 
 @with_config(ConfigDict(extra="allow", strict=True))
 class _CacheDeleteRequest(TypedDict):
-    keys: ReadOnly[NotRequired[list[str] | None]]
+    keys: ReadOnly[NotRequired[list[str | int | float] | None]]
 
 
 _CACHE_DELETE_REQUEST: Final = TypeAdapter(_CacheDeleteRequest)
