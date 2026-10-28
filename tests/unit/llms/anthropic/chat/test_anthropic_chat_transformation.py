@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict
 import litellm
 from litellm.constants import (
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+    DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
@@ -2643,6 +2644,48 @@ def test_get_config_does_not_leak_module_constants():
         "_REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT",
     ):
         assert forbidden not in cfg
+
+
+def _claude_body_without_max_tokens(config: AnthropicConfig, model: str) -> dict:
+    return config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize(
+    "config_cls, model, cost_map_key",
+    [
+        (VertexAIAnthropicConfig, "claude-haiku-4-5@20251001", "vertex_ai/claude-haiku-4-5@20251001"),
+        (VertexAIAnthropicConfig, "claude-sonnet-4-5@20250929", "vertex_ai/claude-sonnet-4-5@20250929"),
+        (VertexAIAnthropicConfig, "claude-opus-4-5@20251101", "vertex_ai/claude-opus-4-5@20251101"),
+        (
+            AmazonAnthropicClaudeConfig,
+            "invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        ),
+    ],
+)
+def test_claude_host_without_max_tokens_sends_the_hosts_mapped_cap(
+    local_model_cost_map, config_cls: type[AnthropicConfig], model: str, cost_map_key: str
+):
+    mapped_cap: Final = litellm.model_cost[cost_map_key]["max_output_tokens"]
+    assert mapped_cap < DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the case needs a mapped cap below the fallback"
+
+    assert _claude_body_without_max_tokens(config_cls(), model)["max_tokens"] == mapped_cap
+
+
+def test_vertex_claude_default_max_tokens_prefers_the_vertex_row_over_the_anthropic_row(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
+    vertex_cap: Final = litellm.model_cost["claude-sonnet-4-6"]["max_output_tokens"] // 2
+    monkeypatch.setitem(litellm.model_cost["vertex_ai/claude-sonnet-4-6"], "max_output_tokens", vertex_cap)
+    litellm.get_model_info.cache_clear()
+
+    assert _claude_body_without_max_tokens(VertexAIAnthropicConfig(), "claude-sonnet-4-6")["max_tokens"] == vertex_cap
 
 
 @pytest.mark.parametrize(

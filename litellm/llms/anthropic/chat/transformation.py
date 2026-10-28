@@ -110,6 +110,7 @@ from litellm.utils import (
     add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
     get_max_tokens,
+    get_model_info,
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_mid_conversation_system,
@@ -446,6 +447,13 @@ def tools_without_unsupported_tool_search(
     return [_without_deferral(tool) for tool in tools if not _is_openai_tool_search_tool(tool)]
 
 
+def _none_on_error(lookup: Callable[[], int | None]) -> int | None:
+    try:
+        return lookup()
+    except Exception:
+        return None
+
+
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
@@ -492,30 +500,34 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @classmethod
-    def get_config(cls, *, model: str | None = None):
+    def get_config(cls, *, model: str | None = None, custom_llm_provider: str | None = None):
         config: Final = super().get_config()
 
         # anthropic requires a default value for max_tokens
         if config.get("max_tokens") is None:
-            config["max_tokens"] = cls.get_max_tokens_for_model(model)
+            config["max_tokens"] = cls.get_max_tokens_for_model(model, custom_llm_provider)
 
         return config
 
     @staticmethod
-    def get_max_tokens_for_model(model: str | None = None) -> int:
+    def get_max_tokens_for_model(model: str | None = None, custom_llm_provider: str | None = None) -> int:
         """
-        Get the max output tokens for a given model.
+        Get the max output tokens for a given model on the host that serves it.
         Falls back to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var) if model is not found.
         """
         if model is None:
             return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
-        try:
-            max_tokens: Final = get_max_tokens(model)
-            if max_tokens is None:
-                return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
-            return max_tokens
-        except Exception:
-            return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+        host_max_tokens: Final = (
+            None
+            if custom_llm_provider is None
+            else _none_on_error(
+                lambda: get_model_info(model, custom_llm_provider=custom_llm_provider).get("max_output_tokens")
+            )
+        )
+        if host_max_tokens is not None:
+            return host_max_tokens
+        max_tokens: Final = _none_on_error(lambda: get_max_tokens(model))
+        return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if max_tokens is None else max_tokens
 
     @staticmethod
     def convert_tool_use_to_openai_format(
@@ -2386,7 +2398,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             optional_params["tools"] = tools
 
         ## Load Config
-        config: Final[Mapping[str, object]] = MappingProxyType(litellm.AnthropicConfig.get_config(model=model))
+        config: Final[Mapping[str, object]] = MappingProxyType(
+            litellm.AnthropicConfig.get_config(model=model, custom_llm_provider=self.custom_llm_provider)
+        )
         for k, v in config.items():
             if (
                 k not in optional_params
