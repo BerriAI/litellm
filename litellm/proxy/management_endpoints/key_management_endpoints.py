@@ -1980,7 +1980,7 @@ async def _validate_project_assignment(
                         "list[str] | None", existing_key_row.models
                     )
                 ),
-                "max_budget": data.max_budget if data.max_budget is not None else existing_key_row.max_budget,
+                "max_budget": data.max_budget if "max_budget" in data.model_fields_set else existing_key_row.max_budget,
             }
         ),
         prisma_client=prisma_client,

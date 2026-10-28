@@ -20279,12 +20279,20 @@ async def test_regenerate_key_repoints_live_membership_not_the_key_row_it_read(
 
 
 async def _cache_with_project(
-    project_id: str, project_models: list[str], team_id: str | None = "team-lit-5823"
+    project_id: str, project_models: list[str], team_id: str | None = "team-lit-5823",
+    project_max_budget: float | None = None,
 ) -> UserApiKeyCache:
     user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
         key=project_cache_key(project_id),
-        value=LiteLLM_ProjectTableCachedObj(project_id=project_id, team_id=team_id, models=project_models),
+        value=LiteLLM_ProjectTableCachedObj(
+            project_id=project_id,
+            team_id=team_id,
+            models=project_models,
+            litellm_budget_table=(
+                LiteLLM_BudgetTable(max_budget=project_max_budget) if project_max_budget is not None else None
+            ),
+        ),
         model_type=LiteLLM_ProjectTableCachedObj,
     )
     return user_api_key_cache
@@ -20810,6 +20818,37 @@ async def test_project_assignment_validates_existing_models_against_project():
         )
     assert exc.value.status_code == 400
     assert "not in project's allowed models" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_project_assignment_with_explicit_null_max_budget_ignores_stored_budget():
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-assign-token", project_id=None, team_id="team-lit-5823", models=[], max_budget=100.0
+    )
+    cache: Final = await _cache_with_project("project-orbit", [], project_max_budget=10.0)
+
+    await _validate_update_key_data(
+        UpdateKeyRequest(key=existing.token, project_id="project-orbit", max_budget=None), existing,
+        UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        None, False, _project_assignment_prisma(), cache,
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_assignment_without_max_budget_uses_stored_budget():
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-assign-token", project_id=None, team_id="team-lit-5823", models=[], max_budget=100.0
+    )
+    cache: Final = await _cache_with_project("project-orbit", [], project_max_budget=10.0)
+
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            UpdateKeyRequest(key=existing.token, project_id="project-orbit"), existing,
+            UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            None, False, _project_assignment_prisma(), cache,
+        )
+    assert exc.value.status_code == 400
+    assert "exceeds project's max_budget" in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
