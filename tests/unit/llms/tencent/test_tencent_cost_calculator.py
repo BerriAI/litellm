@@ -1,5 +1,7 @@
 from typing import Final
 
+import httpx
+import openai
 import pytest
 
 import litellm
@@ -54,3 +56,30 @@ def test_seedream_falls_back_to_the_per_image_price_without_usage(local_model_co
     )
 
     assert cost == pytest.approx(2 * per_image_price)
+
+
+async def test_a_deployment_priced_tencent_image_model_outside_seedream_bills_its_deployment_price() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"created": 1792551825, "data": [{"url": "https://cos.example/hy.png"}]})
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "hy-image",
+                "litellm_params": {"model": "tencent/hy-image-v3.5-preview", "api_key": "sk-tokenhub"},
+                "model_info": {"input_cost_per_image": 0.04},
+            }
+        ]
+    )
+
+    response: Final = await router.aimage_generation(
+        model="hy-image",
+        prompt="a red paper lantern",
+        client=openai.AsyncOpenAI(
+            api_key="sk-tokenhub",
+            base_url="https://tokenhub-intl.tencentcloudmaas.com/v1",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+        ),
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(0.04)

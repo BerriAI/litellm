@@ -798,6 +798,9 @@ def image_variation(
     return response
 
 
+_DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
+
+
 @client
 def image_edit(
     image: FileTypes | list[FileTypes] | None = None,
@@ -1030,7 +1033,17 @@ def image_edit(
             image=images,
             prompt=prompt,
             image_edit_provider_config=image_edit_provider_config,
-            image_edit_optional_request_params=image_edit_request_params,
+            image_edit_optional_request_params={
+                **image_edit_request_params,
+                **(
+                    {
+                        **{key: value for key, value in non_default_params.items() if key not in _DROP_PARAM_KWARGS},
+                        **(extra_body or {}),
+                    }
+                    if custom_llm_provider == litellm.LlmProviders.TENCENT.value
+                    else {}
+                ),
+            },
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,

@@ -105,3 +105,29 @@ def test_edit_is_not_offered_for_tencent_models_outside_seedream() -> None:
         )
 
     assert captured == {}
+
+
+def test_edit_forwards_tokenhub_only_params_and_extra_body() -> None:
+    captured: Final[dict[str, object]] = {}
+
+    litellm.image_edit(
+        model="tencent/seedream-image-v5.0-flash",
+        image=PNG_BYTES,
+        prompt="turn the square into a paper lantern",
+        api_key="sk-tokenhub",
+        client=_client(captured),
+        user="end-user-42",
+        watermark=False,
+        seed=7,
+        extra_body={"sequential_image_generation": "disabled"},
+    )
+
+    assert captured["body"] == {
+        "model": "seedream-image-v5.0-flash",
+        "prompt": "turn the square into a paper lantern",
+        "images": [f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"],
+        "user": "end-user-42",
+        "watermark": False,
+        "seed": 7,
+        "sequential_image_generation": "disabled",
+    }

@@ -20,6 +20,7 @@ from litellm.types.utils import (
     ImageResponse,
     ImageUsage,
     ImageUsageInputTokensDetails,
+    LlmProviders,
 )
 
 if TYPE_CHECKING:
@@ -34,6 +35,7 @@ TOKENHUB_IMAGE_PARAMS: Final[tuple[OpenAIImageGenerationOptionalParams, ...]] = 
     "response_format",
     "output_format",
     "background",
+    "user",
 )
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
@@ -63,7 +65,7 @@ class _TokenHubImageResponse(BaseModel):
 
 
 def is_tokenhub_image_model(model: str) -> bool:
-    return model.startswith(TOKENHUB_IMAGE_MODEL_PREFIX)
+    return model.removeprefix(f"{LlmProviders.TENCENT.value}/").startswith(TOKENHUB_IMAGE_MODEL_PREFIX)
 
 
 def tokenhub_image_url(api_base: str | None) -> str:

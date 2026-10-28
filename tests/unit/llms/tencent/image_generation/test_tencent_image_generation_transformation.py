@@ -107,6 +107,7 @@ def test_generation_resolves_a_configured_api_base_to_the_wand_route(api_base: s
         ({"n": 3, "drop_params": True}, {}),
         ({"background": "auto"}, {}),
         ({"background": "transparent", "output_format": "png"}, {"background": "transparent", "output_format": "png"}),
+        ({"user": "end-user-42"}, {"user": "end-user-42"}),
     ],
 )
 def test_generation_sends_only_values_tokenhub_accepts(

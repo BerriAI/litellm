@@ -2089,7 +2089,9 @@ class _ModelPricedImageCostCalculator(Protocol):
     def __call__(self, model: str, image_response: ImageResponse, model_info: ModelInfo | None = None) -> float: ...
 
 
-def _model_priced_image_cost_calculator(custom_llm_provider: str | None) -> _ModelPricedImageCostCalculator | None:
+def _model_priced_image_cost_calculator(
+    custom_llm_provider: str | None, model: str
+) -> _ModelPricedImageCostCalculator | None:
     match custom_llm_provider:
         case litellm.LlmProviders.RECRAFT.value:
             from litellm.llms.recraft.cost_calculator import cost_calculator as recraft_image_cost_calculator
@@ -2111,8 +2113,9 @@ def _model_priced_image_cost_calculator(custom_llm_provider: str | None) -> _Mod
             return runwayml_image_cost_calculator
         case litellm.LlmProviders.TENCENT.value:
             from litellm.llms.tencent.cost_calculator import image_cost_calculator as tencent_image_cost_calculator
+            from litellm.llms.tencent.image_generation.transformation import is_tokenhub_image_model
 
-            return tencent_image_cost_calculator
+            return tencent_image_cost_calculator if is_tokenhub_image_model(model) else None
         case _:
             return None
 
@@ -2175,7 +2178,7 @@ class CostCalculatorUtils:
         )
         resolved_n: Final = n if n is not None else (len(completion_response.data) if completion_response.data else 0)
         pricing: Final = deployment_pricing(model_info)
-        model_priced_calculator: Final = _model_priced_image_cost_calculator(custom_llm_provider)
+        model_priced_calculator: Final = _model_priced_image_cost_calculator(custom_llm_provider, model)
 
         if model_priced_calculator is not None:
             return model_priced_calculator(model=model, image_response=completion_response, model_info=pricing)
