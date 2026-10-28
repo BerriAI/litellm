@@ -1342,6 +1342,10 @@ class ResponsesAPIStreamOptions(TypedDict, total=False):
     include_obfuscation: bool
 
 
+class ResponsesAPIModeration(TypedDict, total=False):
+    model: Required[ReadOnly[str]]
+
+
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the responses API."""
 
@@ -1369,6 +1373,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     prompt_cache_key: str | None
     prompt_cache_retention: str | None
     prompt_cache_options: ReadOnly[PromptCacheOptions | None]
+    moderation: ReadOnly[ResponsesAPIModeration | None]
     stream_options: ResponsesAPIStreamOptions | None
     top_logprobs: int | None
     partial_images: int | None  # Number of partial images to generate (1-3) for streaming image generation
