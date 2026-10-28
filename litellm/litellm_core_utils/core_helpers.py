@@ -670,6 +670,17 @@ def _assign_attributes(target: object, values: Iterable[tuple[str, object]]) -> 
         setattr(target, key, value)
 
 
+def preserve_streaming_choice_provider_extras(
+    model_response: "ModelResponseStream", original_chunk: "ModelResponseStream"
+) -> None:
+    from litellm.types.utils import STREAMING_CHOICE_OPENAI_FIELDS
+
+    for outgoing, upstream in zip(model_response.choices, original_chunk.choices):
+        for key, value in (upstream.__pydantic_extra__ or {}).items():
+            if key not in STREAMING_CHOICE_OPENAI_FIELDS:
+                setattr(outgoing, key, value)
+
+
 def safe_deep_copy(data):
     """
     Safe Deep Copy

@@ -15,6 +15,7 @@ import httpx
 import pytest
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, TypeAdapter
+
 import litellm
 from litellm import verbose_logger
 from litellm._logging import session_id_var, trace_id_var
@@ -7845,6 +7846,179 @@ async def test_leaving_an_async_with_block_closes_the_provider_stream():
         pass
     assert stream.close_calls == 1
 
+
+def _vllm_wrapper(
+    chunks: Sequence[ModelResponseStream | ChatCompletionChunk],
+    stream_options: dict | None = None,
+    custom_llm_provider: str = "hosted_vllm",
+) -> CustomStreamWrapper:
+    return CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="hosted_vllm/m",
+        custom_llm_provider=custom_llm_provider,
+        stream_options=stream_options,
+        logging_obj=Logging(
+            model="hosted_vllm/m",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=time.time(),
+            litellm_call_id="vllm-choice",
+            function_id="test",
+        ),
+    )
+
+
+def _vllm_chunk(choice: dict, usage: dict | None = None) -> ModelResponseStream:
+    body: Final = {"id": "c", "created": 1, "model": "hosted_vllm/m", "choices": [choice]}
+    if usage is not None:
+        body["usage"] = usage
+    return ModelResponseStream(**body)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_vllm_choice_extras_survive_the_terminal_finish_chunk(sync_mode: bool):
+    chunks: Final = [
+        _vllm_chunk({"index": 0, "delta": {"content": "Hi"}, "finish_reason": None}),
+        _vllm_chunk({"index": 0, "delta": {}, "finish_reason": "stop", "stop_reason": "eos", "token_ids": [9]}),
+    ]
+    wrapper: Final = _vllm_wrapper(chunks)
+
+    emitted: Final = [chunk async for chunk in wrapper] if not sync_mode else list(wrapper)
+
+    finish_choice: Final = emitted[-1].choices[0]
+    assert getattr(finish_choice, "stop_reason", None) == "eos"
+    assert getattr(finish_choice, "token_ids", None) == [9]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("source", ["sdk", "http_handler", "cache"])
+@pytest.mark.parametrize("content", ["", "last token"])
+@pytest.mark.parametrize(("stop_reason", "token_ids"), [("eos", (9,)), (0, ())])
+@pytest.mark.asyncio
+async def test_vllm_finish_choice_extras_survive_serialized_live_and_cached_streams(
+    sync_mode: bool, source: str, content: str, stop_reason: str | int, token_ids: tuple[int, ...]
+) -> None:
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        convert_to_streaming_response,
+        convert_to_streaming_response_async,
+    )
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+    from litellm.proxy.proxy_server import _serialize_streaming_chunk
+
+    terminal_choice: Final = {
+        "index": 0,
+        "finish_reason": "stop",
+        "stop_reason": stop_reason,
+        "token_ids": list(token_ids),
+    }
+    cached_response: Final = {
+        "id": "c",
+        "created": 1,
+        "model": "hosted_vllm/m",
+        "choices": [{**terminal_choice, "message": {"role": "assistant", "content": content}}],
+    }
+    replay_chunks: Final = (
+        list(convert_to_streaming_response(cached_response))
+        if sync_mode
+        else [chunk async for chunk in convert_to_streaming_response_async(cached_response)]
+    )
+    parser: Final = OpenAIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+    live_body: Final = {
+        "id": "c",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "hosted_vllm/m",
+        "choices": [{**terminal_choice, "delta": {"content": content}}],
+    }
+    live_chunk: Final = ChatCompletionChunk(**live_body) if source == "sdk" else parser.chunk_parser(live_body)
+    wrapper: Final = _vllm_wrapper(
+        replay_chunks if source == "cache" else [live_chunk],
+        custom_llm_provider="cached_response" if source == "cache" else "hosted_vllm",
+    )
+
+    emitted: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
+    serialized: Final = [json.loads(_serialize_streaming_chunk(chunk)) for chunk in emitted]
+    finish_choices: Final = [chunk["choices"][0] for chunk in serialized if chunk["choices"][0].get("finish_reason")]
+
+    assert len(finish_choices) == 1
+    assert finish_choices[0]["stop_reason"] == terminal_choice["stop_reason"]
+    assert finish_choices[0]["token_ids"] == terminal_choice["token_ids"]
+    assert not finish_choices[0]["delta"].get("content")
+    assert [
+        chunk["choices"][0]["token_ids"] for chunk in serialized if "token_ids" in chunk["choices"][0]
+    ] == [terminal_choice["token_ids"]]
+    assert "".join(chunk["choices"][0]["delta"].get("content") or "" for chunk in serialized) == content
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_continuous_usage_stats_keeps_usage_on_every_chunk(sync_mode: bool):
+    counts: Final = [
+        {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+        {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13},
+    ]
+    chunks: Final = [
+        _vllm_chunk({"index": 0, "delta": {"content": "Hi"}, "finish_reason": None}, usage=counts[0]),
+        _vllm_chunk({"index": 0, "delta": {}, "finish_reason": "stop"}, usage=counts[1]),
+        ModelResponseStream(id="c", created=1, model="hosted_vllm/m", choices=[], usage=Usage(**counts[2])),
+    ]
+    wrapper: Final = _vllm_wrapper(chunks, stream_options={"include_usage": True, "continuous_usage_stats": True})
+
+    emitted: Final = [chunk async for chunk in wrapper] if not sync_mode else list(wrapper)
+
+    assert all(getattr(chunk, "usage", None) is not None for chunk in emitted)
+    assert [chunk.usage.total_tokens for chunk in emitted] == [11, 12, 13]
+    assert litellm.stream_chunk_builder(chunks=emitted).usage.total_tokens == 13
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_continuous_usage_stats_finishes_before_the_final_usage_chunk(sync_mode: bool):
+    content_usage: Final = {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11}
+    final_usage: Final = {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13}
+    chunks: Final = [
+        _vllm_chunk({"index": 0, "delta": {"content": "Hi"}, "finish_reason": None}, usage=content_usage),
+        _vllm_chunk({"index": 0, "delta": {"content": "!"}, "finish_reason": "length"}, usage=final_usage),
+        ModelResponseStream(id="c", created=1, model="hosted_vllm/m", choices=[], usage=Usage(**final_usage)),
+    ]
+    wrapper: Final = _vllm_wrapper(chunks, stream_options={"include_usage": True, "continuous_usage_stats": True})
+
+    emitted: Final = [chunk async for chunk in wrapper] if not sync_mode else list(wrapper)
+
+    finish_indexes: Final = [i for i, chunk in enumerate(emitted) if chunk.choices and chunk.choices[0].finish_reason]
+    assert len(finish_indexes) == 1
+    assert emitted[finish_indexes[0]].choices[0].finish_reason == "length"
+    assert finish_indexes[0] < len(emitted) - 1
+    terminal_chunk: Final = emitted[-1]
+    assert not (terminal_chunk.choices and terminal_chunk.choices[0].finish_reason)
+    assert [chunk.usage.total_tokens for chunk in emitted] == [
+        content_usage["total_tokens"],
+        *[final_usage["total_tokens"]] * 3,
+    ]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_include_usage_without_continuous_usage_stats_still_emits_only_a_final_usage_chunk(sync_mode: bool):
+    counts: Final = [
+        {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13},
+    ]
+    chunks: Final = [
+        _vllm_chunk({"index": 0, "delta": {"content": "Hi"}, "finish_reason": None}, usage=counts[0]),
+        _vllm_chunk({"index": 0, "delta": {}, "finish_reason": "stop"}, usage=counts[1]),
+    ]
+    wrapper: Final = _vllm_wrapper(chunks, stream_options={"include_usage": True})
+
+    emitted: Final = [chunk async for chunk in wrapper] if not sync_mode else list(wrapper)
+
+    content_chunks: Final = [chunk for chunk in emitted[:-1] if chunk.choices and chunk.choices[0].delta.content]
+    assert content_chunks
+    assert all(getattr(chunk, "usage", None) is None for chunk in content_chunks)
+    assert getattr(emitted[-1], "usage", None) is not None
 
 def _final_chunk_with_dict_usage(choices) -> ModelResponseStream:
     """A stream chunk whose ``usage`` is a plain dict.

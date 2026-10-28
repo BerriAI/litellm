@@ -192,6 +192,7 @@ from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
+    STREAMING_CHOICE_OPENAI_FIELDS,
     CountContextManagement,
     ModelResponse,
     ModelResponseStream,
@@ -10056,6 +10057,13 @@ def _restamp_nested_response_model_in_sse_line(line: bytes, target_model: str) -
     return _SSE_DATA_FIELD + b" " + serialized_event.encode() + line_ending
 
 
+def _streaming_choice_carries_provider_extras(choice: object) -> bool:
+    extra: Final[Mapping[str, object] | None] = getattr(choice, "__pydantic_extra__", None)
+    if not isinstance(extra, dict):
+        return False
+    return any(key not in STREAMING_CHOICE_OPENAI_FIELDS for key in extra)
+
+
 def _fast_serialize_simple_model_response_stream(
     chunk: ModelResponseStream,
 ) -> bytes | None:
@@ -10077,6 +10085,8 @@ def _fast_serialize_simple_model_response_stream(
 
     choice: Final = choices[0]
     if getattr(choice, "logprobs", None) is not None or getattr(choice, "enhancements", None) is not None:
+        return None
+    if _streaming_choice_carries_provider_extras(chunk.choices[0]):
         return None
 
     delta: Final[object] = getattr(choice, "delta", None)

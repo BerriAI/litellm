@@ -17,14 +17,14 @@ import httpx
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, chunk_usage, provider_reported_usage_cost
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR,
     get_hidden_params,
@@ -40,6 +40,7 @@ from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    STREAMING_CHOICE_OPENAI_FIELDS,
     CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
     Delta,
@@ -70,6 +71,7 @@ TOOL_CALLS_ATTRIBUTE: Final = "tool_calls"
 FUNCTION_CALL_ATTRIBUTE: Final = "function_call"
 
 _SYNC_ITER_EXHAUSTED: Final = object()
+_STREAM_OPTIONS_VALUE: Final = TypeAdapter(object)
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
@@ -337,6 +339,7 @@ class CustomStreamWrapper:
         self.system_fingerprint: str | None = None
         self._provider_response_model: str | None = None
         self.received_finish_reason: str | None = None
+        self._deferred_finish_chunk: ModelResponseStream | None = None
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.special_tokens = [
             "<|assistant|>",
@@ -373,10 +376,18 @@ class CustomStreamWrapper:
         self.received_model_id: str | None = None
         self.logging_loop = None
         self.rules = Rules()
-        self.stream_options = stream_options or getattr(logging_obj, "stream_options", None)
+        self.stream_options: object = _STREAM_OPTIONS_VALUE.validate_python(
+            stream_options or getattr(logging_obj, "stream_options", None)
+        )
         self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
+        stream_options_fields: Final = as_str_mapping(self.stream_options)
+        self._continuous_usage_stats = (
+            isinstance(self.stream_options, dict)
+            and stream_options_fields is not None
+            and stream_options_fields.get("continuous_usage_stats") is True
+        ) and self.send_stream_usage
         self.caller_requested_stream_usage: Final = (
             self.check_send_stream_usage(getattr(logging_obj, "stream_options", None))
             and getattr(logging_obj, "stream_usage_injected", False) is not True
@@ -543,8 +554,11 @@ class CustomStreamWrapper:
                     )
         self._restore_consumer_correlation_context()
 
-    def check_send_stream_usage(self, stream_options: dict | None):
-        return stream_options is not None and stream_options.get("include_usage", False) is True
+    def check_send_stream_usage(self, stream_options: object) -> bool:
+        if stream_options is None:
+            return False
+        get_option: Final[Callable[[str, object], object] | None] = getattr(stream_options, "get", None)
+        return get_option is not None and get_option("include_usage", False) is True
 
     def check_is_function_call(self, logging_obj) -> bool:
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -591,9 +605,7 @@ class CustomStreamWrapper:
 
         last_content: Final = self.chunks[-1].choices[0].delta.content
 
-        if (
-            not isinstance(last_content, str) or len(last_content) <= 2
-        ):  # ignore empty content - https://github.com/BerriAI/litellm/issues/5158#issuecomment-2287156946
+        if last_content is None or len(last_content) <= 2:
             self._repeated_messages_count = 1
             return
 
@@ -1129,6 +1141,7 @@ class CustomStreamWrapper:
         plain_delta_created: bool = False,
     ):
         from litellm.litellm_core_utils.core_helpers import (
+            preserve_streaming_choice_provider_extras,
             preserve_upstream_non_openai_attributes,
         )
 
@@ -1227,6 +1240,24 @@ class CustomStreamWrapper:
 
                 self._optional_combine_thinking_block_in_choices(model_response=model_response)
 
+                if self.received_finish_reason is not None:
+                    self._deferred_finish_chunk = ModelResponseStream(choices=model_response.choices).model_copy(
+                        deep=True
+                    )
+                    return model_response.model_copy(
+                        update={
+                            "choices": [
+                                StreamingChoices(
+                                    **{
+                                        key: value
+                                        for key, value in choice.model_dump().items()
+                                        if key in STREAMING_CHOICE_OPENAI_FIELDS
+                                    }
+                                )
+                                for choice in model_response.choices
+                            ]
+                        }
+                    )
                 return model_response
             else:
                 return
@@ -1258,6 +1289,10 @@ class CustomStreamWrapper:
             _original_chunk: Final = response_obj.get("original_chunk", None)
             if _original_chunk is not None:
                 preserve_upstream_non_openai_attributes(
+                    model_response=model_response,
+                    original_chunk=_original_chunk,
+                )
+                preserve_streaming_choice_provider_extras(
                     model_response=model_response,
                     original_chunk=_original_chunk,
                 )
@@ -1694,7 +1729,7 @@ class CustomStreamWrapper:
                         model_response.choices[0].delta = plain_delta if plain_delta is not None else Delta()
                         plain_delta_created = plain_delta is not None  # rebind-ok: the first chunk builds its delta
                 else:
-                    if self.send_stream_usage is True:
+                    if self.send_stream_usage is True and not self._continuous_usage_stats:
                         model_response.choices = []
                         return model_response
                     self._record_usage_only_chunk(model_response=model_response)
@@ -1912,9 +1947,13 @@ class CustomStreamWrapper:
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
     def finish_reason_handler(self):
+        from litellm.litellm_core_utils.core_helpers import preserve_streaming_choice_provider_extras
+
         model_response: Final = self.model_response_creator(
             hidden_params=None if self.received_model_id is None else {"received_model_id": self.received_model_id}
         )
+        if self._deferred_finish_chunk is not None:
+            preserve_streaming_choice_provider_extras(model_response, self._deferred_finish_chunk)
         _finish_reason: Final = self.received_finish_reason or self.intermittent_finish_reason
         if _finish_reason is not None:
             model_response.choices[0].finish_reason = _finish_reason
@@ -2071,7 +2110,7 @@ class CustomStreamWrapper:
                     # ModelResponseStream declares `usage` as a field, so
                     # hasattr(response, "usage") is always True — must check
                     # `is not None` to avoid running this path on every chunk.
-                    if getattr(response, "usage", None) is not None:
+                    if getattr(response, "usage", None) is not None and not self._continuous_usage_stats:
                         usage_to_preserve = response.usage
                         if usage_to_preserve:
                             response_hidden_params_for_usage = cast(  # cast-ok: preserve dynamic mapping behavior
@@ -2173,6 +2212,8 @@ class CustomStreamWrapper:
                     self.chunks.append(processed_chunk)
                 if self.stream_options is None:
                     self._set_final_chunk_usage(processed_chunk)
+                elif self._continuous_usage_stats:
+                    processed_chunk.usage = calculate_total_usage(chunks=self.chunks)
                 ## LOGGING
                 executor.submit(
                     self.run_success_logging_and_cache_storage,
@@ -2259,7 +2300,7 @@ class CustomStreamWrapper:
                         hasattr(processed_chunk, "usage") and getattr(processed_chunk, "usage", None) is not None
                     )
 
-                    if _has_usage:
+                    if _has_usage and not self._continuous_usage_stats:
                         usage_free_chunk = self._record_and_strip_usage_chunk(processed_chunk)
                         if usage_free_chunk is None:
                             continue
@@ -2406,6 +2447,8 @@ class CustomStreamWrapper:
                 self.chunks.append(processed_chunk)
             if self.stream_options is None:
                 self._set_final_chunk_usage(processed_chunk)
+            elif self._continuous_usage_stats:
+                processed_chunk.usage = calculate_total_usage(chunks=self.chunks)
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log

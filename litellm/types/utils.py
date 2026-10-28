@@ -2098,6 +2098,9 @@ class UnreportedUsage(Usage):
     pass
 
 
+STREAMING_CHOICE_OPENAI_FIELDS: Final = frozenset({"index", "delta", "finish_reason", "logprobs", "enhancements"})
+
+
 class StreamingChoices(OpenAIObject):
     def __init__(
         self,
