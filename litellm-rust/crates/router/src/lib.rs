@@ -3,7 +3,7 @@ mod deployment;
 use std::collections::HashMap;
 
 use litellm_config::{Config, Spelled};
-use litellm_core_utils::serde_compat::parse_str_bool;
+use litellm_core_utils::{serde_compat::parse_pydantic_bool, settings::Lookup};
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
 
 pub use deployment::Deployment;
@@ -11,17 +11,22 @@ pub use deployment::Deployment;
 #[derive(Clone, Debug, Default)]
 pub struct Router(HashMap<String, Deployment>);
 
-fn is_on(flag: Option<&Spelled<bool>>) -> bool {
+fn is_on(flag: Option<&Spelled<bool>>, env: &impl Lookup) -> bool {
     match flag {
         Some(Spelled::Value(on)) => *on,
-        Some(Spelled::Text(text)) => parse_str_bool(text) == Some(true),
+        Some(Spelled::Text(text)) => match text.strip_prefix("os.environ/") {
+            Some(name) => env
+                .get(name)
+                .is_some_and(|value| parse_pydantic_bool(&value) == Some(true)),
+            None => parse_pydantic_bool(text) == Some(true),
+        },
         None => false,
     }
 }
 
 impl Router {
-    pub fn from_config(config: &Config) -> Self {
-        let drops_params_globally = is_on(config.litellm_settings.drop_params.as_ref());
+    pub fn from_config(config: &Config, env: &impl Lookup) -> Self {
+        let drops_params_globally = is_on(config.litellm_settings.drop_params.as_ref(), env);
         config
             .model_list
             .iter()
@@ -41,7 +46,7 @@ impl Router {
                         shaping: MessagesShaping {
                             settings: MessagesSettings {
                                 drop_params: drops_params_globally
-                                    || is_on(model.litellm_params.drop_params.as_ref()),
+                                    || is_on(model.litellm_params.drop_params.as_ref(), env),
                                 ..MessagesSettings::default()
                             },
                             ..MessagesShaping::default()
@@ -77,6 +82,19 @@ mod tests {
     #[case::deployment_word("", "\n      drop_params: \" True \"", true)]
     #[case::deployment_off("", "\n      drop_params: false", false)]
     #[case::deployment_unknown_word("", "\n      drop_params: maybe", false)]
+    #[case::deployment_yes("", "\n      drop_params: yes", true)]
+    #[case::deployment_no("", "\n      drop_params: \"no\"", false)]
+    #[case::deployment_env_reference("", "\n      drop_params: os.environ/DROP_PARAMS_FLAG", true)]
+    #[case::deployment_unset_env_reference(
+        "",
+        "\n      drop_params: os.environ/MISSING_FLAG",
+        false
+    )]
+    #[case::global_env_reference(
+        "litellm_settings:\n  drop_params: os.environ/DROP_PARAMS_FLAG\n",
+        "",
+        true
+    )]
     #[case::global_flag("litellm_settings:\n  drop_params: true\n", "", true)]
     #[case::global_word("litellm_settings:\n  drop_params: \"true\"\n", "", true)]
     #[case::global_off("litellm_settings:\n  drop_params: false\n", "", false)]
@@ -96,12 +114,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            Router::from_config(&config)
-                .get("public-model")
-                .unwrap()
-                .shaping
-                .settings
-                .drop_params,
+            Router::from_config(&config, &|name: &str| (name == "DROP_PARAMS_FLAG")
+                .then(|| " Yes ".to_owned()))
+            .get("public-model")
+            .unwrap()
+            .shaping
+            .settings
+            .drop_params,
             expected
         );
     }
