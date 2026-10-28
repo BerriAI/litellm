@@ -10750,6 +10750,24 @@ def giveup(e):
     return result
 
 
+_CONFIG_PARAM_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _config_param_mapping(param_value: object) -> Mapping[str, object] | None:
+    """
+    Read a LiteLLM_Config JSON column as a mapping. Prisma can return the column as
+    a raw string; decode it the way ConfigRepository.get_param does, so a
+    string-valued row is read rather than silently skipped. Anything that is not
+    a JSON object comes back as None.
+    """
+    try:
+        if isinstance(param_value, str):
+            return _CONFIG_PARAM_MAPPING.validate_json(param_value)
+        return _CONFIG_PARAM_MAPPING.validate_python(param_value)
+    except ValidationError:
+        return None
+
+
 class ProxyStartupEvent:
     @staticmethod
     def attach_router_to_prompt_injection_detectors(llm_router: Router | None) -> None:
@@ -11377,17 +11395,9 @@ class ProxyStartupEvent:
                     reason="startup_store_model_in_db_general_settings_lookup_failure",
                 )
                 if _db_gs_record is not None:
-                    _db_param_value = _db_gs_record.param_value
-                    # Prisma can return the JSON column as a raw string; normalize
-                    # it the way ConfigRepository.get_param does before reading, so
-                    # the override isn't silently skipped for string-valued rows.
-                    if isinstance(_db_param_value, str):
-                        try:
-                            _db_param_value = json.loads(_db_param_value)
-                        except json.JSONDecodeError:
-                            _db_param_value = {}
-                    if isinstance(_db_param_value, dict):
-                        _db_val: Final = _db_param_value.get("store_model_in_db")
+                    _db_settings: Final = _config_param_mapping(_db_gs_record.param_value)
+                    if _db_settings is not None:
+                        _db_val: Final = _db_settings.get("store_model_in_db")
                         if _db_val is True or (isinstance(_db_val, str) and _db_val.lower() == "true"):
                             store_model_in_db = True
                             verbose_proxy_logger.info("store_model_in_db=True loaded from DB, overriding config/env")
