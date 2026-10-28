@@ -1449,6 +1449,7 @@ from .exceptions import (
     Timeout,
     APIConnectionError,
     UnsupportedParamsError,
+    UnsupportedEndpointError as UnsupportedEndpointError,
     APIResponseValidationError,
     UnprocessableEntityError,
     InternalServerError,
@@ -1737,6 +1738,9 @@ if TYPE_CHECKING:
     )
     from .llms.lm_studio.decisions.transformation import (
         LMStudioDecisionsConfig as LMStudioDecisionsConfig,
+    )
+    from .llms.ollama.decisions.transformation import (
+        OllamaDecisionsConfig as OllamaDecisionsConfig,
     )
     from .llms.laya.decisions.transformation import (
         LayaDecisionsConfig as LayaDecisionsConfig,

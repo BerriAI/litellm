@@ -27480,18 +27480,6 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
-    "fireworks_ai/accounts/fireworks/routers/spot-deepseek-v4-flash": {
-        "cache_read_input_token_cost": 2.1e-08,
-        "input_cost_per_token": 1.05e-07,
-        "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 1048576,
-        "mode": "chat",
-        "output_cost_per_token": 2.1e-07,
-        "source": "https://api.fireworks.ai/v1/serverless/models",
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_vision": false
-    },
     "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro-0813": {
         "cache_read_input_token_cost": 4.4e-08,
         "cache_read_input_token_cost_priority": 5.5e-08,
@@ -35610,6 +35598,13 @@
         "output_cost_per_token_batches": 5e-06,
         "output_cost_per_token_flex": 5e-06,
         "output_cost_per_token_priority": 2e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -35687,6 +35682,13 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_priority": 2e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -35863,6 +35865,13 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_priority": 2e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -35914,6 +35923,13 @@
         "mode": "chat",
         "output_cost_per_token": 1.4e-05,
         "output_cost_per_token_priority": 2.8e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -36029,6 +36045,13 @@
         "mode": "chat",
         "output_cost_per_token": 1.4e-05,
         "output_cost_per_token_priority": 2.8e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -36078,6 +36101,13 @@
         "mode": "responses",
         "output_cost_per_token": 0.000168,
         "output_cost_per_token_batches": 8.4e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "pro"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -36119,6 +36149,13 @@
         "mode": "responses",
         "output_cost_per_token": 0.000168,
         "output_cost_per_token_batches": 8.4e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "pro"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -36206,6 +36243,15 @@
         "output_cost_per_token_flex": 2.5e-05,
         "output_cost_per_token_priority": 0.0001,
         "output_cost_per_token_ultrafast": 0.0003,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard",
+            "pro"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -36290,6 +36336,15 @@
         "output_cost_per_token_above_272k_tokens_batches": 7.5e-06,
         "output_cost_per_token_flex": 5e-06,
         "output_cost_per_token_priority": 2e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard",
+            "pro"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -36382,6 +36437,15 @@
         "output_cost_per_token_above_272k_tokens_batches": 3.75e-07,
         "output_cost_per_token_flex": 2.5e-07,
         "output_cost_per_token_priority": 1e-06,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard",
+            "pro"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -36465,6 +36529,15 @@
         "output_cost_per_token_above_272k_tokens_batches": 1.5e-05,
         "output_cost_per_token_flex": 1e-05,
         "output_cost_per_token_priority": 4e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard",
+            "pro"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -36546,6 +36619,15 @@
         "output_cost_per_token_above_272k_tokens_batches": 1.5e-05,
         "output_cost_per_token_flex": 1e-05,
         "output_cost_per_token_priority": 4e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard",
+            "pro"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -36629,6 +36711,15 @@
         "output_cost_per_token_above_272k_tokens_batches": 9e-06,
         "output_cost_per_token_flex": 6e-06,
         "output_cost_per_token_priority": 2.4e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard",
+            "pro"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -36711,6 +36802,15 @@
         "output_cost_per_token_above_272k_tokens_batches": 9e-07,
         "output_cost_per_token_flex": 6e-07,
         "output_cost_per_token_priority": 2.4e-06,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard",
+            "pro"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -36948,6 +37048,14 @@
         "reasoning_effort_levels": [
             "medium"
         ],
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "source": "https://developers.openai.com/api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -36995,6 +37103,14 @@
         "output_cost_per_token_batches": 1.5e-05,
         "output_cost_per_token_above_272k_tokens_batches": 2.25e-05,
         "output_cost_per_token_priority": 7.5e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -37057,6 +37173,14 @@
         "output_cost_per_token_batches": 1.5e-05,
         "output_cost_per_token_above_272k_tokens_batches": 2.25e-05,
         "output_cost_per_token_priority": 7.5e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -37111,6 +37235,14 @@
         "output_cost_per_token_flex": 9e-05,
         "output_cost_per_token_batches": 9e-05,
         "output_cost_per_token_above_272k_tokens_batches": 0.000135,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "pro"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -37162,6 +37294,14 @@
         "output_cost_per_token_flex": 9e-05,
         "output_cost_per_token_batches": 9e-05,
         "output_cost_per_token_above_272k_tokens_batches": 0.000135,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "pro"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -37221,6 +37361,14 @@
         "output_cost_per_token_batches": 7.5e-06,
         "output_cost_per_token_above_272k_tokens_batches": 1.125e-05,
         "output_cost_per_token_priority": 3e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "supported_endpoints": [
@@ -37278,6 +37426,14 @@
         "output_cost_per_token_batches": 7.5e-06,
         "output_cost_per_token_above_272k_tokens_batches": 1.125e-05,
         "output_cost_per_token_priority": 3e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "supported_endpoints": [
@@ -37327,6 +37483,14 @@
         "output_cost_per_token_flex": 9e-05,
         "output_cost_per_token_batches": 9e-05,
         "output_cost_per_token_above_272k_tokens_batches": 0.000135,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "pro"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -37379,6 +37543,14 @@
         "output_cost_per_token_flex": 9e-05,
         "output_cost_per_token_batches": 9e-05,
         "output_cost_per_token_above_272k_tokens_batches": 0.000135,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "pro"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -37433,6 +37605,14 @@
         "output_cost_per_token_flex": 2.25e-06,
         "output_cost_per_token_batches": 2.25e-06,
         "output_cost_per_token_priority": 9e-06,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -37487,6 +37667,14 @@
         "output_cost_per_token_flex": 2.25e-06,
         "output_cost_per_token_batches": 2.25e-06,
         "output_cost_per_token_priority": 9e-06,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -37538,6 +37726,14 @@
         "output_cost_per_token": 1.25e-06,
         "output_cost_per_token_flex": 6.25e-07,
         "output_cost_per_token_batches": 6.25e-07,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -37590,6 +37786,14 @@
         "output_cost_per_token": 1.25e-06,
         "output_cost_per_token_flex": 6.25e-07,
         "output_cost_per_token_batches": 6.25e-07,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -37636,6 +37840,13 @@
         "mode": "responses",
         "output_cost_per_token": 0.00012,
         "output_cost_per_token_batches": 6e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "pro"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -37678,6 +37889,13 @@
         "mode": "responses",
         "output_cost_per_token": 0.00012,
         "output_cost_per_token_batches": 6e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "pro"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -37728,6 +37946,13 @@
         "output_cost_per_token_batches": 5e-06,
         "output_cost_per_token_flex": 5e-06,
         "output_cost_per_token_priority": 2e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -37838,6 +38063,13 @@
         "mode": "responses",
         "output_cost_per_token": 1.4e-05,
         "output_cost_per_token_priority": 2.8e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -37920,6 +38152,13 @@
         "output_cost_per_token_batches": 1e-06,
         "output_cost_per_token_flex": 1e-06,
         "output_cost_per_token_priority": 3.6e-06,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -37971,6 +38210,13 @@
         "output_cost_per_token_batches": 1e-06,
         "output_cost_per_token_flex": 1e-06,
         "output_cost_per_token_priority": 3.6e-06,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -38019,6 +38265,13 @@
         "output_cost_per_token": 4e-07,
         "output_cost_per_token_batches": 2e-07,
         "output_cost_per_token_flex": 2e-07,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -38067,6 +38320,13 @@
         "output_cost_per_token": 4e-07,
         "output_cost_per_token_batches": 2e-07,
         "output_cost_per_token_flex": 2e-07,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -41507,9 +41767,14 @@
         "max_output_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 3e-07,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://docs.mistral.ai/models/devstral-small-2-25-12",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -41521,9 +41786,14 @@
         "max_output_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://mistral.ai/news/devstral-2-vibe-cli",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -41535,9 +41805,14 @@
         "max_output_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://mistral.ai/news/devstral-2-vibe-cli",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -41835,6 +42110,22 @@
             "max"
         ],
         "source": "https://docs.mistral.ai/models/zai-glm-5-2",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "mistral/deepseek-v4-1-flash-1017": {
+        "cache_read_input_token_cost": 7e-09,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://docs.mistral.ai/models/deepseek-v4-flash-1017",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -42232,8 +42523,13 @@
         "max_output_tokens": 8191,
         "mode": "chat",
         "output_cost_per_token": 3e-07,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -43797,6 +44093,13 @@
         "output_cost_per_token_batches": 4e-06,
         "output_cost_per_token_flex": 4e-06,
         "output_cost_per_token_priority": 1.4e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -43905,6 +44208,13 @@
         "output_cost_per_token_batches": 4e-06,
         "output_cost_per_token_flex": 4e-06,
         "output_cost_per_token_priority": 1.4e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "standard"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -43984,6 +44294,13 @@
         "mode": "responses",
         "output_cost_per_token": 8e-05,
         "output_cost_per_token_batches": 4e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "pro"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -44021,6 +44338,13 @@
         "mode": "responses",
         "output_cost_per_token": 8e-05,
         "output_cost_per_token_batches": 4e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn"
+        ],
+        "reasoning_modes": [
+            "pro"
+        ],
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -62352,18 +62676,6 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-spot": {
-        "cache_read_input_token_cost": 4.2e-09,
-        "input_cost_per_token": 2.1e-07,
-        "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 1048576,
-        "mode": "chat",
-        "output_cost_per_token": 8.4e-07,
-        "source": "https://api.fireworks.ai/v1/serverless/models",
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_vision": true
-    },
     "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-us": {
         "cache_read_input_token_cost": 9e-09,
         "cache_read_input_token_cost_priority": 1.125e-08,
@@ -62422,18 +62734,6 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
-    },
-    "fireworks_ai/accounts/fireworks/routers/kimi-k3-spot": {
-        "cache_read_input_token_cost": 2.1e-07,
-        "input_cost_per_token": 2.1e-06,
-        "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 1048576,
-        "mode": "chat",
-        "output_cost_per_token": 1.05e-05,
-        "source": "https://api.fireworks.ai/v1/serverless/models",
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_vision": true
     },
     "fireworks_ai/deepseek-v4-flash-0731": {
@@ -65512,9 +65812,14 @@
         "max_output_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://mistral.ai/news/devstral-2-vibe-cli",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -65633,18 +65938,6 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": false
-    },
-    "fireworks_ai/accounts/fireworks/routers/glm-5p3-spot": {
-        "cache_read_input_token_cost": 1.82e-07,
-        "input_cost_per_token": 9.8e-07,
-        "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 1048576,
-        "mode": "chat",
-        "output_cost_per_token": 3.08e-06,
-        "source": "https://api.fireworks.ai/v1/serverless/models",
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_vision": false
     },
     "fireworks_ai/accounts/fireworks/routers/glm-5p3-us": {
@@ -73305,6 +73598,15 @@
         "output_cost_per_token_flex": 5e-06,
         "output_cost_per_token_priority": 2e-05,
         "output_cost_per_token_ultrafast": 6e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard",
+            "pro"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {
@@ -75327,18 +75629,6 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-1017-spot": {
-        "cache_read_input_token_cost": 4.2e-09,
-        "input_cost_per_token": 2.1e-07,
-        "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 1048576,
-        "mode": "chat",
-        "output_cost_per_token": 8.4e-07,
-        "source": "https://api.fireworks.ai/v1/serverless/models",
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_vision": true
-    },
     "github_copilot/claude-sonnet-4.6": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -76816,6 +77106,15 @@
         "output_cost_per_token_batches": 2.5e-06,
         "output_cost_per_token_flex": 2.5e-06,
         "output_cost_per_token_priority": 1e-05,
+        "reasoning_contexts": [
+            "auto",
+            "current_turn",
+            "all_turns"
+        ],
+        "reasoning_modes": [
+            "standard",
+            "pro"
+        ],
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
         "search_context_cost_per_query": {"search_context_size_high":0.01,"search_context_size_low":0.01,"search_context_size_medium":0.01},
@@ -77139,5 +77438,91 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "use_openai_responses_path": true
+    },
+    "fireworks_ai/accounts/fireworks/routers/spot-deepseek-v4-flash": {
+        "cache_read_input_token_cost": 2.1e-08,
+        "deprecation_date": "2026-08-14",
+        "input_cost_per_token": 1.05e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 2.1e-07,
+        "source": "https://api.fireworks.ai/v1/serverless/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "fireworks_ai/accounts/fireworks/routers/kimi-k3-spot": {
+        "cache_read_input_token_cost": 2.1e-07,
+        "input_cost_per_token": 2.1e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.05e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://api.fireworks.ai/v1/serverless/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "fireworks_ai/accounts/fireworks/routers/glm-5p3-spot": {
+        "cache_read_input_token_cost": 1.82e-07,
+        "input_cost_per_token": 9.8e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3.08e-06,
+        "source": "https://api.fireworks.ai/v1/serverless/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-spot": {
+        "cache_read_input_token_cost": 4.2e-09,
+        "input_cost_per_token": 2.1e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 8.4e-07,
+        "source": "https://api.fireworks.ai/v1/serverless/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-1017-spot": {
+        "cache_read_input_token_cost": 4.2e-09,
+        "input_cost_per_token": 2.1e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 8.4e-07,
+        "source": "https://api.fireworks.ai/v1/serverless/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     }
 }
