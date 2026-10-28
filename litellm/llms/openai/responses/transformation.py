@@ -586,12 +586,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         marker_safe_input: Final = self._input_with_wire_safe_prompt_cache_breakpoints(
             model=model, input=validated_input, litellm_params=litellm_params
         )
-        marked_input: Final = (
-            self._input_with_prompt_cache_breakpoints(marker_safe_input)
-            if self._reads_prompt_cache_breakpoints(
-                model=model, litellm_params=litellm_params, prompt_cache_options=prompt_cache_options
-            )
-            else marker_safe_input
+        reads_breakpoints: Final = self._reads_prompt_cache_breakpoints(
+            model=model, litellm_params=litellm_params, prompt_cache_options=prompt_cache_options
         )
         maps_anthropic_tool_search: Final = self._targets_openai_api(litellm_params) and any(
             is_anthropic_tool_search_chat_tool(tool) for tool in tools or ()
@@ -601,19 +597,42 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             if maps_anthropic_tool_search
             else tools
         )
-        replayable_input: Final = (
-            input_without_unanswered_anthropic_tool_search_calls(marked_input)
-            if maps_anthropic_tool_search
-            else marked_input
-        )
         stripped_input, stripped_tools = self.remove_cache_control_flag_from_input_and_tools(
-            model=model, input=replayable_input, tools=mapped_tools
+            model=model,
+            input=self._replayable_input(marker_safe_input, reads_breakpoints, maps_anthropic_tool_search),
+            tools=mapped_tools,
         )
+        if marker_safe_input is not validated_input:
+            self._strip_caller_input_as_if_unmarked(
+                model=model,
+                caller_input=validated_input,
+                reads_breakpoints=reads_breakpoints,
+                maps_anthropic_tool_search=maps_anthropic_tool_search,
+            )
         object_schema_tools: Final = self._tools_with_object_parameters(model=model, tools=stripped_tools)
         sanitized_tools: Final = self._sanitized_tool_schemas_for_openai(
             model=model, tools=object_schema_tools, litellm_params=litellm_params
         )
         return self._drop_foreign_tool_call_item_ids(stripped_input), sanitized_tools
+
+    def _replayable_input(
+        self, input: str | ResponseInputParam, reads_breakpoints: bool, maps_anthropic_tool_search: bool
+    ) -> str | ResponseInputParam:
+        marked_input: Final = self._input_with_prompt_cache_breakpoints(input) if reads_breakpoints else input
+        if not maps_anthropic_tool_search:
+            return marked_input
+        return input_without_unanswered_anthropic_tool_search_calls(marked_input)
+
+    def _strip_caller_input_as_if_unmarked(
+        self,
+        model: str,
+        caller_input: str | ResponseInputParam,
+        reads_breakpoints: bool,
+        maps_anthropic_tool_search: bool,
+    ) -> None:
+        self.remove_cache_control_flag_from_input_and_tools(
+            model=model, input=self._replayable_input(caller_input, reads_breakpoints, maps_anthropic_tool_search)
+        )
 
     def _input_with_wire_safe_prompt_cache_breakpoints(
         self, model: str, input: str | ResponseInputParam, litellm_params: GenericLiteLLMParams

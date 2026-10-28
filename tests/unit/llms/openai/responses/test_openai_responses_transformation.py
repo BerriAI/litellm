@@ -4382,6 +4382,46 @@ def test_cache_control_still_marks_a_part_whose_own_marker_is_malformed_under_dr
     }
 
 
+def _caller_input_after_transform(model: str, marker: object) -> str:
+    hint: Final = {"type": "ephemeral"}
+    marked: Final = {} if marker is None else {"prompt_cache_breakpoint": marker}
+    input: Final = [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Say ok", "cache_control": hint, **marked},
+                {"type": "input_text", "text": "Thanks", "cache_control": hint},
+            ],
+            "cache_control": hint,
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "cache_control": hint, **marked}],
+        },
+    ]
+    _CONFIGS[0].transform_responses_api_request(
+        model=model,
+        input=cast("ResponseInputParam", input),  # cast-ok: plain dicts shaped like the SDK's input items
+        response_api_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+    return json.dumps(input)
+
+
+@pytest.mark.parametrize("model", ("gpt-4.1", "gpt-6.1-sol"))
+@pytest.mark.parametrize("marker", (_VALID_MARKERS[0], "yes"), ids=("explicit", "malformed"))
+def test_a_marker_leaves_the_caller_request_that_fallbacks_and_logs_read_as_an_unmarked_one_would(
+    monkeypatch: pytest.MonkeyPatch, model: str, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    marker_json: Final = f', "prompt_cache_breakpoint": {json.dumps(marker)}'
+    unmarked: Final = _caller_input_after_transform(model, None)
+    assert _caller_input_after_transform(model, marker).replace(marker_json, "") == unmarked
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures(httpx_transport.__name__)
 async def test_aresponses_forwards_previous_response_id_to_openai() -> None:
