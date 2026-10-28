@@ -288,6 +288,38 @@ def test_an_input_tokens_trigger_skips_blocks_no_adapter_sends_inside_a_tool_res
     assert _cleared_ids(cleared) == {"toolu_00", "toolu_01"}
 
 
+def _clear_at_least_one_token(
+    messages: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], AppliedEdit | None]:
+    return apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": 0},
+            "keep": {"type": "tool_uses", "value": 1},
+            "clear_at_least": {"type": "input_tokens", "value": 1},
+        },
+    )
+
+
+def test_clear_at_least_frees_only_blocks_an_adapter_sends_inside_a_tool_result() -> None:
+    history: Final = _make_history(n_pairs=3)
+    result_text: Final = {"type": "text", "text": "Result 0: " + "x" * 200}
+    search_result: Final = {"type": "web_search_result", "url": "https://example.com", "title": "rain " * 300}
+
+    _, sent_only = _clear_at_least_one_token([*history[:2], _first_result_with([result_text]), *history[3:]])
+    cleared, applied = _clear_at_least_one_token(
+        [*history[:2], _first_result_with([result_text, search_result]), *history[3:]]
+    )
+
+    assert applied is not None
+    assert applied == sent_only
+    assert _cleared_ids(cleared) == {"toolu_00", "toolu_01"}
+
+
 def _blocks_of(messages: list[dict[str, object]], block_type: str) -> tuple[dict[str, object], ...]:
     contents: Final = (message["content"] for message in messages)
     blocks: Final = chain.from_iterable(content for content in contents if isinstance(content, list))

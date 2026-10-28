@@ -192,10 +192,12 @@ def _cleared_result(block: Mapping[str, object]) -> dict[str, object]:
 
 def _freed_tokens(model: str, result: Mapping[str, object], use: Mapping[str, object], clears_input: bool) -> int:
     """Tokens that clearing this use frees: its result, and its input when ``clear_tool_inputs`` covers it."""
-    before: Final = [result, use] if clears_input else [result]
-    after: Final = [_cleared_result(result), {**use, "input": {}}] if clears_input else [_cleared_result(result)]
+    before: Final[Sequence[Mapping[str, object]]] = (result, use) if clears_input else (result,)
+    after: Final[Sequence[Mapping[str, object]]] = (
+        (_cleared_result(result), {**use, "input": {}}) if clears_input else (_cleared_result(result),)
+    )
     counts: Final = tuple(
-        litellm.token_counter(model=model, messages=[{"role": "user", "content": blocks}]) for blocks in (before, after)
+        _count_tokens(model, [{"role": "user", "content": blocks}], None) for blocks in (before, after)
     )
     return max(counts[0] - counts[1], 0)
 
