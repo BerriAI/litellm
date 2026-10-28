@@ -8,9 +8,11 @@ import json
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 def assert_response_shape(response, custom_llm_provider):
@@ -402,27 +404,7 @@ def test_huggingface_rerank_request_payload(mock_post: MagicMock) -> None:
     assert len(response.results) == 2
 
 
-@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-def test_huggingface_rerank_forwards_truncate_options(mock_post: MagicMock) -> None:
-    mock_response: Final = MagicMock()
-    mock_response.json.return_value = [{"index": 0, "score": 0.9}]
-    mock_response.status_code = 200
-    mock_response.headers = {"content-type": "application/json"}
-    mock_post.return_value = mock_response
-
-    response: Final = litellm.rerank(
-        model="huggingface/BAAI/bge-reranker-base",
-        query="hello",
-        documents=["hello", "world"],
-        api_key="test_api_key",
-        return_documents=False,
-        truncate=True,
-        truncation_direction="Left",
-    )
-
-    mock_post.assert_called_once()
-
-    request_data: Final = json.loads(mock_post.call_args.kwargs["data"])
+def test_huggingface_rerank_forwards_truncate_options() -> None:
     expected_request: Final = {
         "query": "hello",
         "texts": ["hello", "world"],
@@ -431,6 +413,24 @@ def test_huggingface_rerank_forwards_truncate_options(mock_post: MagicMock) -> N
         "truncation_direction": "Left",
         "truncate": True,
     }
-    assert request_data == expected_request
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://api-inference.huggingface.co/rerank"
+        assert request.headers["Authorization"] == "Bearer test_api_key"
+        assert json.loads(request.content) == expected_request
+        return httpx.Response(200, json=[{"index": 0, "score": 0.9}])
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http_client:
+        response: Final = litellm.rerank(
+            model="huggingface/BAAI/bge-reranker-base",
+            query="hello",
+            documents=["hello", "world"],
+            api_key="test_api_key",
+            return_documents=False,
+            truncate=True,
+            truncation_direction="Left",
+            client=HTTPHandler(client=http_client),
+        )
+
     assert response.results is not None
     assert response.results[0]["relevance_score"] == 0.9
