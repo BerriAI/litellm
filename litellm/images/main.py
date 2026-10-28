@@ -284,6 +284,12 @@ def image_generation(
         extra_headers: Final = kwargs.get("extra_headers", None)
         headers: Final[dict] = kwargs.get("headers", None) or {}
         base_model: Final = kwargs.get("base_model", None)
+        call_kwargs: Final = cast(Mapping[str, object], kwargs)  # cast-ok: image_generation's **kwargs is untyped
+        max_retries: Final = call_kwargs.get("max_retries")
+        is_router_call: Final = any(
+            isinstance(call_metadata := call_kwargs.get(k), Mapping) and "model_group" in call_metadata
+            for k in ("metadata", "litellm_metadata")
+        )
         if extra_headers is not None:
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
@@ -550,6 +556,7 @@ def image_generation(
                 optional_params["extra_headers"] = extra_headers
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Final[str | None] = kwargs.get("organization", None)
+            sdk_max_retries: Final = 0 if is_router_call else max_retries
             model_response = openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
@@ -557,7 +564,9 @@ def image_generation(
                 api_key=api_key or dynamic_api_key,
                 api_base=api_base,
                 logging_obj=litellm_logging_obj,
-                optional_params=optional_params,
+                optional_params=(
+                    optional_params if sdk_max_retries is None else {**optional_params, "max_retries": sdk_max_retries}
+                ),
                 model_response=model_response,
                 organization=organization,
                 aimg_generation=aimg_generation,
