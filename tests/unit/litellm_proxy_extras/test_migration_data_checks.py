@@ -125,7 +125,7 @@ def test_the_report_names_the_rows_the_statement_and_the_fix_and_says_nothing_wa
         "(api_key up to 3207 bytes)"
     ) in text
     assert 'blocks: CREATE INDEX "LiteLLM_SpendLogs_api_key_startTime_idx" (request-log index)' in text
-    assert 'UPDATE "LiteLLM_SpendLogs" SET api_key = encode(sha256(' in text
+    assert 'fix:    Shorten or hash the long "LiteLLM_SpendLogs" (api_key, startTime) values' in text
     assert text.startswith("Existing rows would make a pending schema change fail:")
     assert "No schema change was made" in text
 

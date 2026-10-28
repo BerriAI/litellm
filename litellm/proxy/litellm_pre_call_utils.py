@@ -363,6 +363,8 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "fallback_depth",
     "_target_order",
     "attempted_targets",
+    "_excluded_deployment_ids",
+    "_retry_skipped_deployment_ids",
     "proxy_server_request",
     "standard_logging_object",
     "secret_fields",
@@ -444,6 +446,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "_pipeline_managed_guardrails",
     "client_disconnected",
     "error_information",
+    "_failover_excluded_ids",
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
 )
 
@@ -1414,12 +1417,34 @@ def _tenant_service_name(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     )
 
 
+def litellm_auth_header_name(headers: Headers) -> str:
+    if "x-litellm-api-key" in headers:
+        return "x-litellm-api-key"
+    if "authorization" in headers:
+        return "authorization"
+    return "x-api-key"
+
+
+def forwarded_anthropic_oauth_token(headers: Headers) -> str | None:
+    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+
+    forwarded: Final = clean_headers(headers, authenticated_with_header=litellm_auth_header_name(headers))
+    return next(
+        (
+            value.removeprefix("Bearer ")
+            for header, value in forwarded.items()
+            if header.lower() == "authorization" and is_anthropic_oauth_key(value)
+        ),
+        None,
+    )
+
+
 def clean_headers(
     headers: Headers,
     litellm_key_header_name: str | None = None,
     forward_llm_provider_auth_headers: bool = False,
     authenticated_with_header: str | None = None,
-) -> dict:
+) -> dict[str, str]:
     """
     Removes litellm api key from headers
 
@@ -2512,26 +2537,13 @@ async def add_litellm_data_to_request(
         forward_llm_auth = general_settings.get("forward_llm_provider_auth_headers", False)
     if not forward_llm_auth:
         forward_llm_auth = getattr(litellm, "forward_llm_provider_auth_headers", False)
-    # Determine which header was used for authentication
-    # This enables forwarding provider keys (e.g., x-api-key) when they weren't used for LiteLLM auth
-    authenticated_with_header = None
-    if "x-litellm-api-key" in request.headers:
-        # If x-litellm-api-key is present, it was used for auth
-        authenticated_with_header = "x-litellm-api-key"
-    elif "authorization" in request.headers:
-        # Authorization header was used for auth
-        authenticated_with_header = "authorization"
-    else:
-        # x-api-key or another header was used for auth
-        authenticated_with_header = "x-api-key"
-
     _headers: Final[dict[str, str]] = clean_headers(
         request.headers,
         litellm_key_header_name=(
             general_settings.get("litellm_key_header_name") if general_settings is not None else None
         ),
         forward_llm_provider_auth_headers=forward_llm_auth,
-        authenticated_with_header=authenticated_with_header,
+        authenticated_with_header=litellm_auth_header_name(request.headers),
     )
     _strip_untrusted_request_header_controls(
         _headers,

@@ -273,25 +273,27 @@ def generate_feedback_box():
     # Select a random message
     message: Final = random.choice(list_of_messages)
 
-    print()  # noqa: T201
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa: T201
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa: T201
-    print("\033[1;37m" + f"# {message:^59} #\033[0m")  # noqa: T201
-    print(  # noqa: T201
-        "\033[1;37m" + "# {:^59} #\033[0m".format("https://github.com/BerriAI/litellm/issues/new")
+    print_startup_message(
+        "\n".join(
+            (
+                "",
+                "\033[1;37m" + "#" + "-" * box_width + "#\033[0m",
+                "\033[1;37m" + "#" + " " * box_width + "#\033[0m",
+                "\033[1;37m" + f"# {message:^59} #\033[0m",
+                "\033[1;37m" + "# {:^59} #\033[0m".format("https://github.com/BerriAI/litellm/issues/new"),
+                "\033[1;37m" + "#" + " " * box_width + "#\033[0m",
+                "\033[1;37m" + "#" + "-" * box_width + "#\033[0m",
+                "",
+                " Thank you for using LiteLLM! - Krrish & Ishaan",
+                "",
+                "",
+                "",
+                "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m",
+                "",
+                "",
+            )
+        )
     )
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa: T201
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa: T201
-    print()  # noqa: T201
-    print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa: T201
-    print()  # noqa: T201
-    print()  # noqa: T201
-    print()  # noqa: T201
-    print(  # noqa: T201
-        "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
-    )
-    print()  # noqa: T201
-    print()  # noqa: T201
 
 
 import contextlib
@@ -304,6 +306,7 @@ import litellm._redis
 from litellm import Router
 from litellm._internal_context import service_target, with_service_target
 from litellm._logging import (
+    print_startup_message,
     redact_string,
     verbose_proxy_logger,
     verbose_router_logger,
@@ -6412,17 +6415,13 @@ class ProxyConfig:
 
         search_tools_parsed: Final[list[SearchToolTypedDict]] = []
 
-        print(  # noqa: T201
-            "\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m"
-        )
+        print_startup_message("\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m")
 
         for search_tool in search_tools_raw:
             # Display loaded search tool
             search_tool_name = search_tool.get("search_tool_name", "")
             search_provider = search_tool.get("litellm_params", {}).get("search_provider", "")
-            print(  # noqa: T201
-                f"\033[32m    {search_tool_name} ({search_provider})\033[0m"
-            )
+            print_startup_message(f"\033[32m    {search_tool_name} ({search_provider})\033[0m")
 
             # Handle os.environ/ variables in litellm_params
             litellm_params = search_tool.get("litellm_params", {})
@@ -6598,7 +6597,7 @@ class ProxyConfig:
             reset_color_code: Final = "\033[0m"
             for key, value in litellm_settings.items():
                 if key == "cache" and value is True:
-                    print(f"{blue_color_code}\nSetting Cache on Proxy")  # noqa: T201
+                    print_startup_message(f"{blue_color_code}\nSetting Cache on Proxy")
                     from litellm.caching.caching import Cache
 
                     cache_params = {}
@@ -6789,7 +6788,7 @@ class ProxyConfig:
                                 if PrometheusLogger is not None:
                                     verbose_proxy_logger.debug("mounting metrics endpoint")
                                     PrometheusLogger._mount_metrics_endpoint()
-                    print(  # noqa: T201
+                    print_startup_message(
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )
                 elif key == "failure_callback":
@@ -6808,7 +6807,7 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             litellm.logging_callback_manager.add_litellm_failure_callback(callback)
-                    print(  # noqa: T201
+                    print_startup_message(
                         f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )
                 elif key == "audit_log_callbacks":
@@ -6833,7 +6832,7 @@ class ProxyConfig:
 
                     _store_audit_logs = litellm_settings.get("store_audit_logs", litellm.store_audit_logs)
                     if is_audit_logging_enabled(store_audit_logs=_store_audit_logs):
-                        print(  # noqa: T201
+                        print_startup_message(
                             f"{blue_color_code} Initialized Audit Log Callbacks - {litellm.audit_log_callbacks} {reset_color_code}"
                         )
                     else:
@@ -7232,9 +7231,7 @@ class ProxyConfig:
         if model_list:
             router_params["model_list"] = model_list
             validate_auto_router_capability_limits(model_list, limit=_license_check.auto_router_capability_limit())
-            print(  # noqa: T201
-                "\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
-            )
+            print_startup_message("\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")
             for model in model_list:
                 ### LOAD FROM os.environ/ ###
                 for k, v in model["litellm_params"].items():
@@ -7251,7 +7248,7 @@ class ProxyConfig:
                         complexity_router_config=complexity_router_config,
                         config_file_path=config_file_path,
                     )
-                print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa: T201
+                print_startup_message(f"\033[32m    {model.get('model_name', '')}\033[0m")
                 litellm_model_name = model["litellm_params"]["model"]
                 litellm_model_api_base = model["litellm_params"].get("api_base", None)
                 if "ollama" in litellm_model_name and litellm_model_api_base is None:
@@ -9672,9 +9669,12 @@ async def initialize(
         master_key, \
         user_custom_auth, \
         prisma_client
-    from litellm.proxy.common_utils.banner import show_banner
+    from litellm.proxy.common_utils.banner import LITELLM_BANNER, show_banner
 
-    show_banner()
+    if litellm.json_logs:
+        print_startup_message(LITELLM_BANNER)
+    else:
+        show_banner()
     if os.getenv("LITELLM_DONT_SHOW_FEEDBACK_BOX", "").lower() != "true":
         generate_feedback_box()
     user_model = model
@@ -11930,7 +11930,7 @@ class ProxyStartupEvent:
             and proxy_logging_obj.slack_alerting_instance.alerting is not None
             and prisma_client is not None
         ):
-            print("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa: T201
+            print_startup_message("Alerting: Initializing Weekly/Monthly Spend Reports")
             spend_report_frequency: Final[str] = general_settings.get("spend_report_frequency", "7d") or "7d"
 
             days: Final = int(spend_report_frequency[:-1])
@@ -14628,6 +14628,7 @@ async def run_thread(
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
+from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
@@ -14647,6 +14648,14 @@ from litellm.responses.litellm_completion_transformation.count_request import (
     chat_count_request,
     with_provider_file_ids,
 )
+
+
+def _with_client_oauth_token(
+    counter: BaseTokenCounter | None, client_oauth_token: str | None
+) -> BaseTokenCounter | None:
+    if client_oauth_token is None or not isinstance(counter, AnthropicTokenCounter):
+        return counter
+    return AnthropicTokenCounter(client_oauth_token=client_oauth_token)
 
 
 def _get_provider_token_counter(
@@ -15264,6 +15273,7 @@ async def count_request_tokens(
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
     responses_request: Mapping[str, object] | None = None,
+    client_oauth_token: str | None = None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -15321,7 +15331,8 @@ async def count_request_tokens(
     custom_llm_provider: str | None = None
     if call_endpoint is True and deployment is not None:
         # Auto-route to the correct provider based on model
-        provider_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
+        routed_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
+        provider_counter = _with_client_oauth_token(routed_counter, client_oauth_token)
         if _model is not None:
             model_to_use = _model
 
