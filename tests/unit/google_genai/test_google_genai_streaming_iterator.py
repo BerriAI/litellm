@@ -99,18 +99,15 @@ def _large_inline_data_event() -> str:
     return f"data: {json.dumps(payload)}"
 
 
+def _sse_response(body: str) -> httpx.Response:
+    return httpx.Response(200, stream=httpx.ByteStream(body.encode()))
+
+
 @pytest.mark.asyncio
 async def test_async_streaming_iterator_yields_complete_sse_events():
     """Large inlineData must not be split across byte-chunk boundaries."""
-    mock_response = MagicMock()
-
-    async def _aiter_lines():
-        yield _large_inline_data_event()
-
-    mock_response.aiter_lines = _aiter_lines
-
     iterator = AsyncGoogleGenAIGenerateContentStreamingIterator(
-        response=mock_response,
+        response=_sse_response(_large_inline_data_event() + "\n\n"),
         model="gemini-3.1-flash-image-preview",
         logging_obj=_logging_obj(),
         generate_content_provider_config=MagicMock(),
@@ -128,11 +125,8 @@ async def test_async_streaming_iterator_yields_complete_sse_events():
 
 
 def test_sync_streaming_iterator_yields_complete_sse_events():
-    mock_response = MagicMock()
-    mock_response.iter_lines.return_value = iter([_large_inline_data_event()])
-
     iterator = GoogleGenAIGenerateContentStreamingIterator(
-        response=mock_response,
+        response=_sse_response(_large_inline_data_event() + "\n\n"),
         model="gemini-3.1-flash-image-preview",
         logging_obj=_logging_obj(),
         generate_content_provider_config=MagicMock(),
@@ -150,17 +144,8 @@ def test_sync_streaming_iterator_yields_complete_sse_events():
 
 @pytest.mark.asyncio
 async def test_async_streaming_iterator_preserves_multi_field_sse_event():
-    mock_response = MagicMock()
-
-    async def _aiter_lines():
-        yield "event: message"
-        yield 'data: {"text":"hi"}'
-        yield ""
-
-    mock_response.aiter_lines = _aiter_lines
-
     iterator = AsyncGoogleGenAIGenerateContentStreamingIterator(
-        response=mock_response,
+        response=_sse_response('event: message\ndata: {"text":"hi"}\n\n'),
         model="gemini-test",
         logging_obj=_logging_obj(),
         generate_content_provider_config=MagicMock(),
@@ -174,16 +159,8 @@ async def test_async_streaming_iterator_preserves_multi_field_sse_event():
 
 @pytest.mark.asyncio
 async def test_async_streaming_iterator_forwards_sse_comment_events():
-    mock_response = MagicMock()
-
-    async def _aiter_lines():
-        yield ": keepalive"
-        yield ""
-
-    mock_response.aiter_lines = _aiter_lines
-
     iterator = AsyncGoogleGenAIGenerateContentStreamingIterator(
-        response=mock_response,
+        response=_sse_response(": keepalive\n\n"),
         model="gemini-test",
         logging_obj=_logging_obj(),
         generate_content_provider_config=MagicMock(),
@@ -193,6 +170,40 @@ async def test_async_streaming_iterator_forwards_sse_comment_events():
 
     chunk = await iterator.__anext__()
     assert chunk == b": keepalive\n\n"
+
+
+_LINE_SEPARATED_TEXT: Final = "before\u2028between\u2029after"
+
+
+async def _first_chunk(
+    iterator: GoogleGenAIGenerateContentStreamingIterator | AsyncGoogleGenAIGenerateContentStreamingIterator,
+) -> bytes:
+    if isinstance(iterator, AsyncGoogleGenAIGenerateContentStreamingIterator):
+        return await iterator.__anext__()
+    return next(iterator)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "iterator_cls",
+    [AsyncGoogleGenAIGenerateContentStreamingIterator, GoogleGenAIGenerateContentStreamingIterator],
+)
+async def test_streaming_iterator_keeps_unicode_line_separators_inside_the_event(iterator_cls: type) -> None:
+    payload: Final = {"candidates": [{"content": {"parts": [{"text": _LINE_SEPARATED_TEXT}]}}]}
+    event: Final = f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+    iterator: Final = iterator_cls(
+        response=_sse_response(event),
+        model="gemini-3.1-flash",
+        logging_obj=_logging_obj(),
+        generate_content_provider_config=MagicMock(),
+        litellm_metadata={},
+        custom_llm_provider="gemini",
+    )
+
+    chunk: Final = await _first_chunk(iterator)
+
+    assert chunk == event.encode()
+    assert json.loads(chunk[len(b"data: ") : -2])["candidates"][0]["content"]["parts"][0]["text"] == _LINE_SEPARATED_TEXT
 
 
 def _gemini_event(text: str, finish_reason: str | None = None) -> str:

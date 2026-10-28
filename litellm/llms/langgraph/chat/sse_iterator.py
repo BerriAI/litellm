@@ -12,6 +12,7 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -36,12 +37,12 @@ class LangGraphSSEStreamIterator:
 
     def __iter__(self):
         """Initialize sync iteration."""
-        self.line_iterator = self.response.iter_lines()
+        self.line_iterator = iter_sse_lines(self.response.iter_text())
         return self
 
     def __aiter__(self):
         """Initialize async iteration."""
-        self.async_line_iterator = self.response.aiter_lines()
+        self.async_line_iterator = aiter_sse_lines(self.response.aiter_text())
         return self
 
     def _parse_sse_line(self, line: str) -> ModelResponseStream | None:

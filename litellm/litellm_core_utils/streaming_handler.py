@@ -1936,6 +1936,17 @@ class CustomStreamWrapper:
             model_response.choices[0].delta.content = close_tag
         return model_response
 
+    def _final_chunk_for_logging(self, processed_chunk: "ModelResponseStream") -> "ModelResponseStream | None":
+        # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
+        # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
+        if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
+            return processed_chunk
+        if processed_chunk.choices[0].delta.content is None:
+            return None
+        return processed_chunk.model_copy(
+            update={"choices": [processed_chunk.choices[0].model_copy(update={"finish_reason": None})]}
+        )
+
     def _record_usage_only_chunk(self, model_response: "ModelResponseStream") -> None:
         """
         Keep provider usage-only chunks (e.g. OpenRouter's post-finish chunk, which carries a
@@ -2175,10 +2186,9 @@ class CustomStreamWrapper:
             else:
                 self.sent_last_chunk = True
                 processed_chunk: Final = self.finish_reason_handler()
-                # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
-                # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
-                if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
-                    self.chunks.append(processed_chunk)
+                final_chunk_for_logging: Final = self._final_chunk_for_logging(processed_chunk)
+                if final_chunk_for_logging is not None:
+                    self.chunks.append(final_chunk_for_logging)
                 if self.stream_options is None:
                     self._set_final_chunk_usage(processed_chunk)
                 ## LOGGING
@@ -2408,10 +2418,9 @@ class CustomStreamWrapper:
         else:
             self.sent_last_chunk = True
             processed_chunk: Final = self.finish_reason_handler()
-            # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
-            # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
-            if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
-                self.chunks.append(processed_chunk)
+            final_chunk_for_logging: Final = self._final_chunk_for_logging(processed_chunk)
+            if final_chunk_for_logging is not None:
+                self.chunks.append(final_chunk_for_logging)
             if self.stream_options is None:
                 self._set_final_chunk_usage(processed_chunk)
             # see sync __next__'s sibling branch: deliberately do NOT restore

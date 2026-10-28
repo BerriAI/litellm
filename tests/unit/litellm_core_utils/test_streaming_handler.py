@@ -507,6 +507,13 @@ def _stream_chunk(delta: dict[str, object], finish_reason: str | None = None) ->
     return ModelResponseStream(choices=[{"index": 0, "delta": delta, "finish_reason": finish_reason}])
 
 
+def _content_through_first_call(deltas: Sequence[Delta]) -> str:
+    first_call: Final = next(
+        (index for index, delta in enumerate(deltas) if delta.tool_calls or delta.function_call), len(deltas)
+    )
+    return "".join(delta.content or "" for delta in deltas[: first_call + 1])
+
+
 _GET_WEATHER_CALL: Final = {
     "index": 0,
     "id": "call_1",
@@ -516,6 +523,7 @@ _GET_WEATHER_CALL: Final = {
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [True, False])
 @pytest.mark.parametrize(
     "chunks,expected_content,expected_tool_calls",
     [
@@ -527,6 +535,15 @@ _GET_WEATHER_CALL: Final = {
             ),
             "<think>Check the weather</think>",
             1,
+        ),
+        (
+            (
+                _stream_chunk({"reasoning_content": "Pick a function"}),
+                _stream_chunk({"function_call": {"name": "get_weather", "arguments": "{}"}}),
+                _stream_chunk({}, "function_call"),
+            ),
+            "<think>Pick a function</think>",
+            0,
         ),
         (
             (
@@ -561,6 +578,7 @@ _GET_WEATHER_CALL: Final = {
     ],
     ids=[
         "reasoning_then_tool_call",
+        "reasoning_then_function_call",
         "reasoning_cut_by_length",
         "reasoning_after_answer",
         "stream_ends_mid_reasoning",
@@ -569,21 +587,32 @@ _GET_WEATHER_CALL: Final = {
 )
 async def test_merged_reasoning_stream_keeps_think_tags_balanced(
     logging_obj: Logging,
+    is_async: bool,
     chunks: tuple[ModelResponseStream, ...],
     expected_content: str,
     expected_tool_calls: int,
 ):
     response: Final = CustomStreamWrapper(
-        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        completion_stream=ModelResponseListIterator(model_responses=[chunk.model_copy(deep=True) for chunk in chunks]),
         model="deepseek-reasoner",
         logging_obj=logging_obj,
     )
     response.merge_reasoning_content_in_choices = True
 
-    deltas: Final = tuple([chunk.choices[0].delta async for chunk in response])
+    deltas: Final = (
+        tuple([chunk.choices[0].delta async for chunk in response])
+        if is_async
+        else tuple(chunk.choices[0].delta for chunk in response)
+    )
+    logged: Final = litellm.stream_chunk_builder(chunks=response.chunks)
 
     assert "".join(delta.content or "" for delta in deltas) == expected_content
+    assert _content_through_first_call(deltas) == expected_content
     assert sum(len(delta.tool_calls or ()) for delta in deltas) == expected_tool_calls
+    assert logged.choices[0].message.content == (expected_content or None)
+    assert any(chunk.choices[0].finish_reason for chunk in response.chunks if chunk.choices) == any(
+        chunk.choices[0].finish_reason for chunk in chunks
+    )
 
 
 def test_strip_sse_data_from_chunk():

@@ -35,7 +35,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 )
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
-from litellm.types.utils import ChoiceLogprobs, ModelInfo, Usage
+from litellm.types.utils import ChoiceLogprobs, ModelInfo, ModelResponseStream, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.integrations.custom_logger import CustomLogger
@@ -10673,12 +10673,12 @@ def _split_at(body: bytes, cuts: tuple[int, ...]) -> tuple[bytes, ...]:
     return tuple(body[start:end] for start, end in pairwise((0, *sorted(cuts), len(body))))
 
 
-async def _gemini_stream(is_async: bool, chunks: tuple[bytes, ...]) -> list:
+async def _gemini_stream(is_async: bool, chunks: tuple[bytes, ...]) -> list[ModelResponseStream]:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, stream=_BodyInChunks(chunks), headers={"content-type": "text/event-stream"})
 
     kwargs: Final = {
-        "model": "gemini/gemini-2.5-flash",
+        "model": "gemini/gemini-3.8-flash",
         "messages": [{"role": "user", "content": "hi"}],
         "stream": True,
         "stream_options": {"include_usage": True},

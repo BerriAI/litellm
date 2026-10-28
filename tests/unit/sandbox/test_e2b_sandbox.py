@@ -19,18 +19,17 @@ from litellm.llms.e2b.sandbox.transformation import (
 )
 
 
+def _line_stream(lines: list[str]) -> httpx.Response:
+    return httpx.Response(200, stream=httpx.ByteStream("".join(f"{line}\n" for line in lines).encode()))
+
+
 class FakeResponse:
-    def __init__(self, *, json_data=None, lines=None, status_code=200):
+    def __init__(self, *, json_data=None, status_code=200):
         self._json = json_data
-        self._lines = lines or []
         self.status_code = status_code
 
     def json(self):
         return self._json
-
-    async def aiter_lines(self):
-        for line in self._lines:
-            yield line
 
 
 class FakeHTTPClient:
@@ -61,7 +60,7 @@ class FakeHTTPClient:
         if url.endswith("/execute"):
             if self.execute_raises is not None:
                 raise self.execute_raises
-            return FakeResponse(lines=self.execute_lines)
+            return _line_stream(self.execute_lines)
         raise AssertionError(f"unexpected POST {url}")
 
     async def delete(self, url, headers=None, **kwargs):
@@ -247,6 +246,20 @@ def test_parse_lines_skips_non_json_lines():
     result = E2BSandboxConfig._parse_lines(lines)
     assert result.stdout == "ok\n"
     assert result.error is None
+
+
+@pytest.mark.asyncio
+async def test_run_code_keeps_unicode_line_separators_inside_stdout():
+    separated_text = "before\u2028between\u2029after\n"
+    client = FakeHTTPClient(
+        execute_lines=[json.dumps({"type": "stdout", "text": separated_text, "timestamp": 1}, ensure_ascii=False)]
+    )
+    handle = ContainerHandle(id="sbx_sep", provider="e2b", domain="e2b.app")
+    handle._hidden_params = {"envd_access_token": "tok"}
+
+    result = await E2BSandboxConfig().arun_code(container=handle, code="print(text)", client=client)
+
+    assert result.stdout == separated_text
 
 
 @pytest.mark.asyncio

@@ -560,6 +560,36 @@ class TestStreaming:
         assert sent_body["params"]["message"]["messageId"] == "msg-001"
         assert [event["result"]["kind"] for event in events] == ["task", "status-update"]
 
+    @pytest.mark.asyncio
+    async def test_streaming_keeps_unicode_line_separators_inside_an_sse_event(self, httpx_transport):
+        from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
+            BedrockAgentCoreA2AConfig,
+        )
+
+        event = {
+            "jsonrpc": "2.0",
+            "id": "req-001",
+            "result": {"kind": "artifact-update", "artifact": {"parts": [{"kind": "text", "text": "a\u2028b\u2029c"}]}},
+        }
+        with respx.mock(assert_all_called=True) as router:
+            router.post(url__regex=r".*/invocations.*").mock(
+                return_value=httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    text=f"data: {json.dumps(event, ensure_ascii=False)}\n\n",
+                )
+            )
+            events = [
+                streamed
+                async for streamed in BedrockAgentCoreA2AConfig().handle_streaming(
+                    request_id="req-001",
+                    params=SAMPLE_PARAMS,
+                    litellm_params=SAMPLE_LITELLM_PARAMS,
+                )
+            ]
+
+        assert events == [event]
+
 
 class TestConfigManager:
     """Test that config manager routes 'bedrock' correctly."""
