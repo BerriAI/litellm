@@ -387,11 +387,12 @@ def _forwards(field: str, policy: DropPolicy) -> bool:
     return field in _COUNT_REQUEST_FIELDS or (not policy.drop_params and field in _INFERENCE_REQUEST_FIELDS)
 
 
-def _restored(field: str, value: object) -> object:
+def _restored(field: str, value: object, policy: DropPolicy) -> object:
     match field, value:
         case "input", _:
             return replayable_responses_input(
-                ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(value))
+                ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(value)),
+                drops_set_created_by=policy.drop_params,
             )
         case "previous_response_id", str():
             return ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(value)
@@ -400,5 +401,7 @@ def _restored(field: str, value: object) -> object:
 
 
 def native_count_request(request: Mapping[str, object], model: str, policy: DropPolicy) -> Mapping[str, object]:
-    forwarded: Final = {field: _restored(field, value) for field, value in request.items() if _forwards(field, policy)}
+    forwarded: Final = {
+        field: _restored(field, value, policy) for field, value in request.items() if _forwards(field, policy)
+    }
     return {**forwarded, "model": model}

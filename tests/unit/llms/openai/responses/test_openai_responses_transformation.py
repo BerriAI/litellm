@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 import respx
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
@@ -1409,12 +1410,59 @@ class TestOpenAIResponsesAPIConfig:
 
         assert request["input"] == [expected, {"role": "user", "content": "And Berlin?"}]
 
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            (
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": "user_1"},
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"},
+            ),
+            (
+                ResponseCompactionItem(id="cmp_1", type="compaction", encrypted_content="gAAAA", created_by="user_1"),
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"},
+            ),
+            (
+                {
+                    "type": "shell_call_output",
+                    "call_id": "call_1",
+                    "created_by": "user_1",
+                    "output": [{"stdout": "a.py", "stderr": "", "created_by": "user_1"}],
+                },
+                {"type": "shell_call_output", "call_id": "call_1", "output": [{"stdout": "a.py", "stderr": ""}]},
+            ),
+        ],
+        ids=("compaction", "sdk-compaction-item", "shell-call-output-entries"),
+    )
+    def test_a_set_created_by_is_dropped_under_drop_params(self, item: object, expected: dict[str, object]):
+        request: Final = self.config.transform_responses_api_request(
+            model="gpt-5.6",
+            input=cast("list[dict[str, object]]", [item]),  # cast-ok: an SDK item stands in for its JSON shape
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+            headers={},
+        )
+
+        assert request["input"] == [expected]
+
 
 class TestAzureResponsesAPIConfig:
     def setup_method(self):
         self.config = AzureOpenAIResponsesAPIConfig()
         self.model = "gpt-4o"
         self.logging_obj = MagicMock()
+
+    def test_azure_drops_a_set_created_by_under_drop_params(self):
+        compaction: Final = {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"}
+
+        request: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=[{**compaction, "created_by": "user_1"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+            headers={},
+        )
+
+        assert request["input"] == [compaction]
 
     def test_azure_decodes_json_string_tool_parameters(self):
         """Azure reaches the same wire through `super()`, after un-nesting a chat-shaped tool."""

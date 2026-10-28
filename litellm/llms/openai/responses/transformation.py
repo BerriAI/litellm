@@ -513,7 +513,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         prompt_cache_options: object = None,
     ) -> tuple[str | ResponseInputParam, Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None]:
-        validated_input: Final = self._validate_input_param(self._drop_bridge_minted_reasoning_items(input))
+        validated_input: Final = self._validate_input_param(
+            self._drop_bridge_minted_reasoning_items(input), drops_set_created_by=_drops_params(litellm_params)
+        )
         marked_input: Final = (
             self._input_with_prompt_cache_breakpoints(validated_input)
             if self._reads_prompt_cache_breakpoints(
@@ -747,7 +749,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         ]
         return tools if all(new is old for new, old in zip(sanitized, tools, strict=True)) else sanitized
 
-    def _validate_input_param(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
+    def _validate_input_param(
+        self, input: str | ResponseInputParam, *, drops_set_created_by: bool = False
+    ) -> str | ResponseInputParam:
         """
         Ensure all input fields if pydantic are converted to dict
 
@@ -759,7 +763,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             for item in input:
                 # if it's pydantic, convert to dict
                 if isinstance(item, BaseModel):
-                    validated_input.append(item.model_dump(exclude_none=True))
+                    validated_input.append(
+                        replayable_responses_item(
+                            item.model_dump(exclude_none=True), drops_set_created_by=drops_set_created_by
+                        )
+                    )
                 elif isinstance(item, dict):
                     # Handle reasoning items specifically to filter out status=None
                     if item.get("type") == "reasoning":
@@ -768,7 +776,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                         dict_item = cast(dict[str, object], item)
                         filtered_item = self._handle_reasoning_item(dict_item)
                     else:
-                        filtered_item = replayable_responses_item(item)
+                        filtered_item = replayable_responses_item(item, drops_set_created_by=drops_set_created_by)
                     validated_input.append(filtered_item)
                 else:
                     validated_input.append(item)

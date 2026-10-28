@@ -1493,38 +1493,55 @@ def _as_json_array(value: object) -> Sequence[object] | None:
     return value if isinstance(value, list) else None
 
 
-def _drops_when_null(item_type: object, key: object) -> bool:
-    return key == "created_by" or (item_type == "reasoning" and key in _NULL_DROPPED_REASONING_ITEM_KEYS)
+def _drops_created_by(value: object, *, drops_set_created_by: bool) -> bool:
+    return value is None or drops_set_created_by
 
 
-def _without_null_created_by(entry: object) -> object:
+def _drops(item_type: object, key: object, value: object, *, drops_set_created_by: bool) -> bool:
+    if key == "created_by":
+        return _drops_created_by(value, drops_set_created_by=drops_set_created_by)
+    return value is None and item_type == "reasoning" and key in _NULL_DROPPED_REASONING_ITEM_KEYS
+
+
+def _without_created_by(entry: object, *, drops_set_created_by: bool) -> object:
     entry_object: Final = _as_json_object(entry)
     if entry_object is None:
         return entry
-    return {k: v for k, v in entry_object.items() if k != "created_by" or v is not None}
-
-
-def _replayable_output_value(item_type: object, key: object, value: object) -> object:
-    entries: Final = _as_json_array(value)
-    if item_type != "shell_call_output" or key != "output" or entries is None:
-        return value
-    return [_without_null_created_by(entry) for entry in entries]
-
-
-def replayable_responses_item(item: Mapping[str, object]) -> Mapping[str, object]:
-    item_type: Final = item.get("type")
     return {
-        k: _replayable_output_value(item_type, k, v)
-        for k, v in item.items()
-        if v is not None or not _drops_when_null(item_type, k)
+        k: v
+        for k, v in entry_object.items()
+        if k != "created_by" or not _drops_created_by(v, drops_set_created_by=drops_set_created_by)
     }
 
 
-def replayable_responses_input(value: object) -> object:
+def _replayable_output_value(item_type: object, key: object, value: object, *, drops_set_created_by: bool) -> object:
+    entries: Final = _as_json_array(value)
+    if item_type != "shell_call_output" or key != "output" or entries is None:
+        return value
+    return [_without_created_by(entry, drops_set_created_by=drops_set_created_by) for entry in entries]
+
+
+def replayable_responses_item(
+    item: Mapping[str, object], *, drops_set_created_by: bool = False
+) -> Mapping[str, object]:
+    item_type: Final = item.get("type")
+    return {
+        k: _replayable_output_value(item_type, k, v, drops_set_created_by=drops_set_created_by)
+        for k, v in item.items()
+        if not _drops(item_type, k, v, drops_set_created_by=drops_set_created_by)
+    }
+
+
+def replayable_responses_input(value: object, *, drops_set_created_by: bool = False) -> object:
     items: Final = _as_json_array(value)
     if items is None:
         return value
-    return [replayable_responses_item(obj) if (obj := _as_json_object(item)) is not None else item for item in items]
+    return [
+        replayable_responses_item(obj, drops_set_created_by=drops_set_created_by)
+        if (obj := _as_json_object(item)) is not None
+        else item
+        for item in items
+    ]
 
 
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
