@@ -100,6 +100,8 @@ from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_dependencies,
     authorize_member_auto_router_team,
     authorize_member_auto_router_write,
+    auto_router_environment_reference_error,
+    raise_auto_router_environment_reference_error,
 )
 from litellm.proxy.management_helpers.model_allowlist_rename_sync import sync_model_allowlists_for_renamed_model
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
@@ -2412,6 +2414,14 @@ class ModelManagementAuthChecks:
             raise HTTPException(status_code=403, detail="View-only users cannot manage models.")
         ModelManagementAuthChecks._reject_team_inline_api_key_secret_reference(
             model_params=model_params, incoming_params=incoming_params, incoming_model_params=incoming_model_params
+        )
+        raise_auto_router_environment_reference_error(
+            auto_router_environment_reference_error(
+                config=_OPTIONAL_JSON_OBJECT.validate_python(
+                    incoming_params.get("complexity_router_config") if incoming_params is not None else None
+                ),
+                user_api_key_dict=user_api_key_dict,
+            )
         )
         # Federation fields choose which server-side secret is read and where the org-scoped token
         # it buys is sent, so only a proxy admin may point a federated deployment somewhere else.

@@ -732,6 +732,85 @@ def test_jev_api_base_without_its_own_key_is_rejected_so_the_environment_key_sta
     assert JevClassifierConfig(api_key="sk-own").api_base is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("connection", ["literal", "key-reference", "base-reference", "references", "defaults"])
+async def test_jev_connection_resolves_only_explicit_environment_references(
+    monkeypatch: pytest.MonkeyPatch, legacy: bool, connection: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("JEV_CONNECTION_KEY", "resolved-key")
+    monkeypatch.setenv("JEV_CONNECTION_BASE", "https://jev.test")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "default-key")
+    monkeypatch.setenv("TYPESAFE_API_BASE", "https://default-jev.test")
+    monkeypatch.setenv("literal-key", "must-not-replace-literal")
+    fields: Final = (
+        {}
+        if connection == "defaults"
+        else {
+            "api_key": "os.environ/JEV_CONNECTION_KEY"
+            if connection in ("key-reference", "references")
+            else "literal-key",
+            "api_base": "os.environ/JEV_CONNECTION_BASE"
+            if connection in ("base-reference", "references")
+            else "https://jev.test",
+        }
+    )
+    config: Final = {
+        "classifier_type": "jev" if legacy else "oss_classifier",
+        "jev_classifier_config" if legacy else "opensource_classifier_config": {"model": "openjev-latest", **fields},
+        "tiers": {"SIMPLE": "cheap", "COMPLEX": "strong"},
+    }
+    classifier: Final = ComplexityRouter("env-router", litellm.Router(), config, derive_savings_baseline=False)
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(
+            "https://default-jev.test/v1/systemone" if connection == "defaults" else "https://jev.test/v1/systemone"
+        ).respond(json={"answers": {"tier": _answer("SIMPLE").model_dump()}})
+        outcome: Final = await classifier.aclassify("What is two plus two?")
+    expected_key: Final = (
+        "default-key"
+        if connection == "defaults"
+        else "resolved-key" if connection in ("key-reference", "references") else "literal-key"
+    )
+    assert outcome.cause == "jev_classifier"
+    assert route.calls[0].request.headers["authorization"] == f"Bearer {expected_key}"
+    assert classifier.config.opensource_classifier_config is not None
+    assert classifier.config.opensource_classifier_config.api_key == fields.get("api_key")
+    assert classifier.config.opensource_classifier_config.api_base == fields.get("api_base")
+
+
+@pytest.mark.parametrize("field", ["api_key", "api_base"])
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_jev_missing_explicit_environment_reference_never_uses_provider_defaults(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: str | None
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "never-send-default-key")
+    monkeypatch.setenv("TYPESAFE_API_BASE", "https://never-use-default.test")
+    if value is None:
+        monkeypatch.delenv("JEV_MISSING_CONNECTION", raising=False)
+    else:
+        monkeypatch.setenv("JEV_MISSING_CONNECTION", value)
+    with (
+        respx.mock(assert_all_called=False) as upstream,
+        pytest.raises(ValueError, match=rf"opensource_classifier_config\.{field}"),
+    ):
+        ComplexityRouter(
+            "env-router",
+            litellm.Router(),
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {
+                    "api_key": "literal-key",
+                    "api_base": "https://jev.test",
+                    field: "os.environ/JEV_MISSING_CONNECTION",
+                },
+                "tiers": {"SIMPLE": "cheap"},
+            },
+            derive_savings_baseline=False,
+        )
+    assert len(upstream.calls) == 0
+
+
 def test_databricks_api_base_without_its_own_key_is_rejected_so_the_workspace_token_stays_home() -> None:
     with pytest.raises(ValueError, match="DATABRICKS_API_KEY or DATABRICKS_TOKEN is only sent to DATABRICKS_API_BASE"):
         JevClassifierConfig.model_validate(

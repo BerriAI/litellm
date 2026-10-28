@@ -7861,6 +7861,76 @@ class TestTeamMemberAutoRouterWrites:
         }
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["create", "patch", "legacy"])
+    @pytest.mark.parametrize("legacy", [False, True])
+    @pytest.mark.parametrize("field", ["api_key", "api_base"])
+    async def test_team_admin_classifier_writes_reject_environment_references(
+        self, endpoint: str, legacy: bool, field: str
+    ) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+        stored_config: Final = self._classifier_config(
+            {"api_key": "os.environ/PRIVATE_JEV_VALUE", "api_base": "https://trusted-jev.test"}, legacy
+        )
+        row: Final = self._row().model_copy(update={"litellm_params": {
+            "model": "auto_router/complexity_router", "complexity_router_config": stored_config,
+        }})
+        team: Final = self._team().model_copy(update={"members_with_roles": [Member(user_id="owner", role="admin")]})
+        database: Final = self._database(team, row)
+        actor: Final = UserAPIKeyAuth(user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER)
+        config: Final = self._classifier_config(
+            {"api_key": "caller-key", "api_base": "https://untrusted-jev.test", field: "os.environ/PRIVATE_JEV_VALUE"},
+            legacy,
+        )
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(complexity_router_config=config),
+            model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+        )
+        operation: Final = (
+            add_new_model(Deployment(
+                model_name="new-jev-router",
+                litellm_params=LiteLLM_Params(model="auto_router/complexity_router", complexity_router_config=config),
+                model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+            ), actor)
+            if endpoint == "create"
+            else patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
+        )
+        with self._environment(database, row), pytest.raises((HTTPException, ProxyException)) as denied:
+            await operation
+        assert (denied.value.status_code if isinstance(denied.value, HTTPException) else int(denied.value.code)) == 403
+        database.db.litellm_proxymodeltable.create.assert_not_awaited()
+        database.db.litellm_proxymodeltable.update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    @pytest.mark.parametrize("change_config", [False, True])
+    async def test_team_admin_unrelated_updates_preserve_stored_environment_references(
+        self, endpoint: str, change_config: bool
+    ) -> None:
+        connection: Final = {"api_key": "os.environ/SAVED_JEV_KEY", "api_base": "os.environ/SAVED_JEV_BASE"}
+        stored_config: Final = self._classifier_config(connection, True)
+        row: Final = self._row().model_copy(update={"litellm_params": {
+            "model": "auto_router/complexity_router", "complexity_router_config": stored_config,
+        }})
+        team: Final = self._team().model_copy(update={"members_with_roles": [Member(user_id="owner", role="admin")]})
+        database: Final = self._database(team, row)
+        actor: Final = UserAPIKeyAuth(user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER)
+        params: Final = (
+            {"complexity_router_config": self._classifier_config({"timeout_ms": 8100}, False)}
+            if change_config else {"max_tokens": 100}
+        )
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams.model_validate(params), model_info=ModelInfo(id=row.model_id),
+        )
+        with self._environment(database, row):
+            await (patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor))
+        written: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        saved: Final = json.loads(written["litellm_params"])["complexity_router_config"]
+        assert saved == (
+            self._classifier_config({**connection, "timeout_ms": 8100}, False) if change_config else stored_config
+        )
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "stored_params,removed,denied_param",
         [

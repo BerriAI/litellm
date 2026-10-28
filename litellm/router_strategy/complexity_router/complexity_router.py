@@ -23,6 +23,7 @@ import random
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
 from itertools import accumulate, chain, islice, takewhile
 from threading import Lock
@@ -1389,6 +1390,11 @@ def _session_affinity_cache_value(model: str, tier: ComplexityTier | str | None)
     return {"model": model, "tier": tier_value}
 
 
+@dataclass(frozen=True, slots=True)
+class _JevConnectionError:
+    message: str
+
+
 class ComplexityRouter(CustomLogger):
     """
     Complexity router that classifies requests and routes to appropriate models.
@@ -1404,7 +1410,7 @@ class ComplexityRouter(CustomLogger):
     - Question complexity (multiple questions)
     """
 
-    def _build_jev_client(self, config: OpenSourceClassifierConfig) -> JevClassifierClient:
+    def _build_jev_client(self, config: OpenSourceClassifierConfig) -> JevClassifierClient | _JevConnectionError:
         if config.deployment_name is not None:
             return RouterJevClassifierClient(self.litellm_router_instance, config.deployment_name)
         if config.provider in ("laya", "bespoke"):
@@ -1425,12 +1431,22 @@ class ComplexityRouter(CustomLogger):
                 http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
                 provider="databricks",
             )
-        api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
-        if not api_key:
-            raise ValueError(
+        api_key: Final = (
+            get_secret_str(config.api_key)
+            if config.api_key is not None and config.api_key.startswith("os.environ/")
+            else config.api_key or get_secret_str("TYPESAFE_API_KEY")
+        )
+        if not api_key or not api_key.strip():
+            return _JevConnectionError(
                 "opensource_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'oss_classifier'"
             )
-        api_base: Final = config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+        api_base: Final = (
+            get_secret_str(config.api_base)
+            if config.api_base is not None and config.api_base.startswith("os.environ/")
+            else config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+        )
+        if not api_base or not api_base.strip():
+            return _JevConnectionError("opensource_classifier_config.api_base must resolve to a non-empty value")
         return HttpJevClassifierClient(
             api_key=api_key,
             api_base=api_base,
@@ -1473,13 +1489,18 @@ class ComplexityRouter(CustomLogger):
             self.config.default_model = default_model
 
         jev_config: Final = self.config.opensource_classifier_config
-        self._jev_client: JevClassifierClient | None = (
+        jev_client_result: Final = (
             jev_client
             if jev_client is not None
             else self._build_jev_client(jev_config)
             if self.config.classifier_type == "oss_classifier" and jev_config is not None
             else None
         )
+        match jev_client_result:
+            case _JevConnectionError(message=message):
+                raise ValueError(message)
+            case _:
+                self._jev_client: JevClassifierClient | None = jev_client_result
 
         self._tier_affinity_config = hashlib.sha256(
             self.config.model_dump_json(include=MappingProxyType({"tiers": True, "tier_model_configs": True})).encode()
