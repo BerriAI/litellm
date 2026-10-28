@@ -1365,6 +1365,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if delta_content:
             if not self.sent_message_item_added_event:
                 self._queue_message_item_added_events()
+            self._queue_tool_call_delta_events(getattr(chunk.choices[0].delta, "tool_calls", None))
             self._sequence_number += 1
             text_delta_event: Final = OutputTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
