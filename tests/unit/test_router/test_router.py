@@ -7059,15 +7059,27 @@ def _background_response_body(status: str, background: bool) -> dict[str, object
 
 
 def _paused_background_stream(
-    output_may_start: asyncio.Event, background: bool, after_pause: tuple[dict[str, object], ...]
+    output_may_start: asyncio.Event,
+    upstream_paused: asyncio.Event,
+    background: bool,
+    after_pause: tuple[dict[str, object], ...],
 ) -> httpx.Response:
     async def body() -> AsyncIterator[bytes]:
         yield _background_sse_frame(
-            {"type": "response.created", "sequence_number": 0, "response": _background_response_body("queued", background)}
+            {
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": _background_response_body("queued", background),
+            }
         )
         yield _background_sse_frame(
-            {"type": "response.queued", "sequence_number": 1, "response": _background_response_body("queued", background)}
+            {
+                "type": "response.queued",
+                "sequence_number": 1,
+                "response": _background_response_body("queued", background),
+            }
         )
+        upstream_paused.set()
         await output_may_start.wait()
         for event in after_pause:
             yield _background_sse_frame(event)
@@ -7078,11 +7090,17 @@ def _paused_background_stream(
 def _background_output_then_completed(background: bool) -> tuple[dict[str, object], ...]:
     return (
         {"type": "response.output_text.delta", "sequence_number": 2, "item_id": "msg_1", "delta": "41"},
-        {"type": "response.completed", "sequence_number": 3, "response": _background_response_body("completed", background)},
+        {
+            "type": "response.completed",
+            "sequence_number": 3,
+            "response": _background_response_body("completed", background),
+        },
     )
 
 
-def _background_router(model_name: str, litellm_params: dict[str, object], fallbacks: list | None) -> Router:
+def _background_router(
+    model_name: str, litellm_params: dict[str, object], fallbacks: list[dict[str, list[str]]] | None
+) -> Router:
     return litellm.Router(
         model_list=[
             {"model_name": model_name, "litellm_params": litellm_params},
@@ -7100,8 +7118,12 @@ def _background_router(model_name: str, litellm_params: dict[str, object], fallb
     )
 
 
-async def _arrived_before_output(first: "asyncio.Future[object]", wait_seconds: float) -> bool:
-    done, _ = await asyncio.wait({first}, timeout=wait_seconds)
+async def _reached_client_before_upstream_paused(
+    first: "asyncio.Future[object]", upstream_paused: asyncio.Event
+) -> bool:
+    paused: Final = asyncio.ensure_future(upstream_paused.wait())
+    done, _ = await asyncio.wait({first, paused}, return_when=asyncio.FIRST_COMPLETED)
+    paused.cancel()
     return first in done
 
 
@@ -7114,20 +7136,24 @@ async def _arrived_before_output(first: "asyncio.Future[object]", wait_seconds: 
 )
 @pytest.mark.asyncio
 async def test_aresponses_background_stream_hands_the_response_id_to_the_client_before_output(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, fallbacks: list | None, request_kwargs: dict
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    fallbacks: list[dict[str, list[str]]] | None,
+    request_kwargs: dict[str, bool],
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     output_may_start: Final = asyncio.Event()
+    upstream_paused: Final = asyncio.Event()
     respx_mock.post(_BACKGROUND_PRIMARY_URL).mock(
-        return_value=_paused_background_stream(output_may_start, True, _background_output_then_completed(True))
+        return_value=_paused_background_stream(
+            output_may_start, upstream_paused, True, _background_output_then_completed(True)
+        )
     )
     router: Final = _background_router("gpt-bg", {"model": "openai/gpt-6.1-terra", "api_key": "k"}, fallbacks)
 
-    stream: Final = await router.aresponses(
-        model="gpt-bg", input="hi", background=True, stream=True, **request_kwargs
-    )
+    stream: Final = await router.aresponses(model="gpt-bg", input="hi", background=True, stream=True, **request_kwargs)
     first: Final = asyncio.ensure_future(anext(stream))
-    arrived_before_output: Final = await _arrived_before_output(first, wait_seconds=5)
+    arrived_before_output: Final = await _reached_client_before_upstream_paused(first, upstream_paused)
     output_may_start.set()
     created: Final = await first
     rest: Final = [event async for event in stream]
@@ -7145,9 +7171,7 @@ async def test_aresponses_background_stream_hands_the_response_id_to_the_client_
 @pytest.mark.parametrize(
     ("litellm_params", "background", "fallbacks"),
     [
-        pytest.param(
-            {"model": "openai/gpt-6.1-terra", "api_key": "k"}, False, None, id="foreground-request"
-        ),
+        pytest.param({"model": "openai/gpt-6.1-terra", "api_key": "k"}, False, None, id="foreground-request"),
         pytest.param(
             {"model": "openai/gpt-6.1-terra", "api_key": "k"}, True, [{"gpt-bg": ["backup"]}], id="fallback-configured"
         ),
@@ -7170,24 +7194,26 @@ async def test_aresponses_stream_keeps_holding_lifecycle_events_until_output_off
     monkeypatch: pytest.MonkeyPatch,
     litellm_params: dict[str, object],
     background: bool,
-    fallbacks: list | None,
+    fallbacks: list[dict[str, list[str]]] | None,
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     output_may_start: Final = asyncio.Event()
+    upstream_paused: Final = asyncio.Event()
     respx_mock.route(method="POST", path__regex=r"/responses$").mock(
         return_value=_paused_background_stream(
-            output_may_start, background, _background_output_then_completed(background)
+            output_may_start, upstream_paused, background, _background_output_then_completed(background)
         )
     )
     router: Final = _background_router("gpt-bg", litellm_params, fallbacks)
 
     stream: Final = await router.aresponses(model="gpt-bg", input="hi", background=background, stream=True)
     first: Final = asyncio.ensure_future(anext(stream))
-    arrived_before_output: Final = await _arrived_before_output(first, wait_seconds=0.5)
+    arrived_before_output: Final = await _reached_client_before_upstream_paused(first, upstream_paused)
     output_may_start.set()
     events: Final = [await first, *[event async for event in stream]]
 
     assert arrived_before_output is False
+    assert upstream_paused.is_set()
     assert [event.type for event in events] == [
         "response.created",
         "response.queued",
@@ -7202,6 +7228,7 @@ async def test_aresponses_background_stream_surfaces_a_later_error_instead_of_a_
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     output_may_start: Final = asyncio.Event()
+    upstream_paused: Final = asyncio.Event()
     backup_output_may_start: Final = asyncio.Event()
     backup_output_may_start.set()
     server_error: Final = {
@@ -7210,16 +7237,18 @@ async def test_aresponses_background_stream_surfaces_a_later_error_instead_of_a_
         "error": {"type": "server_error", "code": "server_error", "message": "upstream died", "param": None},
     }
     primary_route: Final = respx_mock.post(_BACKGROUND_PRIMARY_URL).mock(
-        return_value=_paused_background_stream(output_may_start, True, (server_error,))
+        return_value=_paused_background_stream(output_may_start, upstream_paused, True, (server_error,))
     )
     backup_route: Final = respx_mock.post(_BACKGROUND_BACKUP_URL).mock(
-        return_value=_paused_background_stream(backup_output_may_start, True, _background_output_then_completed(True))
+        return_value=_paused_background_stream(
+            backup_output_may_start, asyncio.Event(), True, _background_output_then_completed(True)
+        )
     )
     router: Final = _background_router("gpt-bg", {"model": "openai/gpt-6.1-terra", "api_key": "k"}, None)
 
     stream: Final = await router.aresponses(model="gpt-bg", input="hi", background=True, stream=True)
     first: Final = asyncio.ensure_future(anext(stream))
-    arrived_before_output: Final = await _arrived_before_output(first, wait_seconds=5)
+    arrived_before_output: Final = await _reached_client_before_upstream_paused(first, upstream_paused)
     router.fallbacks = [{"gpt-bg": ["backup"]}]
     output_may_start.set()
     created: Final = await first
