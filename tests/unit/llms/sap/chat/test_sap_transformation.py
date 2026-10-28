@@ -1,6 +1,60 @@
 import warnings
+from copy import deepcopy
+from typing import Final
+
 import pytest
 from pydantic import ValidationError
+
+from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallFunctionChunk
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("arguments", [None, "", '{"city":"Paris"}'])
+def test_replayed_tool_call_arguments_survive_request_serialization(
+    arguments: str | None, stream: bool
+) -> None:
+    function: Final[ChatCompletionToolCallFunctionChunk] = (
+        {"name": "get_weather"}
+        if arguments is None
+        else {"name": "get_weather", "arguments": arguments}
+    )
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": "Check the weather"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_weather", "type": "function", "function": function}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_weather", "content": "Sunny"},
+    ]
+    original: Final = deepcopy(messages)
+    body: Final = GenAIHubOrchestrationConfig().transform_request(
+        model="anthropic--claude-4.6-sonnet",
+        messages=messages,
+        optional_params={
+            "stream": stream,
+            "fallback_sap_modules": [
+                {"model": "sap/anthropic--claude-4.6-sonnet", "messages": messages}
+            ],
+        },
+        litellm_params={},
+        headers={},
+    )
+    expected: Final = {
+        **original[1],
+        "tool_calls": [{
+            "id": "call_weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": arguments or ""},
+        }],
+    }
+    assert messages == original
+    assert [
+        module["prompt_templating"]["prompt"]["template"]
+        for module in body["config"]["modules"]
+    ] == [[original[0], expected, original[2]]] * 2
 
 
 class TestSAPTransformationIntegration:
