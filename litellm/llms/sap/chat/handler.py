@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import Final, cast  # noqa: TID251  # untyped dict keys are casted explicitly
+from typing import Final
 
 import httpx
 
@@ -46,15 +46,12 @@ def normalize_choice(
         thinking_blocks: list[dict[str, object]] = [  # mutable-ok: consumed immediately below; never escapes as mutable
             {
                 "type": "thinking",
-                "thinking": cast(dict[str, object], item).get("content")  # cast-ok: isinstance(item, dict) guard below
-                or "",
-                "signature": cast(dict[str, object], item).get(  # cast-ok: isinstance(item, dict) guard below
+                "thinking": item.get("content") or "",  # pyright: ignore[reportUnknownMemberType]  # isinstance guard in comprehension filter; pyright can't narrow
+                "signature": item.get(  # pyright: ignore[reportUnknownMemberType]  # isinstance guard in comprehension filter; pyright can't narrow
                     "signature"
                 ),
             }
-            for item in cast(  # cast-ok: isinstance(reasoning_content, list) guard above
-                list[object], reasoning_content
-            )
+            for item in reasoning_content  # pyright: ignore[reportUnknownVariableType]  # isinstance(reasoning_content, list) guard above; pyright can't narrow into comprehension
             if isinstance(item, dict)
         ]
         carrier["thinking_blocks"] = thinking_blocks
@@ -69,10 +66,10 @@ def normalize_reasoning_content(
 ) -> dict[str, object]:  # mutable-ok: wire dicts from httpx JSON; callers own them
     """Transform reasoning_content from SAP Orchestration format [{"content": ..., "signature": ...}] to Optional[str] and a thinking_blocks list."""
     choices: Final[list[object]] = list(  # mutable-ok: wire list from httpx JSON
-        cast(list[object], raw.get("choices") or [])  # cast-ok: wire JSON; choices is always a list
+        raw.get("choices") or []  # pyright: ignore[reportArgumentType, reportUnknownArgumentType]  # wire JSON; choices is always a list
     )
     normalized_choices: Final[list[dict[str, object]]] = [  # mutable-ok: wire list passed to pydantic model_validate
-        normalize_choice(cast(dict[str, object], choice))  # cast-ok: isinstance(choice, dict) guard below
+        normalize_choice(choice)  # pyright: ignore[reportUnknownArgumentType]  # isinstance guard in comprehension filter; pyright can't narrow
         for choice in choices
         if isinstance(choice, dict)
     ]
@@ -103,16 +100,13 @@ def denormalize_reasoning_content(
         reasoning_content: Final[list[dict[str, str | None]]] = [  # mutable-ok: wire list passed to validate_dict
             {
                 "content": str(
-                    cast(dict[str, object], block).get("thinking") or ""  # cast-ok: isinstance(block, dict) guard below
+                    block.get("thinking") or ""  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # isinstance guard in comprehension filter; pyright can't narrow
                 ),
-                "signature": cast(  # cast-ok: narrows to str|None
-                    str | None,
-                    cast(dict[str, object], block).get(  # cast-ok: isinstance(block, dict) guard; narrows dict
-                        "signature"
-                    ),
+                "signature": block.get(  # pyright: ignore[reportUnknownMemberType]  # isinstance guard in comprehension filter; pyright can't narrow
+                    "signature"
                 ),
             }
-            for block in cast(list[object], thinking_blocks)  # cast-ok: isinstance(thinking_blocks, list) guard above
+            for block in thinking_blocks  # pyright: ignore[reportUnknownVariableType]  # isinstance(thinking_blocks, list) guard above; pyright can't narrow into comprehension
             if isinstance(block, dict)
         ]
         return {k: v for k, v in message.items() if k not in ("thinking_blocks", "reasoning_content")} | {
@@ -142,9 +136,7 @@ class _StreamParser:
         """
         Accepts orchestration_result shape and maps it to an OpenAI-like *chunk*.
         """
-        orc: Final[dict[str, object]] = cast(  # cast-ok: wire JSON; orchestration_result is always a dict
-            dict[str, object], evt.get("orchestration_result") or {}
-        )
+        orc: Final[dict[str, object]] = evt.get("orchestration_result") or {}  # pyright: ignore[reportAssignmentType]  # wire JSON; orchestration_result is always a dict
         if not orc:
             return None
 
@@ -152,7 +144,7 @@ class _StreamParser:
             normalize_reasoning_content(
                 {
                     "id": orc.get("id")
-                    or cast(str | None, evt.get("request_id"))  # cast-ok: wire JSON string field
+                    or evt.get("request_id")  # pyright: ignore[reportUnknownMemberType]  # wire JSON string field
                     or "stream-chunk",
                     "object": orc.get("object") or "chat.completion.chunk",
                     "created": orc.get("created") or evt.get("created") or _now_ts(),
@@ -163,9 +155,7 @@ class _StreamParser:
                             "delta": choice.get("delta") or {},
                             "finish_reason": choice.get("finish_reason"),
                         }
-                        for choice in cast(  # cast-ok: wire JSON; choices is always list[dict]
-                            list[dict[str, object]], orc.get("choices") or []
-                        )
+                        for choice in orc.get("choices") or []  # pyright: ignore[reportUnknownVariableType, reportGeneralTypeIssues]  # wire JSON; choices is always list[dict]
                     ],
                 }
             )
@@ -350,12 +340,8 @@ class AsyncSAPStreamIterator:
 # -------------------------------
 class GenAIHubOrchestration(BaseLLMHTTPHandler):
     def _add_stream_param_to_request_body(self, data: dict, provider_config: BaseConfig, fake_stream: bool):
-        if (
-            cast(  # cast-ok: config is always a dict when present
-                dict[str, object], data.get("config") or {}
-            ).get("stream")
-            is not None
-        ):
+        config = data.get("config") or {}  # pyright: ignore[reportUnknownVariableType]  # wire JSON; config is always a dict when present
+        if isinstance(config, dict) and config.get("stream") is not None:
             data["config"]["stream"]["enabled"] = True
         else:
             data["config"]["stream"] = {"enabled": True}
