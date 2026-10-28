@@ -222,6 +222,9 @@ class _CallbackCapture(CustomLogger):
         self.async_success: Final = AsyncMock()
         self.sync_failure: Final = Mock()
         self.async_failure: Final = AsyncMock()
+        # Exception seen at dispatch time; litellm releases it from the call-details
+        # dict once the failure handlers have run (issue #48649).
+        self.async_failure_exceptions: Final = []
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         self.sync_success(kwargs=kwargs, response_obj=response_obj)
@@ -234,6 +237,7 @@ class _CallbackCapture(CustomLogger):
         self.sync_failure(kwargs=kwargs, response_obj=response_obj)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.async_failure_exceptions.append(kwargs.get("exception"))
         await self.async_failure(kwargs=kwargs, response_obj=response_obj)
 
 
@@ -501,7 +505,7 @@ async def test_async_embedding_failure_reaches_failure_callback(
     )
     assert len(failure_events) == 1
     assert failure_events[0]["model"] == "text-embedding-3-small"
-    assert isinstance(failure_events[0]["exception"], litellm.AuthenticationError)
+    assert isinstance(callback_capture.async_failure_exceptions[0], litellm.AuthenticationError)
     assert callback_capture.async_success.call_args_list == []
 
 

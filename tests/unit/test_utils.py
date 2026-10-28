@@ -4,15 +4,19 @@ import base64
 import copy
 import contextlib
 import contextvars
+import gc
 import io
 import json
 import logging
 import os
 import queue
 import threading
+import traceback
+import weakref
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path, PurePath
 from typing import Final, SupportsIndex, cast
 from unittest import mock
@@ -10880,3 +10884,177 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     )
 
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
+
+
+class _Always400OpenAIChatHandler(BaseHTTPRequestHandler):
+    """Local OpenAI-compatible deployment that rejects every chat completion with a 400."""
+
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers.get("content-length", 0)))
+        error_body = json.dumps(
+            {
+                "error": {
+                    "message": "This model's maximum context length is 32768 tokens.",
+                    "type": "invalid_request_error",
+                    "code": "context_length_exceeded",
+                }
+            }
+        ).encode()
+        self.send_response(400)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(error_body)))
+        self.end_headers()
+        self.wfile.write(error_body)
+
+    def log_message(self, format, *args):
+        pass
+
+
+@contextlib.contextmanager
+def _local_always_400_chat_completions_server() -> Iterator[str]:
+    server = HTTPServer(("127.0.0.1", 0), _Always400OpenAIChatHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/v1"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+class _WeakRefPrompt(str):
+    """str subclass, so a weakref can observe when litellm releases the request prompt."""
+
+
+_PROMPT_SIZE = 400_000
+
+
+class _CaptureFailureEventLogger(CustomLogger):
+    """Failure callback observer. Records only derived payload facts, never the
+    kwargs dict itself, so it cannot keep the logging cycle alive."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.failure_event_facts = []
+
+    def _record_failure_event(self, kwargs: dict) -> None:
+        standard_payload = kwargs.get("standard_logging_object") or {}
+        error_information = standard_payload.get("error_information") or {}
+        self.failure_event_facts.append(
+            {
+                "exception_present": "exception" in kwargs,
+                "error_code": error_information.get("error_code"),
+            }
+        )
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self._record_failure_event(kwargs)
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self._record_failure_event(kwargs)
+
+
+def test_failed_sync_completion_releases_prompt_without_cyclic_gc(monkeypatch: pytest.MonkeyPatch):
+    """Regression for issue #48649: after a failed sync completion() the cycle
+    exception -> traceback -> wrapper/impl frames -> Logging ->
+    model_call_details["exception"] used to pin the request messages until a
+    full generation-2 collection. With the cyclic GC disabled, the prompt must
+    still be freed by plain refcounting once the failed call returns, the
+    failure callback must see the complete payload before the cleanup, and the
+    exception must reach the caller with its traceback intact."""
+    observer = _CaptureFailureEventLogger()
+    monkeypatch.setattr(litellm, "failure_callback", [observer])
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        with _local_always_400_chat_completions_server() as api_base:
+            prompt = _WeakRefPrompt("x" * _PROMPT_SIZE)
+            messages = [{"role": "user", "content": prompt}]
+            facts = {}
+            try:
+                litellm.completion(
+                    model="openai/default",
+                    api_base=api_base,
+                    api_key="not-used",
+                    messages=messages,
+                    num_retries=0,
+                    max_retries=0,
+                )
+            except litellm.exceptions.ContextWindowExceededError as exc:
+                facts["error_message"] = str(exc)
+                facts["error_type"] = type(exc).__name__
+                facts["has_traceback_frames"] = bool(traceback.format_tb(exc.__traceback__))
+                facts["context_chained"] = exc.__cause__ is not None or exc.__context__ is not None
+            prompt_ref = weakref.ref(prompt)
+            del prompt, messages
+
+            assert prompt_ref() is None, "failed sync request pinned the prompt in the logging cycle (issue #48649)"
+            assert facts["error_type"] == "ContextWindowExceededError"
+            assert "maximum context length" in facts["error_message"]
+            assert facts["has_traceback_frames"] is True
+            assert facts["context_chained"] is True
+            assert observer.failure_event_facts, "sync failure handler never dispatched the failure callback"
+            assert all(event["exception_present"] for event in observer.failure_event_facts)
+            assert all(event["error_code"] == "400" for event in observer.failure_event_facts)
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
+@pytest.mark.asyncio
+async def test_failed_acompletion_releases_prompt_without_cyclic_gc(monkeypatch: pytest.MonkeyPatch):
+    """Async twin of the issue #48649 regression: a failed acompletion() must not
+    pin the request prompt through the exception/logging reference cycle either."""
+    observer = _CaptureFailureEventLogger()
+    monkeypatch.setattr(litellm, "_async_failure_callback", [observer])
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        with _local_always_400_chat_completions_server() as api_base:
+            prompt = _WeakRefPrompt("x" * _PROMPT_SIZE)
+            messages = [{"role": "user", "content": prompt}]
+            facts = {}
+            try:
+                await litellm.acompletion(
+                    model="openai/default",
+                    api_base=api_base,
+                    api_key="not-used",
+                    messages=messages,
+                    num_retries=0,
+                    max_retries=0,
+                )
+            except litellm.exceptions.ContextWindowExceededError as exc:
+                facts["error_message"] = str(exc)
+                facts["error_type"] = type(exc).__name__
+                facts["has_traceback_frames"] = bool(traceback.format_tb(exc.__traceback__))
+                facts["context_chained"] = exc.__cause__ is not None or exc.__context__ is not None
+            prompt_ref = weakref.ref(prompt)
+            del prompt, messages
+
+            assert prompt_ref() is None, "failed async request pinned the prompt in the logging cycle (issue #48649)"
+            assert facts["error_type"] == "ContextWindowExceededError"
+            assert "maximum context length" in facts["error_message"]
+            assert facts["has_traceback_frames"] is True
+            assert facts["context_chained"] is True
+            assert observer.failure_event_facts, "async failure handler never dispatched the failure callback"
+            assert all(event["exception_present"] for event in observer.failure_event_facts)
+            assert all(event["error_code"] == "400" for event in observer.failure_event_facts)
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
+def test_successful_completion_keeps_kwargs_and_callbacks_untouched(monkeypatch: pytest.MonkeyPatch):
+    """The success path must keep working unchanged: a mock-based completion
+    returns its payload, and no failure callback is dispatched for it."""
+    observer = _CaptureFailureEventLogger()
+    monkeypatch.setattr(litellm, "failure_callback", [observer])
+    response = litellm.completion(
+        model="openai/default",
+        api_key="not-used",
+        messages=[{"role": "user", "content": _WeakRefPrompt("short")}],
+        mock_response="all fine",
+    )
+
+    assert response.choices[0].message.content == "all fine"
+    assert observer.failure_event_facts == []

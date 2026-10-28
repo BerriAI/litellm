@@ -2165,6 +2165,14 @@ def client(original_function):
                 logging_obj.failure_handler(
                     e, traceback_exception, start_time, end_time
                 )  # DO NOT MAKE THREADED - router retry fallback relies on this!
+            # All failure callbacks have now been dispatched. Release the stored
+            # exception and the logging object reference so the re-raised exception's
+            # traceback frames cannot pin this request's Logging object (and through
+            # it the request payload) in a reference cycle only a GC pass can help.
+            if logging_obj is not None:
+                logging_obj.model_call_details.pop("exception", None)
+            kwargs.pop("litellm_logging_obj", None)
+            del logging_obj
             raise e
 
     @wraps(original_function)
@@ -2312,6 +2320,11 @@ def client(original_function):
                     )
                 except BaseException:  # noqa: S110, BLE001  # hook dispatch - including cancellation mid-await - must never replace the real deployment failure, so there is nothing to do with what it raises
                     pass
+                if call_kwargs is not kwargs:
+                    # The uncached-input dict is a wrapper-private copy of kwargs whose
+                    # request never left this frame except as part of the failure
+                    # traceback below, so its logging reference is released here.
+                    call_kwargs.pop("litellm_logging_obj", None)
                 raise
             end_time = datetime.datetime.now()
 
@@ -2486,6 +2499,14 @@ def client(original_function):
 
             timeout: Final = _get_wrapper_timeout(kwargs=kwargs)
             setattr(e, "timeout", timeout)
+            # Same cleanup as the sync wrapper: every failure callback has been
+            # dispatched above, so release the stored exception and our kwargs
+            # references before re-raising. `logging_obj` itself cannot be deleted
+            # here because the finally block below still needs it to restore
+            # correlation contextvars.
+            if logging_obj is not None and not _is_litellm_internal_call:
+                logging_obj.model_call_details.pop("exception", None)
+            kwargs.pop("litellm_logging_obj", None)
             raise e
 
         finally:

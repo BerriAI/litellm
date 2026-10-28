@@ -76,11 +76,13 @@ jobs:
       - name: Import and CLI checks
         run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py cli
 
-      - name: Routing and UUID compatibility
+      - name: Routing, UUID and wrapper failure compatibility
         run: >-
           $IN_NETNS .venv/bin/python -m pytest
           tests/unit/router_strategy/test_complexity_router.py::TestCustomDimensions
-          tests/unit/test_uuid_helper.py -q
+          tests/unit/test_uuid_helper.py
+          tests/unit/test_utils.py::test_failed_sync_completion_releases_prompt_without_cyclic_gc
+          tests/unit/test_utils.py::test_failed_acompletion_releases_prompt_without_cyclic_gc -q
 
       - name: Proxy startup check
         run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py proxy-startup --diagnostics-dir "${RUNNER_TEMP}/smoke-diagnostics"

@@ -85,6 +85,7 @@ class _HookEvent(NamedTuple):
     model: object
     kwargs: Mapping[str, object]
     response: object
+    exception: object
 
 
 def _router_context_problems(kwargs: Mapping[str, object]) -> tuple[str, ...]:
@@ -156,7 +157,9 @@ class _HookRecorder(CustomLogger):
         if not _is_from_this_test(kwargs):
             return
         self.errors.extend(f"{state}: {problem}" for problem in problems)
-        self.events.append(_HookEvent(state, model, kwargs, response))
+        # Snapshot the exception at dispatch time: litellm no longer keeps it on the
+        # call-details dict after the failure handlers have run (issue #48649).
+        self.events.append(_HookEvent(state, model, kwargs, response, kwargs.get("exception")))
         if self.loop is not None:
             self.loop.call_soon_threadsafe(self._notify)
 
@@ -344,7 +347,7 @@ async def test_router_chat_success_streaming_and_failure_fire_the_hooks_in_order
     failed: Final = recorder.events[6:]
     assert [event.state for event in failed] == ["sync_pre_api_call", "post_api_call", "async_failure"]
     assert failed[2].response is None
-    assert isinstance(failed[2].kwargs["exception"], litellm.AuthenticationError)
+    assert isinstance(failed[2].exception, litellm.AuthenticationError)
     assert recorder.errors == []
 
 
@@ -372,7 +375,7 @@ async def test_router_embedding_success_and_failure_fire_the_hooks_in_order(
     await recorder.until(_settled(2, posts=2))
     assert recorder.states[3:] == ["sync_pre_api_call", "post_api_call", "async_failure"]
     assert recorder.events[5].response is None
-    assert isinstance(recorder.events[5].kwargs["exception"], litellm.AuthenticationError)
+    assert isinstance(recorder.events[5].exception, litellm.AuthenticationError)
     assert recorder.errors == []
 
 
@@ -425,7 +428,7 @@ async def test_router_fallback_fires_failure_then_success_hooks(
     ]
     assert [_model_group(event) for event in recorder.events] == ["primary-group"] * 3 + ["fallback-group"] * 3
     assert _model_id(recorder.events[0]) != _model_id(recorder.events[3])
-    assert isinstance(recorder.events[2].kwargs["exception"], litellm.AuthenticationError)
+    assert isinstance(recorder.events[2].exception, litellm.AuthenticationError)
     assert _completion(recorder.events[5]).choices[0].message.content == "hello"
     assert recorder.errors == []
 
