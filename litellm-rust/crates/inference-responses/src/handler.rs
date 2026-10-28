@@ -79,7 +79,7 @@ pub(super) async fn execute(
                     headers: wire.headers,
                     signer: authenticated.signer,
                 },
-                wire.url,
+                &wire.url,
                 &wire.body,
                 Some(call.timeout.unwrap_or(Duration::from_secs(600))),
             )?;

@@ -1,11 +1,5 @@
 use std::collections::BTreeMap;
 
-use litellm_core_utils::{
-    call_arguments::{CallArguments, compose_body},
-    params::OpaqueParams,
-    url_utils::ApiUrl,
-};
-use litellm_http::outbound::OutboundRequest;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -17,6 +11,11 @@ use crate::base_llm::ocr::{
         BaseOcrConfig, OCR_INLINE_MAX_BYTES, OcrConnection, OcrRequestContext, PreparedOcrRequest,
         decode_and_normalize_response,
     },
+};
+use litellm_core_utils::{
+    call_arguments::{CallArguments, compose_body},
+    params::OpaqueParams,
+    url_utils::ApiUrl,
 };
 use litellm_llms_types::formats::ocr::{
     LiteLLMOcrResponse, OcrDocument, OcrPage, OcrResponseFormat, OcrUsageInfo,
@@ -173,7 +172,7 @@ impl BaseOcrConfig for ReductoParseV3Config {
         request: &PreparedOcrRequest,
         client: &OcrClient,
         hooks: &dyn CallHooks<Error>,
-    ) -> Result<OutboundRequest, Error> {
+    ) -> Result<reqwest::Request, Error> {
         prepare_upload_request(self, request, client, hooks).await
     }
 }
@@ -262,7 +261,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
         request: &PreparedOcrRequest,
         client: &OcrClient,
         hooks: &dyn CallHooks<Error>,
-    ) -> Result<OutboundRequest, Error> {
+    ) -> Result<reqwest::Request, Error> {
         prepare_upload_request(self, request, client, hooks).await
     }
 }
@@ -275,7 +274,7 @@ async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, Stri
     request: &PreparedOcrRequest,
     client: &OcrClient,
     hooks: &dyn CallHooks<Error>,
-) -> Result<OutboundRequest, Error> {
+) -> Result<reqwest::Request, Error> {
     let params = config.map_ocr_params(&request.optional_params, &request.model)?;
     let headers = config.validate_environment(request, client).await?;
     let url = config.get_complete_url(request, &params, &headers)?;

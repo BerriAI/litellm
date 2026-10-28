@@ -48,7 +48,7 @@ pub(super) async fn execute(
     let authenticated = resolve_auth(auth, environment, &env_lookup).await?;
     let outbound = litellm_inference::outbound::outbound_request(
         authenticated,
-        url,
+        &url,
         &body,
         Some(
             call.timeout

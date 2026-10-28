@@ -5,7 +5,6 @@ use litellm_auth::AuthServices;
 use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
 use litellm_http::{
     Client,
-    outbound::OutboundRequest,
     request::{truncate_error_body, with_default_headers},
 };
 use litellm_llms::base_llm::{
@@ -96,7 +95,7 @@ pub(super) async fn execute(
                     headers: wire.headers,
                     signer: authenticated.signer,
                 },
-                wire.url,
+                &wire.url,
                 &wire.body,
                 call.timeout,
             )?;
@@ -170,10 +169,10 @@ pub(super) fn as_response_error(err: Error) -> Error {
 
 pub(super) fn outbound_request(
     authenticated: Authenticated,
-    url: String,
+    url: &str,
     body: &Value,
     timeout: Option<Duration>,
-) -> Result<OutboundRequest, Error> {
+) -> Result<reqwest::Request, Error> {
     litellm_inference::outbound::outbound_request(
         authenticated,
         url,
