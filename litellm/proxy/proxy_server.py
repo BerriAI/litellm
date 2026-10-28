@@ -18576,6 +18576,30 @@ async def login(request: Request):
     return redirect_response
 
 
+async def _resume_return_to_url(request: Request, jwt_token: str) -> str | None:
+    """Where a JSON sign-in should send the browser for the one-shot ``litellm_cp_return_to`` cookie,
+    or None to land on the dashboard. Goes through the same resumer as /login and the SSO callback,
+    so the two shapes it accepts (same-origin path, control-plane URL) stay in sync across every
+    sign-in route. Never raises: a stale cookie must not fail a completed sign-in."""
+    from litellm.proxy.management_endpoints.ui_sso import read_return_to_cookie, sso_return_to_redirect
+
+    return_to: Final = read_return_to_cookie(request)
+    if not return_to:
+        return None
+    try:
+        resumed: Final = await sso_return_to_redirect(
+            return_to=return_to,
+            jwt_token=jwt_token,
+            redis_usage_cache=redis_usage_cache,
+            user_api_key_cache=user_api_key_cache,
+            request=request,
+        )
+    except Exception:  # noqa: BLE001  # resuming must NEVER block a completed sign-in
+        verbose_proxy_logger.info("Ignoring stale litellm_cp_return_to cookie; landing on dashboard")
+        return None
+    return None if resumed is None else resumed.headers.get("location")
+
+
 @router.post("/v2/login", include_in_schema=False)  # hidden helper for UI logins via API
 async def login_v2(request: Request):
     global premium_user, general_settings, master_key
@@ -18609,14 +18633,21 @@ async def login_v2(request: Request):
         litellm_dashboard_ui = litellm_dashboard_ui.rstrip("/")
         litellm_dashboard_ui += "/ui?login=success"
 
+        # The deprecated /sso/key/generate form points users at this login page (/ui/login/), so a
+        # return_to it preserved (e.g. the MCP gateway's /authorize round-trip) has to be honored here
+        # too, or the native client's loopback callback never gets its code.
+        redirect_url: Final = await _resume_return_to_url(request=request, jwt_token=jwt_token) or litellm_dashboard_ui
+
         # Token is included in the response body so the UI can set a JS-accessible
         # cookie even when a reverse proxy (e.g. nginx-ingress) adds HttpOnly to the
         # server-set cookie, which would otherwise cause an infinite login redirect.
         json_response: Final = JSONResponse(
-            content={"redirect_url": litellm_dashboard_ui, "token": jwt_token},
+            content={"redirect_url": redirect_url, "token": jwt_token},
             status_code=status.HTTP_200_OK,
         )
         set_session_token_cookie(json_response, request, jwt_token)
+        if "litellm_cp_return_to" in request.cookies:
+            json_response.delete_cookie(key="litellm_cp_return_to")
         return json_response
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.login_v2(): Exception occurred - %s", e)
