@@ -6060,3 +6060,78 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
     assert content == expected_content
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+def _accumulated_tool_call_arguments(chunks) -> dict[int, str]:
+    arguments: dict[int, str] = {}
+    for chunk in chunks:
+        for tool_call in chunk.choices[0].delta.tool_calls or []:
+            arguments[tool_call.index] = arguments.get(tool_call.index, "") + (tool_call.function.arguments or "")
+    return arguments
+
+
+def _stream_function_call(iterator, added_arguments: str, deltas: list[str], output_index: int = 0):
+    chunks = [
+        iterator.chunk_parser(
+            {
+                "type": "response.output_item.added",
+                "output_index": output_index,
+                "item": {
+                    "type": "function_call",
+                    "id": f"fc_{output_index}",
+                    "call_id": f"call_{output_index}",
+                    "name": "write_file",
+                    "arguments": added_arguments,
+                },
+            }
+        )
+    ]
+    chunks += [
+        iterator.chunk_parser(
+            {"type": "response.function_call_arguments.delta", "output_index": output_index, "delta": delta}
+        )
+        for delta in deltas
+    ]
+    return chunks
+
+
+def test_stream_drops_argument_deltas_replaying_arguments_from_output_item_added():
+    """Azure Responses deployments put the complete arguments on output_item.added and
+    then stream them again as argument deltas. The chat-completions bridge must emit the
+    arguments once, or clients accumulate them twice into invalid JSON."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    full = '{"path":"nonce.txt","content":"deadbeef"}'
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    chunks = _stream_function_call(iterator, full, [full[:5], full[5:20], full[20:]])
+    chunks += _stream_function_call(iterator, full, [full[:7], full[7:]], output_index=1)
+
+    assert _accumulated_tool_call_arguments(chunks) == {0: full, 1: full}
+    assert all(chunk.choices[0].finish_reason is None for chunk in chunks)
+
+
+def test_stream_keeps_argument_deltas_when_output_item_added_has_no_arguments():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    full = '{"path":"nonce.txt"}'
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    chunks = _stream_function_call(iterator, "", [full[:4], full[4:]])
+
+    assert _accumulated_tool_call_arguments(chunks) == {0: full}
+
+
+def test_stream_forwards_argument_deltas_extending_past_output_item_added_arguments():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    full = '{"path":"nonce.txt","content":"deadbeef"}'
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    replay_then_continue = _stream_function_call(iterator, full[:10], [full[:6], full[6:15], full[15:]])
+    continuation_only = _stream_function_call(iterator, full[:10], [full[10:]], output_index=1)
+
+    assert _accumulated_tool_call_arguments(replay_then_continue + continuation_only) == {0: full, 1: full}
