@@ -669,7 +669,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if pre_guardrail_tool_calls and len(model_response.choices) > 1
             else (model_response,)
         )
-        # Local import avoids a module-level cyclic import with the policy engine.
         from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
         inspection_request_data: Final = request_data if request_data is not None else {}
@@ -677,15 +676,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         prior_response: Final = inspection_request_data.get("response", missing)
         prior_responses: Final = inspection_request_data.get("responses", missing)
         prior_choice_index: Final = inspection_request_data.get("guardrail_choice_index", missing)
-        # An undeliverable rewrite on one choice must not end the loop: the caller releases the
-        # original chunks when it catches this, so leaving later choices uninspected would let a
-        # request with n > 1 pair a redactable choice with a prohibited one and have the whole
-        # response delivered unchecked. Inspect every choice, then raise the first failure.
         undeliverable: UndeliverableStreamRewrite | None = None  # rebind-ok: keeps the first failure
         try:
             for inspection_response in inspection_responses:
                 inspection_request_data["response"] = inspection_response
-                # Labels this round's guardrail log entry and span with the choice it inspected.
                 inspection_request_data["guardrail_choice_index"] = (
                     inspection_response.choices[0].index if len(inspection_response.choices) == 1 else None
                 )
@@ -709,9 +703,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     if undeliverable is None:
                         undeliverable = exc
         finally:
-            # Restore the caller's keys rather than overwriting them: the inspection loop owns
-            # these entries only for its own duration, and "responses" is not a key the
-            # non-streaming path sets at all.
             if prior_response is missing:
                 inspection_request_data.pop("response", None)
             else:
@@ -741,29 +732,48 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         )
 
     @staticmethod
+    def _streamed_choice_indices(responses_so_far: Sequence["ModelResponseStream"]) -> Iterator[int]:
+        for chunk in responses_so_far:
+            for choice in chunk.choices:
+                yield choice.index
+
+    @staticmethod
+    def _streamed_argument_fragments(
+        responses_so_far: Sequence["ModelResponseStream"],
+    ) -> Iterator[tuple[tuple[int, int], str]]:
+        for chunk in responses_so_far:
+            for choice in chunk.choices:
+                for call in choice.delta.tool_calls or ():
+                    arguments = getattr(getattr(call, "function", None), "arguments", None)
+                    yield (choice.index, call.index or 0), arguments if isinstance(arguments, str) else ""
+
+    @staticmethod
+    def _parses_as_json(arguments: str) -> bool:
+        if not arguments:
+            return False
+        try:
+            json.loads(arguments)
+        except ValueError:
+            return False
+        return True
+
+    @staticmethod
     def _streamed_tool_arguments_are_complete(responses_so_far: Sequence["ModelResponseStream"]) -> bool:
         """Whether every streamed tool call now carries arguments that parse as JSON.
 
-        Streamed argument fragments are only valid JSON once the last one has arrived, so this is
-        the completeness test: it holds back `{"ci` and lets `{"city": "Paris"}` through whether
-        the stream ended normally or was cut short by a disconnect. It reads the raw chunks so the
-        answer is available before deciding whether to rebuild.
+        A call that has announced itself but emitted no argument text yet is still in flight, so a
+        parallel call finishing first does not make the whole set complete.
         """
-        fragments: Final[dict[tuple[int, int], list[str]]] = {}  # mutable-ok: local accumulator
-        for chunk in responses_so_far:
-            for choice in chunk.choices:
-                for call in getattr(choice.delta, "tool_calls", None) or ():
-                    arguments = getattr(getattr(call, "function", None), "arguments", None)
-                    if isinstance(arguments, str) and arguments:
-                        fragments.setdefault((choice.index, getattr(call, "index", 0)), []).append(arguments)
+        fragments: Final = tuple(OpenAIChatCompletionsHandler._streamed_argument_fragments(responses_so_far))
         if not fragments:
             return False
-        for parts in fragments.values():
-            try:
-                json.loads("".join(parts))
-            except ValueError:
-                return False
-        return True
+        joined: Final = MappingProxyType(
+            {
+                call: "".join(text for other, text in fragments if other == call)
+                for call in frozenset(call for call, _ in fragments)
+            }
+        )
+        return all(OpenAIChatCompletionsHandler._parses_as_json(arguments) for arguments in joined.values())
 
     @staticmethod
     def _rebuild_ended_stream_per_choice(
@@ -884,15 +894,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
         if self._streamed_tool_call_fingerprints(responses_so_far):
-            # Rebuilding folds every chunk accumulated so far, so doing it on every sampled round is
-            # quadratic in stream length: a 400-chunk stream costs ~44x one end-of-stream rebuild.
-            # main rebuilds only on the ended path, so rebuild here only when this round consumes the
-            # assembled response -- to isolate choices, or to hand over complete tool calls once the
-            # stream has finished. A single-choice round in flight needs neither.
             stream_ended: Final = self._first_choice_has_finished(responses_so_far)
-            streamed_choice_indices: Final = frozenset(
-                choice.index for chunk in responses_so_far for choice in chunk.choices
-            )
+            streamed_choice_indices: Final = frozenset(self._streamed_choice_indices(responses_so_far))
             tool_arguments_complete: Final = self._streamed_tool_arguments_are_complete(responses_so_far)
             assembled: Final = (
                 None
@@ -910,14 +913,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     )
                     for choice in assembled.choices
                 )
-                # Local import avoids a module-level cyclic import with the policy engine.
                 from litellm.proxy.policy_engine.pipeline_executor import (
                     UndeliverableStreamRewrite,
                 )
 
-                # Same rule as the ended-stream inspection loop: an undeliverable rewrite on one
-                # choice must not leave the rest uninspected, because the caller releases the
-                # original chunks when it catches this.
                 transform_undeliverable: UndeliverableStreamRewrite | None = None  # rebind-ok: keeps the first failure
                 try:
                     for choice, choice_sink, choice_chunks in choice_rounds:
@@ -960,12 +959,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 )
                 sink.record(merged_texts, merged_holdback)
                 return
-            # Mid-round the assembled arguments are a truncated JSON fragment such as `{"ci`, which
-            # main never handed to a guardrail: one that parses them either errors or judges
-            # arguments that do not exist yet. Completeness is what matters, not the finish reason:
-            # a stream cut short by a client disconnect carries whole arguments and no finish
-            # reason, and that call still has to be inspected. Send the calls once every one of
-            # them parses; the text of the earlier rounds is still inspected above.
             if assembled is not None and tool_arguments_complete:
                 tool_calls: Final = chain.from_iterable(choice.message.tool_calls or () for choice in assembled.choices)
                 inputs["tool_calls"] = TypeAdapter(list[ChatCompletionToolCallChunk]).validate_python(
