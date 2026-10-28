@@ -10,7 +10,7 @@ small helper utilities without touching the network.
 
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -466,3 +466,67 @@ class TestCreateRequestBody:
             "system_instruction": "Always answer in exactly three words.",
         }
         assert response.id == "sentinel"
+
+
+class TestAgentIdentifier:
+    def test_get_by_id_fetches_that_agent(self, respx_mock: respx.MockRouter) -> None:
+        route: Final = respx_mock.get(f"{_GEMINI_AGENTS_URL}/slides").mock(
+            return_value=httpx.Response(200, json={"id": "slides", "base_agent": "antigravity-preview-09-2026"})
+        )
+
+        response: Final = get(id="slides", api_key="AIza-test")
+
+        assert route.call_count == 1
+        assert (response.id, response.base_agent) == ("slides", "antigravity-preview-09-2026")
+
+    def test_delete_by_id_deletes_that_agent(self, respx_mock: respx.MockRouter) -> None:
+        route: Final = respx_mock.delete(f"{_GEMINI_AGENTS_URL}/slides").mock(
+            return_value=httpx.Response(200, json={})
+        )
+
+        result: Final = delete(id="slides", api_key="AIza-test")
+
+        assert route.call_count == 1
+        assert (result.name, result.deleted) == ("slides", True)
+
+    def test_list_versions_by_id_lists_that_agents_versions(self, respx_mock: respx.MockRouter) -> None:
+        version: Final = {"agent": "slides", "name": "agents/slides/versions/v1"}
+        route: Final = respx_mock.get(f"{_GEMINI_AGENTS_URL}/slides/versions").mock(
+            return_value=httpx.Response(200, json={"agentVersions": [version]})
+        )
+
+        response: Final = list_versions(id="slides", api_key="AIza-test")
+
+        assert route.call_count == 1
+        assert response.agent_versions == [version]
+
+    @pytest.mark.parametrize(
+        "operation",
+        [pytest.param(get, id="get"), pytest.param(delete, id="delete"), pytest.param(list_versions, id="list_versions")],
+    )
+    @pytest.mark.parametrize(
+        "identifier",
+        [
+            pytest.param({}, id="no-identifier"),
+            pytest.param({"id": "slides", "name": "decks"}, id="different-id-and-name"),
+        ],
+    )
+    def test_rejects_a_missing_or_conflicting_identifier(
+        self,
+        respx_mock: respx.MockRouter,
+        operation: Callable[..., object],
+        identifier: Mapping[str, str],
+    ) -> None:
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            operation(**identifier, api_key="AIza-test")
+
+        assert exc_info.value.status_code == 400
+        assert not respx_mock.calls
+
+    @pytest.mark.asyncio
+    async def test_aget_rejects_a_missing_identifier(self, respx_mock: respx.MockRouter) -> None:
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            await aget(api_key="AIza-test")
+
+        assert exc_info.value.status_code == 400
+        assert not respx_mock.calls

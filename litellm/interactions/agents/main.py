@@ -32,6 +32,7 @@ Usage:
 import asyncio
 import contextvars
 from collections.abc import Coroutine, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
 from typing import Any, Final
 
@@ -92,15 +93,37 @@ def _make_logging_obj(
     return litellm_logging_obj
 
 
-# ================================================================== #
-# CREATE                                                               #
-# ================================================================== #
+@dataclass(frozen=True, slots=True)
+class _InvalidAgentRequest:
+    message: str
 
 
 def _alias_conflict(field: str, value: str | None, alias: str, alias_value: str | None) -> str | None:
     if value is None or alias_value is None or value == alias_value:
         return None
     return f"'{alias}' is an alias of '{field}', but the request gives them different values. Pass only '{field}'."
+
+
+def _agent_id_or_error(id: str | None, name: str | None) -> str | _InvalidAgentRequest:
+    conflict: Final = _alias_conflict("id", id, "name", name)
+    if conflict is not None:
+        return _InvalidAgentRequest(conflict)
+    agent_id: Final = id if id is not None else name
+    if agent_id is None:
+        return _InvalidAgentRequest("Missing required parameter: 'id' (or its alias 'name').")
+    return agent_id
+
+
+def _required_agent_id(id: str | None, name: str | None, llm_provider: str) -> str:
+    agent_id: Final = _agent_id_or_error(id, name)
+    if isinstance(agent_id, _InvalidAgentRequest):
+        raise litellm.BadRequestError(message=agent_id.message, model=id or name or "", llm_provider=llm_provider)
+    return agent_id
+
+
+# ================================================================== #
+# CREATE                                                               #
+# ================================================================== #
 
 
 def _create_request_or_error(
@@ -113,15 +136,15 @@ def _create_request_or_error(
     base_environment: InteractionEnvironment | None,
     description: str | None,
     tools: Sequence[Mapping[str, object]] | None,
-) -> AgentCreateRequest | str:
-    conflict: Final = _alias_conflict("id", id, "name", name) or _alias_conflict(
+) -> AgentCreateRequest | _InvalidAgentRequest:
+    agent_id: Final = _agent_id_or_error(id, name)
+    if isinstance(agent_id, _InvalidAgentRequest):
+        return agent_id
+    instruction_conflict: Final = _alias_conflict(
         "system_instruction", system_instruction, "instructions", instructions
     )
-    if conflict is not None:
-        return conflict
-    agent_id: Final = id if id is not None else name
-    if agent_id is None:
-        return "Missing required parameter: 'id' (or its alias 'name')."
+    if instruction_conflict is not None:
+        return _InvalidAgentRequest(instruction_conflict)
     try:
         return AgentCreateRequest(
             id=agent_id,
@@ -133,7 +156,7 @@ def _create_request_or_error(
             tools=tools,
         )
     except ValidationError as e:
-        return str(e)
+        return _InvalidAgentRequest(str(e))
 
 
 @client
@@ -230,7 +253,7 @@ def create(
         **kwargs: Forwarded to GenericLiteLLMParams (api_key, api_base, etc.).
     """
     local_vars: Final = locals()
-    custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
+    custom_llm_provider = custom_llm_provider or "gemini"
     try:
         _is_async: Final = kwargs.pop("acreate_agent", False) is True
         create_request: Final = _create_request_or_error(
@@ -244,9 +267,9 @@ def create(
             description=description,
             tools=tools,
         )
-        if isinstance(create_request, str):
+        if isinstance(create_request, _InvalidAgentRequest):
             raise litellm.BadRequestError(
-                message=create_request, model=id or name or "", llm_provider=custom_llm_provider
+                message=create_request.message, model=id or name or "", llm_provider=custom_llm_provider
             )
         kwargs.setdefault("custom_llm_provider", custom_llm_provider)
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -320,7 +343,7 @@ def list(
 ) -> AgentListResponse | Coroutine[object, object, AgentListResponse]:
     """Sync: List all agents on the provider side."""
     local_vars: Final = locals()
-    custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
+    custom_llm_provider = custom_llm_provider or "gemini"
     try:
         _is_async: Final = kwargs.pop("alist_agents", False) is True
         kwargs.setdefault("custom_llm_provider", custom_llm_provider)
@@ -352,19 +375,22 @@ def list(
 
 @client
 async def aget(
-    name: str,
+    id: str | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
+    *,
+    name: str | None = None,
     **kwargs,
 ) -> AgentCreateResponse:
-    """Async: Get a specific agent by name."""
+    """Async: Get a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
     try:
         loop: Final = asyncio.get_event_loop()
         kwargs["aget_agent"] = True
         func: Final = partial(
             get,
+            id=id,
             name=name,
             custom_llm_provider=custom_llm_provider or "gemini",
             extra_headers=extra_headers,
@@ -378,7 +404,7 @@ async def aget(
         return init_response
     except Exception as e:
         raise litellm.exception_type(
-            model=name,
+            model=id or name or "",
             custom_llm_provider=custom_llm_provider or "gemini",
             original_exception=e,
             completion_kwargs=local_vars,
@@ -388,24 +414,27 @@ async def aget(
 
 @client
 def get(
-    name: str,
+    id: str | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
+    *,
+    name: str | None = None,
     **kwargs,
 ) -> AgentCreateResponse | Coroutine[object, object, AgentCreateResponse]:
-    """Sync: Get a specific agent by name."""
+    """Sync: Get a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
-    custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
+    custom_llm_provider = custom_llm_provider or "gemini"
     try:
         _is_async: Final = kwargs.pop("aget_agent", False) is True
+        agent_id: Final = _required_agent_id(id, name, custom_llm_provider)
         kwargs.setdefault("custom_llm_provider", custom_llm_provider)
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
-        logging_obj: Final = _make_logging_obj(kwargs, name, custom_llm_provider, "get_agent", {"name": name})
+        logging_obj: Final = _make_logging_obj(kwargs, agent_id, custom_llm_provider, "get_agent", {"name": agent_id})
         config: Final = _get_agents_api_config(custom_llm_provider)
         return agents_http_handler.get_agent(
             agents_api_config=config,
-            name=name,
+            name=agent_id,
             litellm_params=litellm_params,
             logging_obj=logging_obj,
             extra_headers=extra_headers,
@@ -414,7 +443,7 @@ def get(
         )
     except Exception as e:
         raise litellm.exception_type(
-            model=name,
+            model=id or name or "",
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
@@ -429,19 +458,22 @@ def get(
 
 @client
 async def adelete(
-    name: str,
+    id: str | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
+    *,
+    name: str | None = None,
     **kwargs,
 ) -> AgentDeleteResult:
-    """Async: Delete a specific agent by name."""
+    """Async: Delete a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
     try:
         loop: Final = asyncio.get_event_loop()
         kwargs["adelete_agent"] = True
         func: Final = partial(
             delete,
+            id=id,
             name=name,
             custom_llm_provider=custom_llm_provider or "gemini",
             extra_headers=extra_headers,
@@ -455,7 +487,7 @@ async def adelete(
         return init_response
     except Exception as e:
         raise litellm.exception_type(
-            model=name,
+            model=id or name or "",
             custom_llm_provider=custom_llm_provider or "gemini",
             original_exception=e,
             completion_kwargs=local_vars,
@@ -465,24 +497,29 @@ async def adelete(
 
 @client
 def delete(
-    name: str,
+    id: str | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
+    *,
+    name: str | None = None,
     **kwargs,
 ) -> AgentDeleteResult | Coroutine[object, object, AgentDeleteResult]:
-    """Sync: Delete a specific agent by name."""
+    """Sync: Delete a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
-    custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
+    custom_llm_provider = custom_llm_provider or "gemini"
     try:
         _is_async: Final = kwargs.pop("adelete_agent", False) is True
+        agent_id: Final = _required_agent_id(id, name, custom_llm_provider)
         kwargs.setdefault("custom_llm_provider", custom_llm_provider)
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
-        logging_obj: Final = _make_logging_obj(kwargs, name, custom_llm_provider, "delete_agent", {"name": name})
+        logging_obj: Final = _make_logging_obj(
+            kwargs, agent_id, custom_llm_provider, "delete_agent", {"name": agent_id}
+        )
         config: Final = _get_agents_api_config(custom_llm_provider)
         return agents_http_handler.delete_agent(
             agents_api_config=config,
-            name=name,
+            name=agent_id,
             litellm_params=litellm_params,
             logging_obj=logging_obj,
             extra_headers=extra_headers,
@@ -491,7 +528,7 @@ def delete(
         )
     except Exception as e:
         raise litellm.exception_type(
-            model=name,
+            model=id or name or "",
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
@@ -506,19 +543,22 @@ def delete(
 
 @client
 async def alist_versions(
-    name: str,
+    id: str | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
+    *,
+    name: str | None = None,
     **kwargs,
 ) -> AgentVersionsResponse:
-    """Async: List versions of a specific agent."""
+    """Async: List versions of a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
     try:
         loop: Final = asyncio.get_event_loop()
         kwargs["alist_agent_versions"] = True
         func: Final = partial(
             list_versions,
+            id=id,
             name=name,
             custom_llm_provider=custom_llm_provider or "gemini",
             extra_headers=extra_headers,
@@ -532,7 +572,7 @@ async def alist_versions(
         return init_response
     except Exception as e:
         raise litellm.exception_type(
-            model=name,
+            model=id or name or "",
             custom_llm_provider=custom_llm_provider or "gemini",
             original_exception=e,
             completion_kwargs=local_vars,
@@ -542,24 +582,29 @@ async def alist_versions(
 
 @client
 def list_versions(
-    name: str,
+    id: str | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
+    *,
+    name: str | None = None,
     **kwargs,
 ) -> AgentVersionsResponse | Coroutine[object, object, AgentVersionsResponse]:
-    """Sync: List versions of a specific agent."""
+    """Sync: List versions of a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
-    custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
+    custom_llm_provider = custom_llm_provider or "gemini"
     try:
         _is_async: Final = kwargs.pop("alist_agent_versions", False) is True
+        agent_id: Final = _required_agent_id(id, name, custom_llm_provider)
         kwargs.setdefault("custom_llm_provider", custom_llm_provider)
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
-        logging_obj: Final = _make_logging_obj(kwargs, name, custom_llm_provider, "list_agent_versions", {"name": name})
+        logging_obj: Final = _make_logging_obj(
+            kwargs, agent_id, custom_llm_provider, "list_agent_versions", {"name": agent_id}
+        )
         config: Final = _get_agents_api_config(custom_llm_provider)
         return agents_http_handler.list_agent_versions(
             agents_api_config=config,
-            name=name,
+            name=agent_id,
             litellm_params=litellm_params,
             logging_obj=logging_obj,
             extra_headers=extra_headers,
@@ -568,7 +613,7 @@ def list_versions(
         )
     except Exception as e:
         raise litellm.exception_type(
-            model=name,
+            model=id or name or "",
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
