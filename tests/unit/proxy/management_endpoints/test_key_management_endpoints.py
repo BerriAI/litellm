@@ -20827,11 +20827,16 @@ async def test_project_assignment_with_explicit_null_max_budget_ignores_stored_b
     )
     cache: Final = await _cache_with_project("project-orbit", [], project_max_budget=10.0)
 
+    request: Final = UpdateKeyRequest(key=existing.token, project_id="project-orbit", max_budget=None)
     await _validate_update_key_data(
-        UpdateKeyRequest(key=existing.token, project_id="project-orbit", max_budget=None), existing,
+        request, existing,
         UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
         None, False, _project_assignment_prisma(), cache,
     )
+
+    result: Final = await prepare_key_update_data(data=request, existing_key_row=existing)
+    assert result["max_budget"] is None
+    assert result["project_id"] == "project-orbit"
 
 
 @pytest.mark.asyncio
