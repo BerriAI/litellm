@@ -8,7 +8,6 @@ server-side using litellm router's search tools.
 
 import asyncio
 import math
-import re
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -98,10 +97,7 @@ WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY: Final = "websearch_native_blocks"
 
 _RESPONSE_CONTENT_FIELD: Final = "content"
 
-_CLAUDE_CODE_SEARCH_PREFIX_RE: Final = re.compile(
-    r"^\s*(?:Perform\s+a\s+)?(?:web\s+)?search\s+for\s+(?:the\s+)?query:\s*",
-    re.IGNORECASE,
-)
+_CLAUDE_CODE_WEB_SEARCH_PROMPT_PREFIX: Final = "Perform a web search for the query:"
 
 _ResponseT: Final = TypeVar("_ResponseT")
 
@@ -299,27 +295,6 @@ class WebSearchInterceptionLogger(CustomLogger):
         """
         return validated_max_agentic_loops(max_agentic_loops, field="websearch_interception_params.max_agentic_loops")
 
-    @classmethod
-    def _extract_short_circuit_query(cls, raw_message: str) -> str:
-        """Extract the intended search terms from a short-circuit user message.
-
-        Clients such as Claude Code format standalone WebSearch requests with an
-        instructional wrapper (e.g. 'Perform a web search for the query: <query>').
-        Strip known instructional prefixes so the search backend receives only
-        the intended search terms rather than query wrapper keywords.
-        """
-        prefix_match: Final[re.Match[str] | None] = _CLAUDE_CODE_SEARCH_PREFIX_RE.match(raw_message)
-        stripped_prefix: Final[str] = (
-            raw_message[prefix_match.end() :].strip() if prefix_match is not None else raw_message.strip()
-        )
-        if prefix_match is not None and (
-            (stripped_prefix.startswith('"') and stripped_prefix.endswith('"'))
-            or (stripped_prefix.startswith("'") and stripped_prefix.endswith("'"))
-        ):
-            return stripped_prefix[1:-1].strip()
-
-        return stripped_prefix if (stripped_prefix or prefix_match is not None) else raw_message.strip()
-
     async def try_short_circuit_search(
         self,
         model: str,
@@ -390,11 +365,8 @@ class WebSearchInterceptionLogger(CustomLogger):
             get_last_user_message,
         )
 
-        raw_query: Final = get_last_user_message(cast(list[AllMessageValues], messages))
-        if not raw_query:
-            return None
-
-        query: Final = self._extract_short_circuit_query(raw_query)
+        last_user_message: Final = get_last_user_message(cast(list[AllMessageValues], messages)) or ""
+        query: Final = last_user_message.removeprefix(_CLAUDE_CODE_WEB_SEARCH_PROMPT_PREFIX).strip()
         if not query:
             return None
 
