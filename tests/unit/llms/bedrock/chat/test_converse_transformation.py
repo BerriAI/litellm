@@ -23,9 +23,9 @@ from litellm.llms.anthropic.chat.transformation import (
     NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS,
     NATIVE_OUTPUT_MAX_UNION_PARAMETERS,
 )
-from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock, RequestObject
 from litellm.types.llms.openai import AllMessageValues
@@ -5348,7 +5348,6 @@ def test_recursive_output_config_format_follows_the_profile_native_key(
     assert ("outputConfig" in request) is forwarded
 
 
-
 def test_sonnet_4_6_json_schema_still_uses_native_output_config(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
@@ -10665,7 +10664,10 @@ def test_uses_opt_in_native_output_reads_the_base_model_of_an_application_infere
 
 
 _CALLER_OUTPUT_CONFIG_WITH_A_SCHEMA_OBJECT: Final = {
-    "textFormat": {"type": "json_schema", "structure": {"jsonSchema": {"name": "capital", "schema": {"type": "object"}}}}
+    "textFormat": {
+        "type": "json_schema",
+        "structure": {"jsonSchema": {"name": "capital", "schema": {"type": "object"}}},
+    }
 }
 _BEDROCK_SCHEMA_TYPE_ERROR: Final = "outputConfig.textFormat.structure.jsonSchema.schema must be a string"
 
@@ -10791,12 +10793,13 @@ def test_a_deployment_with_a_batch_control_plane_endpoint_keeps_it_out_of_chat_r
     assert "aws_bedrock_control_plane_endpoint" not in route.calls[0].request.content.decode()
 
 
-def test_converse_service_tier_dropped_on_models_without_that_tier_under_drop_params():
-    """Bedrock sells priority/flex per model. Claude has neither, so with drop_params the tier must
-    be dropped instead of forwarded to AWS's `The provided service tier is not supported` 400."""
-    config = AmazonConverseConfig()
+# Bedrock tier support is per model. Checked live on 2026-10-27 (LIT-9793): Claude Sonnet 4.5 and
+# Haiku 4.5 answer priority and flex with `The provided service tier is not supported for this model.`,
+# Nova 2 Lite serves both. The price map mirrors that, Claude rows have null tier prices, Nova 2 has real ones.
+def test_converse_service_tier_dropped_on_models_without_that_tier_under_drop_params() -> None:
+    config: Final = AmazonConverseConfig()
 
-    result = config.map_openai_params(
+    result: Final = config.map_openai_params(
         non_default_params={"service_tier": "priority"},
         optional_params={},
         model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -10806,9 +10809,11 @@ def test_converse_service_tier_dropped_on_models_without_that_tier_under_drop_pa
     assert "serviceTier" not in result
 
 
-def test_converse_service_tier_raises_on_models_without_that_tier_without_drop_params(monkeypatch):
+def test_converse_service_tier_raises_on_models_without_that_tier_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    config = AmazonConverseConfig()
+    config: Final = AmazonConverseConfig()
 
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="service_tier='flex'"):
         config.map_openai_params(
@@ -10820,11 +10825,13 @@ def test_converse_service_tier_raises_on_models_without_that_tier_without_drop_p
 
 
 @pytest.mark.parametrize("service_tier", ["priority", "flex"])
-def test_converse_service_tier_forwarded_on_models_that_sell_it(monkeypatch, service_tier):
+def test_converse_service_tier_forwarded_on_models_that_sell_it(
+    monkeypatch: pytest.MonkeyPatch, service_tier: str
+) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    config = AmazonConverseConfig()
+    config: Final = AmazonConverseConfig()
 
-    result = config.map_openai_params(
+    result: Final = config.map_openai_params(
         non_default_params={"service_tier": service_tier},
         optional_params={},
         model="us.amazon.nova-2-lite-v1:0",
@@ -10835,11 +10842,13 @@ def test_converse_service_tier_forwarded_on_models_that_sell_it(monkeypatch, ser
 
 
 @pytest.mark.parametrize("service_tier", ["default", "auto"])
-def test_converse_default_and_auto_service_tier_always_forwarded(monkeypatch, service_tier):
+def test_converse_default_and_auto_service_tier_always_forwarded(
+    monkeypatch: pytest.MonkeyPatch, service_tier: str
+) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    config = AmazonConverseConfig()
+    config: Final = AmazonConverseConfig()
 
-    result = config.map_openai_params(
+    result: Final = config.map_openai_params(
         non_default_params={"service_tier": service_tier},
         optional_params={},
         model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
