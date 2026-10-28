@@ -404,6 +404,30 @@ class TestContentFilterGuardrail:
             f"real [{pattern_name.upper()}_REDACTED] and look-alike {checksum_invalid}"
         ]
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("PIN 4821 4532 0151 1283 0366 thanks", "PIN 4821 [CREDIT_CARD_REDACTED] thanks"),
+            ("order 4111 4532 0151 1283 0366", "order [CREDIT_CARD_REDACTED]"),
+        ],
+    )
+    async def test_checksum_pattern_masks_a_valid_card_overlapping_another_candidate(self, text: str, expected: str):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-checksum-overlap",
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="credit_card", action=ContentFilterAction.MASK)
+            ],
+        )
+
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [text]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert guardrailed_inputs.get("texts") == [expected]
+
     def test_api_key_patterns(self):
         """
         Test API key pattern detection

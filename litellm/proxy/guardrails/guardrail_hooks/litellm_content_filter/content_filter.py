@@ -12,7 +12,7 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from re import Pattern
@@ -852,15 +852,16 @@ class ContentFilterGuardrail(CustomGuardrail):
             return []
 
         match_spans: Final[list[tuple[int, int]]] = []
+        candidate_spans: Final = (
+            self._checksum_valid_spans(regex, text, validator)
+            if validator is not None
+            else ((match.start(), match.end()) for match in regex.finditer(text))
+        )
 
-        for match in regex.finditer(text):
-            if validator is not None and not validator(match.group()):
+        for start, end in candidate_spans:
+            if keyword_matches is not None and not self._match_near_keyword(start, end, keyword_matches, text):
                 continue
-            if keyword_matches is not None and not self._match_near_keyword(
-                match.start(), match.end(), keyword_matches, text
-            ):
-                continue
-            match_spans.append((match.start(), match.end()))
+            match_spans.append((start, end))
 
         if allow_word_numbers:
             for word_match in WORD_NUMBER_SEQUENCE_PATTERN.finditer(text):
@@ -876,6 +877,15 @@ class ContentFilterGuardrail(CustomGuardrail):
                 match_spans.append((word_match.start(), word_match.end()))
 
         return self._merge_spans(match_spans)
+
+    @staticmethod
+    def _checksum_valid_spans(
+        regex: Pattern[str], text: str, validator: Callable[[str], bool]
+    ) -> Iterator[tuple[int, int]]:
+        overlapping_regex: Final = re.compile(f"(?=({regex.pattern}))", regex.flags)
+        return (
+            (match.start(1), match.end(1)) for match in overlapping_regex.finditer(text) if validator(match.group(1))
+        )
 
     def _match_near_keyword(
         self,
