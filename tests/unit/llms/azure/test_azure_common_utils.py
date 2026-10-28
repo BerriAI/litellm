@@ -2,6 +2,8 @@ import json
 import os
 import threading
 import traceback
+from concurrent.futures import ThreadPoolExecutor
+from queue import SimpleQueue
 from typing import Callable, Final, Optional
 from urllib.parse import parse_qs
 from unittest.mock import MagicMock, patch
@@ -2136,6 +2138,42 @@ class TestEntraIdTokenProviderCache:
 
         assert first is second
         assert mock_credential.call_count == 1
+
+    def test_concurrent_first_callers_build_one_credential(self):
+        callers: Final = 8
+        start: Final = threading.Barrier(callers)
+        built: Final = SimpleQueue[None]()
+        everyone_built: Final = threading.Event()
+        release: Final = threading.Event()
+
+        def held_credential(*_: str) -> MagicMock:
+            built.put(None)
+            if built.qsize() >= callers:
+                everyone_built.set()
+            release.wait(5)
+            return MagicMock()
+
+        def first_call() -> Callable[[], str]:
+            start.wait(5)
+            return get_azure_ad_token_from_entra_id(
+                tenant_id="tenant",
+                client_id="client",
+                client_secret="secret",
+                scope="https://cognitiveservices.azure.com/.default",
+            )
+
+        with (
+            patch("azure.identity.ClientSecretCredential", side_effect=held_credential),
+            patch("azure.identity.get_bearer_token_provider", side_effect=lambda credential, scope: lambda: "token"),
+            ThreadPoolExecutor(max_workers=callers) as pool,
+        ):
+            calls: Final = tuple(pool.submit(first_call) for _ in range(callers))
+            everyone_built.wait(0.5)
+            release.set()
+            providers: Final = tuple(call.result(timeout=5) for call in calls)
+
+        assert built.qsize() == 1
+        assert all(provider is providers[0] for provider in providers)
 
     @pytest.mark.parametrize(
         "second_call_kwargs",

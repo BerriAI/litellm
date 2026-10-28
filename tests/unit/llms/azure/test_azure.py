@@ -295,7 +295,7 @@ def test_get_azure_ad_token_from_username_password(mock_get_bearer_token_provide
         mock_credential.return_value, "https://cognitiveservices.azure.com/.default"
     )
 
-    assert result == mock_token_provider
+    assert result() == "mock-token"
 
 
 def test_azure_openai_gpt_4o_naming(monkeypatch):

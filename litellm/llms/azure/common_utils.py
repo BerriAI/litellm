@@ -3,11 +3,13 @@ import hashlib
 import json
 import os
 import re
+import threading
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import closing
+from dataclasses import dataclass, field
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Final, Literal, NamedTuple, cast
+from typing import Final, Generic, Literal, NamedTuple, ParamSpec, TypeVar, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -32,6 +34,32 @@ from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
 _LAST_OPENAI_PATH_SEGMENT: Final = re.compile(r"^(.*/openai)(?=/|$)")
+
+_P: Final = ParamSpec("_P")
+_R: Final = TypeVar("_R")
+
+
+@dataclass(frozen=True, slots=True)
+class _SingleFlightCache(Generic[_P, _R]):
+    cached: Callable[..., _R]
+    clear: Callable[[], None]
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def __call__(
+        self,
+        *args: _P.args,
+        **kwargs: _P.kwargs,  # kwargs-ok: forwarded verbatim to the cached builder, typed by its own signature
+    ) -> _R:
+        with self.lock:
+            return self.cached(*args, **kwargs)
+
+    def cache_clear(self) -> None:
+        self.clear()
+
+
+def _single_flight_lru_cache(build: Callable[_P, _R]) -> _SingleFlightCache[_P, _R]:
+    cached: Final = lru_cache(maxsize=128)(build)
+    return _SingleFlightCache[_P, _R](cached, cached.cache_clear)
 
 
 class _AzureAdTokenJson(TypedDict, total=False):
@@ -95,7 +123,7 @@ def process_azure_headers(headers: httpx.Headers | dict) -> dict:
     return {**llm_response_headers, **openai_headers}
 
 
-@lru_cache(maxsize=128)
+@_single_flight_lru_cache
 def _cached_entra_id_token_provider(
     tenant_id: str,
     client_id: str,
@@ -113,7 +141,7 @@ def _cached_entra_id_token_provider(
     return single_flight_bearer_token_provider(ClientSecretCredential(tenant_id, client_id, client_secret), scope)
 
 
-@lru_cache(maxsize=128)
+@_single_flight_lru_cache
 def _cached_username_password_token_provider(
     client_id: str,
     azure_username: str,
@@ -130,7 +158,7 @@ def _cached_username_password_token_provider(
     return single_flight_bearer_token_provider(credential, scope)
 
 
-@lru_cache(maxsize=128)
+@_single_flight_lru_cache
 def _cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
     return get_azure_ad_token_provider(azure_scope=scope)
 
