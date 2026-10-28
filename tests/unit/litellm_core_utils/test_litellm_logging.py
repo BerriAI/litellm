@@ -12105,6 +12105,29 @@ def test_get_model_cost_information_custom_pricing_uses_base_model():
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+def test_get_model_cost_information_maps_requested_model_when_response_names_an_unmapped_display_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_model: Final = "fireworks_ai/accounts/fireworks/models/sol-display-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        requested_model,
+        {"litellm_provider": "fireworks_ai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    response: Final = ModelResponse(model="Sol Display Max", choices=[])
+    response._hidden_params["provider_response_model"] = "Sol Display Max"
+    response._hidden_params["litellm_model_name"] = requested_model
+
+    result: Final = StandardLoggingPayloadSetup.get_model_cost_information(
+        base_model=None, custom_pricing=False, custom_llm_provider="fireworks_ai", init_response_obj=response
+    )
+
+    assert result["model_map_key"] == requested_model
+    assert result["model_map_value"] is not None
+    assert result["model_map_value"]["input_cost_per_token"] == litellm.model_cost[requested_model]["input_cost_per_token"]
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_standard_logging_payload_uses_deployment_when_no_base_model():
     """metadata["deployment"] is used for cost-map lookup when base_model is not set."""
     from datetime import datetime as datetime_standard_logging

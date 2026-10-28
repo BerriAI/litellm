@@ -11,7 +11,7 @@ from litellm.constants import (
     FIREWORKS_AI_56_B_MOE,
     FIREWORKS_AI_176_B_MOE,
 )
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import cost_map_key_prices_anything, generic_cost_per_token
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
 
@@ -56,11 +56,16 @@ def get_base_model_for_pricing(model_name: str) -> str:
     return "fireworks-ai-default"
 
 
+def has_size_bucket(model_name: str) -> bool:
+    return get_base_model_for_pricing(model_name) != "fireworks-ai-default"
+
+
 def _resolve_model_info(model: str) -> ModelInfo:
     try:
-        return get_model_info(model=model, custom_llm_provider="fireworks_ai")
+        model_info: Final = get_model_info(model=model, custom_llm_provider="fireworks_ai")
     except Exception:
         return _resolve_routed_model_info(model)
+    return model_info if cost_map_key_prices_anything(model_info["key"]) else _resolve_routed_model_info(model)
 
 
 def _resolve_routed_model_info(model: str) -> ModelInfo:

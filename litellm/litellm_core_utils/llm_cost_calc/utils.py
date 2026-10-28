@@ -52,6 +52,35 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
 
+_NON_TOKEN_RATE_FIELDS: Final = frozenset(
+    {
+        "cost_per_second",
+        "input_cost_per_second",
+        "output_cost_per_second",
+        "input_cost_per_query",
+        "input_cost_per_text_message",
+        "tiered_pricing",
+    }
+)
+
+
+def cost_map_entry_prices_anything(entry: Mapping[str, object]) -> bool:
+    return any(
+        value is not None and (field in _NON_TOKEN_RATE_FIELDS or ("cost_per" in field and "token" in field))
+        for field, value in entry.items()
+    )
+
+
+def raw_cost_map_entry(key: str) -> Mapping[str, object] | None:
+    raw_entry: Final = litellm.model_cost.get(key)
+    return raw_entry if isinstance(raw_entry, Mapping) else None
+
+
+def cost_map_key_prices_anything(key: str) -> bool:
+    entry: Final = raw_cost_map_entry(key)
+    return entry is not None and cost_map_entry_prices_anything(entry)
+
+
 _BASE_CACHE_WRITE_RATE_KEY: Final = "cache_creation_input_token_cost"
 
 _CACHE_WRITE_RATE_KEYS: Final[Mapping[str, str]] = MappingProxyType(
