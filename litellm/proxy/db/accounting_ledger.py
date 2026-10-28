@@ -207,8 +207,16 @@ class AccountingLedger:
         """Accept T5/T6's serialized envelope, containing its public event under `event`.
 
         The immutable acceptance hash includes the target set and delivery version.
-        Adding destinations or replaying a new projection version needs an explicit
-        workflow; redelivery cannot silently create or reset work.
+        Changing either for an accepted event conflicts. T7 must provide a separate
+        add-target or new-version workflow that preserves receipts and prevents
+        duplicate contributions; redelivery cannot silently create or reset work.
+
+        The Prisma adapter opens one interactive transaction per event, including
+        two SET LOCAL statements and a source-row lock for costs. I/O is async,
+        but awaiting this method inline adds commit latency per event, potentially
+        several times per request. T5 owns bounded asynchronous capture and an
+        explicit batching strategy; looping over this method does not batch commits.
+        Success acknowledges commit, independently of HTTP response acknowledgement.
         """
         record: Final = _prepare(event, targets, envelope, schema_version, version)
         async with self._transaction() as db:
@@ -227,6 +235,11 @@ class AccountingLedger:
         T8 must supply a coherent recovery watermark including outstanding holds.
         Omitting either watermark disables deletion. Each usage row and its cost
         remain together so a retained charge never loses its source or vice versa.
+        Applied receipts are deleted with the family, ending its retained dedup
+        protection. The caller must guarantee events recorded before
+        redelivery_before cannot be redelivered through supported paths.
+        T8's recovery_before must also protect checkpoints,
+        outstanding holds and unfinished settlements; age alone is insufficient.
         """
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError("Accounting retention batch size must be between 1 and 1000")
