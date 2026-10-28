@@ -138,6 +138,9 @@ def test_responses_compact_routes_forward_complete_request_and_typed_items(gatew
                     {"model": model, **request_body},
                 )
                 assert response.status_code == 200, response.text
+                wire_output: Final = _JSON_OBJECT.validate_json(response.content)["output"]
+                assert isinstance(wire_output, list), response.text
+                assert [item for item in wire_output if not isinstance(item, dict) or "created_by" in item] == []
                 compacted: Final = CompactedResponse.model_validate_json(response.content)
                 assert compacted.id != completed_id, compacted.model_dump_json()
                 assert same_response(compacted.id, completed_id), compacted.model_dump_json()

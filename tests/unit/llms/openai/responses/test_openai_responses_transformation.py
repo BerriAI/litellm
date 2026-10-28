@@ -1373,6 +1373,42 @@ class TestOpenAIResponsesAPIConfig:
 
         assert request["input"] == [expected, {"role": "user", "content": "And Berlin?"}]
 
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            (
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": None},
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"},
+            ),
+            (
+                {
+                    "type": "shell_call_output",
+                    "call_id": "call_1",
+                    "created_by": None,
+                    "output": [{"stdout": "a.py", "stderr": "", "created_by": None}],
+                },
+                {"type": "shell_call_output", "call_id": "call_1", "output": [{"stdout": "a.py", "stderr": ""}]},
+            ),
+            (
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": "user_1"},
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": "user_1"},
+            ),
+        ],
+        ids=("compaction", "shell-call-output-entries", "sent-created-by"),
+    )
+    def test_an_input_item_saved_with_a_null_created_by_replays_without_it(
+        self, item: dict[str, object], expected: dict[str, object]
+    ):
+        request: Final = self.config.transform_responses_api_request(
+            model="gpt-5.6",
+            input=[item, {"role": "user", "content": "And Berlin?"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [expected, {"role": "user", "content": "And Berlin?"}]
+
 
 class TestAzureResponsesAPIConfig:
     def setup_method(self):

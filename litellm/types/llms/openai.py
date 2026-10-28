@@ -1485,7 +1485,7 @@ One of: completed, failed, in_progress, cancelled, queued, or incomplete.
 _NULL_DROPPED_REASONING_ITEM_KEYS: Final = frozenset(("status", "content", "encrypted_content"))
 
 
-def _as_json_object(value: object) -> Mapping[object, object] | None:
+def _as_json_object(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, dict) else None
 
 
@@ -1511,7 +1511,7 @@ def _replayable_output_value(item_type: object, key: object, value: object) -> o
     return [_without_null_created_by(entry) for entry in entries]
 
 
-def _replayable_output_item(item: Mapping[object, object]) -> Mapping[object, object]:
+def replayable_responses_item(item: Mapping[str, object]) -> Mapping[str, object]:
     item_type: Final = item.get("type")
     return {
         k: _replayable_output_value(item_type, k, v)
@@ -1592,7 +1592,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
 
     @field_serializer("output", mode="wrap")
     @classmethod
-    def _serialize_output_filter_reasoning_nulls(cls, value, handler: SerializerFunctionWrapHandler, _info):
+    def _serialize_output_as_replayable(cls, value, handler: SerializerFunctionWrapHandler, _info):
         """
         Drop the nulls the SDK types default in but providers never send: created_by on every output item
         (OpenAI rejects it when `output` is replayed as `input`), and status/content/encrypted_content on
@@ -1602,7 +1602,9 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
         items: Final = _as_json_array(serialized)
         if items is None:
             return serialized
-        return [_replayable_output_item(obj) if (obj := _as_json_object(item)) is not None else item for item in items]
+        return [
+            replayable_responses_item(obj) if (obj := _as_json_object(item)) is not None else item for item in items
+        ]
 
     @property
     def output_text(self) -> str:

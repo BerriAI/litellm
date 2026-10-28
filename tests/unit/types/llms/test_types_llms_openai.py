@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import Mapping
+from itertools import chain
 from typing import Final, Optional
 from unittest.mock import AsyncMock, patch
 
@@ -522,20 +524,20 @@ _OUTPUT_ITEMS_OPENAI_SENDS_WITHOUT_CREATED_BY: Final = (
 )
 
 
+def _created_by_paths_under_key(key: object, child: object, path: str) -> tuple[str, ...]:
+    return (f"{path}.{key}",) if key == "created_by" else _created_by_paths(child, f"{path}.{key}")
+
+
 def _created_by_paths(value: object, path: str = "") -> tuple[str, ...]:
     if isinstance(value, dict):
-        return tuple(
-            found
-            for key, child in value.items()
-            for found in ((f"{path}.{key}",) if key == "created_by" else _created_by_paths(child, f"{path}.{key}"))
-        )
+        return tuple(chain.from_iterable(_created_by_paths_under_key(k, v, path) for k, v in value.items()))
     if isinstance(value, list):
-        return tuple(found for index, child in enumerate(value) for found in _created_by_paths(child, f"{path}[{index}]"))
+        return tuple(chain.from_iterable(_created_by_paths(v, f"{path}[{i}]") for i, v in enumerate(value)))
     return ()
 
 
 @pytest.mark.parametrize("item", _OUTPUT_ITEMS_OPENAI_SENDS_WITHOUT_CREATED_BY, ids=lambda item: item["type"])
-def test_output_item_replays_without_a_created_by_the_provider_never_sent(item):
+def test_output_item_replays_without_a_created_by_the_provider_never_sent(item: Mapping[str, object]):
     response: Final = ResponsesAPIResponse.model_validate(
         {"id": "resp_1", "created_at": 1741476542, "object": "response", "status": "completed", "output": [item]}
     )

@@ -768,8 +768,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                         dict_item = cast(dict[str, object], item)
                         filtered_item = self._handle_reasoning_item(dict_item)
                     else:
-                        # For other dict items, just pass through
-                        filtered_item = cast(dict[str, object], item)
+                        filtered_item = replayable_responses_item(item)
                     validated_input.append(filtered_item)
                 else:
                     validated_input.append(item)
