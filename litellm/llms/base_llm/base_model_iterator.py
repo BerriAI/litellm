@@ -96,7 +96,7 @@ class BaseModelResponseIterator:
         released (and a backend like vLLM aborts generation) when the stream
         is abandoned before its natural end.
 
-        ``streaming_response`` is usually a bare ``aiter_lines()`` generator
+        ``streaming_response`` is usually a bare ``aiter_sse_lines()`` generator
         that holds no reference to the response, so the handler that owns the
         response attaches it here after construction."""
         if self.http_response is not None:

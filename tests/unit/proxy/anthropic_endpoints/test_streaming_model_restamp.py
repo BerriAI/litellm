@@ -46,6 +46,28 @@ def test_restamps_sse_bytes_frame():
     assert b"event: message_start" in restamped
 
 
+def test_restamps_sse_bytes_frame_holding_a_line_separator():
+    payload = {
+        "type": "message_start",
+        "message": {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5-20251001",
+            "content": [{"type": "text", "text": "alpha\u2028beta"}],
+        },
+    }
+    frame = f"event: message_start\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+
+    restamped = restamp_anthropic_stream_chunk_model(frame, "claude-auto-1")
+
+    assert isinstance(restamped, bytes)
+    data_line = next(line for line in restamped.decode().split("\n") if line.startswith("data:"))
+    message = json.loads(data_line[len("data:") :])["message"]
+    assert message["model"] == "claude-auto-1"
+    assert message["content"] == [{"type": "text", "text": "alpha\u2028beta"}]
+
+
 def test_restamps_event_dict():
     chunk = {"type": "message_start", "message": {"id": "msg_1", "model": "claude-sonnet-4-6"}}
 
