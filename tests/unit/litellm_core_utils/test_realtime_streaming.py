@@ -4932,3 +4932,73 @@ async def test_blocked_transcript_is_removed_from_the_conversation_before_the_re
     sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
     assert [event["type"] for event in sent] == expected_frames
     assert all(event["item_id"] == "item_blocked" for event in sent if event["type"] == "conversation.item.delete")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", (False, True))
+async def test_beta_client_bridged_to_a_ga_backend_sends_ga_session_and_response_fields(drop_params: bool) -> None:
+    client_ws = MagicMock()
+    client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "instructions": "Answer briefly",
+                        "temperature": 0.7,
+                        "max_response_output_tokens": 300,
+                        "speed": 1.1,
+                        "input_audio_noise_reduction": {"type": "near_field"},
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "response": {
+                        "modalities": ["text", "audio"],
+                        "voice": "marin",
+                        "output_audio_format": "g711_ulaw",
+                        "temperature": 0.7,
+                        "max_response_output_tokens": 200,
+                        "instructions": "Say hi",
+                    },
+                }
+            ),
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = _mock_logging()
+    logging_obj.pre_call = MagicMock()
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        backend_uses_beta_protocol=False,
+        bridges_beta_client_to_ga=True,
+        drop_params=drop_params,
+    )
+
+    await streaming.client_ack_messages()
+
+    sent: Final = {
+        event["type"]: event for event in (json.loads(call.args[0]) for call in backend_ws.send.call_args_list)
+    }
+    temperature: Final = {} if drop_params else {"temperature": 0.7}
+    assert sent["session.update"]["session"] == {
+        "type": "realtime",
+        "instructions": "Answer briefly",
+        "max_output_tokens": 300,
+        "audio": {"input": {"noise_reduction": {"type": "near_field"}}, "output": {"speed": 1.1}},
+        **temperature,
+    }
+    assert sent["response.create"]["response"] == {
+        "output_modalities": ["audio"],
+        "audio": {"output": {"voice": "marin", "format": {"type": "audio/pcmu"}}},
+        "max_output_tokens": 200,
+        "instructions": "Say hi",
+        **temperature,
+    }

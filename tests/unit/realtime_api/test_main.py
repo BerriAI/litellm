@@ -837,7 +837,13 @@ async def test_transcription_session_sends_the_deployment_model_upstream_in_ever
 def _create_realtime_session_with_an_explicit_null(route: str, client: AsyncHTTPHandler) -> Awaitable[httpx.Response]:
     if route == "client_secrets":
         return realtime_main.acreate_realtime_client_secret.__wrapped__(
-            session={"type": "realtime", "model": "gpt-realtime", "audio": {"input": {"turn_detection": None}}},
+            session={
+                "type": "realtime",
+                "model": "gpt-realtime",
+                "instructions": None,
+                "tools": None,
+                "audio": {"input": {"turn_detection": None}},
+            },
             custom_llm_provider="openai",
             api_base="https://realtime-gateway.example/v1",
             api_key="fake-key",
@@ -847,7 +853,7 @@ def _create_realtime_session_with_an_explicit_null(route: str, client: AsyncHTTP
     if route == "translation_client_secrets":
         return realtime_main.acreate_realtime_translation_client_secret.__wrapped__(
             model="gpt-realtime-translate",
-            session={"audio": {"input": {"noise_reduction": None}}},
+            session={"include": None, "audio": {"input": {"noise_reduction": None}}},
             custom_llm_provider="openai",
             api_base="https://realtime-gateway.example/v1",
             api_key="fake-key",
@@ -856,7 +862,7 @@ def _create_realtime_session_with_an_explicit_null(route: str, client: AsyncHTTP
         )
     return realtime_main.acreate_realtime_transcription_session.__wrapped__(
         model="openai/gpt-transcribe",
-        transcription_session={"audio": {"input": {"turn_detection": None}}},
+        transcription_session={"include": None, "audio": {"input": {"turn_detection": None}}},
         api_base="https://realtime-gateway.example/v1",
         api_key="fake-key",
         litellm_logging_obj=FakeLogging(),
@@ -885,6 +891,25 @@ async def test_realtime_session_requests_forward_an_explicit_null_upstream(
     parent: Final = functools.reduce(lambda node, key: node[key], body_path[:-1], gateway.body)
     assert body_path[-1] in parent
     assert parent[body_path[-1]] is None
+    session_fields: Final = gateway.body["session"] if body_path[0] == "session" else gateway.body
+    assert [key for key, value in session_fields.items() if value is None] == []
+
+
+@pytest.mark.asyncio
+async def test_transcription_client_secret_sends_the_deployment_model_as_the_session_model() -> None:
+    gateway: Final = _GatewayThatRecordsTheSession()
+
+    await realtime_main.acreate_realtime_client_secret.__wrapped__(
+        session={"type": "transcription", "model": "openai/gpt-live-transcribe"},
+        api_key="sk-test",
+        api_base="https://upstream.example",
+        litellm_logging_obj=_realtime_http_logging("client_secrets"),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+    )
+
+    assert gateway.session is not None
+    assert gateway.session["model"] == "gpt-live-transcribe"
+    assert gateway.session["audio"] == {"input": {"transcription": {"model": "gpt-live-transcribe"}}}
 
 
 class _ClientWebSocketWithHeaders:

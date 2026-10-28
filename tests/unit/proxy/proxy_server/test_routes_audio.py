@@ -318,7 +318,7 @@ def test_audio_transcription_stream_returns_sse(client, auth_as, patched_transcr
         response = client.post(path, files=files, data=data)
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
-    assert response.text == 'data: {"type":"transcript.text.done","text":"hello world"}\n\n'
+    assert response.text == 'data: {"type":"transcript.text.done","text":"hello world"}\n\ndata: [DONE]\n\n'
     assert patched_transcription_stream.closed is True
 
 
@@ -429,7 +429,8 @@ def _streams_when_asked(request: httpx.Request) -> httpx.Response:
 
 
 def _sse_events(body: str) -> tuple[object, ...]:
-    return tuple(json.loads(frame.removeprefix("data: ")) for frame in body.split("\n\n") if frame)
+    assert body.endswith("data: [DONE]\n\n")
+    return tuple(json.loads(frame.removeprefix("data: ")) for frame in body.removesuffix("data: [DONE]\n\n").split("\n\n") if frame)
 
 
 @pytest.mark.usefixtures("patched_transcription_stream")

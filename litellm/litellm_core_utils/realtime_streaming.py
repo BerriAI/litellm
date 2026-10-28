@@ -95,6 +95,7 @@ class _ClientEventFrame(TypedDict, total=False):
     type: ReadOnly[str]
     item: ReadOnly[_ClientEventItem]
     session: ReadOnly[Mapping[str, object]]
+    response: ReadOnly[Mapping[str, object]]
 
 
 class _ResponseDoneBody(TypedDict, total=False):
@@ -373,6 +374,7 @@ class RealTimeStreaming:
         logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
         translation_session: bool = False,
         bridges_beta_client_to_ga: bool = False,
+        drop_params: bool = False,
     ):
         self.websocket: _ClientWebSocket = websocket
         self._replay_scope: Final = client_websocket_scope(websocket)
@@ -387,6 +389,7 @@ class RealTimeStreaming:
         self.tool_calls: list[dict] = []
         self._is_translation_session = translation_session
         self._bridges_beta_client_to_ga: Final = bridges_beta_client_to_ga
+        self._drop_params: Final = drop_params
         self._translation_input_seconds = 0.0
         self._translation_input_bytes_per_second = 48000.0
         self._translation_output_seconds = 0.0
@@ -1679,7 +1682,7 @@ class RealTimeStreaming:
     _detect_beta_header = detect_beta_header
 
     @staticmethod
-    def _remap_beta_session_to_ga(session: dict) -> dict:
+    def _remap_beta_session_to_ga(session: dict, drop_temperature: bool = False) -> dict:
         """
         Convert a beta-style session.update payload to the GA nested schema.
 
@@ -1692,6 +1695,10 @@ class RealTimeStreaming:
         session.output_audio_format     → session.audio.output.format (with type/rate)
         session.turn_detection          → session.audio.input.turn_detection
         session.input_audio_transcription → session.audio.input.transcription
+        session.input_audio_noise_reduction → session.audio.input.noise_reduction
+        session.speed                   → session.audio.output.speed
+        session.max_response_output_tokens → session.max_output_tokens
+        session.temperature             (dropped when drop_temperature)
         ─────────────────────────────────────────────────────────────────────
         Fields not in the mapping (instructions, tools, etc.) are passed through.
         GA clients that already use the nested shape are unaffected.
@@ -1743,6 +1750,19 @@ class RealTimeStreaming:
         if "input_audio_transcription" in session:
             inp["transcription"] = session.pop("input_audio_transcription")
 
+        if "input_audio_noise_reduction" in session:
+            inp["noise_reduction"] = session.pop("input_audio_noise_reduction")
+
+        if "speed" in session:
+            out["speed"] = session.pop("speed")
+
+        if "max_response_output_tokens" in session:
+            max_tokens: Final = session.pop("max_response_output_tokens")
+            session.setdefault("max_output_tokens", max_tokens)
+
+        if drop_temperature:
+            session.pop("temperature", None)
+
         if inp:
             audio["input"] = inp
         if out:
@@ -1760,6 +1780,53 @@ class RealTimeStreaming:
             session["audio"] = existing
 
         return session
+
+    @staticmethod
+    def _remap_beta_response_to_ga(response: Mapping[str, object], drop_temperature: bool) -> dict[str, object]:
+        moved: Final = frozenset(
+            ("modalities", "voice", "output_audio_format", "max_response_output_tokens")
+            + (("temperature",) if drop_temperature else ())
+        )
+        raw_format: Final = response.get("output_audio_format")
+        output_audio: Final = {
+            **({} if "voice" not in response else {"voice": response["voice"]}),
+            **(
+                {}
+                if "output_audio_format" not in response
+                else {
+                    "format": RealTimeStreaming._AUDIO_FORMAT_MAP.get(raw_format, raw_format)
+                    if isinstance(raw_format, str)
+                    else raw_format
+                }
+            ),
+        }
+        modalities: Final = response.get("modalities")
+        modality_names: Final = (
+            frozenset(m.lower() for m in modalities if isinstance(m, str))
+            if isinstance(modalities, list)
+            else frozenset()
+        )
+        output_modalities: Final = (
+            ["audio"] if "audio" in modality_names else ["text"] if "text" in modality_names else None
+        )
+        existing_audio: Final = as_str_mapping(response.get("audio")) or {}
+        existing_output: Final = as_str_mapping(existing_audio.get("output")) or {}
+        return {
+            **{key: value for key, value in response.items() if key not in moved},
+            **(
+                {}
+                if output_modalities is None or "output_modalities" in response
+                else {"output_modalities": output_modalities}
+            ),
+            **(
+                {}
+                if "max_response_output_tokens" not in response or "max_output_tokens" in response
+                else {"max_output_tokens": response["max_response_output_tokens"]}
+            ),
+            **(
+                {} if not output_audio else {"audio": {**existing_audio, "output": {**existing_output, **output_audio}}}
+            ),
+        }
 
     @staticmethod
     def _translate_event_to_beta(event: dict) -> dict | None:
@@ -1993,11 +2060,21 @@ class RealTimeStreaming:
                     if msg_type == "session.update" and not self._backend_uses_beta_protocol:
                         session = client_event.get("session", {})
                         if isinstance(session, dict):
-                            session = self._remap_beta_session_to_ga(session)
+                            session = self._remap_beta_session_to_ga(session, drop_temperature=self._drop_params)
                             if self._is_translation_session:
                                 session.pop("type", None)
                             msg_obj["session"] = session
                             message = json.dumps(msg_obj)
+
+                    if (
+                        msg_type == "response.create"
+                        and not self._backend_uses_beta_protocol
+                        and (beta_response := as_str_mapping(client_event.get("response"))) is not None
+                    ):
+                        msg_obj["response"] = self._remap_beta_response_to_ga(
+                            beta_response, drop_temperature=self._drop_params
+                        )
+                        message = json.dumps(msg_obj)
 
                     if msg_type == "session.update" and self._event_normalizer:
                         session = client_event.get("session")

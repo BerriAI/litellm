@@ -142,6 +142,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         user_api_key_dict: object | None = None,
         litellm_metadata: dict | None = None,
         realtime_mode: str = "realtime",
+        drop_params: bool = False,
         **kwargs: object,
     ):
         import websockets
@@ -201,6 +202,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     event_normalizer=self._make_event_normalizer(),
                     usage_meter=self._make_usage_meter(),
                     translation_session=realtime_mode == "translation",
+                    drop_params=drop_params,
                 )
                 await realtime_streaming.bidirectional_forward()
 

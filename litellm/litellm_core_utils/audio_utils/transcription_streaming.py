@@ -6,6 +6,7 @@ import traceback
 from collections.abc import AsyncIterator, Iterator
 from typing import Final, Protocol
 
+import anyio
 from openai import AsyncStream, Stream
 from openai.types.audio import (
     TranscriptionStreamEvent,
@@ -23,6 +24,9 @@ def transcription_stream_requested(value: object) -> bool:
     return str(value).lower() in ("1", "true")
 
 
+TRANSCRIPTION_STREAM_DONE_FRAME: Final = "data: [DONE]\n\n"
+
+
 def guarded_transcription_events(response: TranscriptionResponse) -> tuple[str, ...]:
     text: Final = response.text or ""
     usage: Final = response.usage
@@ -33,9 +37,12 @@ def guarded_transcription_events(response: TranscriptionResponse) -> tuple[str, 
         **({} if usage is None else {"usage": usage.model_dump(exclude_none=True)}),
         **({} if languages is None else {"languages": [language.model_dump() for language in languages]}),
     }
-    return tuple(
-        f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
-        for event in ({"type": "transcript.text.delta", "delta": text}, done_event)
+    return (
+        *(
+            f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+            for event in ({"type": "transcript.text.delta", "delta": text}, done_event)
+        ),
+        TRANSCRIPTION_STREAM_DONE_FRAME,
     )
 
 
@@ -208,11 +215,12 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
             start_time=self._start_time,
             end_time=end_time,
         )
-        await self._logging_obj.async_success_handler(
-            result=response,
-            start_time=self._start_time,
-            end_time=end_time,
-        )
+        with anyio.CancelScope(shield=True):
+            await self._logging_obj.async_success_handler(
+                result=response,
+                start_time=self._start_time,
+                end_time=end_time,
+            )
 
     async def close(self) -> None:
         try:

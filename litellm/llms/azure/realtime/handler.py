@@ -205,6 +205,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         litellm_metadata: dict | None = None,
         realtime_mode: str = "realtime",
         bridges_beta_client_to_ga: bool = False,
+        drop_params: bool = False,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -247,6 +248,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                     ),
                     translation_session=realtime_mode == "translation",
                     bridges_beta_client_to_ga=bridges_beta_client_to_ga,
+                    drop_params=drop_params,
                 )
                 await realtime_streaming.bidirectional_forward()
 

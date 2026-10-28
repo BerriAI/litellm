@@ -360,6 +360,7 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
 )
 from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
     TRANSCRIPTION_RAN_UNSTREAMED,
+    TRANSCRIPTION_STREAM_DONE_FRAME,
     guarded_transcription_events,
     transcription_stream_requested,
 )
@@ -13568,6 +13569,7 @@ async def audio_transcriptions(
                 try:
                     async for event in stream:
                         yield f"data: {event.model_dump_json(exclude_unset=True)}\n\n"
+                    yield TRANSCRIPTION_STREAM_DONE_FRAME
                 except Exception as stream_error:  # noqa: BLE001  # stream boundary: a mid-stream failure ends the SSE body as an error event
                     replacement: Final = await proxy_logging_obj.post_call_failure_hook(
                         user_api_key_dict=user_api_key_dict,
@@ -13576,11 +13578,12 @@ async def audio_transcriptions(
                     )
                     yield _sse_error_frame(stream_error if replacement is None else replacement)
                 finally:
-                    close: Final = getattr(stream, "aclose", None) or getattr(stream, "close", None)
-                    if callable(close):
-                        close_result: Final = close()
-                        if inspect.isawaitable(close_result):
-                            await close_result
+                    with anyio.CancelScope(shield=True):
+                        close: Final = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+                        if callable(close):
+                            close_result: Final = close()
+                            if inspect.isawaitable(close_result):
+                                await close_result
 
             return StreamingResponse(
                 guarded_transcription_events(response)

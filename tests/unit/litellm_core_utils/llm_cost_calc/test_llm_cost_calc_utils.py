@@ -76,6 +76,29 @@ def test_realtime_cached_modality_breakdown_matches_prompt_cost(_local_model_cos
     assert prompt_cost == pytest.approx(uncached_cost + cached_cost)
 
 
+def test_image_model_bills_cached_image_tokens_at_its_cached_image_rate(_local_model_cost_map):
+    model: Final = "gpt-image-2"
+    rates: Final = litellm.model_cost[model]
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=200,
+            image_tokens=800,
+            cached_tokens=600,
+            cached_tokens_details=CachedTokensDetails(text_tokens=100, image_tokens=500),
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="openai")
+    cached_cost: Final = 100 * rates["cache_read_input_token_cost"] + 500 * rates["cache_read_input_image_token_cost"]
+    uncached_cost: Final = 100 * rates["input_cost_per_token"] + 300 * rates["input_cost_per_image_token"]
+
+    assert rates["cache_read_input_image_token_cost"] != rates["cache_read_input_token_cost"]
+    assert prompt_cost == pytest.approx(uncached_cost + cached_cost)
+
+
 @pytest.fixture
 def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")

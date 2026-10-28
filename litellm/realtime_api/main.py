@@ -109,12 +109,16 @@ def _transcription_model_overrides(session: Mapping[str, object], model_name: st
     return MappingProxyType({**flat_part, **nested_part})
 
 
-def with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:
-    if session.get("type") == "transcription":
-        return {**session, **_transcription_model_overrides(session, model_name)}
-    if "model" not in session:
-        return session
-    return {**session, "model": model_name}
+def with_resolved_session_model(session: Mapping[str, object], model_name: str) -> dict[str, object]:
+    top_level_model: Final = {} if "model" not in session else {"model": model_name}
+    transcription_models: Final = (
+        _transcription_model_overrides(session, model_name) if session.get("type") == "transcription" else {}
+    )
+    return {**session, **top_level_model, **transcription_models}
+
+
+def _without_top_level_nulls(fields: Mapping[str, object]) -> dict[str, object]:
+    return {key: value for key, value in fields.items() if value is not None}
 
 
 _POLICY_PIPELINE_METADATA_KEYS: Final = ("_guardrail_pipelines", "_pipeline_managed_guardrails")
@@ -272,7 +276,7 @@ async def _realtime_http_bearer_token(
     return bearer_token or ""
 
 
-def _get_realtime_http_extra_headers(
+async def _get_realtime_http_extra_headers(
     provider_config: BaseRealtimeHTTPConfig | None,
     litellm_params: GenericLiteLLMParams,
     resolved_api_key: str,
@@ -280,7 +284,8 @@ def _get_realtime_http_extra_headers(
 ) -> Mapping[str, object] | None:
     if provider_config is None:
         return extra_headers
-    return provider_config.get_extra_headers(
+    return await asyncio.to_thread(
+        provider_config.get_extra_headers,
         litellm_params=litellm_params,
         api_key=resolved_api_key,
         extra_headers=extra_headers,
@@ -289,7 +294,9 @@ def _get_realtime_http_extra_headers(
 
 def _client_secret_session_body(req: RealtimeClientSecretRequest, model_name: str) -> Mapping[str, object] | None:
     if req.session is not None:
-        return with_resolved_session_model(req.session.model_dump(exclude_unset=True), model_name)
+        return with_resolved_session_model(
+            _without_top_level_nulls(req.session.model_dump(exclude_unset=True)), model_name
+        )
     if req.model is not None:
         return {"type": "realtime", "model": model_name}
     return None
@@ -338,7 +345,7 @@ async def acreate_realtime_client_secret(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
-    resolved_extra_headers: Final = _get_realtime_http_extra_headers(
+    resolved_extra_headers: Final = await _get_realtime_http_extra_headers(
         provider_config=provider_config,
         litellm_params=litellm_params,
         resolved_api_key=resolved_api_key,
@@ -410,7 +417,7 @@ async def acreate_realtime_translation_client_secret(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
-    resolved_extra_headers: Final = _get_realtime_http_extra_headers(
+    resolved_extra_headers: Final = await _get_realtime_http_extra_headers(
         provider_config=provider_config,
         litellm_params=litellm_params,
         resolved_api_key=resolved_api_key,
@@ -426,7 +433,9 @@ async def acreate_realtime_translation_client_secret(
         litellm_params={"api_base": resolved_api_base},
         custom_llm_provider=custom_llm_provider,
     )
-    translation_session: Final = with_resolved_session_model(session_config.model_dump(exclude_unset=True), model_name)
+    translation_session: Final = with_resolved_session_model(
+        _without_top_level_nulls(session_config.model_dump(exclude_unset=True)), model_name
+    )
     return await base_llm_http_handler.async_realtime_translation_client_secret_handler(
         api_base=resolved_api_base,
         api_key=await _realtime_http_bearer_token(
@@ -512,7 +521,7 @@ async def acreate_realtime_transcription_session(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
-    resolved_extra_headers: Final = _get_realtime_http_extra_headers(
+    resolved_extra_headers: Final = await _get_realtime_http_extra_headers(
         provider_config=provider_config,
         litellm_params=litellm_params,
         resolved_api_key=resolved_api_key,
@@ -528,7 +537,7 @@ async def acreate_realtime_transcription_session(
     # The upstream transcription model must match the authorized routing model, so a
     # caller cannot pass auth with an allowed top-level model and forward a different one.
     request_data: Final = _with_upstream_transcription_model(
-        req.model_dump(exclude_unset=True, exclude={"model"}), model_name
+        _without_top_level_nulls(req.model_dump(exclude_unset=True, exclude={"model"})), model_name
     )
     return await base_llm_http_handler.async_realtime_transcription_session_handler(
         api_base=resolved_api_base,
@@ -934,6 +943,7 @@ async def _arealtime(
             user_api_key_dict=kwargs.get("user_api_key_dict"),
             litellm_metadata=session_litellm_metadata,
             bridges_beta_client_to_ga=realtime_protocol.bridges_beta_client_to_ga,
+            drop_params=drop_params,
         )
     elif _custom_llm_provider == "openai":
         api_base = dynamic_api_base or litellm_params.api_base or litellm.api_base or "https://api.openai.com/"
@@ -953,6 +963,7 @@ async def _arealtime(
             realtime_mode=realtime_mode,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
             litellm_metadata=session_litellm_metadata,
+            drop_params=drop_params,
         )
     elif _custom_llm_provider == "bedrock":
         # Extract AWS parameters from kwargs
