@@ -14,6 +14,7 @@ from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
+from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
 from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 from litellm.llms.tencent.messages.transformation import TencentAnthropicMessagesConfig
@@ -123,6 +124,29 @@ def test_messages_request_removes_tool_custom_fields_without_mutating_tools(
     ]
     assert tools[0]["custom"] == {"eager_input_streaming": True}
     assert optional_params["tools"] is tools
+
+
+@pytest.mark.parametrize(
+    ("config", "model"),
+    [(DeepSeekAnthropicMessagesConfig(), "deepseek-chat"), (MinimaxMessagesConfig(), "MiniMax-M2")],
+)
+def test_messages_request_drops_wrapped_defer_loading_without_deferring_tools_off_claude(
+    config: AnthropicMessagesConfig, model: str
+) -> None:
+    schema: Final[dict[str, object]] = {"type": "object", "properties": {}}
+
+    request: Final = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hi"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 50,
+            "tools": [{"name": "A", "input_schema": schema, "custom": {"defer_loading": True}}],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert request["tools"] == [{"name": "A", "input_schema": schema}]
 
 
 def test_workload_identity_allowed_for_anthropic() -> None:

@@ -234,6 +234,7 @@ from .litellm_core_utils.streaming_chunk_builder_utils import (
     ChunkProcessor as ChunkProcessor,  # noqa: PLC0414  # public re-export
 )
 from .llms.anthropic.chat import AnthropicChatCompletion
+from .llms.anthropic.common_utils import is_claude_tool_target
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
@@ -1133,17 +1134,6 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 
 _ANTHROPIC_ONLY_TOOL_KEYS: Final = frozenset({"input_examples", "eager_input_streaming"})
-
-
-def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
-    if custom_llm_provider == "anthropic":
-        return True
-    model_lower: Final = model.lower()
-    if custom_llm_provider == "bedrock":
-        return "claude" in model_lower or ("arn:" in model_lower and ":bedrock:" in model_lower)
-    if custom_llm_provider == "azure_ai" or custom_llm_provider == "vertex_ai":
-        return "claude" in model_lower
-    return False
 
 
 def _history_without_unanswered_tool_search_calls(
@@ -5749,7 +5739,7 @@ def completion(
             }
         )
 
-        if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
+        if not is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
 
         if provider_specific_header is not None:

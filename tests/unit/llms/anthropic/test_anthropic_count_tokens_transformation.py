@@ -171,6 +171,24 @@ def test_transform_includes_tools():
     assert result["tools"] == tools
 
 
+def test_transform_drops_tool_custom_object_and_keeps_wrapped_defer_loading():
+    schema: Final[dict[str, JsonValue]] = {"type": "object", "properties": {"path": {"type": "string"}}}
+
+    result: Final = AnthropicCountTokensConfig().transform_request_to_count_tokens(
+        model="claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        tools=[
+            {"name": "read_file", "input_schema": schema, "custom": {"eager_input_streaming": True}},
+            {"name": "list_files", "input_schema": schema, "custom": {"defer_loading": True}},
+        ],
+    )
+
+    assert result["tools"] == [
+        {"name": "read_file", "input_schema": schema},
+        {"name": "list_files", "input_schema": schema, "defer_loading": True},
+    ]
+
+
 def test_transform_includes_system_and_tools():
     """Test that both system and tools are included together."""
     config = AnthropicCountTokensConfig()

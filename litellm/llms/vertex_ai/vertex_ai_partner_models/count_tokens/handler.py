@@ -9,6 +9,7 @@ their respective publisher-specific count-tokens endpoints.
 from typing import Any, Final
 
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.common_utils import OBJECT_LIST_ADAPTER, is_claude_tool_target, tools_without_custom_field
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -166,10 +167,21 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
 
         # Make the request
         # Note: Partner models (especially Claude) accept Anthropic Messages API format directly
+        tools: Final = request_data.get("tools")
         response: Final = await async_client.post(
             endpoint_url,
             headers=headers,
-            json=request_data,
+            json=(
+                {
+                    **request_data,
+                    "tools": tools_without_custom_field(
+                        OBJECT_LIST_ADAPTER.validate_python(tools),
+                        hoist_defer_loading=is_claude_tool_target("vertex_ai", model),
+                    ),
+                }
+                if isinstance(tools, list)
+                else request_data
+            ),
             timeout=30.0,
         )
 

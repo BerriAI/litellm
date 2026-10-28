@@ -32,6 +32,7 @@ from ...common_utils import (
     OBJECT_LIST_ADAPTER,
     AnthropicError,
     AnthropicModelInfo,
+    is_claude_tool_target,
     merge_anthropic_beta_headers,
     optionally_handle_anthropic_oauth,
     requires_native_compaction_beta,
@@ -720,7 +721,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return dict(anthropic_messages_request)
         return {
             **anthropic_messages_request,
-            "tools": tools_without_custom_field(OBJECT_LIST_ADAPTER.validate_python(tools)),
+            "tools": tools_without_custom_field(
+                OBJECT_LIST_ADAPTER.validate_python(tools),
+                hoist_defer_loading=is_claude_tool_target(self._resolved_provider, model),
+            ),
         }
 
     def transform_anthropic_messages_response(
