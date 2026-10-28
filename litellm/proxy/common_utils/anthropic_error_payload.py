@@ -1,8 +1,8 @@
-"""Renders the Anthropic error envelope for the Messages routes, wherever the failure is raised.
+"""Renders the Anthropic error envelope for the Anthropic routes, wherever the failure is raised.
 
 The central ``ProxyException`` handler answers every route with OpenAI's ``{"error": {...}}``
 body, which an Anthropic SDK cannot read. Auth, key, budget and model-access failures are
-raised by ``user_api_key_auth`` before the Messages handler runs, so the envelope is picked
+raised by ``user_api_key_auth`` before the route handler runs, so the envelope is picked
 from the request route rather than inside the handler.
 """
 
@@ -29,15 +29,17 @@ ANTHROPIC_MESSAGES_ROUTES: Final[frozenset[str]] = frozenset(
         "/claude_code_gateway/v1/messages/count_tokens",
     }
 )
+ANTHROPIC_PASS_THROUGH_PREFIX: Final = "/anthropic/"
 
 
-def is_anthropic_messages_route(route: str) -> bool:
-    """True for the Messages routes, whose callers read the Anthropic error envelope.
+def uses_anthropic_error_envelope(route: str) -> bool:
+    """True for the Messages routes and the Anthropic pass-through, whose callers read the Anthropic envelope.
 
     Narrower than ``LiteLLMRoutes.anthropic_routes``: the Skills and marketplace routes there
-    answer their own body shape, and ``/anthropic/v1/messages`` relays the upstream response.
+    answer their own body shape. The pass-through relays upstream errors as Anthropic sent them,
+    so the proxy's own refusals there answer the same envelope.
     """
-    return route in ANTHROPIC_MESSAGES_ROUTES
+    return route in ANTHROPIC_MESSAGES_ROUTES or route.startswith(ANTHROPIC_PASS_THROUGH_PREFIX)
 
 
 def anthropic_error_status_code(exc: ProxyException) -> int:

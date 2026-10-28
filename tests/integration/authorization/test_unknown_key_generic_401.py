@@ -66,6 +66,7 @@ class _AnthropicErrorResponse(BaseModel):
 
 GENERIC_ERROR: Final = _ProxyError(message=GENERIC_MESSAGE, type="token_not_found_in_db", param="key", code="401")
 MESSAGES_PATH: Final = "/v1/messages"
+ANTHROPIC_ENVELOPE_PATHS: Final = frozenset({MESSAGES_PATH, "/anthropic/v1/messages"})
 ANTHROPIC_GENERIC_ERROR: Final = _AnthropicErrorDetail(type="authentication_error", message=GENERIC_MESSAGE)
 
 
@@ -145,8 +146,8 @@ def _assert_messages_refusal(response: httpx.Response, *secrets: str) -> None:
 
 
 def _assert_refusal(path: str, response: httpx.Response, *secrets: str) -> None:
-    """The Messages routes answer the Anthropic envelope, every other route the OpenAI one."""
-    if path == MESSAGES_PATH:
+    """The Messages and Anthropic pass-through routes answer the Anthropic envelope, every other route the OpenAI one."""
+    if path in ANTHROPIC_ENVELOPE_PATHS:
         _assert_messages_refusal(response, *secrets)
     else:
         _assert_generic_refusal(response, *secrets)

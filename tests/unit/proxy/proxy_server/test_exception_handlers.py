@@ -189,10 +189,15 @@ _MESSAGES_ROUTES: Final = (
     "/claude_code_gateway/v1/messages",
     "/claude_code_gateway/v1/messages/count_tokens",
 )
+_ANTHROPIC_PASS_THROUGH_ROUTES: Final = (
+    "/anthropic/v1/messages",
+    "/anthropic/v1/messages/count_tokens",
+    "/anthropic/v1/models",
+)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", _MESSAGES_ROUTES)
+@pytest.mark.parametrize("path", (*_MESSAGES_ROUTES, *_ANTHROPIC_PASS_THROUGH_ROUTES))
 async def test_openai_exception_handler_answers_the_anthropic_envelope_on_the_messages_routes(path):
     """An auth failure raised before the Messages handler (user_api_key_auth) must reach an
     Anthropic SDK as {"type": "error", "error": {...}}, not the OpenAI {"error": {...}} body."""
@@ -305,14 +310,15 @@ async def test_openai_exception_handler_messages_route_copies_the_call_id_when_o
 
 
 @pytest.mark.asyncio
-async def test_a_messages_request_with_no_key_answers_the_anthropic_authentication_error(client, monkeypatch):
+@pytest.mark.parametrize("path", ("/v1/messages", "/anthropic/v1/messages"))
+async def test_a_messages_request_with_no_key_answers_the_anthropic_authentication_error(client, monkeypatch, path):
     """End to end through the real user_api_key_auth: a /v1/messages request with no
     credential is rejected before the handler, and the SDK must see Anthropic's
     authentication_error envelope, not OpenAI's {"error": {...}} body."""
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
 
-    response = client.post("/v1/messages", json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]})
+    response = client.post(path, json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]})
     body = response.json()
 
     assert response.status_code == 401

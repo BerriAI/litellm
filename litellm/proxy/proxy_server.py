@@ -471,7 +471,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
 )
 from litellm.proxy.common_utils.anthropic_error_payload import (
     anthropic_error_json_response,
-    is_anthropic_messages_route,
+    uses_anthropic_error_envelope,
 )
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
@@ -2192,7 +2192,7 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
     log_model_access_denial(exc)
     headers: Final = exc.headers
-    if is_anthropic_messages_route(get_request_route(request)):
+    if uses_anthropic_error_envelope(get_request_route(request)):
         return anthropic_error_json_response(exc, request)
     error_dict: Final = with_call_id(
         JSON_OBJECT.validate_python(exc.to_dict()),
