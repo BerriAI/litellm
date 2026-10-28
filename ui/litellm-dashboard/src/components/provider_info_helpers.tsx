@@ -198,6 +198,7 @@ export enum Providers {
   xAI = "xAI",
   XINFERENCE = "Xinference",
   ZAI = "Z.AI (Zhipu AI)",
+  ZeroGPU = "ZeroGPU",
 }
 
 export const provider_map: Record<string, string> = {
@@ -327,6 +328,7 @@ export const provider_map: Record<string, string> = {
   xAI: "xai",
   XINFERENCE: "xinference",
   ZAI: "zai",
+  ZeroGPU: "zerogpu",
 };
 
 const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
@@ -500,6 +502,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Voyage]: "voyage/",
   [Providers.WATSONX]: "watsonx/ibm/granite-3-3-8b-instruct",
   [Providers.ZAI]: "zai/glm-4.5",
+  [Providers.ZeroGPU]: "zerogpu/gpt-oss-120b",
 };
 
 export const getPlaceholder = (selectedProvider: string): string => {
