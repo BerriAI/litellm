@@ -1447,7 +1447,10 @@ async def test_aborted_stream_raises_instead_of_finishing_successfully(
 
 
 @pytest.mark.parametrize("async_stream", [False, True])
-async def test_sdk_stream_with_null_choices_chunk_finishes_normally(async_stream: bool, logging_obj: Logging) -> None:
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+async def test_stream_with_null_choices_chunk_finishes_normally(
+    async_stream: bool, transport: str, logging_obj: Logging
+) -> None:
     body: Final = (
         "".join(
             "data: "
@@ -1478,15 +1481,22 @@ async def test_sdk_stream_with_null_choices_chunk_finishes_normally(async_stream
     )
     client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
     stream: Final = (
-        AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
-        if isinstance(client, AsyncOpenAI)
-        else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+        (
+            AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+            if isinstance(client, AsyncOpenAI)
+            else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+        )
+        if transport == "sdk"
+        else OpenAIChatCompletionStreamingHandler(
+            streaming_response=raw_response.aiter_lines() if async_stream else raw_response.iter_lines(),
+            sync_stream=not async_stream,
+        )
     )
     response: Final = CustomStreamWrapper(
         completion_stream=stream,
         model="test-model",
         logging_obj=logging_obj,
-        custom_llm_provider="openai",
+        custom_llm_provider="openai" if transport == "sdk" else "hosted_vllm",
     )
 
     try:

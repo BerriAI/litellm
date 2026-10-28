@@ -959,7 +959,7 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                     status_code=error_status_code,
                     message=error_message,
                 )
-            choices = chunk.get("choices", [])
+            choices = chunk.get("choices") or []
             if any(choice.get("finish_reason") == "abort" for choice in _CHOICE_MAPPINGS.validate_python(choices)):
                 raise OpenAIError(
                     status_code=500,
