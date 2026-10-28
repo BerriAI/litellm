@@ -622,7 +622,6 @@ _RESPONSES_REQUEST_FIELDS: Final = frozenset(get_type_hints(ResponsesAPIOptional
 
 @dataclass(frozen=True, slots=True)
 class _UntranslatableResponsesFields:
-
     fields: tuple[str, ...]
 
 
