@@ -267,6 +267,10 @@ def _whole_float_as_int(value: object) -> object:
 class ModelInfo(MirroredPricingParams):
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
+    cancel_on_disconnect: bool = Field(
+        False,
+        description="Opt this model group into cancelling non-streaming upstream calls when the client disconnects. Enabled if any deployment in the group opts in. A global cancel_on_disconnect setting still applies to every group.",
+    )
     updated_at: datetime.datetime | None = None
     updated_by: str | None = None
 
