@@ -439,6 +439,7 @@ _SCOPE: Final = "api://audit/.default"
 _YEAR_2100: Final = 4_102_444_800
 _LONG_EXPIRED: Final = 1
 _JOIN_WINDOW_SECONDS: Final = 0.5
+_FAST_FAILING_CALLERS: Final = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -570,13 +571,33 @@ def test_waiting_callers_retry_a_failed_token_request_again_once_entra_recovers(
     assert {call.result() for call in recovered if call.exception() is None} == {"token-4"}
 
 
-def test_a_failed_refresh_keeps_the_valid_token_for_the_request_that_made_it() -> None:
+def test_a_failed_refresh_fails_the_request_that_made_it_even_while_a_valid_token_is_held() -> None:
     credential: Final = _ScriptedCredential(iter((int(time.time()) + 120, None)))
     provider: Final = single_flight_bearer_token_provider(credential, _SCOPE)
     credential.answers.release(2)
 
-    assert (provider(), provider()) == ("token-0", "token-0")
-    assert credential.requests.qsize() == 2
+    assert provider() == "token-0"
+    with pytest.raises(ClientAuthenticationError):
+        provider()
+
+
+def test_callers_waiting_on_a_failed_token_request_share_one_retry_when_entra_fails_fast() -> None:
+    credential: Final = _ScriptedCredential()
+    provider: Final = single_flight_bearer_token_provider(credential, _SCOPE)
+    start: Final = threading.Barrier(_FAST_FAILING_CALLERS)
+
+    def call() -> str:
+        start.wait(5)
+        return provider()
+
+    with ThreadPoolExecutor(max_workers=_FAST_FAILING_CALLERS) as pool:
+        calls: Final = tuple(pool.submit(call) for _ in range(_FAST_FAILING_CALLERS))
+        credential.requests.get(timeout=5)
+        time.sleep(_JOIN_WINDOW_SECONDS)
+        credential.answers.release(_FAST_FAILING_CALLERS)
+
+    assert all(isinstance(call.exception(), ClientAuthenticationError) for call in calls)
+    assert credential.requests.qsize() == 1
 
 
 @dataclass(frozen=True, slots=True)

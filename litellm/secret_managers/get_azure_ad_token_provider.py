@@ -115,7 +115,6 @@ def _supports_token_info(
 def single_flight_bearer_token_provider(
     credential: "TokenCredential | SupportsTokenInfo", scope: str
 ) -> Callable[[], str]:
-    from azure.core.exceptions import AzureError
     from azure.identity import get_bearer_token_provider
 
     held: Final = _HeldToken()
@@ -125,17 +124,8 @@ def single_flight_bearer_token_provider(
     provider: Final = get_bearer_token_provider(watched, scope)
     token_request: Final[SingleFlight[str]] = SingleFlight()
 
-    def fetch_or_keep_held_token() -> str:
-        try:
-            return provider()
-        except AzureError:
-            held_token: Final = held.still_valid()
-            if held_token is None:
-                raise
-            return held_token
-
     def bearer_token() -> str:
-        return token_request.run(fetch_or_keep_held_token, while_busy=held.still_valid())
+        return token_request.run(provider, while_busy=held.still_valid())
 
     return bearer_token
 

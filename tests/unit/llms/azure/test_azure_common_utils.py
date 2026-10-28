@@ -16,6 +16,7 @@ import litellm
 from litellm.llms.azure.common_utils import (
     BaseAzureLLM,
     _cached_azure_ad_token_refresh_provider,
+    _cached_default_azure_credential_provider,
     _cached_entra_id_token_provider,
     get_azure_ad_token,
     get_azure_ad_token_from_entra_id,
@@ -44,6 +45,7 @@ def setup_mocks(monkeypatch):
     monkeypatch.delenv("AZURE_SCOPE", raising=False)
     monkeypatch.delenv("AZURE_AD_TOKEN", raising=False)
     _cached_azure_ad_token_refresh_provider.cache_clear()
+    _cached_default_azure_credential_provider.cache_clear()
 
     with (
         patch(
@@ -89,6 +91,7 @@ def setup_mocks(monkeypatch):
             "select_url": mock_select_url,
         }
     _cached_azure_ad_token_refresh_provider.cache_clear()
+    _cached_default_azure_credential_provider.cache_clear()
 
 
 def test_initialize_with_api_key(setup_mocks):
@@ -1437,6 +1440,33 @@ def test_get_azure_ad_token_with_token_refresh_reuses_provider_per_scope(setup_m
         {"azure_scope": default_scope},
         {"azure_scope": other_scope},
     ]
+
+
+def test_get_azure_ad_token_reuses_one_default_azure_credential_provider_per_scope(setup_mocks):
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = True
+    default_scope: Final = "https://cognitiveservices.azure.com/.default"
+    other_scope: Final = "api://other-resource/.default"
+
+    def provider_for(azure_scope: str, azure_credential: AzureCredentialType | None = None) -> Callable[[], str]:
+        if azure_credential != AzureCredentialType.DefaultAzureCredential:
+            raise ValueError("No credential provided")
+        return lambda: f"token-for-{azure_scope}"
+
+    setup_mocks["token_provider"].side_effect = provider_for
+
+    tokens: Final = (
+        get_azure_ad_token(GenericLiteLLMParams()),
+        get_azure_ad_token(GenericLiteLLMParams()),
+        get_azure_ad_token(GenericLiteLLMParams(azure_scope=other_scope)),
+    )
+
+    default_credential_builds: Final = tuple(
+        call.kwargs["azure_scope"]
+        for call in setup_mocks["token_provider"].call_args_list
+        if call.kwargs.get("azure_credential") == AzureCredentialType.DefaultAzureCredential
+    )
+    assert tokens == (f"token-for-{default_scope}", f"token-for-{default_scope}", f"token-for-{other_scope}")
+    assert default_credential_builds == (default_scope, other_scope)
 
 
 def test_get_azure_ad_token_with_token_refresh_error(setup_mocks):

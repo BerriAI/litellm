@@ -13,41 +13,60 @@ _R: Final = TypeVar("_R")
 class SingleFlight(Generic[_R]):
     lock: threading.Lock = field(default_factory=threading.Lock)
     in_flight: Future[_R] | None = None
+    flights_started: int = 0
     last_flight_failed: bool = False
 
     def run(self, fetch: Callable[[], _R], while_busy: _R | None = None) -> _R:
         leader: Final[Future[_R]] = Future()
         with self.lock:
             in_flight: Final = self.in_flight
+            joined_flight: Final = self.flights_started
             retry_if_it_fails: Final = not self.last_flight_failed
             if in_flight is None:
-                self.in_flight = leader
-        if in_flight is not None:
-            return self._follow(in_flight, fetch, while_busy, retry_if_it_fails)
+                self._take_off(leader)
+        if in_flight is None:
+            return self._lead(leader, fetch)
+        if while_busy is not None:
+            return while_busy
+        try:
+            return in_flight.result()
+        except Exception:
+            retry: Final = self._claim_retry(joined_flight) if retry_if_it_fails else None
+            if retry is None:
+                raise
+            retry_flight, leads_retry = retry
+            return self._lead(retry_flight, fetch) if leads_retry else retry_flight.result()
+
+    def _take_off(self, leader: Future[_R]) -> None:
+        self.in_flight = leader
+        self.flights_started += 1
+
+    def _claim_retry(self, failed_flight: int) -> tuple[Future[_R], bool] | None:
+        leader: Final[Future[_R]] = Future()
+        with self.lock:
+            in_flight: Final = self.in_flight
+            if in_flight is not None:
+                return in_flight, False
+            if self.flights_started > failed_flight and self.last_flight_failed:
+                return None
+            self._take_off(leader)
+        return leader, True
+
+    def _lead(self, flight: Future[_R], fetch: Callable[[], _R]) -> _R:
         try:
             result: Final = fetch()
         except BaseException as error:
             self._land(failed=True)
-            leader.set_exception(error)
+            flight.set_exception(error)
             raise
         self._land(failed=False)
-        leader.set_result(result)
+        flight.set_result(result)
         return result
 
     def _land(self, failed: bool) -> None:
         with self.lock:
             self.in_flight = None
             self.last_flight_failed = failed
-
-    def _follow(self, in_flight: Future[_R], fetch: Callable[[], _R], while_busy: _R | None, retry: bool) -> _R:
-        if while_busy is not None:
-            return while_busy
-        try:
-            return in_flight.result()
-        except Exception:
-            if not retry:
-                raise
-            return self.run(fetch, while_busy)
 
 
 @dataclass(frozen=True, slots=True)

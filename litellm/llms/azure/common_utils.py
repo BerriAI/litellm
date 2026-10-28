@@ -28,6 +28,7 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.secret_managers.get_azure_ad_token_provider import AzureCredentialType
 from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
@@ -133,6 +134,11 @@ def _cached_username_password_token_provider(
 @single_flight_lru_cache
 def _cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
     return get_azure_ad_token_provider(azure_scope=scope)
+
+
+@single_flight_lru_cache
+def _cached_default_azure_credential_provider(scope: str) -> Callable[[], str]:
+    return get_azure_ad_token_provider(azure_scope=scope, azure_credential=AzureCredentialType.DefaultAzureCredential)
 
 
 def cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
@@ -531,17 +537,10 @@ class BaseAzureLLM(BaseOpenAILLM):
         Returns:
             Token provider callable if DefaultAzureCredential is enabled and available, None otherwise
         """
-        from litellm.types.secret_managers.get_azure_ad_token_provider import (
-            AzureCredentialType,
-        )
-
         verbose_logger.debug("Attempting to use DefaultAzureCredential for Azure Auth")
 
         try:
-            azure_ad_token_provider: Final = get_azure_ad_token_provider(
-                azure_scope=scope,
-                azure_credential=AzureCredentialType.DefaultAzureCredential,
-            )
+            azure_ad_token_provider: Final = _cached_default_azure_credential_provider(scope)
             verbose_logger.debug("Successfully obtained Azure AD token provider using DefaultAzureCredential")
             return azure_ad_token_provider
         except Exception as e:
