@@ -121,7 +121,7 @@ def _chat_stream(gate: threading.Event | None) -> Reply:
             _stream_frame(identity, {"content": "answer"}, "stop"),
             b"data: [DONE]\n\n",
         ),
-        gate_before_first=gate,
+        gate_after_first=gate,
     )
 
 
@@ -246,12 +246,15 @@ def _answer(response: httpx.Response) -> JsonValue:
     return object_value(choice["message"])["content"]
 
 
-def _stream(gateway: Gateway, data: bytes) -> tuple[int, str]:
+def _stream(gateway: Gateway, data: bytes, first_text: threading.Event) -> tuple[int, str]:
     with (
         httpx.Client(base_url=gateway.client.base_url, timeout=case_timeout_seconds(), trust_env=False) as client,
         client.stream("POST", CHAT, content=data, headers=_headers(gateway.key, "gzip")) as response,
     ):
-        return response.status_code, response.read().decode()
+        pieces: Final = response.iter_text()
+        first: Final = next(pieces, "")
+        first_text.set()
+        return response.status_code, first + "".join(pieces)
 
 
 CODINGS: Final = (
@@ -271,7 +274,7 @@ def test_a_compressed_chat_body_reaches_the_provider_as_its_plain_twin(
     assert plain.status_code == 200, plain.text
     assert compressed.status_code == 200, compressed.text
     assert _answer(compressed) == _answer(plain)
-    assert compressed.headers.get("x-litellm-response-cost") == plain.headers.get("x-litellm-response-cost")
+    assert compressed.headers["x-litellm-response-cost"] == plain.headers["x-litellm-response-cost"]
     calls: Final = rig.calls()
     assert len(calls) == 2, [call.target for call in calls]
     assert JSON_OBJECT.validate_json(calls[1].body) == JSON_OBJECT.validate_json(calls[0].body)
@@ -353,14 +356,12 @@ def test_the_decoded_body_budget_turns_away_a_second_body_until_the_stream_ends(
     second: Final = gzip_body(_chat_body(CHAT_MODEL, secrets.token_hex(300_000)))
     keyless: Final = _send(rig, second, "gzip", key=f"sk-unknown-{uuid.uuid4().hex}")
     assert keyless.status_code == 401, keyless.text
+    first_text: Final = threading.Event()
     with ThreadPoolExecutor(1) as pool:
-        streaming: Final = pool.submit(_stream, rig.gateway, held)
+        streaming: Final = pool.submit(_stream, rig.gateway, held, first_text)
         try:
-            reached, _ = eventually(
-                lambda: (rig.calls(), streaming.done()),
-                lambda seen: bool(seen[0]) or seen[1],
-                seconds=case_timeout_seconds(),
-            )
+            eventually(lambda: first_text.is_set() or streaming.done(), bool, seconds=case_timeout_seconds())
+            reached: Final = rig.calls()
             turned_away: Final = _send(rig, second, "gzip")
         finally:
             rig.gate.set()
