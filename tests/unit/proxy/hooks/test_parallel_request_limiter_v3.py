@@ -4335,7 +4335,7 @@ async def test_first_round_logged_after_tool_call_reuse_releases_only_at_request
 @pytest.mark.asyncio
 async def test_completed_mcp_replay_stream_frees_slot_its_logged_first_round_kept() -> None:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
+    from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
         FakeAnthropicMessagesStreamIterator,
     )
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
