@@ -1275,12 +1275,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         for item in output_items:
             if isinstance(item, ResponseReasoningItem):
-                built_reasoning_item = _build_reasoning_item(
-                    item_id=item.id,
-                    encrypted_content=getattr(item, "encrypted_content", None),
-                    summary_raw=item.summary,
+                pending_reasoning_items = (
+                    *(pending_reasoning_items if replay_openai_history else ()),
+                    _build_reasoning_item(
+                        item_id=item.id,
+                        encrypted_content=getattr(item, "encrypted_content", None),
+                        summary_raw=item.summary,
+                    ),
                 )
-                pending_reasoning_items = (*pending_reasoning_items, built_reasoning_item)
                 reasoning_content = " ".join(
                     s["text"]
                     for s in chain.from_iterable(built["summary"] for built in pending_reasoning_items)
@@ -2269,7 +2271,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     StreamingChoices(
                         index=0,
                         delta=Delta(
-                            content=None,
+                            content=None if replays_openai_history else "",
                             reasoning_items=terminal_reasoning_items_typed,
                             provider_specific_fields=(
                                 completed_stream_history(

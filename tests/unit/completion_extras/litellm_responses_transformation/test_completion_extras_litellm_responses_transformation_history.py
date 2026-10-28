@@ -7,6 +7,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.completion_extras.litellm_responses_transformation import history
 from litellm.exceptions import MidStreamFallbackError
 
 OPENAI_RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
@@ -59,7 +60,12 @@ FINAL_ANSWER: Final = {
 }
 OUTPUT: Final = (COMMENTARY, FIRST_REASONING, SECOND_REASONING, WEATHER_CALL, FINAL_ANSWER)
 REPLAYED: Final = (
-    {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Checking the weather."}], "phase": "commentary"},
+    {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Checking the weather."}],
+        "phase": "commentary",
+    },
     {
         "type": "reasoning",
         "id": "rs_first",
@@ -199,8 +205,8 @@ def _assistant_turn(
             stream=stream,
         )
         message: Final = (
-            litellm.stream_chunk_builder(list(response), messages=[USER]) if stream else response
-        ).choices[0].message
+            (litellm.stream_chunk_builder(list(response), messages=[USER]) if stream else response).choices[0].message
+        )
     return json.loads(json.dumps(message.model_dump()))
 
 
@@ -321,6 +327,18 @@ def test_missing_or_corrupt_replay_metadata_falls_back_to_the_chat_fields(
     assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
     assert sent[3]["content"] == [{"type": "output_text", "text": "Checking the weather.Paris: light rain."}]
     assert sent[3]["phase"] == "final_answer"
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+def test_an_unphased_answer_after_commentary_is_never_labeled_commentary(stream: bool) -> None:
+    unphased_answer: Final = {key: value for key, value in FINAL_ANSWER.items() if key != "phase"}
+    assistant: Final = _assistant_turn((COMMENTARY, WEATHER_CALL, unphased_answer), stream=stream)
+
+    sent: Final = _next_turn_input(_edit_content(assistant))
+
+    assert "phase" not in _replayed_fields(assistant)
+    assert _types(sent[1:-1]) == ["message", "function_call"]
+    assert "phase" not in sent[1]
 
 
 def test_a_phase_openai_does_not_define_is_dropped_under_drop_params() -> None:
@@ -461,6 +479,77 @@ def test_a_non_openai_route_ignores_a_recorded_replay() -> None:
     assert all("phase" not in item for item in sent)
 
 
+SECOND_THOUGHT: Final = {**SECOND_REASONING, "summary": [{"type": "summary_text", "text": "Lyon is likely dry."}]}
+LYON_CALL: Final = {**WEATHER_CALL, "id": "fc_lyon", "call_id": "call_weather_lyon", "arguments": '{"city":"Lyon"}'}
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_ids", "expected_text"),
+    [
+        (f"openai/responses/{MODEL}", ["rs_first", "rs_second"], "Paris is likely wet. Lyon is likely dry."),
+        (f"azure/responses/{MODEL}", ["rs_second"], "Lyon is likely dry."),
+    ],
+    ids=["openai", "azure"],
+)
+def test_only_the_openai_route_keeps_every_reasoning_item_of_a_tool_call_turn(
+    model: str, expected_ids: list[str], expected_text: str
+) -> None:
+    assistant: Final = _assistant_turn(
+        (FIRST_REASONING, WEATHER_CALL, SECOND_THOUGHT, LYON_CALL), stream=False, model=model
+    )
+
+    reasoning_items: Final = assistant["reasoning_items"]
+    assert isinstance(reasoning_items, list)
+    assert [item["id"] for item in reasoning_items] == expected_ids
+    assert assistant["reasoning_content"] == expected_text
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_content"),
+    [(f"openai/responses/{MODEL}", None), (f"azure/responses/{MODEL}", "")],
+    ids=["openai", "azure"],
+)
+def test_only_the_openai_route_ends_a_streamed_tool_call_turn_with_null_content(
+    model: str, expected_content: str | None
+) -> None:
+    assistant: Final = _assistant_turn((FIRST_REASONING, WEATHER_CALL), stream=True, model=model)
+
+    assert assistant["content"] == expected_content
+
+
+def _resealed(message: Mapping[str, object], items: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+    chat: Final = history._chat_message(message)
+    assert chat is not None
+    entries: Final = history._Replay.model_validate({"version": 1, "items": items, "checksum": ""}).items
+    replay: Final = {"version": 1, "items": list(items), "checksum": history._checksum(chat, entries)}
+    return {**message, "provider_specific_fields": _with_replay(_replayed_fields(message), replay)}
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        (
+            {"type": "message", "parts": [21]},
+            {"type": "function_call", "index": 1},
+            {"type": "message", "parts": [7, 11]},
+        ),
+        (
+            {"type": "message", "parts": [5]},
+            {"type": "function_call", "index": 0},
+            {"type": "message", "parts": [7, 11]},
+        ),
+    ],
+    ids=["tool-call-index", "text-lengths"],
+)
+def test_a_resealed_record_that_does_not_fit_the_chat_fields_falls_back(items: Sequence[Mapping[str, object]]) -> None:
+    assistant: Final = _assistant_turn((COMMENTARY, WEATHER_CALL, FINAL_ANSWER), stream=False)
+
+    sent: Final = _next_turn_input(_resealed(assistant, items))
+
+    assert _types(sent[1:-1]) == ["message", "function_call"]
+    assert sent[1]["content"] == [{"type": "output_text", "text": "Checking the weather.Paris: light rain."}]
+
+
 PATCH_CALL: Final = {
     "type": "custom_tool_call",
     "id": "ctc_patch",
@@ -488,7 +577,17 @@ def test_a_custom_tool_call_replays_with_its_custom_output(stream: bool) -> None
     sent: Final = json.loads(upstream.calls[0].request.content)["input"]
 
     assert sent[1:] == [
-        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Checking the weather."}], "phase": "commentary"},
-        {"type": "custom_tool_call", "call_id": "call_patch_readme", "name": "apply_patch", "input": PATCH_CALL["input"]},
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Checking the weather."}],
+            "phase": "commentary",
+        },
+        {
+            "type": "custom_tool_call",
+            "call_id": "call_patch_readme",
+            "name": "apply_patch",
+            "input": PATCH_CALL["input"],
+        },
         {"type": "custom_tool_call_output", "call_id": "call_patch_readme", "output": "applied"},
     ]

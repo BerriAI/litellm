@@ -264,7 +264,7 @@ def _matches(items: Sequence[_OutputItem], message: _ChatMessage) -> bool:
 
 
 def _last_phase(items: Sequence[_OutputItem | None]) -> Phase | None:
-    messages: Final = tuple(item for item in items if isinstance(item, _OutputMessage) and item.phase is not None)
+    messages: Final = tuple(item for item in items if isinstance(item, _OutputMessage))
     return messages[-1].phase if messages else None
 
 
@@ -364,6 +364,23 @@ def _input_item(resolved: _Resolved, position: int, entry: _MessageEntry | _Inde
             return dict(resolved.tool_searches[entry.index])
 
 
+def _fits(message: _ChatMessage, entries: Sequence[_MessageEntry | _IndexedEntry]) -> bool:
+    tool_calls: Final = len(message.tool_calls or ())
+    tool_searches: Final = len(_tool_search_entries(message))
+    sizes: Final = MappingProxyType(
+        {
+            "reasoning": len(message.reasoning_items or ()),
+            "function_call": tool_calls,
+            "custom_tool_call": tool_calls,
+            "tool_search_call": tool_searches,
+            "tool_search_output": tool_searches,
+        }
+    )
+    parts: Final = chain.from_iterable(entry.parts for entry in entries if isinstance(entry, _MessageEntry))
+    indexed: Final = (entry for entry in entries if isinstance(entry, _IndexedEntry))
+    return sum(parts) == len(message.content or "") and all(entry.index < sizes[entry.type] for entry in indexed)
+
+
 def _resolve(
     message: _ChatMessage, entries: Sequence[_MessageEntry | _IndexedEntry], replay_tool_search: bool
 ) -> ReplayedTurn | None:
@@ -390,5 +407,7 @@ def replay_items(message: object, *, replay_tool_search: bool) -> ReplayedTurn |
     chat: Final = _chat_message(message)
     stored: Final = _stored_replay(chat) if chat is not None and chat.role == "assistant" else None
     if chat is None or stored is None or stored.checksum != _checksum(chat, stored.items):
+        return None
+    if not _fits(chat, stored.items):
         return None
     return _resolve(chat, stored.items, replay_tool_search)
