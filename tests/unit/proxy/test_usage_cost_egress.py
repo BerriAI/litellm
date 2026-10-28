@@ -73,10 +73,20 @@ def test_an_unpriceable_stream_keeps_the_upstream_cost(bill: float | None) -> No
     assert chunk.usage is not None and chunk.usage.cost == UPSTREAM_COST
 
 
-def test_a_streamed_usage_chunk_without_an_upstream_cost_goes_out_as_sent() -> None:
+def test_a_priced_stream_without_an_upstream_cost_still_tells_the_client_the_bill() -> None:
     chunk: Final = _usage_chunk(None)
 
-    assert with_client_stream_usage_cost(chunk, _bill) is chunk
+    billed: Final = with_client_stream_usage_cost(chunk, _bill)
+
+    assert isinstance(billed, ModelResponseStream) and billed is not chunk
+    assert billed.usage is not None and billed.usage.cost == pytest.approx(OPERATOR_BILL)
+
+
+@pytest.mark.parametrize("bill", [None, 0.0])
+def test_an_unpriced_stream_without_an_upstream_cost_goes_out_as_sent(bill: float | None) -> None:
+    chunk: Final = _usage_chunk(None)
+
+    assert with_client_stream_usage_cost(chunk, lambda _reply: bill) is chunk
 
 
 def test_a_content_chunk_is_not_priced() -> None:
