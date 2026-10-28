@@ -25,6 +25,7 @@ from litellm.integrations.otel.mappers.utils import (
     output_messages,
     serialize_messages,
 )
+from litellm.integrations.otel.model.metadata import IDENTITY_METADATA_FIELDS
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     LLMRequestParams,
@@ -40,15 +41,8 @@ LANGFUSE_TRACE_SESSION_ID: Final = "session.id"
 LANGFUSE_TRACE_TAGS: Final = "langfuse.trace.tags"
 LANGFUSE_OBSERVATION_METADATA: Final = "langfuse.observation.metadata"
 LANGFUSE_TRACE_METADATA_PREFIX: Final = "langfuse.trace.metadata."
-TRACE_IDENTITY_FIELDS: Final = (
-    "user_api_key_alias",
-    "user_api_key_user_id",
-    "user_api_key_end_user_id",
-    "user_api_key_team_id",
-    "user_api_key_team_alias",
-)
 LANGFUSE_REQUEST_METADATA_ATTRIBUTES: Final[frozenset[str]] = frozenset(
-    {LANGFUSE_OBSERVATION_METADATA, *(f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}" for name in TRACE_IDENTITY_FIELDS)}
+    {LANGFUSE_OBSERVATION_METADATA, *(f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}" for name in IDENTITY_METADATA_FIELDS)}
 )
 
 
@@ -70,7 +64,7 @@ class LangfuseMapper:
             else None
         ),
         **MappingProxyType(
-            {f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}": _identity_field(name) for name in TRACE_IDENTITY_FIELDS}
+            {f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}": _identity_field(name) for name in IDENTITY_METADATA_FIELDS}
         ),
     }
 

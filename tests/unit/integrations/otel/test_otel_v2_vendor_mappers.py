@@ -826,6 +826,7 @@ def test_langfuse_mapper_emits_request_metadata_and_identity():
             "user_api_key_end_user_id": "end-1",
             "user_api_key_team_id": "team-9",
             "user_api_key_team_alias": "team nine",
+            "user_api_key_org_id": "org-3",
             "user_api_key_max_budget": None,
             "requester_ip_address": "10.0.0.1",
             "spend_logs_metadata": {"ticket": "LIT-8283"},
@@ -839,12 +840,14 @@ def test_langfuse_mapper_emits_request_metadata_and_identity():
         "user_api_key_user_id": "user-1",
         "user_api_key_alias": "prod-key",
         "user_api_key_end_user_id": "end-1",
+        "user_api_key_org_id": "org-3",
     }
     assert attrs["langfuse.trace.metadata.user_api_key_alias"] == "prod-key"
     assert attrs["langfuse.trace.metadata.user_api_key_user_id"] == "user-1"
     assert attrs["langfuse.trace.metadata.user_api_key_end_user_id"] == "end-1"
     assert attrs["langfuse.trace.metadata.user_api_key_team_id"] == "team-9"
     assert attrs["langfuse.trace.metadata.user_api_key_team_alias"] == "team nine"
+    assert attrs["langfuse.trace.metadata.user_api_key_org_id"] == "org-3"
     assert attrs["langfuse.trace.metadata.team_id"] == "team-9"
     assert attrs["langfuse.trace.metadata.team_alias"] == "team nine"
     assert attrs["langfuse.observation.metadata.provider"] == "openai"
