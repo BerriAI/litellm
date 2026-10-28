@@ -15,7 +15,7 @@ from litellm.litellm_core_utils.fallback_generalizations import match_capability
 from litellm.llms.openai.chat.gpt_reasoning_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
-from litellm.types.utils import SearchFreeRequests
+from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, SearchFreeRequests, Usage
 
 REPO_ROOT = Path(__file__).parents[2]
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
@@ -226,6 +226,45 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
 
 # Azure Foundry GPT-6.1 Sol announcement, 2026-09-29: https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-gpt-6-1-sol-in-microsoft-foundry-advanced-intelligence-optimized-for/4560811
 AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM: Final = MappingProxyType({"us": 1.1, "eu": 1.2, "apac": 1.2})
+
+
+@pytest.mark.parametrize(
+    ("model", "premium"),
+    (
+        ("azure/gpt-6.1-terra", 1.0),
+        ("azure/gpt-6.1-terra-2026-10-26", 1.0),
+        ("azure/us/gpt-6.1-terra", 1.1),
+        ("azure/eu/gpt-6.1-terra", 1.2),
+        ("azure/apac/gpt-6.1-terra", 1.2),
+        ("azure_ai/gpt-6.1-terra", 1.0),
+        ("azure_ai/gpt-6.1-terra-2026-10-26", 1.0),
+    ),
+)
+@pytest.mark.parametrize("input_tokens", (1_000, 272_000, 272_001))
+def test_azure_gpt_6_1_terra_prices_cached_requests_in_each_context_tier(
+    model: str, premium: float, input_tokens: int, local_model_cost_map: None
+) -> None:
+    """Azure Foundry rate card, 2026-10-26, https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/gpt-6-1-terra-now-generally-available-in-microsoft-foundry-build-agents-that-see/4567769."""
+    provider: Final = model.partition("/")[0]
+    info: Final = litellm.get_model_info(model)
+    assert info["litellm_provider"] == provider
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=input_tokens,
+            completion_tokens=100,
+            total_tokens=input_tokens + 100,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100, cache_creation_tokens=200),
+        ),
+    )
+    input_multiplier: Final = 2 if input_tokens > 272_000 else 1
+    output_rate: Final = 7.5 if input_tokens > 272_000 else 5
+    expected: Final = (
+        premium * (((input_tokens - 300) + 100 * 0.05 + 200 * 1.25) * input_multiplier + 100 * output_rate) / 1_000_000
+    )
+    assert litellm.completion_cost(
+        completion_response=response, model=model, custom_llm_provider=provider
+    ) == pytest.approx(expected)
 
 
 @pytest.mark.parametrize("region", sorted(AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM))
