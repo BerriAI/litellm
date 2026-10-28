@@ -3,8 +3,23 @@
 import sys
 from typing import Final
 
-from litellm.rust_bridge._native import Catalog, Installed, Parsed, RowError, Unavailable
+from litellm.rust_bridge._native import (
+    Catalog,
+    Installed,
+    Parsed,
+    Provenance,
+    RowError,
+    Unavailable,
+)
 
 CATALOG: Final = Catalog.bound_to(sys.modules["litellm"], "model_cost")
 
-__all__ = ["CATALOG", "Catalog", "Installed", "Parsed", "RowError", "Unavailable"]
+__all__ = [
+    "CATALOG",
+    "Catalog",
+    "Installed",
+    "Parsed",
+    "Provenance",
+    "RowError",
+    "Unavailable",
+]

@@ -32,13 +32,22 @@ _ROOT_COST_MAP = Path(__file__).resolve().parents[4] / "model_prices_and_context
 # ---------------------------------------------------------------------------
 
 
-def _reloaded(cost_map: dict) -> "ModelCostMapReloaded":
-    from litellm._catalog import Catalog, Parsed
-    from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 
-    parsed = Catalog.parse(json.dumps(cost_map).encode(), etag=None, min_model_count=0, max_shrink_ratio=0.0)
-    assert isinstance(parsed, Parsed)
-    return ModelCostMapReloaded(parsed=parsed)
+
+def _reloading(cost_map: dict):
+    """A stand-in reload that installs ``cost_map`` over the bundled map, read from a file like a fetched map"""
+    import tempfile
+    from pathlib import Path
+
+    from litellm._catalog import CATALOG
+    from tests._support.cost_map_files import reload_from_file
+
+    def reload(url, catalog=CATALOG):
+        path = Path(tempfile.mkdtemp()) / "model_prices.json"
+        path.write_text(json.dumps({**CATALOG.bundled().document(), **cost_map}))
+        return reload_from_file(path, catalog)
+
+    return reload
 
 
 def _attach_litellm_config(mock_prisma):
@@ -73,8 +82,8 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
 
     fake_cost_map = {"gpt-4": {"input_cost": 0.03}, "gpt-3.5": {"input_cost": 0.002}}
     monkeypatch.setattr(
-        "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-        AsyncMock(return_value=_reloaded(fake_cost_map)),
+        "litellm.litellm_core_utils.get_model_cost_map.reload_model_cost_map",
+        MagicMock(side_effect=_reloading(fake_cost_map)),
     )
     monkeypatch.setattr("litellm.add_known_models", lambda model_cost_map=None: None)
     monkeypatch.setattr("litellm.model_cost", {}, raising=False)
@@ -110,7 +119,6 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
 def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every_status_surface(
     client, auth_as, monkeypatch, mock_prisma
 ):
-    import httpx
 
     import litellm
     import hashlib
@@ -125,11 +133,23 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
         "source_revision": hashlib.sha1(b"blob %d\0" % len(body) + body, usedforsecurity=False).hexdigest(),
         "etag": _SERVED_ETAG,
     }
-    served = httpx.Response(200, headers={"ETag": _SERVED_ETAG}, content=body)
-    monkeypatch.setattr(
-        "litellm.litellm_core_utils.get_model_cost_map._default_reload_client",
-        lambda: httpx.AsyncClient(transport=httpx.MockTransport(lambda request: served)),
-    )
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("ETag", _SERVED_ETAG)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    monkeypatch.setattr(litellm, "model_cost_map_url", f"http://127.0.0.1:{httpd.server_address[1]}/map.json")
     monkeypatch.setattr("litellm.add_known_models", lambda model_cost_map=None: None)
     monkeypatch.setattr("litellm.model_cost", {}, raising=False)
 
@@ -155,6 +175,8 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
     assert {key: status_response.json()[key] for key in expected} == expected
     assert public_response.status_code == 200
     assert "gpt-4o" in public_response.json()
+    httpd.shutdown()
+    httpd.server_close()
     assert reload_body["models_count"] == len(litellm.model_cost)
 
 
@@ -166,9 +188,7 @@ def test_reload_model_cost_map_fetch_failure_502_keeps_map(
     Regression: the endpoint used to report success after silently swapping in
     the stale packaged backup.
     """
-    from litellm.litellm_core_utils.get_model_cost_map import (
-        ModelCostMapReloadUnavailable,
-    )
+    from litellm._catalog import Unavailable
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -178,9 +198,9 @@ def test_reload_model_cost_map_fetch_failure_502_keeps_map(
     sentinel_map = {"existing-model": {"input_cost": 0.01}}
     monkeypatch.setattr("litellm.model_cost", sentinel_map, raising=False)
     monkeypatch.setattr(
-        "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-        AsyncMock(
-            return_value=ModelCostMapReloadUnavailable(
+        "litellm.litellm_core_utils.get_model_cost_map.reload_model_cost_map",
+        MagicMock(
+            return_value=Unavailable(
                 reason="HTTP 429 from upstream (after 3 attempts)"
             )
         ),
@@ -415,7 +435,6 @@ def test_get_model_cost_map_reload_status_no_config_not_scheduled(
     client, auth_as, monkeypatch, mock_prisma
 ):
     """A row left behind by a manual reload (interval_hours=None) → not scheduled."""
-    from datetime import datetime, timezone
 
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles

@@ -4,19 +4,32 @@ Tests for the ``aliases`` feature in the model cost map.
 The Rust catalog serves every name in an ``aliases`` list as its own key, sharing one dict with the canonical entry
 """
 
+import functools
 import json
+import tempfile
+from pathlib import Path
 
-from litellm._catalog import Catalog, Parsed, Unavailable
+from litellm._catalog import CATALOG, Parsed, Unavailable
+from tests._support.cost_map_files import load_file
 
 
-def _parsed(model_cost: dict) -> Parsed | Unavailable:
-    return Catalog.parse(json.dumps(model_cost).encode(), etag=None, min_model_count=0, max_shrink_ratio=0.0)
+@functools.lru_cache(maxsize=1)
+def _bundled_document() -> dict:
+    return CATALOG.bundled().document()
+
+
+def _parsed(model_cost: dict, over_bundled: bool = True) -> Parsed | Unavailable:
+    path = Path(tempfile.mkdtemp()) / "model_prices.json"
+    path.write_text(json.dumps({**_bundled_document(), **model_cost} if over_bundled else model_cost))
+    return load_file(path)
 
 
 def _expand(model_cost: dict) -> dict:
+    """The rows the fetched map serves beyond the bundled ones, aliases included"""
     parsed = _parsed(model_cost)
     assert isinstance(parsed, Parsed)
-    return parsed.served()
+    bundled = _bundled_document()
+    return {key: row for key, row in parsed.served().items() if key not in bundled or key in model_cost}
 
 
 def _error_kinds(model_cost: dict) -> list[str]:
@@ -247,4 +260,4 @@ class TestAliasIntegration:
         assert "model-with-alias" in result
 
     def test_an_empty_map_is_unavailable(self):
-        assert isinstance(_parsed({}), Unavailable)
+        assert isinstance(_parsed({}, over_bundled=False), Unavailable)

@@ -2454,16 +2454,34 @@ def test_register_model_with_scientific_notation():
 @pytest.mark.usefixtures("isolated_openai_model_sets")
 @respx.mock
 def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     before = dict(litellm.model_cost)
     threads_before = {thread.name for thread in threading.enumerate()}
-    route = respx.get("https://example.invalid/custom_pricing.json").mock(return_value=httpx.Response(503))
+    requests: list[str] = []
 
-    litellm.register_model(model_cost="https://example.invalid/custom_pricing.json")
+    class Unavailable(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            requests.append(self.path)
+            self.send_response(503)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Unavailable)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        litellm.register_model(model_cost=f"http://127.0.0.1:{httpd.server_address[1]}/custom_pricing.json")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
     threads_after = {thread.name for thread in threading.enumerate()}
-    assert route.call_count == 1
+    assert requests == ["/custom_pricing.json"]
     assert not (threads_after - threads_before) & {"litellm-model-cost-map-retry"}
     assert not any(
         thread.name == "litellm-model-cost-map-retry" and thread.is_alive() for thread in threading.enumerate()

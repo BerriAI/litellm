@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use litellm_model_catalog::Catalog;
+use litellm_model_catalog::{Catalog, Error as CatalogError};
 
-use crate::Error;
+use crate::error::Error;
 use crate::source::Source;
 
 /// One attempt. Where to fetch from is the `Source`, so the request carries no URL
@@ -12,7 +12,7 @@ pub struct FetchRequest {
     pub timeout: Duration,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Reply {
     /// An HTTP, S3 or file answer. The body is read only on 200
     Response {
@@ -22,7 +22,7 @@ pub enum Reply {
         body: Option<Vec<u8>>,
     },
     /// No answer reached us
-    Transport { error: Error },
+    Failed(Error),
 }
 
 /// What the fetch state machine asks its driver to do next
@@ -34,19 +34,14 @@ pub enum Step {
     Adopt {
         catalog: Box<Catalog>,
         installed: Installed,
-        errors: Vec<litellm_model_catalog::Error>,
+        errors: Vec<CatalogError>,
     },
     /// 304, a final status, or retries exhausted
     Done {
-        reason: DoneReason,
+        error: Error,
+        /// The wait before the next attempt when the last failure was retryable, so a caller can retry later
+        retry_after: Option<Duration>,
     },
-}
-
-#[derive(Debug)]
-pub enum DoneReason {
-    NotModified,
-    Status(u16),
-    Exhausted(Error),
 }
 
 /// What is installed now, the input to the next revalidation

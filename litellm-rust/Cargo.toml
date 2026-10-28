@@ -76,6 +76,7 @@ litellm-redis-testing = { path = "crates/redis-testing" }
 litellm-cost = { path = "crates/cost" }
 litellm-model-catalog = { path = "crates/model-catalog" }
 litellm-model-catalog-refresh = { path = "crates/model-catalog-refresh" }
+litellm-s3 = { path = "crates/s3" }
 
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 tracing = "0.1"

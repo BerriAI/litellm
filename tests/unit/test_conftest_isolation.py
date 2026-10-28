@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -12,8 +13,8 @@ from litellm import Router
 from litellm import router as litellm_router_module
 from litellm import utils as litellm_utils_module
 from litellm.caching.caching import DualCache
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from tests.unit import conftest as unit_harness
 
 CANARY_MODEL = "conftest-isolation-canary-model"
@@ -179,11 +180,14 @@ def registered_collection_models() -> Iterator[None]:
     litellm_router_module._live_routers.update(original_routers)
 
 
-def test_collection_model_metadata_is_not_replayed_into_a_test_catalog() -> None:
-    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+def test_collection_model_metadata_is_not_replayed_into_a_test_catalog(tmp_path) -> None:
+    from litellm._catalog import CATALOG
+    from tests._support.cost_map_files import reload_from_file
 
     catalog: Final = {"unit-test-catalog-model": {"litellm_provider": "openai", "input_cost_per_token": 0.001}}
-    adopt_model_cost_map(catalog)
+    path: Final = tmp_path / "model_prices.json"
+    path.write_text(json.dumps({**CATALOG.bundled().document(), **catalog}))
+    reload_from_file(path)
     assert "collection-isolation-ledger" not in litellm.model_cost
     assert "collection-isolation-router" not in litellm.model_cost
     assert "unit-test-catalog-model" in litellm.model_cost
