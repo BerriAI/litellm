@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Final, Literal, TypeAlias
 
@@ -38,6 +39,14 @@ class BulkUpdateKeyRequestItem(LiteLLMBaseModel):
     team_id: str | None = None  # Team ID associated with key
     tags: list[str] | None = None  # Tags for organizing keys
     object_permission: LiteLLM_ObjectPermissionBase | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_expiration(cls, values: object) -> object:
+        original: Final[object] = values
+        if "expires" in (values if isinstance(values, Mapping) else {}):
+            raise ValueError("Use /key/update to change expires; /key/bulk_update does not support expiration changes")
+        return original
 
 
 class BulkUpdateKeyRequest(LiteLLMBaseModel):

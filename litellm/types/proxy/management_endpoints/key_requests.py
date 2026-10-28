@@ -2,9 +2,9 @@ import enum
 from collections.abc import Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import Any, Literal  # noqa: TID251  # allowed_routes and metadata stay Any for existing callers
+from typing import Annotated, Any, Literal  # noqa: TID251  # allowed_routes and metadata stay Any for existing callers
 
-from pydantic import Field, PositiveInt, field_validator, model_validator
+from pydantic import AwareDatetime, Field, PositiveInt, field_validator, model_validator
 from typing_extensions import TypeIs  # noqa: TID251  # narrows the raw payload a before-validator receives
 
 from litellm.types.proxy.management_endpoints.request_base import GenerateRequestBase
@@ -55,6 +55,10 @@ class LiteLLMKeyType(str, enum.Enum):
 
 
 class GenerateKeyRequest(KeyRequestBase):
+    expires: Annotated[datetime, AwareDatetime] | None = Field(
+        default=None,
+        description="Absolute expiration with a timezone. When supplied, overrides duration. Null means no expiration, subject to lifetime limits. Past timestamps expire the key immediately.",
+    )
     tpm_limit: int | None = Field(default=None, ge=0)
     rpm_limit: int | None = Field(default=None, ge=0)
     soft_budget: float | None = None
@@ -84,6 +88,10 @@ def _is_mapping(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: 
 
 
 class UpdateKeyRequest(KeyRequestBase):
+    expires: Annotated[datetime, AwareDatetime] | None = Field(
+        default=None,
+        description="Absolute expiration with a timezone. When supplied, overrides duration. Omit to retain expiration, or use null to clear it when lifetime limits allow. Past timestamps expire the key immediately.",
+    )
     tpm_limit: int | None = Field(default=None, ge=0)
     rpm_limit: int | None = Field(default=None, ge=0)
     # Note: the defaults of all Params here MUST BE NONE

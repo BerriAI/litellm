@@ -338,6 +338,7 @@ async def _sign_in(
         if os.getenv("DATABASE_URL") is not None:
             response = await generate_key_helper_fn(
                 llm_router=None,
+                expires=None,
                 request_type="key",
                 **{
                     "user_role": LitellmUserRoles.PROXY_ADMIN,

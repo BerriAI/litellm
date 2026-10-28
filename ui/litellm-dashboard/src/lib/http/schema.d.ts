@@ -8451,6 +8451,7 @@ export interface paths {
          *
          *     Parameters:
          *     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+         *     - expires: Optional[datetime] - Absolute expiration with a timezone, overriding duration when supplied. Null requests no expiration, subject to lifetime limits. Past timestamps expire the key immediately.
          *     - key_alias: Optional[str] - User defined key alias
          *     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
          *     - team_id: Optional[str] - The team id of the key
@@ -8733,6 +8734,7 @@ export interface paths {
          *         - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
          *         - allowed_cache_controls: Optional[list] - List of allowed cache control values
          *         - duration: Optional[str] - Key validity duration ("30d", "1h", etc.)
+         *         - expires: Optional[datetime] - Absolute expiration with a timezone, overriding duration when supplied. Omit to retain expiration, or use null to clear it when lifetime limits allow. Past timestamps expire the key immediately.
          *         - permissions: Optional[dict] - Key-specific permissions
          *         - guardrails: Optional[List[str]] - List of active guardrails for the key
          *         - blocked: Optional[bool] - Whether the key is blocked
@@ -8950,6 +8952,7 @@ export interface paths {
          *     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
          *     - allowed_cache_controls: Optional[list] - List of allowed cache control values
          *     - duration: Optional[str] - Key validity duration ("30d", "1h", etc.), null to never expire, or "-1" to never expire (deprecated, use null)
+         *     - expires: Optional[datetime] - Absolute expiration with a timezone, overriding duration when supplied. Omit to retain expiration, or use null to clear it when lifetime limits allow. Past timestamps expire the key immediately.
          *     - permissions: Optional[dict] - Key-specific permissions
          *     - send_invite_email: Optional[bool] - Send invite email to user_id
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
@@ -9032,6 +9035,7 @@ export interface paths {
          *         - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
          *         - allowed_cache_controls: Optional[list] - List of allowed cache control values
          *         - duration: Optional[str] - Key validity duration ("30d", "1h", etc.)
+         *         - expires: Optional[datetime] - Absolute expiration with a timezone, overriding duration when supplied. Omit to retain expiration, or use null to clear it when lifetime limits allow. Past timestamps expire the key immediately.
          *         - permissions: Optional[dict] - Key-specific permissions
          *         - guardrails: Optional[List[str]] - List of active guardrails for the key
          *         - blocked: Optional[bool] - Whether the key is blocked
@@ -32829,6 +32833,11 @@ export interface components {
             end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
+            /**
+             * Expires
+             * @description Absolute expiration with a timezone. When supplied, overrides duration. Null means no expiration, subject to lifetime limits. Past timestamps expire the key immediately.
+             */
+            expires?: string | null;
             /** Guardrails */
             guardrails?: string[] | null;
             /** Key */
@@ -42154,6 +42163,11 @@ export interface components {
             end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
+            /**
+             * Expires
+             * @description Absolute expiration with a timezone. When supplied, overrides duration. Null means no expiration, subject to lifetime limits. Past timestamps expire the key immediately.
+             */
+            expires?: string | null;
             /** Grace Period */
             grace_period?: string | null;
             /** Guardrails */
@@ -48296,6 +48310,11 @@ export interface components {
             end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
+            /**
+             * Expires
+             * @description Absolute expiration with a timezone. When supplied, overrides duration. Omit to retain expiration, or use null to clear it when lifetime limits allow. Past timestamps expire the key immediately.
+             */
+            expires?: string | null;
             /** Guardrails */
             guardrails?: string[] | null;
             /** Key */
