@@ -4,6 +4,7 @@ from typing import Final
 
 from httpx._types import RequestFiles
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
@@ -45,8 +46,8 @@ class FalAIFluxLoraDepthEditConfig(FalAIImageEditConfig):
         api_base: str | None,
         litellm_params: dict,  # mutable-ok: base class contract
     ) -> str:
-        base_url: Final = (api_base or get_secret_str("FAL_AI_API_BASE") or DEFAULT_BASE_URL).rstrip("/")
-        return f"{base_url}/{FLUX_LORA_DEPTH_ENDPOINT}"
+        base_url: Final = api_base or get_secret_str("FAL_AI_API_BASE") or DEFAULT_BASE_URL
+        return join_api_base(base_url, FLUX_LORA_DEPTH_ENDPOINT)
 
     def transform_image_edit_request(
         self,

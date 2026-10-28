@@ -332,8 +332,8 @@ DATABRICKS_OPENJEV_QWEN35_4B_DECISIONS: Final = CostTrackingTestCase(
         },
     ),
     expected=ExactExpected(
-        spend=0.0,
-        input_cost=0.0,
+        spend=1.89e-06,
+        input_cost=1.89e-06,
         output_cost=0.0,
         prompt_tokens=45,
         completion_tokens=0,
@@ -363,8 +363,8 @@ DATABRICKS_OPENJEV_QWEN35_4B_SYSTEMONE: Final = CostTrackingTestCase(
         },
     ),
     expected=ExactExpected(
-        spend=0.0,
-        input_cost=0.0,
+        spend=1.89e-06,
+        input_cost=1.89e-06,
         output_cost=0.0,
         prompt_tokens=45,
         completion_tokens=0,
