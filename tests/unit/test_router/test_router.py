@@ -7268,12 +7268,21 @@ async def test_aresponses_background_stream_surfaces_a_later_error_instead_of_a_
 
 
 
+_BACKGROUND_TEXT_DELTA: Final = {
+    "type": "response.output_text.delta",
+    "sequence_number": 2,
+    "item_id": "msg_1",
+    "delta": "41",
+}
+
+
 @pytest.mark.parametrize(
-    ("fallbacks", "content_policy_fallbacks"),
+    ("fallbacks", "content_policy_fallbacks", "output_before_refusal", "router_note_expected"),
     [
-        pytest.param(None, None, id="no-fallback-configured"),
-        pytest.param([{"other-group": ["backup"]}], None, id="fallbacks-for-another-group"),
-        pytest.param(None, [{"other-group": ["backup"]}], id="content-policy-fallbacks-for-another-group"),
+        pytest.param(None, None, (), True, id="no-fallback-configured"),
+        pytest.param([{"other-group": ["backup"]}], None, (), True, id="fallbacks-for-another-group"),
+        pytest.param(None, [{"other-group": ["backup"]}], (), True, id="content-policy-fallbacks-for-another-group"),
+        pytest.param(None, None, (_BACKGROUND_TEXT_DELTA,), False, id="refused-after-output-text"),
     ],
 )
 @pytest.mark.asyncio
@@ -7282,6 +7291,8 @@ async def test_aresponses_background_stream_content_policy_error_reads_the_same_
     monkeypatch: pytest.MonkeyPatch,
     fallbacks: list[dict[str, list[str]]] | None,
     content_policy_fallbacks: list[dict[str, list[str]]] | None,
+    output_before_refusal: tuple[dict[str, object], ...],
+    router_note_expected: bool,
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     released_output_may_start: Final = asyncio.Event()
@@ -7290,7 +7301,7 @@ async def test_aresponses_background_stream_content_policy_error_reads_the_same_
     held_output_may_start.set()
     refusal: Final = {
         "type": "error",
-        "sequence_number": 2,
+        "sequence_number": 2 + len(output_before_refusal),
         "error": {
             "type": "invalid_request_error",
             "code": "content_policy_violation",
@@ -7298,10 +7309,11 @@ async def test_aresponses_background_stream_content_policy_error_reads_the_same_
             "param": None,
         },
     }
+    after_pause: Final = (*output_before_refusal, refusal)
     primary_route: Final = respx_mock.post(_BACKGROUND_PRIMARY_URL).mock(
         side_effect=[
-            _paused_background_stream(released_output_may_start, released_upstream_paused, True, (refusal,)),
-            _paused_background_stream(held_output_may_start, asyncio.Event(), False, (refusal,)),
+            _paused_background_stream(released_output_may_start, released_upstream_paused, True, after_pause),
+            _paused_background_stream(held_output_may_start, asyncio.Event(), False, after_pause),
         ]
     )
     backup_route: Final = respx_mock.post(_BACKGROUND_BACKUP_URL)
@@ -7321,7 +7333,7 @@ async def test_aresponses_background_stream_content_policy_error_reads_the_same_
     assert arrived_before_output is True
     assert isinstance(released_error, litellm.ContentPolicyViolationError)
     assert isinstance(held_error, litellm.ContentPolicyViolationError)
-    assert "LiteLLM: model group 'gpt-bg' failed with the error above" in held_error.message
+    assert ("LiteLLM: model group 'gpt-bg' failed with the error above" in held_error.message) is router_note_expected
     assert released_error.message == held_error.message
     assert primary_route.call_count == 2
     assert backup_route.call_count == 0
@@ -17629,7 +17641,7 @@ def test_stream_can_fall_back_order_target(request_kwargs, expected):
     assert router._stream_can_fall_back("primary", request_kwargs) is expected
 
 
-def test_anthropic_messages_order_levels_direct_call():
+def test_stream_order_levels_direct_call():
     router = Router(
         model_list=[
             {
@@ -17640,7 +17652,7 @@ def test_anthropic_messages_order_levels_direct_call():
         ],
         fallbacks=None,
     )
-    assert router._anthropic_messages_order_levels("primary", {"model": "primary"}) == (1, 2)
+    assert router._stream_order_levels("primary", {"model": "primary"}) == (1, 2)
 
 
 @pytest.mark.asyncio

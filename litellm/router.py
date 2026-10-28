@@ -834,6 +834,10 @@ def _request_model_group(kwargs: Mapping[str, object]) -> str | None:
     return model_group if isinstance(model_group, str) else None
 
 
+def _mid_stream_error_before_output(error: "MidStreamFallbackError") -> bool:
+    return not error.generated_content or error.is_pre_first_chunk
+
+
 def _mid_stream_retry_trigger(error: "MidStreamFallbackError") -> Exception:
     """The provider's own error, which is what the retry policy and should_retry_this_error classify."""
     return error.original_exception if error.original_exception is not None else error
@@ -4200,8 +4204,6 @@ class Router:
     def _raise_released_stream_error(
         self, e: "MidStreamFallbackError", initial_kwargs: Mapping[str, object]
     ) -> NoReturn:
-        """Raise the provider error of a stream whose id already reached the client, with the note the fallback
-        dispatcher would have added, since that dispatcher could start a second run."""
         original: Final = e.original_exception
         model_group: Final = initial_kwargs.get("model")
         if (
@@ -4209,6 +4211,7 @@ class Router:
             and isinstance(original, litellm.ContentPolicyViolationError)
             and isinstance(model_group, str)
             and not fallbacks_disabled_for_request(initial_kwargs)
+            and _mid_stream_error_before_output(e)
         ):
             hop_depth: Final = initial_kwargs.get("fallback_depth")
             original.message += format_content_policy_no_fallback_note(
@@ -4237,7 +4240,7 @@ class Router:
         """What a fallback continues from once a Responses stream broke after text, raising the primary's error
         when the request constrains its output or the stream began a tool call, since a continued JSON document or
         tool call would not parse, and when a content filter cut it, so no other model finishes filtered text."""
-        if not e.generated_content or e.is_pre_first_chunk:
+        if _mid_stream_error_before_output(e):
             return None
         if source_iterator.started_tool_call or isinstance(e.original_exception, litellm.ContentPolicyViolationError):
             Router._raise_original_mid_stream_error(e)
@@ -9937,7 +9940,7 @@ class Router:
         )
         return has_unattempted_fallback_target(resolved, kwargs)
 
-    def _anthropic_messages_order_levels(self, model_group: str, kwargs: Mapping[str, Any]) -> tuple[int, ...]:
+    def _stream_order_levels(self, model_group: str, kwargs: Mapping[str, Any]) -> tuple[int, ...]:
         """
         The distinct deployment order levels the fallback dispatcher would see for this request,
         computed the same way: the tier a pre-routing hook selected wins over the requested group.
@@ -9967,7 +9970,7 @@ class Router:
             return False
         if self.enable_weighted_failover:
             return True
-        order_levels: Final = self._anthropic_messages_order_levels(model_group, kwargs)
+        order_levels: Final = self._stream_order_levels(model_group, kwargs)
         if len(order_levels) > 1:
             current_target: Final = kwargs.get("_target_order")
             skip_up_to: Final = current_target if current_target is not None else order_levels[0]

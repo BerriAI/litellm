@@ -6,6 +6,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.types.llms.openai import ResponsesAPIResponse
 from tests.unit.proxy.conftest import httpx_transport
 
 pytestmark: Final = pytest.mark.usefixtures(httpx_transport.__name__)
@@ -40,6 +41,12 @@ async def _invoke_cancel_response(sync_mode: bool, call_kwargs: dict[str, object
     if sync_mode:
         return litellm.cancel_responses(**call_kwargs)
     return await litellm.acancel_responses(**call_kwargs)
+
+
+async def _invoke_get_response(sync_mode: bool, call_kwargs: dict[str, object]) -> object:
+    if sync_mode:
+        return litellm.get_responses(**call_kwargs)
+    return await litellm.aget_responses(**call_kwargs)
 
 
 @pytest.mark.parametrize(
@@ -102,8 +109,43 @@ async def test_cancel_responses_404_surfaces_openai_api_error_with_exact_url(
         }
         with pytest.raises(openai.APIError) as exc_info:
             await _invoke_cancel_response(sync_mode, call_kwargs)
-        requests: Final = tuple(route.calls)
+        requests: Final[tuple[respx.models.Call, ...]] = tuple(route.calls)
 
     assert exc_info.value.status_code == 404
     assert len(requests) == 1
     assert str(requests[0].request.url) == expected_url
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_cancel_responses_reply_carries_the_id_retrieve_gives_for_the_same_run(sync_mode: bool) -> None:
+    upstream_id: Final = "resp_upstream123"
+    reply: Final = {
+        "id": upstream_id,
+        "object": "response",
+        "created_at": 0,
+        "status": "cancelled",
+        "model": "gpt-6.1-terra",
+        "output": [],
+    }
+    call_kwargs: Final = {
+        "custom_llm_provider": "openai",
+        "api_key": "sk-test",
+        "response_id": upstream_id,
+        "litellm_metadata": {"model_info": {"id": "deployment-1"}},
+    }
+
+    with respx.mock() as mock_router:
+        mock_router.post(f"https://api.openai.com/v1/responses/{upstream_id}/cancel").mock(
+            return_value=httpx.Response(status_code=200, json=reply)
+        )
+        mock_router.get(f"https://api.openai.com/v1/responses/{upstream_id}").mock(
+            return_value=httpx.Response(status_code=200, json=reply)
+        )
+        cancelled: Final = await _invoke_cancel_response(sync_mode, call_kwargs)
+        retrieved: Final = await _invoke_get_response(sync_mode, call_kwargs)
+
+    assert isinstance(cancelled, ResponsesAPIResponse)
+    assert isinstance(retrieved, ResponsesAPIResponse)
+    assert cancelled.id == retrieved.id
+    assert cancelled.id != upstream_id

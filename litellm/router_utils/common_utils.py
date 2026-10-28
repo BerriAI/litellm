@@ -283,7 +283,6 @@ def format_content_policy_no_fallback_note(
     fallbacks: object,
     nested_fallback_hop: bool,
 ) -> str:
-    """The text the fallback dispatcher appends to a content-policy error it does not retry."""
     outcome: Final = "" if nested_fallback_hop else format_fallback_outcome_message(model_group, None, "")
     if content_policy_fallbacks is not None:
         return outcome

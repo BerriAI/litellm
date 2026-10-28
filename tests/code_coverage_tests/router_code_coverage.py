@@ -176,6 +176,8 @@ ignored_function_names = [
     "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py
     "_responses_event_announces_background_run",  # Tested through the background Responses stream tests in test_router.py
     "_aresponses_background_stream_can_release",  # Tested through the background Responses stream tests in test_router.py
+    "_raise_released_stream_error",  # Tested through the background Responses stream content-policy tests in test_router.py
+    "_mid_stream_error_before_output",  # Tested through the Responses mid-stream fallback and background stream tests
 ]
 
 
