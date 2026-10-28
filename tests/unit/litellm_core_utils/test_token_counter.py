@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.token_counter import (
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.utils import SelectTokenizerResponse
 from tests.large_text import text
 from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
@@ -1210,7 +1211,7 @@ def test_disable_hf_tokenizer_download_keeps_deepseek_v4_on_cl100k(monkeypatch: 
 @pytest.mark.parametrize("model", ["llama-2-7b", "meta-llama/llama-3-8b-instruct"])
 def test_offline_mode_counts_downloaded_tokenizer_models_with_tiktoken(monkeypatch: pytest.MonkeyPatch, model: str):
     _load_huggingface_tokenizer.cache_clear()
-    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
     monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
 
     with patch("litellm.utils.tokenizer_dispatch.from_pretrained") as from_pretrained:
@@ -1322,6 +1323,37 @@ def test_counts_during_a_retry_after_the_window_use_tiktoken_instead_of_download
             downloads: Final = from_pretrained.call_count
         assert first_type == "openai_tokenizer"
         assert types_during_retry == ("openai_tokenizer",) * 3
+        assert downloads == 2
+        assert retried["tokenizer"] is sentinel.tokenizer
+    finally:
+        _load_huggingface_tokenizer.cache_clear()
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+
+
+def test_counts_after_an_idle_stretch_of_several_windows_still_share_one_retry_download():
+    _load_huggingface_tokenizer.cache_clear()
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    count_during_retry: Final = Future[SelectTokenizerResponse]()
+
+    def download(_: str) -> object:
+        if from_pretrained.call_count == 1:
+            raise RuntimeError("HF unavailable")
+        if from_pretrained.call_count == 2:
+            count_during_retry.set_result(_select_tokenizer_helper(model))
+        return sentinel.tokenizer
+
+    try:
+        with (
+            patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained,
+            patch("litellm.utils.time.monotonic", return_value=0.0) as clock,
+        ):
+            first_type: Final = _select_tokenizer_helper(model)["type"]
+            clock.return_value = 2 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS + 1.0
+            retried: Final = _select_tokenizer_helper(model)
+            downloads: Final = from_pretrained.call_count
+        assert first_type == "openai_tokenizer"
+        assert count_during_retry.result(timeout=0)["type"] == "openai_tokenizer"
         assert downloads == 2
         assert retried["tokenizer"] is sentinel.tokenizer
     finally:

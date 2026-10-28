@@ -2679,6 +2679,52 @@ class _HuggingFaceTokenizerLoadFailure:
     retry_at: float
 
 
+_HuggingFaceTokenizerKey: TypeAlias = tuple[HuggingFaceTokenizerKind, Decision]
+_HuggingFaceTokenizerLoadOutcome: TypeAlias = _HuggingFaceTokenizerLoaded | _HuggingFaceTokenizerLoadFailure
+
+
+@dataclass(slots=True)
+class _HuggingFaceTokenizerLoadOutcomes:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    by_tokenizer: Mapping[_HuggingFaceTokenizerKey, _HuggingFaceTokenizerLoadOutcome] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+
+    def claim(self, key: _HuggingFaceTokenizerKey) -> _HuggingFaceTokenizerLoadOutcome | None:
+        with self.lock:
+            known: Final = self.by_tokenizer.get(key)
+            now: Final = time.monotonic()
+            match known:
+                case _HuggingFaceTokenizerLoadFailure(retry_at=retry_at) if now >= retry_at:
+                    self._remember(key, replace(known, retry_at=now + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS))
+                    return None
+                case _:
+                    return known
+
+    def remember_loaded(self, key: _HuggingFaceTokenizerKey) -> None:
+        with self.lock:
+            self._remember(key, _HuggingFaceTokenizerLoaded())
+
+    def remember_failure(self, key: _HuggingFaceTokenizerKey, reason: str) -> _HuggingFaceTokenizerLoadFailure:
+        failure: Final = _HuggingFaceTokenizerLoadFailure(
+            reason=reason, retry_at=time.monotonic() + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        )
+        with self.lock:
+            if not isinstance(self.by_tokenizer.get(key), _HuggingFaceTokenizerLoaded):
+                self._remember(key, failure)
+        return failure
+
+    def flush_cache(self) -> None:
+        with self.lock:
+            self.by_tokenizer = MappingProxyType({})
+
+    def _remember(self, key: _HuggingFaceTokenizerKey, outcome: _HuggingFaceTokenizerLoadOutcome) -> None:
+        self.by_tokenizer = MappingProxyType({**self.by_tokenizer, key: outcome})
+
+
+_HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES: Final = _HuggingFaceTokenizerLoadOutcomes()
+
+
 def _warn_huggingface_tokenizer_fallback(model: str, reason: str) -> None:
     verbose_logger.warning(
         "Falling back to tiktoken for %s; token counts may be approximate. "
@@ -2693,42 +2739,19 @@ def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | _Hugg
     if kind is None or (kind not in _BUNDLED_TOKENIZER_LOAD_LOCKS and is_offline_mode()):
         return None
     backend: Final = _huggingface_tokenizer_backend()
-    key: Final = _huggingface_tokenizer_outcome_key(kind, backend)
     with _BUNDLED_TOKENIZER_LOAD_LOCKS.get(kind, nullcontext()):
-        known: Final = _claim_huggingface_tokenizer_load(key)
+        known: Final = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.claim((kind, backend))
         if isinstance(known, _HuggingFaceTokenizerLoadFailure):
             return known
         tokenizer: Final = (
             _load_huggingface_tokenizer(kind, backend)
             if isinstance(known, _HuggingFaceTokenizerLoaded)
-            else _load_huggingface_tokenizer_remembering_outcome(kind, backend, key)
+            else _load_huggingface_tokenizer_remembering_outcome(kind, backend)
         )
     if isinstance(tokenizer, _HuggingFaceTokenizerLoadFailure):
         _warn_huggingface_tokenizer_fallback(model, tokenizer.reason)
         return tokenizer
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
-
-
-def _huggingface_tokenizer_outcome_key(kind: HuggingFaceTokenizerKind, backend: Decision) -> str:
-    return f"{kind}:{backend.name}"
-
-
-def _claim_huggingface_tokenizer_load(
-    key: str,
-) -> _HuggingFaceTokenizerLoaded | _HuggingFaceTokenizerLoadFailure | None:
-    with _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES_LOCK:
-        known: Final = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.get_cache(key)
-        now: Final = time.monotonic()
-        match known:
-            case _HuggingFaceTokenizerLoadFailure(retry_at=retry_at) if now >= retry_at:
-                _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.set_cache(
-                    key, replace(known, retry_at=now + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS)
-                )
-                return None
-            case _HuggingFaceTokenizerLoaded() | _HuggingFaceTokenizerLoadFailure():
-                return known
-            case _:
-                return None
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
@@ -2754,7 +2777,7 @@ def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind, backend: Decisio
 
 
 def _load_huggingface_tokenizer_remembering_outcome(
-    kind: HuggingFaceTokenizerKind, backend: Decision, key: str
+    kind: HuggingFaceTokenizerKind, backend: Decision
 ) -> HuggingFace | _HuggingFaceTokenizerLoadFailure:
     try:
         tokenizer: Final = _load_huggingface_tokenizer(kind, backend)
@@ -2763,20 +2786,9 @@ def _load_huggingface_tokenizer_remembering_outcome(
 
         if isinstance(error, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
             raise
-        return _remember_huggingface_tokenizer_failure(key, str(error))
-    with _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES_LOCK:
-        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.set_cache(key, _HuggingFaceTokenizerLoaded())
+        return _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.remember_failure((kind, backend), str(error))
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.remember_loaded((kind, backend))
     return tokenizer
-
-
-def _remember_huggingface_tokenizer_failure(key: str, reason: str) -> _HuggingFaceTokenizerLoadFailure:
-    failure: Final = _HuggingFaceTokenizerLoadFailure(
-        reason=reason, retry_at=time.monotonic() + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
-    )
-    with _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES_LOCK:
-        if not isinstance(_HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.get_cache(key), _HuggingFaceTokenizerLoaded):
-            _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.set_cache(key, failure)
-    return failure
 
 
 def encode(model="", text="", custom_tokenizer: dict | None = None):
@@ -8348,27 +8360,6 @@ def trim_messages(
 
 
 from litellm.caching.in_memory_cache import InMemoryCache
-
-
-class _HuggingFaceTokenizerLoadOutcomeCache(Protocol):
-    def get_cache(self, key: str) -> object | None: ...
-
-    def set_cache(self, key: str, value: object, ttl: float | None = None) -> None: ...
-
-    def flush_cache(self) -> None: ...
-
-
-_HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES: Final[_HuggingFaceTokenizerLoadOutcomeCache] = (
-    cast(  # cast-ok: cache methods are untyped
-        _HuggingFaceTokenizerLoadOutcomeCache,
-        InMemoryCache(
-            max_size_in_memory=16,
-            default_ttl=2 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
-            clock=lambda: time.monotonic(),
-        ),
-    )
-)
-_HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES_LOCK: Final = threading.Lock()
 
 
 class AvailableModelsCache(InMemoryCache):
