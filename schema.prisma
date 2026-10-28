@@ -1163,6 +1163,7 @@ model LiteLLM_ManagedFileTable {
   @@index([unified_file_id])
   @@index([flat_model_file_ids], type: Gin)
   @@index([team_id, created_at(sort: Desc)])
+  @@index([created_by, created_at(sort: Desc)])
 }
 
 model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use the

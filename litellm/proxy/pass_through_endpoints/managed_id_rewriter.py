@@ -242,6 +242,12 @@ def _passthrough_sentinel_model_id(provider: str) -> str:
     return f"_passthrough_{provider}"
 
 
+def passthrough_file_model_id(provider: str) -> str | None:
+    if (provider, "/v1/files") not in _LIST_ROUTE_TABLE:
+        return None
+    return _passthrough_sentinel_model_id(provider)
+
+
 # Key under which the provider marker is stored in a file row's model_mappings.
 # Its value lands in flat_model_file_ids (built from model_mappings.values()),
 # giving the file table a DB-queryable provider scope it otherwise lacks.

@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Union
+from collections.abc import AsyncGenerator, Callable, Iterable, Iterator, Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
 from openai.types.file_deleted import FileDeleted
@@ -36,6 +37,22 @@ else:
     Span = Any
     Router = Any
     UserAPIKeyAuth = Any
+
+
+def _routes_nowhere(_model_name: str) -> bool:
+    return False
+
+
+@dataclass(frozen=True, slots=True)
+class FileListModelScope:
+    model_mapping_keys: frozenset[str]
+    routes_stored_model_name: Callable[[str], bool] = _routes_nowhere
+
+    def holds(self, model_mapping_keys: Iterable[str], stored: bool) -> bool:
+        mapped_keys: Final = frozenset(model_mapping_keys)
+        return not self.model_mapping_keys.isdisjoint(mapped_keys) or (
+            stored and any(map(self.routes_stored_model_name, mapped_keys))
+        )
 
 
 class BaseFileUploadStream(ABC):
@@ -274,6 +291,8 @@ class BaseFileEndpoints(ABC):
         user_api_key_dict: UserAPIKeyAuth,
         limit: int | None = None,
         after: str | None = None,
+        model_scope: FileListModelScope | None = None,
+        before: str | None = None,
         **data: dict,
     ) -> FileListPage:
         pass
