@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Final, Literal, TypeVar
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -155,6 +155,7 @@ class _DailyUserSpendOwnerRow(LiteLLMBaseModel):
     last_owner: str | None = None
 
 
+_RAW_ROWS: Final = TypeAdapter(Sequence[dict[str, object]], config=ConfigDict(strict=True))
 _TOKEN_DIGEST_ROWS: Final = TypeAdapter(tuple[_TokenDigestRow, ...])
 _SPEND_LOG_DIGEST_ROWS: Final = TypeAdapter(tuple[_SpendLogDigestRow, ...])
 _DAILY_USER_SPEND_OWNER_ROWS: Final = TypeAdapter(tuple[_DailyUserSpendOwnerRow, ...])
@@ -194,7 +195,7 @@ async def _rows_within_the_statement_timeout(
         await transaction.execute_raw(_SPEND_LOG_STATEMENT_TIMEOUT_SQL)
         for setting in planner_settings:
             await transaction.execute_raw(setting)
-        return await transaction.query_raw(sql, *params)
+        return _RAW_ROWS.validate_python(await transaction.query_raw(sql, *params))
 
 
 async def _reverse_hash_key_metadata(

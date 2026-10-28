@@ -3,8 +3,11 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 import requests
+from pydantic import ConfigDict, TypeAdapter
 
 from .exceptions import NotFoundError, UnauthorizedError
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class ModelsManagementClient:
@@ -109,7 +112,7 @@ class ModelsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
@@ -145,7 +148,7 @@ class ModelsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
@@ -287,7 +290,7 @@ class ModelsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)

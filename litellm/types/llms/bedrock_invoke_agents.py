@@ -4,7 +4,7 @@ Type definitions for AWS Bedrock Invoke Agent API responses.
 https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_InvokeAgent.html
 """
 
-from typing import Any, Final
+from typing import Final
 
 from typing_extensions import TypedDict
 
@@ -39,7 +39,7 @@ class InvokeAgentModelInvocationInput(TypedDict, total=False):
     """Model invocation input details."""
 
     foundationModel: str | None
-    inferenceConfiguration: dict[str, Any] | None
+    inferenceConfiguration: dict[str, object] | None
     text: str | None
     traceId: str | None
     type: str | None
@@ -49,9 +49,9 @@ class InvokeAgentModelInvocationOutput(TypedDict, total=False):
     """Model invocation output details."""
 
     metadata: InvokeAgentMetadata | None
-    parsedResponse: dict[str, Any] | None
-    rawResponse: dict[str, Any] | None
-    reasoningContent: dict[str, Any] | None
+    parsedResponse: dict[str, object] | None
+    rawResponse: dict[str, object] | None
+    reasoningContent: dict[str, object] | None
     traceId: str | None
 
 

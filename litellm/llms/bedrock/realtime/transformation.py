@@ -53,6 +53,7 @@ from litellm.types.realtime import (
     RealtimeResponseTypedDict,
 )
 
+_JSON_OBJECT_MESSAGE: Final = TypeAdapter(dict[str, JsonValue], config=ConfigDict(strict=True))
 _JSON_VALUE: Final = TypeAdapter(object)
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 
@@ -856,7 +857,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             List of Bedrock format messages (JSON strings)
         """
         try:
-            json_message: Final[dict[str, JsonValue]] = json.loads(message)
+            json_message: Final = _JSON_OBJECT_MESSAGE.validate_python(json.loads(message))
         except json.JSONDecodeError:
             verbose_logger.warning("Invalid JSON message: %s", message[:200])
             return []
