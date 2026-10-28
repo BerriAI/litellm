@@ -64,6 +64,9 @@ _NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 _FILE_BLOCK_ESCALATION_REASON: Final = (
     "This message was blocked by Ovalix because file content anonymization isn't possible via LiteLLM"
 )
+_UNDECODABLE_FILE_BLOCK_REASON: Final = (
+    "This message was blocked by Ovalix because an attached file couldn't be decoded for inspection"
+)
 _TOOL_BLOCK_ESCALATION_REASON: Final = (
     "This message was blocked by Ovalix because tool call anonymization isn't possible via LiteLLM"
 )
@@ -380,6 +383,8 @@ class OvalixGuardrail(CustomGuardrail):
         session_id: str,
         target: CheckpointTarget,
     ) -> str | None:
+        if any(part.undecodable for part in file_parts):
+            return _UNDECODABLE_FILE_BLOCK_REASON
         for part in sorted(file_parts, key=lambda p: p.message_index, reverse=True):
             data = await self._file_part_to_data(part)
             reason = await self._block_reason_for_item(

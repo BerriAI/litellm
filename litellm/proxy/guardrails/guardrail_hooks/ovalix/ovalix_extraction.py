@@ -39,6 +39,7 @@ class FilePart(NamedTuple):
     inline: bool
     oversize: bool
     message_index: int
+    undecodable: bool = False
 
 
 def _split_data_url(value: str) -> tuple[str | None, str | None]:
@@ -60,24 +61,28 @@ def _b64decode_or_none(payload: str) -> bytes | None:
         return None
 
 
-def _decode_base64_with_limit(b64_payload: str, size_limit: int | None) -> tuple[bytes | None, bool]:
-    cleaned: Final = "".join(b64_payload.split())
-    if not cleaned:
-        return None, False
-    if size_limit is not None and (len(cleaned) * 3) // 4 - 2 > size_limit:
-        return None, True
+def _decoded_base64(cleaned: str) -> bytes | None:
     strict: Final = _b64decode_or_none(cleaned)
-    urlsafe: Final = (
-        _b64decode_or_none(cleaned.translate(_URLSAFE_TO_STANDARD_B64))
-        if strict is None and ("-" in cleaned or "_" in cleaned)
-        else None
-    )
-    data: Final = strict if strict is not None else urlsafe
+    if strict is not None or ("-" not in cleaned and "_" not in cleaned):
+        return strict
+    return _b64decode_or_none(cleaned.translate(_URLSAFE_TO_STANDARD_B64))
+
+
+def _inline_part(name: str | None, value: str, size_limit: int | None, message_index: int) -> FilePart | None:
+    mime_hint, payload = _split_data_url(value)
+    if payload is None:
+        return FilePart(name, None, mime_hint, True, False, message_index, undecodable=True)
+    cleaned: Final = "".join(payload.split())
+    if not cleaned:
+        return None
+    if size_limit is not None and (len(cleaned) * 3) // 4 - 2 > size_limit:
+        return FilePart(name, None, mime_hint, True, True, message_index)
+    data: Final = _decoded_base64(cleaned)
     if data is None:
-        return None, False
+        return FilePart(name, None, mime_hint, True, False, message_index, undecodable=True)
     if size_limit is not None and len(data) > size_limit:
-        return None, True
-    return (data, False) if data else (None, False)
+        return FilePart(name, None, mime_hint, True, True, message_index)
+    return FilePart(name, data, mime_hint, True, False, message_index)
 
 
 def _name_from_url(url: str) -> str | None:
@@ -92,13 +97,9 @@ def _part_from_file_block(block: Mapping[str, object], size_limit: int | None, m
     if file_obj is None:
         return None
     name: Final = str_or_none(file_obj.get("filename")) or str_or_none(file_obj.get("file_id"))
-    file_data: Final = file_obj.get("file_data")
-    if isinstance(file_data, str) and file_data:
-        mime_hint, payload = _split_data_url(file_data)
-        data, oversize = _decode_base64_with_limit(payload, size_limit) if payload else (None, False)
-        if data is not None or oversize:
-            return FilePart(name, data, mime_hint, True, oversize, message_index)
-    return FilePart(name, None, None, False, False, message_index)
+    file_data: Final = str_or_none(file_obj.get("file_data"))
+    inline: Final = _inline_part(name, file_data, size_limit, message_index) if file_data else None
+    return inline or FilePart(name, None, None, False, False, message_index)
 
 
 def _part_from_image_url_block(
@@ -110,11 +111,7 @@ def _part_from_image_url_block(
     if not isinstance(url, str) or not url:
         return None
     if url.startswith("data:"):
-        mime_hint, payload = _split_data_url(url)
-        data, oversize = _decode_base64_with_limit(payload, size_limit) if payload else (None, False)
-        if data is not None or oversize:
-            return FilePart(None, data, mime_hint, True, oversize, message_index)
-        return None
+        return _inline_part(None, url, size_limit, message_index)
     return FilePart(_name_from_url(url), None, None, False, False, message_index)
 
 
@@ -122,12 +119,10 @@ def _part_from_input_file_block(
     block: Mapping[str, object], size_limit: int | None, message_index: int
 ) -> FilePart | None:
     declared_name: Final = str_or_none(block.get("filename")) or str_or_none(block.get("file_id"))
-    file_data: Final = block.get("file_data")
-    if isinstance(file_data, str) and file_data:
-        mime_hint, payload = _split_data_url(file_data)
-        data, oversize = _decode_base64_with_limit(payload, size_limit) if payload else (None, False)
-        if data is not None or oversize:
-            return FilePart(declared_name, data, mime_hint, True, oversize, message_index)
+    file_data: Final = str_or_none(block.get("file_data"))
+    inline: Final = _inline_part(declared_name, file_data, size_limit, message_index) if file_data else None
+    if inline is not None:
+        return inline
     file_url: Final = block.get("file_url")
     name: Final = (
         _name_from_url(file_url) if isinstance(file_url, str) and file_url and not declared_name else declared_name
@@ -145,10 +140,9 @@ def _part_from_input_audio_block(
     if not isinstance(data_b64, str) or not data_b64:
         return None
     name: Final = f"audio.{audio.get('format') or 'bin'}"
-    data, oversize = _decode_base64_with_limit(data_b64, size_limit)
-    if data is None and not oversize:
-        return FilePart(name, None, None, False, False, message_index)
-    return FilePart(name, data, None, True, oversize, message_index)
+    return _inline_part(name, data_b64, size_limit, message_index) or FilePart(
+        name, None, None, False, False, message_index
+    )
 
 
 _BLOCK_PARSERS: Final[Mapping[str, Callable[[Mapping[str, object], int | None, int], FilePart | None]]] = (
@@ -200,11 +194,7 @@ def _file_part_of_image(value: str, size_limit: int | None, index: int) -> FileP
     if value.startswith(("http://", "https://")):
         name: Final = _name_from_url(value)
         return FilePart(name, None, None, False, False, index) if name else None
-    mime_hint, payload = _split_data_url(value)
-    data, oversize = _decode_base64_with_limit(payload, size_limit) if payload else (None, False)
-    if data is None and not oversize:
-        return None
-    return FilePart(None, data, mime_hint, True, oversize, index)
+    return _inline_part(None, value, size_limit, index)
 
 
 def extract_file_parts_from_images(

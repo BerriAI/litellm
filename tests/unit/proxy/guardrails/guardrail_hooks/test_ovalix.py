@@ -1301,6 +1301,42 @@ async def test_file_checkpoint_call_failure_fails_closed():
             await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
 
 
+_GIF_B64 = base64.b64encode(b"GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00;").decode()
+_CORRUPT_GIF_B64 = f"{_GIF_B64[:8]}!{_GIF_B64[8:]}"
+
+
+def _user_turn_with(block):
+    return GenericGuardrailAPIInputs(
+        texts=["what is this?"],
+        structured_messages=[{"role": "user", "content": [{"type": "text", "text": "what is this?"}, block]}],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("inputs", "input_type"),
+    [
+        (
+            _user_turn_with({"type": "image_url", "image_url": {"url": f"data:image/gif;base64,{_CORRUPT_GIF_B64}"}}),
+            "request",
+        ),
+        (_user_turn_with({"type": "file", "file": {"filename": "a.gif", "file_data": _CORRUPT_GIF_B64}}), "request"),
+        (_user_turn_with({"type": "input_file", "filename": "a.gif", "file_data": _CORRUPT_GIF_B64}), "request"),
+        (
+            _user_turn_with({"type": "input_audio", "input_audio": {"data": _CORRUPT_GIF_B64, "format": "wav"}}),
+            "request",
+        ),
+        (GenericGuardrailAPIInputs(texts=[], images=[f"data:image/gif;base64,{_CORRUPT_GIF_B64}"]), "response"),
+    ],
+)
+async def test_inline_content_that_cannot_be_decoded_blocks_instead_of_skipping_inspection(inputs, input_type):
+    g = _static_guardrail()
+    with patch.object(g._async_handler, "post", new=_post_returning(lambda body: _ALLOW)):
+        with pytest.raises(OvalixGuardrailBlockedException) as exc:
+            await g.apply_guardrail(inputs=inputs, request_data={}, input_type=input_type, logging_obj=None)
+    assert "couldn't be decoded" in str(exc.value.message)
+
+
 @pytest.mark.asyncio
 async def test_discovery_resolved_without_any_checkpoint_raises():
     """An application with no checkpoints in any direction is a tracker misconfiguration, so fail closed."""

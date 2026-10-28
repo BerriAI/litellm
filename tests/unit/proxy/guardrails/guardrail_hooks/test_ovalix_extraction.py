@@ -185,10 +185,10 @@ def test_file_block_urlsafe_base64_decoded_via_fallback():
     assert len(parts) == 1 and parts[0].data == raw
 
 
-def test_file_block_data_url_without_base64_marker_has_no_bytes():
+def test_file_block_data_url_without_base64_marker_is_undecodable():
     block = {"type": "file", "file": {"filename": "n.txt", "file_data": "data:text/plain,hello"}}
     parts = extract_file_parts_from_messages(_msgs(block), size_limit=1000)
-    assert len(parts) == 1 and parts[0].data is None and parts[0].inline is False and parts[0].name == "n.txt"
+    assert len(parts) == 1 and parts[0].undecodable and parts[0].data is None and parts[0].name == "n.txt"
 
 
 def test_input_file_block_data_url_decoded():
@@ -209,10 +209,10 @@ def test_input_audio_block_decoded():
     assert len(parts) == 1 and parts[0].data == b"wav" and parts[0].name == "audio.wav" and parts[0].inline
 
 
-def test_input_audio_block_undecodable_is_name_only():
+def test_input_audio_block_undecodable_is_flagged():
     block = {"type": "input_audio", "input_audio": {"data": "!!!not-base64!!!"}}
     parts = extract_file_parts_from_messages(_msgs(block), size_limit=1000)
-    assert len(parts) == 1 and parts[0].name == "audio.bin" and parts[0].data is None and parts[0].inline is False
+    assert len(parts) == 1 and parts[0].undecodable and parts[0].data is None and parts[0].name == "audio.bin"
 
 
 def test_input_audio_block_non_dict_skipped():
@@ -267,9 +267,10 @@ def test_messages_skip_non_dict_and_unknown_blocks():
     assert len(parts) == 1 and parts[0].name == "a.txt" and parts[0].data == b"x"
 
 
-def test_image_url_block_invalid_data_url_returns_no_part():
+def test_image_url_block_invalid_data_url_is_flagged():
     block = {"type": "image_url", "image_url": {"url": "data:image/png;base64,%%%invalid%%%"}}
-    assert extract_file_parts_from_messages(_msgs(block), size_limit=1000) == ()
+    parts = extract_file_parts_from_messages(_msgs(block), size_limit=1000)
+    assert len(parts) == 1 and parts[0].undecodable and parts[0].data is None
 
 
 def test_tool_message_with_empty_content_is_skipped():
@@ -286,10 +287,10 @@ def test_extract_tool_results_skips_non_dict_messages_and_tool_calls():
     assert extract_tool_results(msgs) == (("f", "ok", "c1"),)
 
 
-def test_malformed_data_url_yields_no_bytes():
+def test_malformed_data_url_is_undecodable():
     block = {"type": "file", "file": {"filename": "x.bin", "file_data": "data:garbage-no-comma"}}
     parts = extract_file_parts_from_messages(_msgs(block), size_limit=1000)
-    assert len(parts) == 1 and parts[0].data is None and parts[0].inline is False and parts[0].name == "x.bin"
+    assert len(parts) == 1 and parts[0].undecodable and parts[0].data is None and parts[0].name == "x.bin"
 
 
 def test_input_audio_block_without_data_skipped():
@@ -324,10 +325,10 @@ def test_whitespace_only_base64_payload_yields_no_bytes():
     assert len(parts) == 1 and parts[0].data is None and parts[0].inline is False and parts[0].name == "n.txt"
 
 
-def test_base64_invalid_even_after_urlsafe_translate_yields_no_bytes():
+def test_base64_invalid_even_after_urlsafe_translate_is_undecodable():
     block = {"type": "file", "file": {"filename": "b.bin", "file_data": "_@@@"}}
     parts = extract_file_parts_from_messages(_msgs(block), size_limit=1000)
-    assert len(parts) == 1 and parts[0].data is None and parts[0].inline is False and parts[0].name == "b.bin"
+    assert len(parts) == 1 and parts[0].undecodable and parts[0].data is None and parts[0].name == "b.bin"
 
 
 def test_file_oversize_detected_after_decode_when_estimate_passes():
