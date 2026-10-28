@@ -7514,7 +7514,7 @@ def validate_environment(
                 missing_keys.append("DEEPINFRA_API_KEY")
         elif custom_llm_provider == "clf_ai_gateway":
             if "CLF_AI_GATEWAY_API_KEY" in os.environ:
-                keys_in_environment = True
+                keys_in_environment = True  # rebind-ok: the result accumulates across the provider chain
             else:
                 missing_keys.append("CLF_AI_GATEWAY_API_KEY")
         elif custom_llm_provider == "featherless_ai":

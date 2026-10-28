@@ -51,7 +51,7 @@ class ClfAiGatewayConfig(OpenAIGPTConfig):
             custom_llm_provider=self.custom_llm_provider,
         )
         extra: Final = ("reasoning_effort",) if supports_reasoning else ()
-        return [*SUPPORTED_OPENAI_PARAMS, *extra]  # mutable-ok: one-shot build, list per base contract
+        return [*SUPPORTED_OPENAI_PARAMS, *extra]
 
     def get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
