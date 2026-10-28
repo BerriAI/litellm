@@ -47,6 +47,7 @@ UPPER_BACKEND: Final = "bedrock/converse/global.amazon.nova-2-lite-v1:0"
 MAX_TOKENS: Final = 8
 OVERSIZED_PROMPT_CHARS: Final = 1_000_000
 BEYOND_DECLARED_WINDOW_PROMPT_CHARS: Final = 400_000
+LONG_PROMPT_TIMEOUT_SECONDS: Final = 180.0
 FILLER: Final = (
     "On the morning of day {n}, the garden club met beside the old mill and talked about which flowers "
     "to grow along the river walk. Everyone brought warm bread and shared stories about the cold winter "
@@ -175,7 +176,11 @@ class TestContextWindowEscalationFromBaseModel:
         )
 
         response: Final = unwrap(
-            proxy.chat(key, _chat_body(routers.base_model_router, _prompt_of(OVERSIZED_PROMPT_CHARS)))
+            proxy.chat(
+                key,
+                _chat_body(routers.base_model_router, _prompt_of(OVERSIZED_PROMPT_CHARS)),
+                timeout=LONG_PROMPT_TIMEOUT_SECONDS,
+            )
         )
 
         _answered(response)
@@ -198,7 +203,11 @@ class TestContextWindowEscalationFromBaseModel:
         )
 
         response: Final = unwrap(
-            proxy.chat(key, _chat_body(routers.explicit_window_router, _prompt_of(BEYOND_DECLARED_WINDOW_PROMPT_CHARS)))
+            proxy.chat(
+                key,
+                _chat_body(routers.explicit_window_router, _prompt_of(BEYOND_DECLARED_WINDOW_PROMPT_CHARS)),
+                timeout=LONG_PROMPT_TIMEOUT_SECONDS,
+            )
         )
 
         _answered(response)

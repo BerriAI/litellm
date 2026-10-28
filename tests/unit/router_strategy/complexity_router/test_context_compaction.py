@@ -377,6 +377,39 @@ async def test_an_armed_compactor_does_not_keep_an_oversized_history_on_an_infer
     assert "MAPLE-47" in str(response)
 
 
+@pytest.mark.parametrize("chosen", ["SIMPLE", "MEDIUM"])
+async def test_an_oversized_history_compacts_on_the_cheapest_compactable_tier_beside_an_inference_profile(
+    wire: tuple[respx.Route, respx.Route], chosen: str,
+) -> None:
+    base_model: Final = "meta.llama3-8b-instruct-v1:0"
+    base_window: Final = litellm.get_model_info(model=base_model)["max_input_tokens"]
+    assert base_window is not None
+    small_window: Final = base_window + base_window // 2
+    router: Final = make_router(small_window, settings={
+        "enable_context_window_escalation": True,
+        "keyword_tier_rules": [{"keywords": ["answer"], "tier": chosen}],
+        "tiers": {"SIMPLE": "profile", "MEDIUM": "small", "COMPLEX": "large", "REASONING": "large"},
+    })
+    router.add_deployment(Deployment(
+        model_name="profile", litellm_params={
+            "model": "bedrock/converse/arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/abc123xyz",
+            "mock_response": "profile answer",
+        }, model_info={"id": "profile-answer", "base_model": base_model},
+    ))
+    payload: Final = {"messages": [
+        {"role": "user", "content": "Project code MAPLE-47. Background detail. " * (base_window // 5)},
+        {"role": "assistant", "content": "Recorded"},
+        {"role": "user", "content": "Answer with the project code"},
+    ]}
+    counted: Final = router._count_pre_call_check_tokens(payload["messages"], None, payload)
+    assert small_window < counted < 32000 * ContextCompactionConfig().trigger_ratio - 64
+    response: Final = await invoke(router, "chat", payload)
+    compactor, answer = wire
+    assert compactor.call_count == 1 and answer.call_count == 1
+    assert "Background detail" not in answer.calls[0].request.content.decode()
+    assert "MAPLE-47" in str(response)
+
+
 @pytest.mark.parametrize(
     ("surface", "failure"),
     [(surface, failure) for surface in ("chat", "messages", "responses") for failure in ("unsigned", "oversized", "provider")]

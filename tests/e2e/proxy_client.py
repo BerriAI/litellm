@@ -989,12 +989,13 @@ class ProxyClient:
     # ---- LLM calls ------------------------------------------------------
 
     @step("Send a /chat/completions request to {body.model}")
-    def chat(self, key: str, body: ChatBody) -> Result[ChatResponse]:
+    def chat(self, key: str, body: ChatBody, timeout: float | None = None) -> Result[ChatResponse]:
         return self.transport.post(
             "/chat/completions",
             headers=self.transport.bearer(key),
             json=body,
             response_type=ChatResponse,
+            timeout=timeout,
         )
 
     @step("Send a streaming /chat/completions request to {body.model}")

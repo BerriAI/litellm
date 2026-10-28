@@ -1360,11 +1360,6 @@ def _inference_profile_base_model_window(deployment: Mapping[str, object]) -> in
             return None
 
 
-def _group_provably_fits(facts: tuple[int | None, bool], needed: int, buffer: float) -> bool:
-    window, has_unknown = facts
-    return window is not None and not has_unknown and needed <= int(window * buffer)
-
-
 class _RequestContextFit(NamedTuple):
     facts: Mapping[str, tuple[int | None, bool]]
     needed: int | None
@@ -1377,6 +1372,12 @@ class _RequestContextFit(NamedTuple):
             or model in self.compaction_owned
             or _window_can_hold(self.facts.get(model, (None, True))[0], self.needed, self.buffer)
         )
+
+    def can_escalate_to(self, model: str, needed: int) -> bool:
+        window, has_unknown = self.facts.get(model, (None, True))
+        if window is None or has_unknown:
+            return False
+        return model in self.compaction_owned or needed <= int(window * self.buffer)
 
 
 class _ContextWindowPlacement(NamedTuple):
@@ -3681,7 +3682,6 @@ class ComplexityRouter(CustomLogger):
         fit: _RequestContextFit,
         needed: int,
     ) -> _ContextWindowPlacement | None:
-        buffer: Final = self.config.context_window_escalation_buffer
         in_tier: Final = tuple(group for group in pool if fit.accepts(group))
         if in_tier and len(in_tier) == len(pool):
             return None
@@ -3689,11 +3689,7 @@ class ComplexityRouter(CustomLogger):
         if in_tier:
             return _ContextWindowPlacement(tier=tier, allowed_models=in_tier, holdable_models=holdable)
         for name in self.config.tier_names()[self._active_tier_severity(tier) + 1 :]:
-            proven = tuple(
-                group
-                for group in pools.get(name, ())
-                if _group_provably_fits(fit.facts.get(group, (None, True)), needed, buffer)
-            )
+            proven = tuple(group for group in pools.get(name, ()) if fit.can_escalate_to(group, needed))
             if proven:
                 return _ContextWindowPlacement(
                     tier=name if self.config.has_custom_tiers else ComplexityTier(name),
@@ -4071,7 +4067,7 @@ class ComplexityRouter(CustomLogger):
                 if not context_recovery
                 or candidate_tier == decided_tier
                 or fit.needed is None
-                or _group_provably_fits(fit.facts.get(model, (None, True)), fit.needed, fit.buffer)
+                or fit.can_escalate_to(model, fit.needed)
             )
             candidates: Final = tuple(
                 peer
