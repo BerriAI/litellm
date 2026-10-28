@@ -1,6 +1,6 @@
 """Regression tests for the UI unit-test scope decision.
 
-`.github/workflows/test-litellm-ui-unit.yml` narrows the dashboard's Vitest run to
+`.github/workflows/test-unit.yml` narrows the dashboard's Vitest run to
 `vitest related <changed files>` so a pull request only pays for the tests it can
 affect. `related` resolves a file to the tests that import it, so a file no test
 imports resolves to nothing, and with `--passWithNoTests` the job then goes green
@@ -26,7 +26,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCOPE_SCRIPT = REPO_ROOT / ".github" / "scripts" / "select_ui_test_scope.sh"
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-litellm-ui-unit.yml"
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-unit.yml"
 STEP_NAME = "Run UI unit tests (Vitest)"
 
 FULL_SUITE_ARGV = ["run", "test", "--", "--run", "--pool", "forks", "--maxWorkers=14"]
@@ -75,7 +75,7 @@ def test_an_empty_change_set_fails_open_to_the_full_suite() -> None:
 
 def _step_script() -> str:
     workflow = yaml.safe_load(WORKFLOW.read_text())
-    steps = workflow["jobs"]["ui-unit-tests"]["steps"]
+    steps = workflow["jobs"]["ui-unit"]["steps"]
     script = next(step["run"] for step in steps if step.get("name") == STEP_NAME)
     resolved = script.replace("${{ github.repository }}", "BerriAI/litellm")
     assert "${{" not in resolved, "the step uses an Actions expression this harness does not resolve"

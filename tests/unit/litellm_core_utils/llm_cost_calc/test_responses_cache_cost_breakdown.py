@@ -39,7 +39,7 @@ def _logging_obj() -> Logging:
 
 def _responses_completion(cached_tokens: int, cache_write_tokens: int, fresh_tokens: int, output_tokens: int):
     input_tokens = cached_tokens + cache_write_tokens + fresh_tokens
-    usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+    usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
         {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,

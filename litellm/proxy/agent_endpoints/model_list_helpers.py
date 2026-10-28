@@ -51,7 +51,7 @@ async def append_agents_to_model_group(
 async def append_agents_to_model_info(
     models: list[dict],
     user_api_key_dict: UserAPIKeyAuth,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """
     Append A2A agents to model info list for UI display.
 

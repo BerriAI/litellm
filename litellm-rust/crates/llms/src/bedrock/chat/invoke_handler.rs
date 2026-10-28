@@ -1,22 +1,20 @@
 use base64::Engine;
 use bytes::Buf;
 use futures_util::{Stream, StreamExt};
-use litellm_framing::{
+use litellm_framer::{
+    EventStreamError,
     aws_event_stream::{AwsEventStreamCodec, Message},
     frames,
 };
+use litellm_llms_types::formats::messages::streaming::MessagesStreamEvent;
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
     Error,
-    anthropic::{
-        chat::handler::ModelResponseIterator,
-        messages::streaming_iterator::AnthropicMessagesStreamEvent,
-    },
     base_llm::{
-        anthropic_messages::streaming::{ByteStream, EventStream},
-        chat::streaming::{ChatStream, StreamShape},
+        base_model_iterator::tunnelled_http,
+        messages::streaming::{ByteStream, EventStream},
     },
 };
 
@@ -28,15 +26,18 @@ struct InvokeChunkPayload {
 pub fn decode_invoke_chunk(message: Message) -> Result<Value, Error> {
     let payload: InvokeChunkPayload =
         serde_json::from_slice(message.payload()).map_err(|error| {
-            Error::InvalidResponse(format!("Bedrock event payload is invalid: {error}"))
+            Error::InvalidResponse(crate::ErrorDetail::invalid("Bedrock event payload", error))
         })?;
     let chunk = base64::engine::general_purpose::STANDARD
         .decode(payload.bytes)
         .map_err(|error| {
-            Error::InvalidResponse(format!("Bedrock event payload has invalid base64: {error}"))
+            Error::InvalidResponse(crate::ErrorDetail::invalid(
+                "Bedrock event payload base64",
+                error,
+            ))
         })?;
     serde_json::from_slice(&chunk).map_err(|error| {
-        Error::InvalidResponse(format!("Anthropic stream event is invalid: {error}"))
+        Error::InvalidResponse(crate::ErrorDetail::invalid("Anthropic stream event", error))
     })
 }
 
@@ -46,36 +47,31 @@ where
     B: Buf + Send,
     E: std::error::Error + Send + Sync + 'static,
 {
-    frames(input, AwsEventStreamCodec).map(|message| {
-        decode_invoke_chunk(
-            message.map_err(|error| {
-                Error::InvalidResponse(format!("stream framing failed: {error}"))
-            })?,
-        )
-    })
+    frames(input, AwsEventStreamCodec).map(|message| decode_invoke_chunk(message.map_err(framing)?))
 }
 
-pub fn decode_invoke_anthropic_chunk(chunk: Value) -> Result<AnthropicMessagesStreamEvent, Error> {
+fn framing(error: EventStreamError) -> Error {
+    match &error {
+        EventStreamError::Body(body) if let Some(http) = tunnelled_http(body) => {
+            Error::Http(http.clone())
+        }
+        EventStreamError::Body(_)
+        | EventStreamError::InvalidLength(_)
+        | EventStreamError::Truncated
+        | EventStreamError::Malformed(_) => {
+            Error::InvalidResponse(crate::ErrorDetail::failed("stream framing", error))
+        }
+    }
+}
+
+pub fn decode_invoke_anthropic_chunk(chunk: Value) -> Result<MessagesStreamEvent, Error> {
     serde_json::from_value(chunk).map_err(|error| {
-        Error::InvalidResponse(format!("Anthropic stream event is invalid: {error}"))
+        Error::InvalidResponse(crate::ErrorDetail::invalid("Anthropic stream event", error))
     })
 }
 
 pub fn invoke_anthropic_event_stream(bytes: ByteStream) -> EventStream {
     Box::pin(invoke_chunk_stream(bytes).map(|chunk| decode_invoke_anthropic_chunk(chunk?)))
-}
-
-pub fn invoke_chat_stream(invoke_provider: &str, shape: StreamShape) -> Result<ChatStream, Error> {
-    match invoke_provider {
-        "anthropic" => Ok(ChatStream::new(
-            invoke_anthropic_event_stream,
-            ModelResponseIterator::new(shape),
-        )),
-        "deepseek_r1" | "moonshot" => Err(Error::Unsupported(
-            "Bedrock invoke streaming for this model family",
-        )),
-        _ => Err(Error::Unsupported("Bedrock invoke streaming")),
-    }
 }
 
 #[cfg(test)]
@@ -85,12 +81,10 @@ mod tests {
     use base64::engine::general_purpose::STANDARD;
     use bytes::Bytes;
     use futures_util::TryStreamExt;
+    use litellm_llms_types::formats::messages::streaming::MessagesContentBlockDelta;
 
     use super::*;
-    use crate::{
-        anthropic::messages::streaming_iterator::AnthropicContentBlockDelta,
-        base_llm::anthropic_messages::streaming::anthropic_sse_event_stream,
-    };
+    use crate::base_llm::messages::streaming;
 
     fn in_pieces(wire: &[u8]) -> ByteStream {
         let pieces: Vec<Bytes> = wire.chunks(3).map(Bytes::copy_from_slice).collect();
@@ -119,16 +113,16 @@ mod tests {
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
-        let from_sse = anthropic_sse_event_stream(in_pieces(sse.as_bytes()))
+        let from_sse = streaming::event_stream(in_pieces(sse.as_bytes()))
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
 
         assert_eq!(
             from_aws,
-            vec![AnthropicMessagesStreamEvent::ContentBlockDelta {
+            vec![MessagesStreamEvent::ContentBlockDelta {
                 index: 0,
-                delta: AnthropicContentBlockDelta::TextDelta {
+                delta: MessagesContentBlockDelta::TextDelta {
                     text: "hello".into(),
                 },
             }]

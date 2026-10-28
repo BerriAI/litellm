@@ -18,6 +18,7 @@ import pytest
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, UI_PASSWORD, UI_USERNAME, unique_marker
 from e2e_http import StreamingResponse, Success, unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from management_client import (
     DASHBOARD_SESSION_TEAM_ID,
@@ -37,6 +38,7 @@ from models import (
     OrgUpdateBody,
     TagListEntry,
     TagNewBody,
+    TeamMemberEntry,
     TeamNewBody,
     TeamUpdateBody,
     UserNewBody,
@@ -46,8 +48,11 @@ from proxy_client import Converged, await_converged
 
 pytestmark = pytest.mark.e2e
 
+GEMINI_MODEL: Final = "gemini-2.5-flash"
+OPENAI_MODEL: Final = "gpt-5.5"
 REGENERATE_GRACE_PERIOD = "15s"
 REGENERATE_GRACE_SECONDS = 15.0
+TEAM_DELETE_POOL_OVERFLOW_MEMBERS = 250
 
 
 def _poll[T](client: ManagementClient, attempt: Callable[[], T | None], failure: str) -> T:
@@ -128,6 +133,15 @@ def _poll_model_access_granted(client: ManagementClient, key: str, model: str) -
 
 class TestKeyRoutes:
     @pytest.mark.covers("mgmt.key.generate.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.KEY_MANAGEMENT,
+            providers=(Provider.GEMINI,),
+            models=(GEMINI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_generate_persists_to_key_info_and_scopes_chat(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -135,12 +149,12 @@ class TestKeyRoutes:
         key = _generate_key(
             client,
             resources,
-            KeyGenerateBody(models=["gemini-2.5-flash"], key_alias=alias, tpm_limit=424242, rpm_limit=424243),
+            KeyGenerateBody(models=[GEMINI_MODEL], key_alias=alias, tpm_limit=424242, rpm_limit=424243),
         )
 
         info = client.proxy.key_info(key)
         assert info.key_alias == alias, f"/key/info reports key_alias {info.key_alias!r}, configured {alias!r}"
-        assert info.models == ["gemini-2.5-flash"], (
+        assert info.models == [GEMINI_MODEL], (
             f"/key/info reports models {info.models}, configured ['gemini-2.5-flash']"
         )
         assert info.tpm_limit == 424242, (
@@ -150,49 +164,73 @@ class TestKeyRoutes:
             f"/key/info reports rpm_limit {info.rpm_limit}, configured 424243"
         )
 
-        _poll_chat_ok(client, key, "gemini-2.5-flash")
+        _poll_chat_ok(client, key, GEMINI_MODEL)
         _assert_model_denied(
-            client.chat_status(key, "gpt-5.5", f"say hi {unique_marker()}"), "gpt-5.5"
+            client.chat_status(key, OPENAI_MODEL, f"say hi {unique_marker()}"), OPENAI_MODEL
         )
 
     @pytest.mark.covers("mgmt.key.update.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.KEY_MANAGEMENT,
+            providers=(Provider.GEMINI, Provider.OPENAI),
+            models=(GEMINI_MODEL, OPENAI_MODEL),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_update_models_persists_and_flips_enforcement(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
-        key = _generate_key(client, resources, KeyGenerateBody(models=["gemini-2.5-flash"]))
-        _poll_chat_ok(client, key, "gemini-2.5-flash")
+        key = _generate_key(client, resources, KeyGenerateBody(models=[GEMINI_MODEL]))
+        _poll_chat_ok(client, key, GEMINI_MODEL)
         _assert_model_denied(
-            client.chat_status(key, "gpt-5.5", f"say hi {unique_marker()}"), "gpt-5.5"
+            client.chat_status(key, OPENAI_MODEL, f"say hi {unique_marker()}"), OPENAI_MODEL
         )
 
-        client.update_key_models(key, ["gpt-5.5"])
+        client.update_key_models(key, [OPENAI_MODEL])
 
         info = client.proxy.key_info(key)
-        assert info.models == ["gpt-5.5"], (
+        assert info.models == [OPENAI_MODEL], (
             f"/key/info reports models {info.models} after /key/update to ['gpt-5.5']"
         )
 
-        _poll_model_access_granted(client, key, "gpt-5.5")
-        _poll_chat_denied(client, key, "gemini-2.5-flash")
+        _poll_model_access_granted(client, key, OPENAI_MODEL)
+        _poll_chat_denied(client, key, GEMINI_MODEL)
 
     @pytest.mark.covers("mgmt.key.delete.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.KEY_MANAGEMENT,
+            providers=(Provider.GEMINI,),
+            models=(GEMINI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_delete_revokes_the_key_on_chat(self, client: ManagementClient, resources: ResourceManager) -> None:
         """The teardown's deferred delete fires again on the already-deleted key by
         design: the deferred cleanup must survive this test failing before the
         in-body delete, and a repeat /key/delete is a cheap no-op the warn-only
         teardown absorbs."""
-        key = _generate_key(client, resources, KeyGenerateBody(models=["gemini-2.5-flash"]))
-        _poll_chat_ok(client, key, "gemini-2.5-flash")
+        key = _generate_key(client, resources, KeyGenerateBody(models=[GEMINI_MODEL]))
+        _poll_chat_ok(client, key, GEMINI_MODEL)
 
         client.delete_key_strict(key)
 
         def rejected() -> bool | None:
-            outcome = client.chat_status(key, "gemini-2.5-flash", f"say hi {unique_marker()}")
+            outcome = client.chat_status(key, GEMINI_MODEL, f"say hi {unique_marker()}")
             return True if outcome.status_code == 401 else None
 
         _ = _poll(client, rejected, "deleted key was still accepted on chat (never rejected 401) at the deadline")
 
     @pytest.mark.covers("mgmt.key.list.happy_path")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.KEY_MANAGEMENT,
+        )
+    )
     def test_created_key_appears_in_key_list_inventory(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -212,8 +250,14 @@ class TestKeyRoutes:
 
 
     @pytest.mark.covers("mgmt.key.block.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.KEY_MANAGEMENT,
+        )
+    )
     def test_block_persists_to_key_info(self, client: ManagementClient, resources: ResourceManager) -> None:
-        key = _generate_key(client, resources, KeyGenerateBody(models=["gemini-2.5-flash"]))
+        key = _generate_key(client, resources, KeyGenerateBody(models=[GEMINI_MODEL]))
         assert not client.proxy.key_info(key).blocked, "/key/info reports the key blocked before /key/block ran"
 
         client.block_key(key)
@@ -231,6 +275,15 @@ class TestDashboardKeyRoutes:
     are the same routes the API-surface tests cover with a different caller."""
 
     @pytest.mark.covers("mgmt.key.generate.happy_path")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.KEY_MANAGEMENT,
+            providers=(Provider.GEMINI,),
+            models=(GEMINI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_creating_a_key_from_the_dashboard_persists_and_works(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -258,7 +311,7 @@ class TestDashboardKeyRoutes:
 
         def dashboard_creates_the_key() -> str | None:
             match client.generate_key(
-                KeyGenerateBody(models=["gemini-2.5-flash"], key_alias=alias, tpm_limit=100),
+                KeyGenerateBody(models=[GEMINI_MODEL], key_alias=alias, tpm_limit=100),
                 caller_key=session.session_key,
             ):
                 case Success(data=created):
@@ -278,7 +331,7 @@ class TestDashboardKeyRoutes:
             f"/key/info reports key_alias {created_info.key_alias!r} for the key the dashboard created, "
             f"expected {alias!r}"
         )
-        assert created_info.models == ["gemini-2.5-flash"], (
+        assert created_info.models == [GEMINI_MODEL], (
             f"/key/info reports models {created_info.models} for the key the dashboard created"
         )
         assert created_info.tpm_limit == 100, (
@@ -299,10 +352,19 @@ class TestDashboardKeyRoutes:
             "would render no keys",
         )
 
-        _poll_chat_ok(client, created, "gemini-2.5-flash")
-        _assert_model_denied(client.chat_status(created, "gpt-5.5", f"say hi {unique_marker()}"), "gpt-5.5")
+        _poll_chat_ok(client, created, GEMINI_MODEL)
+        _assert_model_denied(client.chat_status(created, OPENAI_MODEL, f"say hi {unique_marker()}"), OPENAI_MODEL)
 
     @pytest.mark.covers("mgmt.key.update.happy_path")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.KEY_MANAGEMENT,
+            providers=(Provider.GEMINI, Provider.OPENAI),
+            models=(GEMINI_MODEL, OPENAI_MODEL),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_editing_a_key_from_the_dashboard_persists_and_is_enforced(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -310,17 +372,17 @@ class TestDashboardKeyRoutes:
         target = _generate_key(
             client,
             resources,
-            KeyGenerateBody(models=["gemini-2.5-flash"], key_alias=alias, tpm_limit=100, rpm_limit=200),
+            KeyGenerateBody(models=[GEMINI_MODEL], key_alias=alias, tpm_limit=100, rpm_limit=200),
         )
-        _poll_chat_ok(client, target, "gemini-2.5-flash")
-        _assert_model_denied(client.chat_status(target, "gpt-5.5", f"say hi {unique_marker()}"), "gpt-5.5")
+        _poll_chat_ok(client, target, GEMINI_MODEL)
+        _assert_model_denied(client.chat_status(target, OPENAI_MODEL, f"say hi {unique_marker()}"), OPENAI_MODEL)
 
         session = client.dashboard_login(UI_USERNAME, UI_PASSWORD)
         resources.defer(lambda: client.proxy.delete_key(session.session_key))
 
         def dashboard_saves_the_edit() -> bool | None:
             match client.update_key(
-                KeyUpdateBody(key=target, models=["gpt-5.5"], tpm_limit=300, rpm_limit=400),
+                KeyUpdateBody(key=target, models=[OPENAI_MODEL], tpm_limit=300, rpm_limit=400),
                 caller_key=session.session_key,
             ):
                 case Success():
@@ -335,7 +397,7 @@ class TestDashboardKeyRoutes:
         )
 
         info = client.proxy.key_info(target)
-        assert info.models == ["gpt-5.5"], (
+        assert info.models == [OPENAI_MODEL], (
             f"/key/info reports models {info.models} after the dashboard edit to ['gpt-5.5']"
         )
         assert info.tpm_limit == 300, f"/key/info reports tpm_limit {info.tpm_limit} after the dashboard edit to 300"
@@ -344,29 +406,38 @@ class TestDashboardKeyRoutes:
             f"the dashboard edit renamed the key to {info.key_alias!r}, it should still be {alias!r}"
         )
 
-        _poll_model_access_granted(client, target, "gpt-5.5")
-        _poll_chat_denied(client, target, "gemini-2.5-flash")
+        _poll_model_access_granted(client, target, OPENAI_MODEL)
+        _poll_chat_denied(client, target, GEMINI_MODEL)
 
 
 class TestKeyRegeneration:
     @pytest.mark.covers("mgmt.key.regenerate.happy_path")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.KEY_MANAGEMENT,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_regenerate_rotates_to_a_working_new_key(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
-        old_key = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
+        old_key = _generate_key(client, resources, KeyGenerateBody(models=[OPENAI_MODEL]))
 
         new_key = client.regenerate_key(old_key)
         resources.defer(lambda: client.proxy.delete_key(new_key))
         assert new_key != old_key, "regenerate returned the same key string, so no rotation happened"
 
         def new_accepted() -> bool | None:
-            outcome = client.chat_status(new_key, "gpt-5.5", f"say hi {unique_marker()}")
+            outcome = client.chat_status(new_key, OPENAI_MODEL, f"say hi {unique_marker()}")
             return True if outcome.status_code != 401 else None
 
         _ = _poll(client, new_accepted, "regenerated key was never accepted at auth (still 401) at the deadline")
 
         def old_rejected() -> bool | None:
-            outcome = client.chat_status(old_key, "gpt-5.5", f"say hi {unique_marker()}")
+            outcome = client.chat_status(old_key, OPENAI_MODEL, f"say hi {unique_marker()}")
             return True if outcome.status_code == 401 else None
 
         _ = _poll(
@@ -374,10 +445,19 @@ class TestKeyRegeneration:
         )
 
     @pytest.mark.covers("other.key_mgmt.regenerate.grace_period_honored")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.KEY_MANAGEMENT,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_regenerate_with_grace_period_keeps_old_key_until_revoked(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
-        old_key = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
+        old_key = _generate_key(client, resources, KeyGenerateBody(models=[OPENAI_MODEL]))
 
         new_key = client.regenerate_key(old_key, grace_period=REGENERATE_GRACE_PERIOD)
         resources.defer(lambda: client.proxy.delete_key(new_key))
@@ -385,7 +465,7 @@ class TestKeyRegeneration:
         assert new_key != old_key, "regenerate returned the same key string, so no rotation happened"
 
         def old_accepted() -> bool | None:
-            outcome = client.chat_status(old_key, "gpt-5.5", f"say hi {unique_marker()}")
+            outcome = client.chat_status(old_key, OPENAI_MODEL, f"say hi {unique_marker()}")
             return True if outcome.ok else None
 
         _ = _poll(client, old_accepted, "old key was rejected 401 inside its grace period at the deadline")
@@ -394,7 +474,7 @@ class TestKeyRegeneration:
         )
 
         def old_rejected() -> bool | None:
-            outcome = client.chat_status(old_key, "gpt-5.5", f"say hi {unique_marker()}")
+            outcome = client.chat_status(old_key, OPENAI_MODEL, f"say hi {unique_marker()}")
             return True if outcome.status_code == 401 else None
 
         _ = _poll(
@@ -406,15 +486,21 @@ class TestKeyRegeneration:
 
 class TestTeamRoutes:
     @pytest.mark.covers("mgmt.team.new.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.TEAM_MANAGEMENT,
+        )
+    )
     def test_new_persists_to_team_info_and_binds_keys(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         alias = f"e2e-mgmt-team-{unique_marker()}"
-        team_id = _create_team(client, resources, alias, ["gemini-2.5-flash"])
+        team_id = _create_team(client, resources, alias, [GEMINI_MODEL])
 
         info = client.team_info(team_id)
         assert info.team_alias == alias, f"/team/info reports team_alias {info.team_alias!r}, configured {alias!r}"
-        assert info.models == ["gemini-2.5-flash"], (
+        assert info.models == [GEMINI_MODEL], (
             f"/team/info reports models {info.models}, configured ['gemini-2.5-flash']"
         )
 
@@ -425,8 +511,14 @@ class TestTeamRoutes:
         )
 
     @pytest.mark.covers("mgmt.team.update.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.TEAM_MANAGEMENT,
+        )
+    )
     def test_update_persists_to_team_info(self, client: ManagementClient, resources: ResourceManager) -> None:
-        team_id = _create_team(client, resources, f"e2e-mgmt-team-{unique_marker()}", ["gemini-2.5-flash"])
+        team_id = _create_team(client, resources, f"e2e-mgmt-team-{unique_marker()}", [GEMINI_MODEL])
 
         updated_alias = f"e2e-mgmt-team-updated-{unique_marker()}"
         client.update_team(TeamUpdateBody(team_id=team_id, team_alias=updated_alias))
@@ -436,11 +528,17 @@ class TestTeamRoutes:
 
         _ = _poll(client, reflected, f"/team/info never reflected team_alias {updated_alias!r} after /team/update")
     @pytest.mark.covers("mgmt.team.list.happy_path")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.TEAM_MANAGEMENT,
+        )
+    )
     def test_created_team_appears_in_team_list(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         alias = f"e2e-mgmt-team-{unique_marker()}"
-        team_id = _create_team(client, resources, alias, ["gemini-2.5-flash"])
+        team_id = _create_team(client, resources, alias, [GEMINI_MODEL])
 
         _ = _poll(
             client,
@@ -449,17 +547,26 @@ class TestTeamRoutes:
         )
 
     @pytest.mark.covers("mgmt.team.delete.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.TEAM_MANAGEMENT,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_delete_persists_and_revokes_team_bound_key(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         """The teardown's deferred delete_team/delete_key fire again on the already-
         deleted team and key by design: both are warn-only no-ops, and the deferred
         cleanup must survive this test failing before the in-body delete."""
-        team_id = _create_team(client, resources, f"e2e-mgmt-team-{unique_marker()}", ["gpt-5.5"])
+        team_id = _create_team(client, resources, f"e2e-mgmt-team-{unique_marker()}", [OPENAI_MODEL])
         key = _generate_key(client, resources, KeyGenerateBody(team_id=team_id))
 
         def accepted() -> bool | None:
-            outcome = client.chat_status(key, "gpt-5.5", f"say hi {unique_marker()}")
+            outcome = client.chat_status(key, OPENAI_MODEL, f"say hi {unique_marker()}")
             return True if outcome.status_code != 401 else None
 
         _ = _poll(client, accepted, "team-bound key was never accepted at auth before team deletion")
@@ -472,14 +579,63 @@ class TestTeamRoutes:
         )
 
         def rejected() -> bool | None:
-            outcome = client.chat_status(key, "gpt-5.5", f"say hi {unique_marker()}")
+            outcome = client.chat_status(key, OPENAI_MODEL, f"say hi {unique_marker()}")
             return True if outcome.status_code == 401 else None
 
         _ = _poll(
             client, rejected, "team-bound key was still accepted on chat (never rejected 401) after team deletion"
         )
 
+    @pytest.mark.covers("mgmt.team.delete.membership_larger_than_db_pool")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.TEAM_MANAGEMENT,
+        )
+    )
+    def test_team_delete_succeeds_for_team_larger_than_db_pool(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        """Customer repro: /team/delete fans one transaction per member out over a
+        Prisma pool of 10 connections, each queued on the team's advisory lock,
+        so a team bigger than the pool must still delete cleanly instead of
+        answering 500 P2028."""
+        team_id = _create_team(client, resources, f"e2e-mgmt-team-{unique_marker()}", [])
+        user_ids = tuple(
+            _create_user(
+                client,
+                resources,
+                UserNewBody(
+                    user_email=f"e2e-mgmt-bulk-{i}-{unique_marker()}@example.com",
+                    user_role="internal_user",
+                ),
+            )
+            for i in range(TEAM_DELETE_POOL_OVERFLOW_MEMBERS)
+        )
+        client.add_team_members(team_id, [TeamMemberEntry(role="user", user_id=user_id) for user_id in user_ids])
+        seated = len(client.team_info(team_id).members_with_roles)
+        assert seated >= len(user_ids), (
+            f"/team/info lists {seated} members after the bulk /team/member_add, expected at least {len(user_ids)}"
+        )
+
+        outcome = client.delete_team_status(team_id)
+
+        assert outcome.status_code == 200, (
+            f"/team/delete on a {len(user_ids)}-member team must succeed, got "
+            f"{outcome.status_code}: {outcome.body[:500]}"
+        )
+        probe = client.team_info_status(team_id)
+        assert probe.status_code == 404, (
+            f"deleted team {team_id} still resolves: /team/info returned {probe.status_code}: {probe.body[:300]}"
+        )
+
     @pytest.mark.covers("mgmt.team.member_add.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.TEAM_MANAGEMENT,
+        )
+    )
     def test_member_add_and_delete_persist_to_team_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -488,7 +644,7 @@ class TestTeamRoutes:
             resources,
             UserNewBody(user_email=f"e2e-mgmt-{unique_marker()}@example.com", user_role="internal_user"),
         )
-        team_id = _create_team(client, resources, f"e2e-mgmt-team-{unique_marker()}", ["gemini-2.5-flash"])
+        team_id = _create_team(client, resources, f"e2e-mgmt-team-{unique_marker()}", [GEMINI_MODEL])
 
         client.add_team_member(team_id, user_id)
         member = next(
@@ -506,6 +662,12 @@ class TestTeamRoutes:
 
 class TestUserRoutes:
     @pytest.mark.covers("mgmt.user.new.happy_path")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.USER_MANAGEMENT,
+        )
+    )
     def test_new_persists_to_user_info(self, client: ManagementClient, resources: ResourceManager) -> None:
         email = f"e2e-mgmt-{unique_marker()}@example.com"
         user_id = _create_user(client, resources, UserNewBody(user_email=email, user_role="internal_user"))
@@ -517,6 +679,12 @@ class TestUserRoutes:
         )
 
     @pytest.mark.covers("mgmt.user.update.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.USER_MANAGEMENT,
+        )
+    )
     def test_update_persists_to_user_info(self, client: ManagementClient, resources: ResourceManager) -> None:
         email = f"e2e-mgmt-{unique_marker()}@example.com"
         user_id = _create_user(client, resources, UserNewBody(user_email=email, user_role="internal_user"))
@@ -533,6 +701,12 @@ class TestUserRoutes:
             f"/user/info reports user_role {info.user_role!r} after /user/update to 'internal_user_viewer'"
         )
     @pytest.mark.covers("mgmt.user.delete.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.USER_MANAGEMENT,
+        )
+    )
     def test_delete_removes_the_user_from_inventory(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -555,6 +729,12 @@ class TestUserRoutes:
         _ = _poll(client, removed, f"user {user_id} still present in /user/list after /user/delete at the deadline")
 
     @pytest.mark.covers("mgmt.user.list.happy_path")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.USER_MANAGEMENT,
+        )
+    )
     def test_created_users_appear_in_user_list(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -577,22 +757,34 @@ class TestUserRoutes:
 
 class TestOrganizationRoutes:
     @pytest.mark.covers("mgmt.organization.new.happy_path")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.ORGANIZATION_MANAGEMENT,
+        )
+    )
     def test_new_persists_to_organization_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         alias = f"e2e-mgmt-org-{unique_marker()}"
-        org_id = client.create_org(OrgNewBody(organization_alias=alias, models=["gemini-2.5-flash"]))
+        org_id = client.create_org(OrgNewBody(organization_alias=alias, models=[GEMINI_MODEL]))
         resources.defer(lambda: client.delete_org(org_id))
 
         info = client.org_info(org_id)
         assert info.organization_alias == alias, (
             f"/organization/info reports alias {info.organization_alias!r}, configured {alias!r}"
         )
-        assert info.models == ["gemini-2.5-flash"], (
+        assert info.models == [GEMINI_MODEL], (
             f"/organization/info reports models {info.models}, configured ['gemini-2.5-flash']"
         )
 
     @pytest.mark.covers("mgmt.organization.update.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.ORGANIZATION_MANAGEMENT,
+        )
+    )
     def test_update_alias_persists_to_organization_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -611,6 +803,12 @@ class TestOrganizationRoutes:
         )
 
     @pytest.mark.covers("mgmt.organization.delete.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.ORGANIZATION_MANAGEMENT,
+        )
+    )
     def test_delete_removes_from_organization_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -635,6 +833,12 @@ class TestOrganizationRoutes:
 
 class TestTagRoutes:
     @pytest.mark.covers("mgmt.tag.new.happy_path")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.TAG_MANAGEMENT,
+        )
+    )
     def test_new_persists_to_tag_list(self, client: ManagementClient, resources: ResourceManager) -> None:
         name = f"e2e-mgmt-tag-{unique_marker()}"
         description = "Tag for spend categorization"
@@ -665,6 +869,12 @@ def _model_entry(client: ManagementClient, model_name: str) -> ModelInfoEntry | 
 
 class TestModelRoutes:
     @pytest.mark.covers("mgmt.model.update.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.MODEL_MANAGEMENT,
+        )
+    )
     def test_update_persists_input_cost_to_model_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -708,6 +918,12 @@ class TestModelRoutes:
         )
 
     @pytest.mark.covers("mgmt.model.delete.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.MODEL_MANAGEMENT,
+        )
+    )
     def test_delete_removes_from_model_info_catalog(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -730,6 +946,12 @@ class TestModelRoutes:
         _ = _poll(client, absent, f"{model_name} still present in /model/info after /model/delete at the deadline")
 
     @pytest.mark.covers("mgmt.model.add.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.MODEL_MANAGEMENT,
+        )
+    )
     def test_new_persists_to_model_info_catalog(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -758,6 +980,11 @@ def _assert_route_forbidden(route: str, outcome: StreamingResponse) -> None:
 
 class TestManagementRoutePermissions:
     @pytest.mark.covers("other.auth.virtual_key.route_permission_enforced")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+        )
+    )
     def test_llm_only_key_forbidden_from_management_writes(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -793,6 +1020,12 @@ class TestManagementRoutePermissions:
 
 class TestCustomer:
     @pytest.mark.covers("mgmt.end_user.new.happy_path")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.CUSTOMER_MANAGEMENT,
+        )
+    )
     def test_customer_create_persists_to_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -857,6 +1090,12 @@ def _generate_response(
 
 class TestKeyDeletionAuditLog:
     @pytest.mark.covers("mgmt.key.delete.audit_logged")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.KEY_MANAGEMENT,
+        )
+    )
     def test_key_delete_by_key_writes_audit_row(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -869,6 +1108,12 @@ class TestKeyDeletionAuditLog:
         _assert_single_deleted_row(_await_deleted_audit_rows(client, token), token)
 
     @pytest.mark.covers("mgmt.key.delete.audit_logged")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.KEY_MANAGEMENT,
+        )
+    )
     def test_key_delete_by_alias_writes_audit_row(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -882,6 +1127,12 @@ class TestKeyDeletionAuditLog:
         _assert_single_deleted_row(_await_deleted_audit_rows(client, token), token)
 
     @pytest.mark.covers("mgmt.team.member_delete.audit_logs_keys")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.TEAM_MANAGEMENT,
+        )
+    )
     def test_team_member_delete_writes_audit_row_for_member_keys(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -901,6 +1152,12 @@ class TestKeyDeletionAuditLog:
         _assert_single_deleted_row(_await_deleted_audit_rows(client, token), token)
 
     @pytest.mark.covers("mgmt.team.delete.audit_logs_keys")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.TEAM_MANAGEMENT,
+        )
+    )
     def test_team_delete_writes_audit_row_for_team_keys(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -914,6 +1171,12 @@ class TestKeyDeletionAuditLog:
         _assert_single_deleted_row(_await_deleted_audit_rows(client, token), token)
 
     @pytest.mark.covers("mgmt.user.delete.audit_logs_keys")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.USER_MANAGEMENT,
+        )
+    )
     def test_user_delete_writes_audit_row_for_user_keys(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:

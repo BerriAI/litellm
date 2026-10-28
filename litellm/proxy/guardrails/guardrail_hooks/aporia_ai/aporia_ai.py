@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import json
 import sys
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
 
@@ -70,7 +70,7 @@ class AporiaGuardrail(CustomGuardrail):
         return new_messages
 
     async def prepare_aporia_request(self, new_messages: list[dict], response_string: str | None = None) -> dict:
-        data: Final[dict[str, Any]] = {}
+        data: Final[dict[str, object]] = {}
         if new_messages is not None:
             data["messages"] = new_messages
         if response_string is not None:
@@ -123,6 +123,7 @@ class AporiaGuardrail(CustomGuardrail):
                 "X-APORIA-API-KEY": self.aporia_api_key,
                 "Content-Type": "application/json",
             },
+            timeout=self.timeout,
         )
         verbose_proxy_logger.debug("Aporia AI response: %s", response.text)
         if response.status_code == 200:

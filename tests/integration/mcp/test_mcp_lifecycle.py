@@ -1,28 +1,49 @@
+import asyncio
 import functools
 import json
 import uuid
+from collections.abc import Mapping
 from contextlib import ExitStack
+from hashlib import sha256
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
+import httpx
+import httpx2
 import pytest
 import yaml
 from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
-from integration._support.client import Gateway, eventually
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+from mcp.types import CallToolResult, TextContent
+from integration._support.client import JSON_OBJECT, Gateway, eventually, string_value
 from integration._support.database import read_rows
 from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
 from integration._support.mcp import (
+    JsonRpc,
     McpCaller,
     Outcome,
+    ScriptedTool,
     call_tool,
     mcp_peer,
     register_mcp,
+    scripted_peer,
+    text_result,
+    stateful_mcp_peer,
     tool_calls,
     tool_names,
 )
 from integration._support.process import owned_proxy
+from pydantic import BaseModel, Field, JsonValue, TypeAdapter
+
+_SPEND_NONCES: Final = (
+    "SELECT status, metadata->'mcp_tool_call_metadata'->'arguments'->>'nonce' AS nonce"
+    ' FROM "LiteLLM_SpendLogs" WHERE api_key = %s AND call_type = %s'
+)
+_OBJECTS: Final = TypeAdapter(Mapping[str, object])
+_STRINGS: Final = TypeAdapter(Mapping[str, str])
 
 
 @pytest.mark.covers("mcp.call_tool.saved_headers.reach_actual_transport")
@@ -243,7 +264,7 @@ def test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution(
     gateway: Gateway, authenticated: bool
 ) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
-        aliases: Final = tuple("scope" + uuid.uuid4().hex for _ in range(2))
+        aliases: Final = tuple(f"scope{uuid.uuid4().int % 10**32:032d}" for _ in range(2))
         servers: Final = tuple(
             register_mcp(
                 scenario,
@@ -452,6 +473,42 @@ def test_key_grant_added_by_key_update_is_visible_to_mcp_tool_listing_before_the
         assert set(seen.tools) == {f"{alias}-add", f"{alias}-multiply", f"{alias}-fail"}, seen.raw
 
 
+async def _select_then_create(url: str, key: str) -> tuple[CallToolResult, CallToolResult]:
+    async with httpx2.AsyncClient(headers={"x-litellm-api-key": key}, timeout=30, trust_env=False) as http:
+        async with streamable_http_client(url, http_client=http) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                names: Final = {tool.name.rsplit("-", 1)[-1]: tool.name for tool in (await session.list_tools()).tools}
+                selected: Final = await session.call_tool(names["select_project"], {"name": "alpha"})
+                created: Final = await session.call_tool(names["create_feature"], {"title": "login"})
+                return selected, created
+
+
+def _upstream_session_ids(observed: tuple[dict[str, object], ...]) -> set[str | None]:
+    headers: Final = tuple(cast(dict[bytes, bytes], item["headers"]) for item in observed)
+    return {raw.decode() if isinstance(raw := item.get(b"mcp-session-id"), bytes) else None for item in headers}
+
+
+def test_stateful_upstream_keeps_selection_across_tool_calls_through_gateway(gateway: Gateway) -> None:
+    with stateful_mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "integration" + uuid.uuid4().hex
+        identity: Final = register_mcp(scenario, peer, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        peer.drain()
+        selected, created = asyncio.run(_select_then_create(f"{gateway.client.base_url}/{alias}/mcp", key))
+        observed: Final = peer.drain()
+        for session_id in _upstream_session_ids(observed):
+            if session_id is not None:
+                httpx.delete(peer.url, headers={"mcp-session-id": session_id}, trust_env=False)
+        call_sessions: Final = _upstream_session_ids(
+            tuple(item for item in observed if cast(dict[str, object], item["body"]).get("method") == "tools/call")
+        )
+        assert selected.is_error is False, selected.model_dump_json()
+        assert created.is_error is False, created.model_dump_json()
+        assert isinstance(created.content[0], TextContent) and created.content[0].text == "alpha/login"
+        assert len(call_sessions) == 1 and None not in call_sessions, call_sessions
+
+
 def _update_tool_permissions(
     gateway: Gateway, key: str, identity: str, permissions: dict[str, list[str]] | None
 ) -> None:
@@ -463,9 +520,7 @@ def _update_tool_permissions(
     assert updated.status_code == 200, updated.text
 
 
-def _listing_on_both(
-    gateway: Gateway, peer: Gateway, key: str, expected: set[str]
-) -> None:
+def _listing_on_both(gateway: Gateway, peer: Gateway, key: str, expected: set[str]) -> None:
     for worker in (gateway, peer):
         listing: Final = eventually(
             functools.partial(_granted_view, worker, key),
@@ -525,3 +580,167 @@ def test_key_update_tool_permission_widen_narrow_and_clear_apply_on_both_workers
         _listing_on_both(gateway, peer, key, all_tools)
         nulled: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
         assert [call.text for call in nulled] == ["6", "6"], [call.raw for call in nulled]
+
+
+def _nonce_echo(params: JsonRpc) -> JsonRpc:
+    return text_result(_STRINGS.validate_python(params["arguments"])["nonce"])
+
+
+def _call_params(call: Mapping[str, object]) -> Mapping[str, object]:
+    return _OBJECTS.validate_python(_OBJECTS.validate_python(call["body"])["params"])
+
+
+def _listed(caller: McpCaller, name: str) -> None:
+    listing: Final = eventually(caller.list_tools, lambda outcome: name in outcome.tools, seconds=45)
+    assert listing.error is None, (caller.gateway.client.base_url, listing.raw)
+
+
+def test_tool_calls_on_both_workers_stay_base_compatible_after_each_worker_lists(
+    gateway: Gateway, peer: Gateway
+) -> None:
+    schema: Final = {"type": "object", "properties": {"nonce": {"type": "string"}}}
+    tool: Final = ScriptedTool("echo", _nonce_echo, description="Echo the nonce back", input_schema=schema)
+    with scripted_peer(tool) as upstream, gateway.scenario() as scenario:
+        alias: Final = "compat" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, upstream, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        name: Final = f"{alias}-echo"
+        first: Final = McpCaller(gateway, key, "mcp", alias)
+        second: Final = McpCaller(peer, key, "mcp", alias)
+        _listed(first, name)
+        _listed(second, name)
+        upstream.drain()
+        nonces: Final = (uuid.uuid4().hex, uuid.uuid4().hex)
+        outcomes: Final = (
+            first.call(name, {"nonce": nonces[0]}),
+            second.call(name, {"nonce": nonces[1]}),
+            first.call(name, {"nonce": nonces[0]}),
+        )
+        assert [outcome.text for outcome in outcomes] == [nonces[0], nonces[1], nonces[0]], [o.raw for o in outcomes]
+        params: Final = [_call_params(call) for call in tool_calls(upstream.drain())]
+        assert [set(entry) - {"_meta"} for entry in params] == [{"name", "arguments"}] * 3, params
+        assert [entry["name"] for entry in params] == ["echo"] * 3, params
+        assert [entry["arguments"] for entry in params] == [
+            {"nonce": nonces[0]},
+            {"nonce": nonces[1]},
+            {"nonce": nonces[0]},
+        ], params
+        rows: Final = eventually(
+            lambda: read_rows(_SPEND_NONCES, (sha256(key.encode()).hexdigest(), "call_mcp_tool")),
+            lambda found: len(found) >= 3,
+            seconds=70,
+        )
+        assert sorted((str(row["status"]), str(row["nonce"])) for row in rows) == sorted(
+            ("success", nonce) for nonce in (nonces[0], nonces[1], nonces[0])
+        ), rows
+
+
+_ENVELOPE_SPEND: Final = (
+    "SELECT request_tags, metadata->'spend_logs_metadata' AS spend_logs_metadata,"
+    " metadata->'mcp_tool_call_metadata' AS tool"
+    ' FROM "LiteLLM_SpendLogs" WHERE api_key = %s AND call_type = %s ORDER BY "startTime"'
+)
+
+
+class EnvelopeText(BaseModel):
+    type: str
+    text: str
+    annotations: None
+    meta: None = Field(alias="_meta")
+
+
+class EnvelopeResult(BaseModel):
+    meta: None = Field(alias="_meta")
+    content: list[EnvelopeText]
+    structuredContent: dict[str, JsonValue]
+    isError: bool
+    resultType: str
+
+
+class EnvelopeTool(BaseModel):
+    name: str
+    arguments: dict[str, JsonValue]
+    mcp_server_name: str
+
+
+class EnvelopeSpendRow(BaseModel):
+    request_tags: list[str]
+    spend_logs_metadata: dict[str, JsonValue]
+    tool: EnvelopeTool
+
+
+def _structured_result(params: JsonRpc) -> JsonRpc:
+    order: Final = string_value(JSON_OBJECT.validate_python(params.get("arguments"))["order"])
+    return {
+        "content": [{"type": "text", "text": f"order {order} shipped"}],
+        "structuredContent": {"order": order, "status": "shipped", "eta_days": 2},
+        "isError": False,
+    }
+
+
+def test_rest_call_envelope_keeps_caller_metadata_forwarded_headers_and_structured_content(gateway: Gateway) -> None:
+    with scripted_peer(ScriptedTool("track", _structured_result)) as peer, gateway.scenario() as scenario:
+        alias: Final = "envelope" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias, auth_type="bearer_token")
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        tag: Final = "envelope-tag-" + uuid.uuid4().hex[:8]
+        ticket: Final = "T-" + uuid.uuid4().hex[:8]
+        cases: Final = (
+            (
+                {
+                    f"x-mcp-{alias}-authorization": "Bearer per-server-token",
+                    f"x-mcp-{alias}-x-tenant": "tenant-a",
+                    "x-mcp-auth": "Bearer legacy-token",
+                },
+                {"authorization": "Bearer per-server-token", "x-tenant": "tenant-a"},
+            ),
+            ({"x-mcp-auth": "Bearer legacy-token"}, {"authorization": "Bearer legacy-token", "x-tenant": None}),
+        )
+        for index, (forwarded, expected) in enumerate(cases):
+            order: Final = f"A-{index}"
+            peer.drain()
+            response = gateway.client.post(
+                "/mcp-rest/tools/call",
+                headers={"x-litellm-api-key": key, **forwarded},
+                json={
+                    "server_id": identity,
+                    "name": "track",
+                    "arguments": {"order": order},
+                    "metadata": {"tags": [tag], "spend_logs_metadata": {"ticket": ticket}},
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert EnvelopeResult.model_validate_json(response.content) == EnvelopeResult.model_validate(
+                {
+                    "_meta": None,
+                    "content": [{"type": "text", "text": f"order {order} shipped", "annotations": None, "_meta": None}],
+                    "structuredContent": {"order": order, "status": "shipped", "eta_days": 2},
+                    "isError": False,
+                    "resultType": "complete",
+                }
+            ), response.text
+            calls: Final = tool_calls(peer.drain())
+            assert len(calls) == 1, calls
+            body: Final = _OBJECTS.validate_python(calls[0]["body"])
+            assert body == {
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "method": "tools/call",
+                "params": {"name": "track", "arguments": {"order": order}, "_meta": {"progressToken": body["id"]}},
+            }, calls
+            assert isinstance(body["id"], int), body
+            headers: Final = _STRINGS.validate_python(calls[0]["headers"])
+            assert {name: headers.get(name) for name in ("authorization", "x-tenant")} == expected, headers
+            assert sum("token" in value for value in headers.values()) == 1, headers
+        rows: Final = eventually(
+            lambda: read_rows(_ENVELOPE_SPEND, (sha256(key.encode()).hexdigest(), "call_mcp_tool")),
+            lambda found: len(found) == 2,
+            seconds=70,
+        )
+        for index, row in enumerate(rows):
+            spend = EnvelopeSpendRow.model_validate(row)
+            assert tag in spend.request_tags, row
+            assert spend.spend_logs_metadata == {"ticket": ticket}, row
+            assert spend.tool == EnvelopeTool(name="track", arguments={"order": f"A-{index}"}, mcp_server_name=alias), (
+                row
+            )

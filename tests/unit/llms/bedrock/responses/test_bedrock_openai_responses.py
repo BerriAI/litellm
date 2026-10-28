@@ -162,6 +162,27 @@ class TestForModelGate:
         ):
             assert BedrockOpenAIResponsesConfig.for_model(None) is None
 
+    def test_chat_completions_route_keeps_the_native_responses_surface(self):
+        with patch.object(  # test-quality-ok: the gate reads the global cost map by design; no injection point exists
+            litellm, "model_cost", {MODEL: {"supported_endpoints": ["/v1/responses"]}}
+        ):
+            cfg = BedrockOpenAIResponsesConfig.for_model(f"chat_completions/{MODEL}")
+        assert isinstance(cfg, BedrockOpenAIResponsesConfig)
+        body = cfg.transform_responses_api_request(
+            model=f"chat_completions/{MODEL}",
+            input="hi",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["model"] == MODEL
+
+    def test_converse_route_keeps_the_chat_completions_bridge(self):
+        with patch.object(  # test-quality-ok: the gate reads the global cost map by design; no injection point exists
+            litellm, "model_cost", {MODEL: {"supported_endpoints": ["/v1/responses"]}}
+        ):
+            assert BedrockOpenAIResponsesConfig.for_model(f"converse/{MODEL}") is None
+
 
 class TestProviderResolution:
     """model_cost is patched explicitly: it is populated at import time from a GitHub
@@ -305,6 +326,36 @@ class TestBackgroundDrop:
             )
         assert params == {"max_output_tokens": 64}
         assert not [r for r in caplog.records if "dropping unsupported parameter" in r.getMessage()]
+
+
+class TestDisabledReasoningEffort:
+    @pytest.mark.parametrize("model", ["us.openai.gpt-5.6-luna", MODEL])
+    def test_effort_level_disabled_in_model_map_is_rejected(self, model, local_model_cost_map):
+        with pytest.raises(litellm.UnsupportedParamsError, match="minimal"):
+            _cfg().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "minimal"}}, model=model, drop_params=False
+            )
+
+    @pytest.mark.parametrize("model", ["us.openai.gpt-5.6-luna", MODEL])
+    def test_effort_level_disabled_in_model_map_is_dropped_with_drop_params(self, model, local_model_cost_map):
+        params = _cfg().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "minimal", "summary": "auto"}, "max_output_tokens": 64},
+            model=model,
+            drop_params=True,
+        )
+        assert params == {"reasoning": {"summary": "auto"}, "max_output_tokens": 64}
+
+    def test_effort_only_reasoning_is_removed_when_dropped(self, local_model_cost_map):
+        params = _cfg().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "minimal"}}, model=MODEL, drop_params=True
+        )
+        assert params == {}
+
+    def test_supported_effort_level_is_forwarded(self, local_model_cost_map):
+        params = _cfg().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "low"}}, model=MODEL, drop_params=False
+        )
+        assert params == {"reasoning": {"effort": "low"}}
 
 
 def _never_fetch(url: str) -> str:

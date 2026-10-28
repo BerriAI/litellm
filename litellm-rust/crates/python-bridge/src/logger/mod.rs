@@ -1,7 +1,5 @@
-mod execution;
 mod machine;
 
-pub(crate) use execution::{run_async, run_async_value, run_sync, run_sync_value};
 pub(crate) use machine::LoggedMachine;
 
 use litellm_host_python::Pythonized;
@@ -83,8 +81,12 @@ impl NativeDiagnosticProcessor {
     }
 }
 
-fn processing_error(_: fancy_regex::Error) -> PyErr {
-    PyRuntimeError::new_err("diagnostic processing failed")
+#[derive(Debug, thiserror::Error)]
+#[error("diagnostic processing failed")]
+struct ProcessingError(#[source] fancy_regex::Error);
+
+fn processing_error(error: fancy_regex::Error) -> PyErr {
+    PyRuntimeError::new_err(litellm_error::Report::new(&ProcessingError(error)).to_string())
 }
 
 struct PythonSink {

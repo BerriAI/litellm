@@ -103,7 +103,7 @@ async def async_embedding(
         raise e
 
     ## PROCESS RESPONSE ##
-    return CohereEmbeddingConfig()._transform_response(
+    return CohereEmbeddingConfig().transform_response(
         response=response,
         api_key=api_key,
         logging_obj=logging_obj,
@@ -168,7 +168,7 @@ def embedding(
 
     response: Final = client.post(embed_url, headers=headers, data=json.dumps(data))
 
-    return CohereEmbeddingConfig()._transform_response(
+    return CohereEmbeddingConfig().transform_response(
         response=response,
         api_key=api_key,
         logging_obj=logging_obj,

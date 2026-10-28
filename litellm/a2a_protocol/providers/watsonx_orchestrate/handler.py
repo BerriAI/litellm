@@ -7,7 +7,7 @@ import hashlib
 import json
 import time
 from collections.abc import AsyncIterator
-from typing import Any, Final, NamedTuple, Protocol
+from typing import Final, NamedTuple, Protocol
 
 import httpx
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -228,7 +228,7 @@ class WatsonxOrchestrateHandler:
         return run_data
 
     @staticmethod
-    async def _accumulate_wxo_sse_text(response: Any) -> str:
+    async def _accumulate_wxo_sse_text(response: _SSELineSource) -> str:
         source: Final[_WXOView] = {"sse_source": response}
         accumulated_text = ""
         async for line in source["sse_source"].aiter_lines():

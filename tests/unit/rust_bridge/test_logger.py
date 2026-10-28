@@ -15,8 +15,8 @@ from litellm._logging import (
 from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
 from litellm.litellm_core_utils.secret_redaction import (
     _python_redact_internal_details,
-    _python_redact_string,
-    _python_redact_structured_value,
+    python_redact_string,
+    python_redact_structured_value,
 )
 from litellm.rust_bridge import diagnostics, logger
 
@@ -80,18 +80,16 @@ def test_native_logging_observes_level_changes(caplog: pytest.LogCaptureFixture)
     ),
 )
 def test_native_credential_patterns_match_python(text: str) -> None:
-    pytest.importorskip("litellm.rust_bridge._native")
     from litellm.rust_bridge._native import NativeDiagnosticProcessor
 
     processor: Final = NativeDiagnosticProcessor(MINIMUM_CUSTOM_KEY_LENGTH)
-    assert processor.redact_text(text) == _python_redact_string(text)
-    assert processor.redact_structured_text("api_key", "secret123") == _python_redact_structured_value(
+    assert processor.redact_text(text) == python_redact_string(text)
+    assert processor.redact_structured_text("api_key", "secret123") == python_redact_structured_value(
         "api_key", "secret123"
     )
 
 
 def test_native_client_redaction_matches_python() -> None:
-    pytest.importorskip("litellm.rust_bridge._native")
     from litellm.rust_bridge._native import NativeDiagnosticProcessor
 
     text: Final = "error at /etc/secrets/config on db.internal\nTraceback (most recent call last):\nsecret"
@@ -100,7 +98,6 @@ def test_native_client_redaction_matches_python() -> None:
 
 
 def test_native_diagnostic_batch_matches_python() -> None:
-    pytest.importorskip("litellm.rust_bridge._native")
     from litellm.rust_bridge._native import NativeDiagnosticProcessor
 
     message: Final = "é" * 110 + "sk-" + "q" * 48 + "界" * 1000

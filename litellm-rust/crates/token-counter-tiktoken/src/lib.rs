@@ -5,8 +5,8 @@ mod ranks;
 
 use std::collections::HashSet;
 
-pub use error::UnsupportedTokenizer;
-pub use ranks::{LoadError, Vocabulary};
+pub use error::{Error, RankError};
+pub use ranks::Vocabulary;
 
 pub struct TiktokenTokenizer {
     encoder: &'static tiktoken_rs::CoreBPE,
@@ -22,7 +22,7 @@ impl TiktokenTokenizer {
     pub fn from_cached_ranks(
         name: &str,
         load: impl FnOnce(&str) -> std::io::Result<String>,
-    ) -> Result<Self, LoadError> {
+    ) -> Result<Self, Error> {
         let (loaded, name) = ranks::load(name, load)?;
         Ok(Self {
             encoder: &loaded.bpe,
@@ -32,7 +32,7 @@ impl TiktokenTokenizer {
     }
 
     /// The encodings tiktoken-rs embeds, for hosts without the packaged rank files.
-    pub fn from_name(name: &str) -> Result<Self, UnsupportedTokenizer> {
+    pub fn from_name(name: &str) -> Result<Self, Error> {
         let (encoder, name) = match name {
             "cl100k_base" => (tiktoken_rs::cl100k_base_singleton(), "cl100k_base"),
             "o200k_base" => (tiktoken_rs::o200k_base_singleton(), "o200k_base"),
@@ -41,7 +41,7 @@ impl TiktokenTokenizer {
             "p50k_edit" => (tiktoken_rs::p50k_edit_singleton(), "p50k_edit"),
             "r50k_base" => (tiktoken_rs::r50k_base_singleton(), "r50k_base"),
             "gpt2" => (tiktoken_rs::r50k_base_singleton(), "gpt2"),
-            _ => return Err(UnsupportedTokenizer(name.to_owned())),
+            _ => return Err(Error::UnsupportedTokenizer(name.to_owned())),
         };
         Ok(Self {
             encoder,
@@ -62,12 +62,12 @@ impl TiktokenTokenizer {
         self.encoder.encode_ordinary(text)
     }
 
-    pub fn encode_special(&self, text: &str, allowed: &[String]) -> Result<Vec<u32>, String> {
+    pub fn encode_special(&self, text: &str, allowed: &[String]) -> Result<Vec<u32>, Error> {
         let allowed = allowed.iter().map(String::as_str).collect();
         self.encoder
             .encode(text, &allowed)
             .map(|(ids, _)| ids)
-            .map_err(|error| error.to_string())
+            .map_err(Error::Encode)
     }
 
     pub fn special_tokens(&self) -> HashSet<String> {
@@ -92,17 +92,13 @@ impl TiktokenTokenizer {
         (stable, completions)
     }
 
-    pub fn decode_bytes(&self, ids: &[u32]) -> Result<Vec<u8>, String> {
-        self.encoder
-            .decode_bytes(ids)
-            .map_err(|error| error.to_string())
+    pub fn decode_bytes(&self, ids: &[u32]) -> Result<Vec<u8>, Error> {
+        self.encoder.decode_bytes(ids).map_err(Error::Decode)
     }
 
-    pub fn decode(&self, ids: &[u32]) -> Result<String, String> {
-        self.encoder
-            .decode_bytes(ids)
+    pub fn decode(&self, ids: &[u32]) -> Result<String, Error> {
+        self.decode_bytes(ids)
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-            .map_err(|error| error.to_string())
     }
 
     pub fn name(&self) -> &str {
@@ -125,6 +121,8 @@ pub fn encoding_for_model(model: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     #[test]
@@ -159,7 +157,8 @@ mod tests {
 
     #[test]
     fn unsupported_encoding_preserves_its_name() {
-        let Err(UnsupportedTokenizer(name)) = TiktokenTokenizer::from_name("unknown-encoding")
+        let Err(Error::UnsupportedTokenizer(name)) =
+            TiktokenTokenizer::from_name("unknown-encoding")
         else {
             panic!("unknown encoding must be rejected");
         };
@@ -167,27 +166,23 @@ mod tests {
         assert_eq!(TiktokenTokenizer::from_name("gpt2").unwrap().name(), "gpt2");
     }
 
-    #[test]
-    fn codecs_round_trip_named_encodings() {
-        let encodings = [
-            "cl100k_base",
-            "o200k_base",
-            "o200k_harmony",
-            "p50k_base",
-            "p50k_edit",
-            "r50k_base",
-            "gpt2",
-        ];
+    #[rstest]
+    #[case::cl100k_base("cl100k_base")]
+    #[case::o200k_base("o200k_base")]
+    #[case::o200k_harmony("o200k_harmony")]
+    #[case::p50k_base("p50k_base")]
+    #[case::p50k_edit("p50k_edit")]
+    #[case::r50k_base("r50k_base")]
+    #[case::gpt2("gpt2")]
+    fn codecs_round_trip_named_encodings(#[case] name: &str) {
         let texts = ["hello world", "café 漢字 مرحبا 🙂", "line one\nline two"];
-        for name in encodings {
-            let tokenizer = TiktokenTokenizer::from_name(name).unwrap();
-            for text in texts {
-                assert_eq!(
-                    tokenizer.decode(&tokenizer.encode(text)).unwrap(),
-                    text,
-                    "{name}: {text:?}",
-                );
-            }
+        let tokenizer = TiktokenTokenizer::from_name(name).unwrap();
+        for text in texts {
+            assert_eq!(
+                tokenizer.decode(&tokenizer.encode(text)).unwrap(),
+                text,
+                "{name}: {text:?}",
+            );
         }
     }
 
@@ -229,10 +224,11 @@ mod tests {
         assert!(completions.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
-    #[test]
-    fn encoding_for_model_maps_known_models() {
-        assert_eq!(encoding_for_model("gpt-4o"), Some("o200k_base"));
-        assert_eq!(encoding_for_model("text-davinci-003"), Some("p50k_base"));
-        assert_eq!(encoding_for_model("unknown-model"), None);
+    #[rstest]
+    #[case::gpt_4o("gpt-4o", Some("o200k_base"))]
+    #[case::text_davinci("text-davinci-003", Some("p50k_base"))]
+    #[case::unknown("unknown-model", None)]
+    fn encoding_for_model_maps_known_models(#[case] model: &str, #[case] expected: Option<&str>) {
+        assert_eq!(encoding_for_model(model), expected);
     }
 }

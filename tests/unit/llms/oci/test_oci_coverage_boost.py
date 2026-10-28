@@ -12,19 +12,18 @@ All tests are self-contained and require no real OCI credentials or network acce
 
 import json
 from typing import TYPE_CHECKING
-
-import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 
 if TYPE_CHECKING:
     from litellm.llms.oci.chat.transformation import OCIStreamWrapper
 
 from litellm import ModelResponse
 from litellm.llms.oci.chat.cohere import (
-    _extract_text_content,
     adapt_messages_to_cohere_standard,
+    extract_text_content,
     handle_cohere_response,
     handle_cohere_stream_chunk,
 )
@@ -407,16 +406,16 @@ def test_handle_generic_stream_chunk_no_message():
 
 
 # ===========================================================================
-# cohere.py — _extract_text_content
+# cohere.py — extract_text_content
 # ===========================================================================
 
 
 def test_extract_text_content_none():
-    assert _extract_text_content(None) == ""
+    assert extract_text_content(None) == ""
 
 
 def test_extract_text_content_string():
-    assert _extract_text_content("hello") == "hello"
+    assert extract_text_content("hello") == "hello"
 
 
 def test_extract_text_content_list():
@@ -424,7 +423,7 @@ def test_extract_text_content_list():
         {"type": "text", "text": "foo"},
         {"type": "text", "text": "bar"},
     ]
-    assert _extract_text_content(content) == "foobar"
+    assert extract_text_content(content) == "foobar"
 
 
 def test_extract_text_content_list_skips_non_text():
@@ -432,11 +431,11 @@ def test_extract_text_content_list_skips_non_text():
         {"type": "image_url", "url": "https://x.com/img.png"},
         {"type": "text", "text": "only this"},
     ]
-    assert _extract_text_content(content) == "only this"
+    assert extract_text_content(content) == "only this"
 
 
 def test_extract_text_content_non_string_non_list():
-    assert _extract_text_content(42) == "42"
+    assert extract_text_content(42) == "42"
 
 
 # ===========================================================================
@@ -1111,6 +1110,7 @@ def test_get_sync_custom_stream_wrapper_returns_wrapper():
     mock_client.post.return_value = mock_response
 
     wrapper = config.get_sync_custom_stream_wrapper(
+        litellm_params={},
         model=_GENERIC_MODEL,
         custom_llm_provider="oci",
         logging_obj=MagicMock(),
@@ -1143,6 +1143,7 @@ async def test_get_async_custom_stream_wrapper_returns_wrapper():
     mock_client.post = AsyncMock(return_value=mock_response)
 
     wrapper = await config.get_async_custom_stream_wrapper(
+        litellm_params={},
         model=_GENERIC_MODEL,
         custom_llm_provider="oci",
         logging_obj=MagicMock(),

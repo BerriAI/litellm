@@ -22,8 +22,10 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
+from litellm.llms.base_llm.responses.transformation import ReasoningSummaryLevel
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock_mantle.common_utils import (
@@ -73,6 +75,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK_MANTLE
 
+    def auto_reasoning_summary(self) -> ReasoningSummaryLevel:
+        return "auto" if self.use_openai_path else super().auto_reasoning_summary()
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
     ) -> BaseLLMException:
@@ -96,7 +101,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         if MANTLE_HOST_RE.match(base):
             base = f"https://bedrock-mantle.{region}.api.aws"
         path: Final = "/openai/v1/responses" if self.use_openai_path else "/v1/responses"
-        return f"{base}{path}"
+        return join_api_base(base, path)
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
@@ -173,15 +178,11 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             summary,
             sorted(_BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES),
         )
-        stripped: Final = {  # mutable-ok: map_openai_params contract returns a plain dict
-            key: value for key, value in reasoning.items() if key != "summary"
-        }
+        stripped: Final = {key: value for key, value in reasoning.items() if key != "summary"}
         return (
-            {**params, "reasoning": stripped}  # mutable-ok: map_openai_params contract returns a plain dict
+            {**params, "reasoning": stripped}
             if stripped
-            else {  # mutable-ok: map_openai_params contract returns a plain dict
-                key: value for key, value in params.items() if key != "reasoning"
-            }
+            else {key: value for key, value in params.items() if key != "reasoning"}
         )
 
     def transform_responses_api_request(

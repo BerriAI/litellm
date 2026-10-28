@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "@/components/policies/types";
 import { Guardrail } from "@/components/guardrails/types";
 import { getResolvedGuardrails, modelAvailableCall } from "@/components/networking";
@@ -247,7 +247,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   }, [visible, accessToken]);
 
   const loadAvailableModels = async () => {
-    if (!accessToken) return;
+    if (!accessToken || !userId) return;
     try {
       const response = await modelAvailableCall(accessToken, userId, userRole);
       if (response?.data) {

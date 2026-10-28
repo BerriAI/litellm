@@ -8,12 +8,15 @@ API Documentation: https://developers.sber.ru/docs/ru/gigachat/api/reference/res
 from __future__ import annotations
 
 import types
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm import LlmProviders
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.gigachat.utils import get_api_base
@@ -21,6 +24,8 @@ from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..authenticator import get_access_token
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class GigaChatEmbeddingError(BaseLLMException):
@@ -39,9 +44,10 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -93,8 +99,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         stream: bool | None = None,
     ) -> str:
         """Get the complete URL for embeddings endpoint."""
-        base: Final = get_api_base(api_base)
-        return f"{base}/embeddings"
+        return join_api_base(get_api_base(api_base), "embeddings")
 
     def transform_embedding_request(
         self,
@@ -112,7 +117,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
             "input": ["text1", "text2", ...]
         }
         """
-        normalized_input: Final = [input] if isinstance(input, str) else input  # mutable-ok: preserve list API
+        normalized_input: Final = [input] if isinstance(input, str) else input
         return {
             "model": model.removeprefix("gigachat/"),
             "input": normalized_input,
@@ -165,7 +170,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
             "total_tokens": total_tokens,
         }
 
-        return EmbeddingResponse(**response_json)
+        return EmbeddingResponse.model_validate(_JSON_OBJECT.validate_python(response_json))
 
     def validate_environment(
         self,

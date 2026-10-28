@@ -13,7 +13,7 @@ use std::sync::Arc;
 use byte_level::ByteLevelCounter;
 use scanner::{SplitPattern, TiktokenCounter};
 
-pub use error::Error;
+pub use error::{Error, RankError};
 
 enum Encoder {
     HuggingFace {

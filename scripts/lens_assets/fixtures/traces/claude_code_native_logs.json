@@ -1,0 +1,748 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "lens.session.capture",
+            "value": {
+              "stringValue": "true"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "com.anthropic.claude_code.events",
+            "version": "2.1.289"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1791241295512000000",
+              "body": {
+                "stringValue": "claude_code.assistant_response"
+              },
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "event.name",
+                  "value": {
+                    "stringValue": "assistant_response"
+                  }
+                },
+                {
+                  "key": "event.timestamp",
+                  "value": {
+                    "stringValue": "2026-10-05T23:01:35.512Z"
+                  }
+                },
+                {
+                  "key": "event.sequence",
+                  "value": {
+                    "intValue": "19"
+                  }
+                },
+                {
+                  "key": "prompt.id",
+                  "value": {
+                    "stringValue": "73f6dfd9-e1ea-4950-8027-52e6c124e6bc"
+                  }
+                },
+                {
+                  "key": "response_length",
+                  "value": {
+                    "intValue": "18"
+                  }
+                },
+                {
+                  "key": "response",
+                  "value": {
+                    "stringValue": "MINIMAL-COMMENTARY"
+                  }
+                },
+                {
+                  "key": "message.uuid",
+                  "value": {
+                    "stringValue": "51da354c-8278-4ead-8f90-e47fd72bf9c3"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source",
+                  "value": {
+                    "stringValue": "repl_main_thread"
+                  }
+                }
+              ],
+              "flags": 1,
+              "traceId": "ced683bb1985e31a6a67d7180245ad0a",
+              "spanId": "7602ccb75a2365b7",
+              "observedTimeUnixNano": "1791241295512000000"
+            },
+            {
+              "timeUnixNano": "1791241295581000000",
+              "body": {
+                "stringValue": "claude_code.assistant_response"
+              },
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "event.name",
+                  "value": {
+                    "stringValue": "assistant_response"
+                  }
+                },
+                {
+                  "key": "event.timestamp",
+                  "value": {
+                    "stringValue": "2026-10-05T23:01:35.581Z"
+                  }
+                },
+                {
+                  "key": "event.sequence",
+                  "value": {
+                    "intValue": "22"
+                  }
+                },
+                {
+                  "key": "prompt.id",
+                  "value": {
+                    "stringValue": "73f6dfd9-e1ea-4950-8027-52e6c124e6bc"
+                  }
+                },
+                {
+                  "key": "response_length",
+                  "value": {
+                    "intValue": "47"
+                  }
+                },
+                {
+                  "key": "response",
+                  "value": {
+                    "stringValue": "{\"title\":\"MINIMAL README and exit-3 Bash test\"}"
+                  }
+                },
+                {
+                  "key": "message.uuid",
+                  "value": {
+                    "stringValue": "52462a69-0006-4520-a142-e2fcd53593e5"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source",
+                  "value": {
+                    "stringValue": "generate_session_title"
+                  }
+                }
+              ],
+              "flags": 1,
+              "traceId": "ced683bb1985e31a6a67d7180245ad0a",
+              "spanId": "7602ccb75a2365b7",
+              "observedTimeUnixNano": "1791241295581000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "lens.session.capture",
+            "value": {
+              "stringValue": "true"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "com.anthropic.claude_code.events",
+            "version": "2.1.289"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1791241300179000000",
+              "body": {
+                "stringValue": "claude_code.assistant_response"
+              },
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "event.name",
+                  "value": {
+                    "stringValue": "assistant_response"
+                  }
+                },
+                {
+                  "key": "event.timestamp",
+                  "value": {
+                    "stringValue": "2026-10-05T23:01:40.179Z"
+                  }
+                },
+                {
+                  "key": "event.sequence",
+                  "value": {
+                    "intValue": "27"
+                  }
+                },
+                {
+                  "key": "prompt.id",
+                  "value": {
+                    "stringValue": "73f6dfd9-e1ea-4950-8027-52e6c124e6bc"
+                  }
+                },
+                {
+                  "key": "response_length",
+                  "value": {
+                    "intValue": "194"
+                  }
+                },
+                {
+                  "key": "response",
+                  "value": {
+                    "stringValue": "README.txt says it's a synthetic test fixture with the marker `LENS-REPLAY-ALPHA`. The command printed MINIMAL-EXPECTED and exited with code 3, as you asked, so I didn't retry it.\n\nMINIMAL-FINAL"
+                  }
+                },
+                {
+                  "key": "message.uuid",
+                  "value": {
+                    "stringValue": "a01fab5f-ab6a-4633-9863-d7a8ea56b53d"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source",
+                  "value": {
+                    "stringValue": "repl_main_thread"
+                  }
+                }
+              ],
+              "flags": 1,
+              "traceId": "ced683bb1985e31a6a67d7180245ad0a",
+              "spanId": "7602ccb75a2365b7",
+              "observedTimeUnixNano": "1791241300179000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "lens.session.capture",
+            "value": {
+              "stringValue": "true"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "com.anthropic.claude_code.events",
+            "version": "2.1.289"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1791241516987000000",
+              "body": {
+                "stringValue": "claude_code.assistant_response"
+              },
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "event.name",
+                  "value": {
+                    "stringValue": "assistant_response"
+                  }
+                },
+                {
+                  "key": "event.timestamp",
+                  "value": {
+                    "stringValue": "2026-10-05T23:05:16.987Z"
+                  }
+                },
+                {
+                  "key": "event.sequence",
+                  "value": {
+                    "intValue": "39"
+                  }
+                },
+                {
+                  "key": "prompt.id",
+                  "value": {
+                    "stringValue": "a700c173-6689-4a7b-8fd7-28a4640dc577"
+                  }
+                },
+                {
+                  "key": "response_length",
+                  "value": {
+                    "intValue": "218"
+                  }
+                },
+                {
+                  "key": "response",
+                  "value": {
+                    "stringValue": "I started the Reader and Checker agents in parallel. Both ended up running in the background, not just one as you asked. I'll wait for both to finish before reporting their results and closing with NATIVE-AGENTS-FINAL."
+                  }
+                },
+                {
+                  "key": "message.uuid",
+                  "value": {
+                    "stringValue": "646639c5-36f9-4bc7-9117-500658fa4af0"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source",
+                  "value": {
+                    "stringValue": "repl_main_thread"
+                  }
+                }
+              ],
+              "flags": 1,
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "f6836a39a95b89d0",
+              "observedTimeUnixNano": "1791241516987000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "lens.session.capture",
+            "value": {
+              "stringValue": "true"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "com.anthropic.claude_code.events",
+            "version": "2.1.289"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1791241518190000000",
+              "body": {
+                "stringValue": "claude_code.assistant_response"
+              },
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "event.name",
+                  "value": {
+                    "stringValue": "assistant_response"
+                  }
+                },
+                {
+                  "key": "event.timestamp",
+                  "value": {
+                    "stringValue": "2026-10-05T23:05:18.190Z"
+                  }
+                },
+                {
+                  "key": "event.sequence",
+                  "value": {
+                    "intValue": "44"
+                  }
+                },
+                {
+                  "key": "prompt.id",
+                  "value": {
+                    "stringValue": "a700c173-6689-4a7b-8fd7-28a4640dc577"
+                  }
+                },
+                {
+                  "key": "response_length",
+                  "value": {
+                    "intValue": "31"
+                  }
+                },
+                {
+                  "key": "response",
+                  "value": {
+                    "stringValue": "NATIVE-READER LENS-REPLAY-ALPHA"
+                  }
+                },
+                {
+                  "key": "message.uuid",
+                  "value": {
+                    "stringValue": "0f7da27c-5d13-48f4-ab2a-c94af16cc877"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source",
+                  "value": {
+                    "stringValue": "agent:builtin:general-purpose"
+                  }
+                }
+              ],
+              "flags": 1,
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "1016ee3f27ec48a1",
+              "observedTimeUnixNano": "1791241518190000000"
+            },
+            {
+              "timeUnixNano": "1791241518342000000",
+              "body": {
+                "stringValue": "claude_code.assistant_response"
+              },
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "event.name",
+                  "value": {
+                    "stringValue": "assistant_response"
+                  }
+                },
+                {
+                  "key": "event.timestamp",
+                  "value": {
+                    "stringValue": "2026-10-05T23:05:18.342Z"
+                  }
+                },
+                {
+                  "key": "event.sequence",
+                  "value": {
+                    "intValue": "48"
+                  }
+                },
+                {
+                  "key": "prompt.id",
+                  "value": {
+                    "stringValue": "06a1d3a0-95a5-405b-997b-f36539ad420a"
+                  }
+                },
+                {
+                  "key": "response_length",
+                  "value": {
+                    "intValue": "17"
+                  }
+                },
+                {
+                  "key": "response",
+                  "value": {
+                    "stringValue": "NATIVE-CHECKER 15"
+                  }
+                },
+                {
+                  "key": "message.uuid",
+                  "value": {
+                    "stringValue": "e2b4a8ec-8b78-4c10-a0be-650545d3639f"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source",
+                  "value": {
+                    "stringValue": "agent:builtin:general-purpose"
+                  }
+                }
+              ],
+              "flags": 1,
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "069ab83e9b2f1d80",
+              "observedTimeUnixNano": "1791241518342000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "lens.session.capture",
+            "value": {
+              "stringValue": "true"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "com.anthropic.claude_code.events",
+            "version": "2.1.289"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1791241519849000000",
+              "body": {
+                "stringValue": "claude_code.assistant_response"
+              },
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "event.name",
+                  "value": {
+                    "stringValue": "assistant_response"
+                  }
+                },
+                {
+                  "key": "event.timestamp",
+                  "value": {
+                    "stringValue": "2026-10-05T23:05:19.849Z"
+                  }
+                },
+                {
+                  "key": "event.sequence",
+                  "value": {
+                    "intValue": "52"
+                  }
+                },
+                {
+                  "key": "prompt.id",
+                  "value": {
+                    "stringValue": "06a1d3a0-95a5-405b-997b-f36539ad420a"
+                  }
+                },
+                {
+                  "key": "response_length",
+                  "value": {
+                    "intValue": "75"
+                  }
+                },
+                {
+                  "key": "response",
+                  "value": {
+                    "stringValue": "Reader finished: NATIVE-READER LENS-REPLAY-ALPHA. Checker is still running."
+                  }
+                },
+                {
+                  "key": "message.uuid",
+                  "value": {
+                    "stringValue": "905350de-6161-4013-a7bc-3dd8f404f877"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source",
+                  "value": {
+                    "stringValue": "repl_main_thread"
+                  }
+                }
+              ],
+              "flags": 1,
+              "traceId": "b08f665a8a47e055a82cf882ae69d83b",
+              "spanId": "23211831eeb7496c",
+              "observedTimeUnixNano": "1791241519849000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "lens.session.capture",
+            "value": {
+              "stringValue": "true"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "com.anthropic.claude_code.events",
+            "version": "2.1.289"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1791241522476000000",
+              "body": {
+                "stringValue": "claude_code.assistant_response"
+              },
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "event.name",
+                  "value": {
+                    "stringValue": "assistant_response"
+                  }
+                },
+                {
+                  "key": "event.timestamp",
+                  "value": {
+                    "stringValue": "2026-10-05T23:05:22.476Z"
+                  }
+                },
+                {
+                  "key": "event.sequence",
+                  "value": {
+                    "intValue": "56"
+                  }
+                },
+                {
+                  "key": "prompt.id",
+                  "value": {
+                    "stringValue": "412b0cac-7610-4d76-8591-37e6787c0f63"
+                  }
+                },
+                {
+                  "key": "response_length",
+                  "value": {
+                    "intValue": "249"
+                  }
+                },
+                {
+                  "key": "response",
+                  "value": {
+                    "stringValue": "Both subagents are done. They both ran in the background, not one in the foreground as you asked.\n\n- **Reader:** NATIVE-READER LENS-REPLAY-ALPHA (the marker from README.txt)\n- **Checker:** NATIVE-CHECKER 15 (from `python3`, 7+8)\n\nNATIVE-AGENTS-FINAL"
+                  }
+                },
+                {
+                  "key": "message.uuid",
+                  "value": {
+                    "stringValue": "cac3bf80-9439-4bda-8cb7-c88414a940a0"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source",
+                  "value": {
+                    "stringValue": "repl_main_thread"
+                  }
+                }
+              ],
+              "flags": 1,
+              "traceId": "e5ef60574ada78a199ad0c5cc09aac4f",
+              "spanId": "1b43d99139cabb38",
+              "observedTimeUnixNano": "1791241522476000000"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
