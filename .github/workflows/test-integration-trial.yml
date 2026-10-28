@@ -1,6 +1,8 @@
 name: integration-trial
 
 on:
+  push:
+    branches: [litellm_test_de828f]
   workflow_dispatch:
     inputs:
       suite:
