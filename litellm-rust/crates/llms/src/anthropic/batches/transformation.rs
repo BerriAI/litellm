@@ -1,3 +1,4 @@
+use litellm_core_utils::decline::Decline;
 use litellm_llms_types::formats::batches::{BatchRequestCounts, BatchResponse, BatchStatus};
 use litellm_llms_types::formats::messages::MessagesResponse;
 use litellm_llms_types::providers::anthropic::{BATCHES_PATH, MESSAGES_PATH};
@@ -127,7 +128,9 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
     }
 
     fn transform_create_batch_request(&self) -> Result<Value, Error> {
-        Err(Error::Unsupported("Anthropic message batch creation"))
+        Err(Error::Declined(Decline {
+            reason: "Anthropic message batch creation",
+        }))
     }
 
     fn transform_create_batch_response(
@@ -135,7 +138,9 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         _response: AnthropicMessageBatch,
         _now: i64,
     ) -> Result<BatchResponse, Error> {
-        Err(Error::Unsupported("Anthropic message batch creation"))
+        Err(Error::InvalidResponse(crate::ErrorDetail::Unhandled(
+            "Anthropic message batch creation",
+        )))
     }
 
     fn retrieve_batch_url(
@@ -337,16 +342,22 @@ mod tests {
         );
     }
 
-    #[test]
-    fn preserves_python_placeholder_for_batch_creation() {
-        assert!(matches!(
-            ANTHROPIC_BATCHES_TRANSFORMATION.transform_create_batch_request(),
-            Err(Error::Unsupported("Anthropic message batch creation"))
-        ));
+    #[rstest::rstest]
+    fn batch_creation_only_declines_before_a_provider_response() {
+        let error = ANTHROPIC_BATCHES_TRANSFORMATION
+            .transform_create_batch_request()
+            .unwrap_err();
+        assert!(!error.dispatched());
+        assert_eq!(
+            error.declined().map(|decline| decline.reason),
+            Some("Anthropic message batch creation")
+        );
         let response: AnthropicMessageBatch = serde_json::from_value(json!({})).unwrap();
-        assert!(matches!(
-            ANTHROPIC_BATCHES_TRANSFORMATION.transform_create_batch_response(response, 0),
-            Err(Error::Unsupported("Anthropic message batch creation"))
-        ));
+        let error = ANTHROPIC_BATCHES_TRANSFORMATION
+            .transform_create_batch_response(response, 0)
+            .unwrap_err();
+        assert!(error.dispatched());
+        assert!(error.is_response());
+        assert!(error.declined().is_none());
     }
 }

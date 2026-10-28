@@ -1,3 +1,4 @@
+use litellm_core_utils::decline::Decline;
 use litellm_llms_types::formats::chat_completions::{
     ChatCompletionsResponse, ChatMessage, ChatMessageContent,
 };
@@ -28,16 +29,6 @@ pub const STREAM_PARAM: &str = "stream";
 const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
 
 pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
-
-/// Why a request cannot be served by the Rust path.
-///
-/// The core declines rather than guessing: the host turns this into a
-/// transparent fallback to the Python implementation, which covers the full
-/// surface. Acceptance is an allowlist, so a parameter or message shape the
-/// core has never seen declines by construction instead of being translated
-/// wrong.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Unsupported(pub &'static str);
 
 pub trait BaseConfig: Sync {
     fn secret_names(&self) -> Vec<&'static str>;
@@ -97,7 +88,7 @@ pub trait BaseConfig: Sync {
         &self,
         messages: &[ChatMessage],
         optional_params: &Map<String, Value>,
-    ) -> Option<Unsupported> {
+    ) -> Option<Decline> {
         unsupported_param(
             self.supported_openai_param_mappings(),
             self.config_params(),
@@ -111,13 +102,13 @@ pub fn unsupported_param(
     supported: &'static [(&'static str, &'static str)],
     config: &'static [&'static str],
     optional_params: &Map<String, Value>,
-) -> Option<Unsupported> {
+) -> Option<Decline> {
     if optional_params
         .get(STREAM_PARAM)
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        return Some(Unsupported("streaming"));
+        return Some(Decline::new("streaming"));
     }
     optional_params
         .keys()
@@ -128,29 +119,29 @@ pub fn unsupported_param(
                     .any(|(_, provider_name)| *provider_name == key)
                 && !config.contains(&key.as_str())
         })
-        .then_some(Unsupported("unrecognized request parameter"))
+        .then_some(Decline::new("unrecognized request parameter"))
 }
 
 /// Message shapes the core can translate faithfully: text content, either a
 /// plain string or a non-empty list of parts that are all
 /// `{"type": "text", "text": ...}`. Tool calls, tool results, and multimodal
 /// parts decline so Python's fuller translation handles them.
-pub fn unsupported_message(message: &ChatMessage) -> Option<Unsupported> {
+pub fn unsupported_message(message: &ChatMessage) -> Option<Decline> {
     if message
         .extra
         .keys()
         .any(|key| !IGNORABLE_MESSAGE_FIELDS.contains(&key.as_str()))
     {
-        return Some(Unsupported("unrecognized message field"));
+        return Some(Decline::new("unrecognized message field"));
     }
     if !matches!(message.role.as_str(), "system" | "user" | "assistant") {
-        return Some(Unsupported("unrecognized message role"));
+        return Some(Decline::new("unrecognized message role"));
     }
     match &message.content {
-        None => Some(Unsupported("message without content")),
+        None => Some(Decline::new("message without content")),
         Some(ChatMessageContent::Text(_)) => None,
         Some(ChatMessageContent::Parts(parts)) if parts.is_empty() => {
-            Some(Unsupported("message without content"))
+            Some(Decline::new("message without content"))
         }
         Some(ChatMessageContent::Parts(parts)) => parts
             .iter()
@@ -159,6 +150,6 @@ pub fn unsupported_message(message: &ChatMessage) -> Option<Unsupported> {
                     || part.get("text").and_then(Value::as_str).is_none()
                     || part.as_object().is_some_and(|object| object.len() != 2)
             })
-            .then_some(Unsupported("non-text message content")),
+            .then_some(Decline::new("non-text message content")),
     }
 }
