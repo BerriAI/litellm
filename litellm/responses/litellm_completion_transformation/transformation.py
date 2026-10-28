@@ -321,7 +321,7 @@ def _responses_file_part(item: Mapping[str, object]) -> _ResponsesFilePart:
     )
 
 
-def _decode_responses_media(item: Mapping[str, object]) -> _ResponsesMediaPart | None:
+def decode_responses_media(item: Mapping[str, object]) -> _ResponsesMediaPart | None:
     kind: Final = item.get("type")
     if kind in ("input_image", "image_url", "computer_screenshot") and any(key in item for key in ("image_url", "url")):
         image: Final = _responses_image_part(item)
@@ -2412,7 +2412,7 @@ class LiteLLMCompletionResponsesConfig:
             if isinstance(output, str):
                 return output
 
-            single_media: Final = _decode_responses_media(output) if isinstance(output, Mapping) else None
+            single_media: Final = decode_responses_media(output) if isinstance(output, Mapping) else None
             if single_media is not None:
                 return [single_media]
             # Some adapters represent tool output as a list of "input_*" parts
@@ -2428,7 +2428,7 @@ class LiteLLMCompletionResponsesConfig:
                         if isinstance(txt, str) and txt:
                             text_acc.append(txt)
                             normalized_blocks.append({"type": "text", "text": txt})
-                    elif (media := _decode_responses_media(part)) is not None:
+                    elif (media := decode_responses_media(part)) is not None:
                         normalized_blocks.append(media)
 
                 if any(b.get("type") != "text" for b in normalized_blocks):
@@ -2606,7 +2606,7 @@ class LiteLLMCompletionResponsesConfig:
                     content_list.append(item)
                 elif isinstance(item, dict):
                     if (
-                        media := _decode_responses_media(
+                        media := decode_responses_media(
                             fields := _validate_responses_media(_STR_KEY_DICT_ADAPTER, item)
                         )
                     ) is not None:

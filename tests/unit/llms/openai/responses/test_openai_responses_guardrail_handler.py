@@ -83,6 +83,7 @@ class RecordingMaskingGuardrail(MockGuardrail):
         super().__init__(guardrail_name=guardrail_name)
         self.seen_texts: list[list[str]] = []
         self.seen_message_contents: list[list[object]] = []
+        self.seen_tools: list[object] = []
 
     async def apply_guardrail(
         self,
@@ -93,6 +94,7 @@ class RecordingMaskingGuardrail(MockGuardrail):
     ) -> GenericGuardrailAPIInputs:
         self.seen_texts.append(list(inputs.get("texts", [])))
         self.seen_message_contents.append([m["content"] for m in inputs.get("structured_messages") or []])
+        self.seen_tools.append(inputs.get("tools"))
         return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
 
 
@@ -586,6 +588,209 @@ class TestSkipSystemMessageScopesInstructions:
             ("user", [COMPRESSED_MARKER]),
             ("user", ["What is the codename?"]),
         ]
+
+
+_TOOL_TURNS: Final = (
+    (
+        {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "Paris"}'},
+        "function_call_output",
+    ),
+    (
+        {"type": "custom_tool_call", "call_id": "call_1", "name": "run_sql", "input": "select 1"},
+        "custom_tool_call_output",
+    ),
+)
+
+
+def _tool_result_request(call_item: dict[str, str], output_type: str, output: object) -> dict[str, object]:
+    return {
+        "model": "gpt-5.4-mini",
+        "input": [
+            {"role": "user", "content": "Weather?"},
+            call_item,
+            {"type": output_type, "call_id": "call_1", "output": output},
+        ],
+    }
+
+
+class TestToolResultItemsReachTextsGuardrails:
+    """A Responses tool result is scanned and rewritten in its `output` field the way a chat `tool`
+    message's content is, and skip_tool_message_in_guardrail keeps it out of the scan the same way."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("call_item", "output_type"), _TOOL_TURNS, ids=["function", "custom"])
+    async def test_string_output_is_scanned_and_rewritten_in_place(
+        self, call_item: dict[str, str], output_type: str
+    ) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            _tool_result_request(call_item, output_type, "SECRET forecast"), guardrail
+        )
+
+        assert guardrail.seen_texts == [["Weather?", "SECRET forecast"]]
+        assert result["input"] == [
+            {"role": "user", "content": "Weather? [GUARDRAILED]"},
+            call_item,
+            {"type": output_type, "call_id": "call_1", "output": "SECRET forecast [GUARDRAILED]"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_content_part_output_is_scanned_and_rewritten_in_its_part(self) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        call_item, output_type = _TOOL_TURNS[0]
+        image_part: Final = {"type": "input_image", "image_url": "https://example.com/map.png"}
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            _tool_result_request(
+                call_item, output_type, [{"type": "input_text", "text": "SECRET forecast"}, image_part]
+            ),
+            guardrail,
+        )
+
+        assert guardrail.seen_texts == [["Weather?", "SECRET forecast"]]
+        assert result["input"][2]["output"] == [
+            {"type": "input_text", "text": "SECRET forecast [GUARDRAILED]"},
+            image_part,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_text_only_parts_are_scanned_as_one_text_and_rewritten_into_one_part(self) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        call_item, output_type = _TOOL_TURNS[0]
+        parts: Final = [{"type": "input_text", "text": "SECRET forecast: "}, {"type": "input_text", "text": "sunny"}]
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            _tool_result_request(call_item, output_type, parts), guardrail
+        )
+
+        assert guardrail.seen_texts == [["Weather?", "SECRET forecast: sunny"]]
+        assert result["input"][2]["output"] == [{"type": "input_text", "text": "SECRET forecast: sunny [GUARDRAILED]"}]
+
+    @pytest.mark.asyncio
+    async def test_text_only_parts_the_guardrail_leaves_unchanged_keep_their_parts(self) -> None:
+        call_item, output_type = _TOOL_TURNS[0]
+        parts: Final = [{"type": "input_text", "text": "SECRET forecast: "}, {"type": "input_text", "text": "sunny"}]
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            _tool_result_request(call_item, output_type, copy.deepcopy(parts)), CustomGuardrail(guardrail_name="test")
+        )
+
+        assert result["input"][2]["output"] == parts
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("output", "expected_texts"),
+        [
+            pytest.param("SECRET forecast", ["SECRET forecast"], id="string"),
+            pytest.param([{"type": "input_text", "text": "SECRET forecast"}], ["SECRET forecast"], id="one_part"),
+            pytest.param(
+                [{"type": "input_text", "text": "SECRET "}, {"type": "output_text", "text": "forecast"}],
+                ["SECRET forecast"],
+                id="parts",
+            ),
+            pytest.param(
+                [
+                    {"type": "input_text", "text": "SECRET "},
+                    {"type": "input_image", "image_url": "https://example.com/map.png"},
+                    {"type": "input_text", "text": ""},
+                    {"type": "input_text", "text": "forecast"},
+                ],
+                ["SECRET ", "forecast"],
+                id="parts_with_image",
+            ),
+            pytest.param(
+                [
+                    {"type": "input_text", "text": "SECRET forecast"},
+                    {"type": "summary_text", "text": "not tool output"},
+                ],
+                ["SECRET forecast"],
+                id="non_text_part_with_text_field",
+            ),
+            pytest.param(
+                ["SECRET forecast", {"type": "input_text", "text": "visible"}],
+                ["visible"],
+                id="non_dict_part",
+            ),
+            pytest.param([], [], id="empty"),
+            pytest.param({"type": "input_image", "image_url": "https://example.com/map.png"}, [], id="single_image"),
+        ],
+    )
+    async def test_tool_result_texts_match_the_structured_tool_message(
+        self, output: object, expected_texts: list[str]
+    ) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        call_item, output_type = _TOOL_TURNS[0]
+
+        await OpenAIResponsesHandler().process_input_messages(
+            _tool_result_request(call_item, output_type, output), guardrail
+        )
+
+        tool_content: Final = guardrail.seen_message_contents[0][2]
+        structured_texts: Final = (
+            [tool_content]
+            if isinstance(tool_content, str)
+            else [part["text"] for part in tool_content if part.get("type") == "text"]
+        )
+        tool_texts: Final = guardrail.seen_texts[0][1:]
+        assert tool_texts == expected_texts
+        assert tool_texts in ([], structured_texts)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("call_item", "output_type"), _TOOL_TURNS, ids=["function", "custom"])
+    async def test_skip_tool_message_keeps_the_tool_result_out_of_texts_and_rows(
+        self, call_item: dict[str, str], output_type: str
+    ) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        guardrail.skip_tool_message_in_guardrail = True
+        tool_result: Final = {"type": output_type, "call_id": "call_1", "output": "SECRET forecast"}
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            _tool_result_request(call_item, output_type, "SECRET forecast"), guardrail
+        )
+
+        assert guardrail.seen_texts == [["Weather?"]]
+        assert "SECRET forecast" not in guardrail.seen_message_contents[0]
+        assert result["input"][0] == {"role": "user", "content": "Weather? [GUARDRAILED]"}
+        assert result["input"][2] == tool_result
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("call_item", "output_type"), _TOOL_TURNS, ids=["function", "custom"])
+    async def test_scan_only_tool_results_sends_only_the_tool_result(
+        self, call_item: dict[str, str], output_type: str
+    ) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        guardrail.scan_only_tool_results = True
+        tool: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}
+        request: Final = {
+            **_tool_result_request(call_item, output_type, "SECRET forecast"),
+            "instructions": "Answer briefly",
+            "tools": [tool],
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+
+        assert guardrail.seen_texts == [["SECRET forecast"]]
+        assert guardrail.seen_message_contents == [["SECRET forecast"]]
+        assert guardrail.seen_tools == [None]
+        assert result["instructions"] == "Answer briefly"
+        assert result["tools"] == [tool]
+        assert result["input"] == [
+            {"role": "user", "content": "Weather?"},
+            call_item,
+            {"type": output_type, "call_id": "call_1", "output": "SECRET forecast [GUARDRAILED]"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_scan_only_tool_results_leaves_a_request_without_tool_results_unscanned(self) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        guardrail.scan_only_tool_results = True
+        request: Final = {"model": "gpt-5.4-mini", "instructions": "Answer briefly", "input": "Weather?"}
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(dict(request), guardrail)
+
+        assert guardrail.seen_texts == []
+        assert result == request
 
 
 class TestOpenAIResponsesHandlerOutputProcessing:

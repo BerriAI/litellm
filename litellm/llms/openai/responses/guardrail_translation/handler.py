@@ -55,7 +55,9 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_responses_stream_usage,
+    effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
     list_field,
     merge_guardrailed_scoped_messages,
     role_out_of_guardrail_scope,
@@ -75,6 +77,7 @@ from litellm.responses.litellm_completion_transformation.custom_tools import wit
 from litellm.responses.litellm_completion_transformation.tool_search import is_server_tool_search_tool
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
+    decode_responses_media,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -270,6 +273,8 @@ _TOOL_CALL_PAYLOAD_EVENT_TYPES: Final = _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES | f
 )
 _OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
 _OUTPUT_TEXT_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.output_text.done"})
+TOOL_OUTPUT_ITEM_TYPES: Final = frozenset({"function_call_output", "custom_tool_call_output"})
+_TOOL_OUTPUT_TEXT_PART_TYPES: Final = frozenset({"input_text", "output_text", "text"})
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call_output": "output", "custom_tool_call_output": "output", "message": "content"}
 )
@@ -519,8 +524,45 @@ def scannable_instructions(data: Mapping[str, object], *, skip_system: bool = Fa
 
 
 def _input_item_role(item: object) -> str:
+    if stream_item_field(item, "type") in TOOL_OUTPUT_ITEM_TYPES:
+        return "tool"
     role: Final = item.get("role") if isinstance(item, Mapping) else None
     return role.lower() if isinstance(role, str) else ""
+
+
+def _scanned_text_field(item: Mapping[str, object]) -> str:
+    return "output" if item.get("type") in TOOL_OUTPUT_ITEM_TYPES else "content"
+
+
+def _tool_output_part_text(part: object) -> str | None:
+    if not isinstance(part, dict):
+        return None
+    fields: Final = _item_fields_adapter.validate_python(part)
+    text: Final = fields.get("text")
+    return text if fields.get("type") in _TOOL_OUTPUT_TEXT_PART_TYPES and isinstance(text, str) else None
+
+
+def _is_tool_output_media_part(part: object) -> bool:
+    return isinstance(part, dict) and decode_responses_media(_item_fields_adapter.validate_python(part)) is not None
+
+
+def tool_output_texts(item: object) -> tuple[tuple[int | None, str], ...]:
+    output: Final = stream_item_field(item, "output")
+    if isinstance(output, str):
+        return ((None, output),)
+    parts: Final = stream_item_items(item, "output")
+    texts: Final = tuple((index, text) for index, part in enumerate(parts) if (text := _tool_output_part_text(part)))
+    if len(texts) < 2 or any(_is_tool_output_media_part(part) for part in parts):
+        return texts
+    return ((None, "".join(text for _, text in texts)),)
+
+
+def _rewritten_whole_text(item: object, content: object, guardrail_response: str) -> object | None:
+    if isinstance(content, str):
+        return guardrail_response
+    if not isinstance(content, list) or tool_output_texts(item) == ((None, guardrail_response),):
+        return None
+    return [{"type": "input_text", "text": guardrail_response}]
 
 
 def _patched_request_fields(
@@ -640,9 +682,11 @@ class OpenAIResponsesHandler(BaseTranslation):
         if not isinstance(input_data, (str, list)):
             return data
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
+        skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        scan_only: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
         structured_messages: Final = self.get_structured_messages(data)
         scoped_indices: Final = scoped_structured_message_indices(
-            structured_messages or [], scan_only_tool_results=False, skip_system=skip_system, skip_tool=False
+            structured_messages or [], scan_only_tool_results=scan_only, skip_system=skip_system, skip_tool=skip_tool
         )
         scoped_structured_messages: Final = (
             [structured_messages[index] for index in scoped_indices] if structured_messages else None
@@ -661,7 +705,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
         )
         extracted: Final = self._extract_guardrail_inputs(
-            data, input_data, flattened_tool_groups, skip_system=skip_system
+            data,
+            input_data,
+            () if scan_only else flattened_tool_groups,
+            skip_system=skip_system,
+            skip_tool=skip_tool,
+            scan_only=scan_only,
         )
         if not extracted.inputs.get("texts"):
             return data
@@ -673,9 +722,10 @@ class OpenAIResponsesHandler(BaseTranslation):
             input_type="request",
             logging_obj=litellm_logging_obj,
         )
-        self._apply_guardrailed_tools_to_data(
-            data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools")
-        )
+        if not scan_only:
+            self._apply_guardrailed_tools_to_data(
+                data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools")
+            )
         written_back: Final = self._written_back_request_fields(
             data,
             structured_messages or (),
@@ -730,8 +780,10 @@ class OpenAIResponsesHandler(BaseTranslation):
         flattened_tool_groups: Sequence[Sequence[Mapping[str, object]]],
         *,
         skip_system: bool = False,
+        skip_tool: bool = False,
+        scan_only: bool = False,
     ) -> _ExtractedInputs:
-        instructions: Final = scannable_instructions(data, skip_system=skip_system)
+        instructions: Final = scannable_instructions(data, skip_system=skip_system or scan_only)
         texts_to_check: Final[list[str]] = [] if instructions is None else [instructions]
         images_to_check: Final[list[str]] = []
         task_mappings: Final[list[tuple[int, int | None]]] = []
@@ -745,11 +797,15 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
         )
         if isinstance(input_data, str):
-            texts_to_check.append(input_data)
+            if not scan_only:
+                texts_to_check.append(input_data)
         else:
             for msg_idx, message in enumerate(input_data):
                 if role_out_of_guardrail_scope(
-                    _input_item_role(message), skip_system_message=skip_system, skip_tool_message=False
+                    _input_item_role(message),
+                    skip_system_message=skip_system,
+                    skip_tool_message=skip_tool,
+                    scan_only_tool_results=scan_only,
                 ):
                     continue
                 self._extract_input_text_and_images(
@@ -839,6 +895,11 @@ class OpenAIResponsesHandler(BaseTranslation):
             texts_to_check.append(summary)
             task_mappings.append((msg_idx, None))
             return
+        if message.get("type") in TOOL_OUTPUT_ITEM_TYPES:
+            for content_idx, text in tool_output_texts(message):
+                texts_to_check.append(text)
+                task_mappings.append((msg_idx, content_idx))
+            return
         content: Final = message.get("content", None)
         if content is None:
             return
@@ -890,18 +951,20 @@ class OpenAIResponsesHandler(BaseTranslation):
                 )
                 continue
 
-            content = messages[msg_idx].get("content", None)
+            field = _scanned_text_field(messages[msg_idx])
+            content = messages[msg_idx].get(field, None)
             if content is None:
                 continue
 
-            if isinstance(content, str) and content_idx_optional is None:
-                # Replace string content with guardrail response
-                messages[msg_idx]["content"] = guardrail_response
+            if content_idx_optional is None:
+                rewritten = _rewritten_whole_text(messages[msg_idx], content, guardrail_response)
+                if rewritten is not None:
+                    messages[msg_idx][field] = rewritten
 
-            elif isinstance(content, list) and content_idx_optional is not None:
+            elif isinstance(content, list):
                 # Replace specific text item in list content
-                if isinstance(messages[msg_idx]["content"][content_idx_optional], dict):
-                    messages[msg_idx]["content"][content_idx_optional]["text"] = guardrail_response
+                if isinstance(messages[msg_idx][field][content_idx_optional], dict):
+                    messages[msg_idx][field][content_idx_optional]["text"] = guardrail_response
 
     async def process_output_response(
         self,
