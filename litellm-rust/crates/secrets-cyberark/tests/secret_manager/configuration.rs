@@ -77,7 +77,7 @@ async fn authentication_encodes_login(#[case] username: &str, #[case] expected_p
         .mount(&server)
         .await;
     let manager = CyberArkSecretManager::with_client(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         server.uri().parse().unwrap(),
         "acct".into(),
         username.into(),
@@ -201,7 +201,7 @@ async fn trait_read_applies_cyberark_operation_timeout_to_authentication() {
 
     match result {
         Err(Error::Timeout) => {}
-        Err(Error::Http(error)) => assert!(error.is_timeout()),
+        Err(Error::Http(error)) => assert_eq!(error.status(), Some(408)),
         other => panic!("expected timeout, got {other:?}"),
     }
 }
@@ -237,7 +237,7 @@ fn new_validates_credentials_before_license_and_configuration() {
             }),
             true
         ),
-        Err(Error::RefreshInterval)
+        Err(Error::RefreshInterval(_))
     ));
     assert!(matches!(
         from_environment(
@@ -248,7 +248,7 @@ fn new_validates_credentials_before_license_and_configuration() {
             }),
             true
         ),
-        Err(Error::Endpoint)
+        Err(Error::Endpoint(_))
     ));
 }
 
@@ -263,7 +263,7 @@ fn certificate_only_credentials_are_validated_as_a_client_identity() {
         true,
     );
 
-    assert!(matches!(result, Err(Error::ClientCertificate)));
+    assert!(matches!(result, Err(Error::ClientCertificate(_))));
 }
 
 #[rstest]
@@ -347,7 +347,7 @@ fn invalid_client_identity_is_not_ignored(
         true,
     );
 
-    assert!(matches!(result, Err(Error::ClientCertificate)));
+    assert!(matches!(result, Err(Error::ClientCertificate(_))));
 }
 
 #[rstest]
@@ -413,7 +413,7 @@ fn new_reports_missing_client_certificate_files() {
             }),
             true
         ),
-        Err(Error::ClientCertificate)
+        Err(Error::ClientCertificate(_))
     ));
 }
 
@@ -433,7 +433,7 @@ async fn trailing_slash_endpoint_preserves_base_path() {
         .await;
     let endpoint = format!("{}/prefix/", server.uri()).parse().unwrap();
     let manager = CyberArkSecretManager::with_client(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         endpoint,
         "acct".into(),
         "admin".into(),

@@ -39,7 +39,7 @@ impl Selection {
         services: HostServices<P>,
     ) -> (Option<ScopedCache>, CacheOptions)
     where
-        P::Error: From<MachineFault>,
+        P::Error: From<MachineFault> + std::error::Error,
     {
         let service = match self.backend {
             Backend::Disabled => None,

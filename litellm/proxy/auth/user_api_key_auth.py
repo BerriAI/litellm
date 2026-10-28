@@ -2513,10 +2513,20 @@ async def user_api_key_auth_builder(
                     parent_otel_span=parent_otel_span,
                 )
         elif api_key is None:  # only require api key if master key is set
-            raise Exception("No api key passed in.")
+            raise ProxyException(
+                message="Authentication Error, No api key passed in.",
+                type=ProxyErrorTypes.auth_error,
+                param="None",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
         elif api_key == "":
             # missing 'Bearer ' prefix
-            raise Exception("Malformed API Key passed in. Ensure Key has `Bearer ` prefix.")
+            raise ProxyException(
+                message="Authentication Error, Malformed API Key passed in. Ensure Key has `Bearer ` prefix.",
+                type=ProxyErrorTypes.auth_error,
+                param="None",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
 
         if route == "/user/auth":
             if general_settings.get("allow_user_auth", False) is True:
@@ -2752,7 +2762,12 @@ async def user_api_key_auth_builder(
         ## IF it's not a master key
         ## Route should not be in master_key_only_routes
         if route in LiteLLMRoutes.master_key_only_routes.value:
-            raise Exception(f"Tried to access route={route}, which is only for MASTER KEY")
+            raise ProxyException(
+                message=f"Authentication Error, Tried to access route={route}, which is only for MASTER KEY",
+                type=ProxyErrorTypes.auth_error,
+                param="None",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
 
         ## Check DB
 
@@ -2880,7 +2895,12 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
 
         ## base case ## key is disabled
         if valid_token.blocked is True:
-            raise Exception("Key is blocked. Update via `/key/unblock` if you're an admin.")
+            raise ProxyException(
+                message="Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.",
+                type=ProxyErrorTypes.auth_error,
+                param="None",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
         await enforce_key_and_fallback_model_access(
             valid_token=valid_token,
             request_data=request_data,
@@ -2923,8 +2943,14 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                 and isinstance(user_obj.metadata, dict)
                 and user_obj.metadata.get("scim_active") is False
             ):
-                raise Exception(
-                    f"User={valid_token.user_id} has been deactivated via SCIM. Keys owned by this user cannot be used."
+                raise ProxyException(
+                    message=(
+                        f"Authentication Error, User={valid_token.user_id} has been deactivated via SCIM. "
+                        "Keys owned by this user cannot be used."
+                    ),
+                    type=ProxyErrorTypes.auth_error,
+                    param="None",
+                    code=status.HTTP_401_UNAUTHORIZED,
                 )
 
         # Check 2a. Check if model has zero cost - if so, skip all budget checks
@@ -3231,8 +3257,9 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
         if valid_token.budget_throttle_pct is not None:
             valid_token_dict["budget_throttle_pct"] = valid_token.budget_throttle_pct
 
-        if _end_user_object is not None:
+        if _end_user_object is not None or litellm.max_end_user_budget_id is not None:
             valid_token_dict.update(end_user_params)
+        if _end_user_object is not None:
             valid_token_dict["end_user_object_permission"] = _end_user_object.object_permission
 
     # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
@@ -3241,7 +3268,12 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
 
     if valid_token is None:
         # No token was found when looking up in the DB
-        raise Exception("Invalid proxy server token passed")
+        raise ProxyException(
+            message="Authentication Error, Invalid proxy server token passed",
+            type=ProxyErrorTypes.auth_error,
+            param="None",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
     if valid_token_dict is not None:
         virtual_key_auth_obj: Final = await _return_user_api_key_auth_obj(
             user_obj=user_obj,

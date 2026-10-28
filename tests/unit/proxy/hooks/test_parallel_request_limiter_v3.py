@@ -4000,10 +4000,10 @@ async def test_billed_personal_key_auth_produces_team_rpm_descriptors(monkeypatc
     from litellm.models.budget import LiteLLM_BudgetTable
     from litellm.models.team_membership import LiteLLM_TeamMembership
     from litellm.proxy import proxy_server
-    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
-    from litellm.proxy.auth import auth_checks
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
     server: Final = MCPServer(
         server_id="math_a",
@@ -4333,6 +4333,97 @@ async def test_first_round_logged_after_tool_call_reuse_releases_only_at_request
 
 
 @pytest.mark.asyncio
+async def test_completed_mcp_replay_stream_frees_slot_its_logged_first_round_kept() -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
+        FakeAnthropicMessagesStreamIterator,
+    )
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    reused_at: Final = datetime(2026, 1, 5, 12, 0, 0)
+    api_key: Final = hash_token("sk-mcp-replayed-stream")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=lambda: reused_at,
+    )
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = handler
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    parallel_key: Final = f"{{api_key:{api_key}}}:max_parallel_requests"
+    owner_call_id: Final = "mcp-replayed-stream-owner"
+    messages: Final = [{"role": "user", "content": "add 2 and 3"}]
+
+    async def in_flight() -> int:
+        return handler._gauge_in_flight_from_cache_value(
+            await local_cache.async_get_cache(key=parallel_key)
+        )
+
+    async def pre_call(data: dict[str, object], call_type: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type=call_type,
+        )
+
+    await pre_call(
+        {"model": "claude-haiku-5-5", "messages": messages, "stream": True, "litellm_call_id": owner_call_id},
+        CallTypes.anthropic_messages.value,
+    )
+    await pre_call(
+        {"model": "MCP: add", "messages": [{"role": "user", "content": "Tool: add"}], "mcp_server_name": "math"},
+        CallTypes.call_mcp_tool.value,
+    )
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="claude-haiku-5-5",
+        messages=messages,
+        stream=True,
+        call_type=CallTypes.anthropic_messages.value,
+        start_time=None,
+        litellm_call_id=owner_call_id,
+        function_id="mcp-replayed-stream",
+    )
+    assert logging_obj.claim_async_success_log()
+    await handler.async_log_success_event(
+        kwargs={"litellm_call_id": owner_call_id, "stream": False},
+        response_obj=None,
+        start_time=None,
+        end_time=reused_at - timedelta(seconds=1),
+    )
+    assert await in_flight() == 1
+
+    replay: Final = FakeAnthropicMessagesStreamIterator(
+        response={
+            "id": "msg_replayed",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "2 + 3 = 5"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 20, "output_tokens": 8},
+        }
+    )
+    with _override_litellm_callbacks([]):
+        streamed: Final = [
+            chunk
+            async for chunk in ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                response=replay,
+                user_api_key_dict=user_api_key_dict,
+                request_data={
+                    "model": "claude-haiku-5-5",
+                    "litellm_call_id": owner_call_id,
+                    "litellm_logging_obj": logging_obj,
+                },
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        ]
+
+    assert b"event: message_stop" in streamed[-1]
+    assert await in_flight() == 0
+
+
+@pytest.mark.asyncio
 async def test_mcp_tool_call_reusing_request_slot_keeps_request_max_parallel_headers() -> None:
     api_key: Final = hash_token("sk-mcp-reuse-headers")
     local_cache: Final = DualCache()
@@ -4378,8 +4469,11 @@ async def test_mcp_tool_call_reusing_request_slot_keeps_request_max_parallel_hea
 
 
 @pytest.mark.asyncio
-async def test_concurrent_success_callbacks_release_parallel_slot_once_when_redis_fails() -> None:
+@pytest.mark.parametrize("release_from", ["post_call", "stream_cleanup"])
+async def test_concurrent_success_callbacks_release_parallel_slot_once_when_redis_fails(release_from: str) -> None:
     from unittest.mock import AsyncMock
+
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
     api_key = hash_token("sk-concurrent-release")
     local_cache = DualCache()
@@ -4409,9 +4503,20 @@ async def test_concurrent_success_callbacks_release_parallel_slot_once_when_redi
         counter_keys=[parallel_key],
     )
     data = {"litellm_call_id": call_id}
+    logger: Final = ProxyLogging(user_api_key_cache=local_cache)
+    logger.proxy_hook_mapping["parallel_request_limiter"] = handler
 
     post_call_task = asyncio.create_task(
-        handler.async_post_call_success_hook(
+        ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
+            request=None,
+            request_data=data,
+            response=None,
+            stream_completed=True,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=logger,
+        )
+        if release_from == "stream_cleanup"
+        else handler.async_post_call_success_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
             response=ResponsesAPIResponse(

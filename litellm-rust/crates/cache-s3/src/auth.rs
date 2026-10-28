@@ -46,7 +46,7 @@ impl ProvideCredentials for S3Credentials {
             self.auth
                 .resolve_credentials(self.config.clone(), &self.env)
                 .await
-                .map_err(|_| CredentialsError::provider_error("S3 cache authentication failed"))
+                .map_err(CredentialsError::provider_error)
         })
     }
 }

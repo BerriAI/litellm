@@ -18,6 +18,10 @@ use url::Url;
 
 use crate::{credential::AzureBlobCredential, transport::ReqwestTransport};
 
+#[derive(Debug, thiserror::Error)]
+#[error("account URL cannot hold a container path")]
+struct NotABaseUrl;
+
 pub struct AzureBlobCache<C> {
     container: BlobContainerClient,
     codec: C,
@@ -57,12 +61,12 @@ impl<C: CacheCodec> AzureBlobCache<C> {
         codec: C,
         runtime: Handle,
     ) -> Result<Self, Error> {
-        let parsed = Url::parse(account_url).map_err(|_| Error::Unavailable)?;
+        let parsed = Url::parse(account_url).map_err(Error::unavailable)?;
         let account_url = parsed.as_str().trim_end_matches('/').to_string();
         let container_url = {
             let mut url = parsed;
             url.path_segments_mut()
-                .map_err(|()| Error::Unavailable)?
+                .map_err(|()| Error::unavailable(NotABaseUrl))?
                 .pop_if_empty()
                 .push(container);
             url
@@ -75,7 +79,7 @@ impl<C: CacheCodec> AzureBlobCache<C> {
                 ..BlobContainerClientOptions::default()
             }),
         )
-        .map_err(|_| Error::Unavailable)?;
+        .map_err(Error::unavailable)?;
         let cache = Self {
             container: client,
             codec,
@@ -101,7 +105,7 @@ impl<C: CacheCodec> AzureBlobCache<C> {
             Err(error) if is_storage_error(&error, StorageErrorCode::ContainerAlreadyExists) => {
                 Ok(())
             }
-            Err(_) => Err(Error::Unavailable),
+            Err(error) => Err(Error::unavailable(error)),
         }
     }
 
@@ -116,7 +120,7 @@ impl<C: CacheCodec> AzureBlobCache<C> {
         {
             Ok(_) => Ok(()),
             Err(error) if !overwrite && is_already_present(&error) => Ok(()),
-            Err(_) => Err(Error::Unavailable),
+            Err(error) => Err(Error::unavailable(error)),
         }
     }
 
@@ -126,13 +130,9 @@ impl<C: CacheCodec> AzureBlobCache<C> {
             Err(error) if is_storage_error(&error, StorageErrorCode::BlobNotFound) => {
                 return Ok(None);
             }
-            Err(_) => return Err(Error::Unavailable),
+            Err(error) => return Err(Error::unavailable(error)),
         };
-        let bytes = response
-            .body
-            .collect()
-            .await
-            .map_err(|_| Error::Unavailable)?;
+        let bytes = response.body.collect().await.map_err(Error::unavailable)?;
         self.codec.decode(&bytes).map(Some)
     }
 
@@ -140,16 +140,16 @@ impl<C: CacheCodec> AzureBlobCache<C> {
         let mut pages = self
             .container
             .list_blobs(None)
-            .map_err(|_| Error::Unavailable)?
+            .map_err(Error::unavailable)?
             .into_pages();
-        while let Some(page) = pages.try_next().await.map_err(|_| Error::Unavailable)? {
-            let page = page.into_model().map_err(|_| Error::Unavailable)?;
+        while let Some(page) = pages.try_next().await.map_err(Error::unavailable)? {
+            let page = page.into_model().map_err(Error::unavailable)?;
             for name in page.blob_items.into_iter().filter_map(|item| item.name) {
                 self.container
                     .blob_client(&name)
                     .delete(None)
                     .await
-                    .map_err(|_| Error::Unavailable)?;
+                    .map_err(Error::unavailable)?;
             }
         }
         Ok(())

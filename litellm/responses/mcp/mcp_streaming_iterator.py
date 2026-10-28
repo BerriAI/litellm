@@ -20,6 +20,7 @@ from litellm.types.llms.openai import (
     MCPListToolsCompletedEvent,
     MCPListToolsFailedEvent,
     MCPListToolsInProgressEvent,
+    ResponseInputParam,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
@@ -290,6 +291,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.mcp_tools_with_litellm_proxy = mcp_tools_with_litellm_proxy or []
         self.user_api_key_auth = user_api_key_auth
         self.original_request_params = original_request_params or {}
+        self._follow_up_history: str | ResponseInputParam | None = self.original_request_params.get("input")
         configured_rounds: Final = validated_max_agentic_loops(
             self.original_request_params.get("max_agentic_loops"), field="litellm_params.max_agentic_loops"
         )
@@ -368,7 +370,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         from starlette.datastructures import Headers
 
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )
 
@@ -1003,8 +1005,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 follow_up_input: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
                     response=self.collected_response,
                     tool_results=self.tool_results,
-                    original_input=self.original_request_params.get("input"),
+                    original_input=self._follow_up_history,
                     preserve_reasoning=persistence_disabled,
+                )
+                self._follow_up_history = cast(  # cast-ok: helper returns valid input items
+                    "ResponseInputParam", follow_up_input
                 )
 
                 # Make follow-up call with streaming
