@@ -9098,18 +9098,18 @@ def _project_itpm_estimate(router: Router, model: str) -> int:
     return handler._estimate_precise_input_tokens(_MULTILINGUAL_REQUEST, model, "acompletion")
 
 
-def test_project_itpm_counts_a_group_mixing_in_a_non_openai_model_as_at_least_each_served_model():
-    served: Final = ("openai/gpt-6.1-sol", "anthropic/claude-sonnet-5-5")
+def test_project_itpm_counts_a_group_mixing_in_a_non_openai_model_by_its_name_and_its_openai_models_only():
     router: Final = Router(
         model_list=[
-            {"model_name": "gpt-6.1-sol", "litellm_params": {"model": model, "api_key": "sk-test"}} for model in served
+            {"model_name": "gpt-6.1-sol", "litellm_params": {"model": model, "api_key": "sk-test"}}
+            for model in ("openai/gpt-6.1-sol", "anthropic/claude-sonnet-5-5")
         ]
     )
+    messages: Final = _MULTILINGUAL_REQUEST["messages"]
 
-    estimate: Final = _project_itpm_estimate(router, "gpt-6.1-sol")
-
-    assert all(
-        estimate >= litellm.token_counter(model=model, messages=_MULTILINGUAL_REQUEST["messages"]) for model in served
+    assert _project_itpm_estimate(router, "gpt-6.1-sol") == max(
+        litellm.token_counter(model="gpt-6.1-sol", messages=messages),
+        litellm.token_counter(model="openai/gpt-6.1-sol", messages=messages),
     )
 
 

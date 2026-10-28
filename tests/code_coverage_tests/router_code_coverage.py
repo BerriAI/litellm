@@ -172,6 +172,7 @@ ignored_function_names = [
     "_deployment_provider",  # Read by without_deployments_that_cannot_batch, tested through the mixed-group tests in test_router.py
     "_cannot_run_batches",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
     "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py
+    "_served_openai_models",  # Cached as served_openai_models, tested through the mixed-group tests in test_budget_reservation.py
 ]
 
 

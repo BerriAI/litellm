@@ -476,13 +476,32 @@ async def test_model_group_alias_of_an_openai_group_reserves_on_that_groups_toke
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("group", ["gpt-6.1-sol", "mixed"])
-async def test_group_mixing_in_a_non_openai_model_reserves_at_least_each_served_models_count(group: str):
+async def test_group_mixing_in_a_non_openai_model_reserves_on_its_own_name_and_its_openai_models_only(group: str):
     served: Final = ("openai/gpt-6.1-sol", "anthropic/claude-sonnet-5-5")
     router: Final = _router_with_groups(*((group, model) for model in served))
 
     reserved: Final = (await _input_tokens(router, group))[group]
     per_model: Final = await count_input_tokens(
-        request_body={"model": group, "messages": _MULTILINGUAL_MESSAGES}, raw_body=None, models=served
+        request_body={"model": group, "messages": _MULTILINGUAL_MESSAGES},
+        raw_body=None,
+        models=(group, *served),
     )
 
-    assert all(reserved >= per_model[model] for model in served)
+    assert reserved == max(per_model[group], per_model["openai/gpt-6.1-sol"])
+
+
+@pytest.mark.asyncio
+async def test_group_reserves_on_its_current_deployments_after_another_vendors_deployment_joins():
+    router: Final = _router_with_groups(("prod", "openai/gpt-6.1-sol"))
+    openai_only: Final = (await _input_tokens(router, "prod"))["prod"]
+
+    router.add_deployment(
+        Deployment(
+            model_name="prod",
+            litellm_params=LiteLLM_Params(model="anthropic/claude-sonnet-5-5", api_key="sk-test"),
+        )
+    )
+
+    by_own_name: Final = litellm.token_counter(model="prod", messages=_MULTILINGUAL_MESSAGES)
+    assert openai_only != by_own_name
+    assert (await _input_tokens(router, "prod"))["prod"] == by_own_name

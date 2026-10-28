@@ -2505,6 +2505,13 @@ def test_token_counter_counts_openai_models_newer_than_tiktokens_table_with_o200
     )
 
 
+@pytest.mark.parametrize("model", ["openai/gpt-5.9", "chatgpt/gpt-5.3-instant", "azure/gpt-5.9-mini"])
+def test_token_counter_counts_unlisted_openai_names_with_the_encoding_tiktoken_gives_them(model: str):
+    assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == len(
+        tiktoken.encoding_for_model(model.rsplit("/", 1)[-1]).encode(_MULTILINGUAL_SAMPLE)
+    )
+
+
 @pytest.mark.parametrize(
     "model",
     [

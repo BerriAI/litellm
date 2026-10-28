@@ -1139,7 +1139,7 @@ def _estimated_prompt_usage(
         None,
     )
     return _estimate_dispatched_failure_usage(
-        model=str(model_call_details.get("model") or ""),
+        model=get_base_model_from_metadata(model_call_details) or str(model_call_details.get("model") or ""),
         request_input=(
             messages_since_newest_compaction(dispatched_input)
             if dispatched_call_type in _RESPONSES_CALL_TYPES

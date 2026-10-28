@@ -793,9 +793,10 @@ def openai_tokenizer_encoding_name(model: str) -> str:
 
     A listed OpenAI or Azure model that tiktoken does not know is either a suffixed variant of a model it does
     know (`text-embedding-ada-002-v2`) or a newer release than its table, which gets o200k_base, the encoding every
-    OpenAI model since gpt-4o uses. Provider and region prefixes (`azure/eu/`, `azure_ai/`) are dropped, and a
-    name listed only under Azure (`gpt-41`, `openai/o1-mini`) counts as listed through its `azure/` cost-map key."""
-    model_to_use: Final = _listed_openai_model_name(model) or _fix_model_name(model)
+    OpenAI model since gpt-4o uses. Provider and region prefixes (`azure/eu/`, `azure_ai/`) are dropped, a name
+    listed only under Azure (`gpt-41`, `openai/o1-mini`) counts as listed through its `azure/` cost-map key, and an
+    unlisted name tiktoken counts with o200k_base (`openai/gpt-5.9`) gets it."""
+    model_to_use: Final = _openai_model_name(model) or _fix_model_name(model)
     if "gpt-4o" in model_to_use:
         return "o200k_base"
     try:
@@ -804,16 +805,40 @@ def openai_tokenizer_encoding_name(model: str) -> str:
         return _suffixed_variant_encoding_name(model_to_use) or "o200k_base"
 
 
-def is_listed_openai_model(model: str) -> bool:
-    """Whether `model` names an OpenAI or Azure OpenAI model the cost map lists, with or without its prefixes."""
-    return _listed_openai_model_name(model) is not None
+def is_openai_model(model: str) -> bool:
+    """Whether `model` names an OpenAI or Azure OpenAI model, listed in the cost map or counted with o200k_base by
+    tiktoken, with or without its prefixes."""
+    return _openai_model_name(model) is not None
 
 
 def deployment_openai_model(deployment: object) -> str | None:
-    """The listed OpenAI model a router deployment serves, read from its base model first, since a custom deployment
-    name (`azure/my-gpt-5`) says nothing about its tokenizer, or None when it serves no listed OpenAI model."""
+    """The OpenAI model a router deployment serves, read from its base model first, since a custom deployment name
+    (`azure/my-gpt-5`) says nothing about its tokenizer, or None when it serves no OpenAI model."""
     served: Final = next(iter(deployment_pricing_models(deployment)), None)
-    return served if served is not None and is_listed_openai_model(served) else None
+    return served if served is not None and is_openai_model(served) else None
+
+
+def served_openai_models(deployments: Iterable[object]) -> tuple[str | None, ...]:
+    """The distinct OpenAI models `deployments` serve, with None standing for any deployment serving another model."""
+    return tuple(dict.fromkeys(deployment_openai_model(deployment) for deployment in deployments))
+
+
+def single_encoding_openai_model(served: Sequence[str | None]) -> str | None:
+    """An OpenAI model to count a request with, when every `served_openai_models` entry is an OpenAI model on the same
+    encoding, else None."""
+    if not served or None in served:
+        return None
+    encodings: Final = frozenset(openai_tokenizer_encoding_name(model) for model in served if model is not None)
+    return served[0] if len(encodings) == 1 else None
+
+
+def _openai_model_name(model: str) -> str | None:
+    return _listed_openai_model_name(model) or _tiktoken_o200k_model_name(model)
+
+
+def _tiktoken_o200k_model_name(model: str) -> str | None:
+    name: Final = model.rsplit("/", 1)[-1]
+    return name if _tiktoken_encoding_name(name) == "o200k_base" else None
 
 
 def _listed_openai_model_name(model: str) -> str | None:
@@ -848,7 +873,7 @@ def _is_azure_openai_text_model(model: str) -> bool:
 def _is_openai_model_name(name: str) -> bool:
     return (
         name in litellm.open_ai_chat_completion_models
-        or _tiktoken_knows(name)
+        or _tiktoken_encoding_name(name) is not None
         or any(
             name.startswith(f"{listed}-") or listed.startswith(f"{name}-")
             for listed in litellm.open_ai_chat_completion_models
@@ -856,11 +881,11 @@ def _is_openai_model_name(name: str) -> bool:
     )
 
 
-def _tiktoken_knows(model: str) -> bool:
+def _tiktoken_encoding_name(model: str) -> str | None:
     try:
-        return bool(tiktoken.encoding_name_for_model(model))
+        return tiktoken.encoding_name_for_model(model)
     except KeyError:
-        return False
+        return None
 
 
 def _suffixed_variant_encoding_name(model: str) -> str | None:

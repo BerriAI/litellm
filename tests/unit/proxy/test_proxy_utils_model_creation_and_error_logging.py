@@ -2308,6 +2308,23 @@ def test_a_failed_dispatch_is_estimated_as_input_only():
     assert usage.total_tokens == usage.prompt_tokens
 
 
+def test_a_failed_dispatch_to_a_custom_named_deployment_is_counted_with_its_base_model():
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _estimated_prompt_usage, count_request_input_tokens
+
+    messages: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+    logging_obj = _dispatched_failure_logging_obj(
+        "my-gpt-6", get_litellm_params(metadata={"model_info": {"base_model": "azure/gpt-6.1-sol"}})
+    )
+    logging_obj.model_call_details["messages"] = messages
+
+    usage: Final = _estimated_prompt_usage(logging_obj.model_call_details, {}, "acompletion")
+
+    assert usage is not None
+    assert usage.prompt_tokens == count_request_input_tokens("azure/gpt-6.1-sol", messages, None)
+    assert usage.prompt_tokens != count_request_input_tokens("my-gpt-6", messages, None)
+
+
 @pytest.mark.parametrize("request_input", [[], object()])
 def test_nothing_is_estimated_when_there_is_nothing_to_count(request_input):
     from litellm.proxy.utils import _estimate_dispatched_failure_usage
