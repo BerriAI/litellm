@@ -210,8 +210,8 @@ class TestBedrockNative:
     def test_bedrock_json_schema_response_exposes_text_before_json_tool_call(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        model = f"e2e-bedrock-json-mode-preamble-{unique_marker()}"
-        model_id = proxy.create_model(
+        model: Final = f"e2e-bedrock-json-mode-preamble-{unique_marker()}"
+        model_id: Final = proxy.create_model(
             model,
             LiteLLMParamsBody(
                 model=BEDROCK_JSON_SCHEMA_BACKEND,

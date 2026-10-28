@@ -6761,7 +6761,7 @@ def _transform_json_mode_content_blocks(content: list[dict[str, object]]) -> Mod
             return json.dumps(response_json)
 
     return AmazonConverseConfig()._transform_response(
-        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-5-5",
         response=MockResponse(),
         model_response=ModelResponse(),
         stream=False,
@@ -6795,7 +6795,7 @@ def test_bedrock_json_mode_preserves_nonblank_text_before_json_tool_call():
 
 
 def test_bedrock_json_mode_omits_whitespace_only_preamble():
-    result: Final = _transform_json_mode_content_blocks(
+    whitespace_result: Final = _transform_json_mode_content_blocks(
         [
             {"text": " \n\t"},
             {
@@ -6808,9 +6808,25 @@ def test_bedrock_json_mode_omits_whitespace_only_preamble():
         ]
     )
 
-    message: Final = result.choices[0].message
-    assert message.content == '{"answer": 42}'
-    assert "json_mode_preamble_text" not in (message.provider_specific_fields or {})
+    whitespace_message: Final = whitespace_result.choices[0].message
+    assert whitespace_message.content == '{"answer": 42}'
+    assert "json_mode_preamble_text" not in (whitespace_message.provider_specific_fields or {})
+
+    preamble: Final = "Here is the answer. "
+    nonblank_result: Final = _transform_json_mode_content_blocks(
+        [
+            {"text": preamble},
+            {
+                "toolUse": {
+                    "toolUseId": "tooluse_json_001",
+                    "name": "json_tool_call",
+                    "input": {"answer": 42},
+                }
+            },
+        ]
+    )
+    nonblank_message: Final = nonblank_result.choices[0].message
+    assert nonblank_message.provider_specific_fields["json_mode_preamble_text"] == preamble
 
 
 def test_bedrock_json_mode_preamble_preserves_reasoning_content_fields():
