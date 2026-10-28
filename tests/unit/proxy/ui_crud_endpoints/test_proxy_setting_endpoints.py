@@ -1359,35 +1359,45 @@ class TestProxySettingEndpoints:
         assert values["logo_url"] == "https://cdn.example.com/logo.png"
         assert values["favicon_url"] == "https://cdn.example.com/favicon.ico"
 
+    @pytest.mark.parametrize("env_logo", [
+        "https://env.example.com/logo.png", "/mnt/secret/internal/logo.png",
+    ])
     def test_get_ui_theme_settings_stored_value_wins_over_env(
-        self, mock_auth, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, env_logo: str,
+    ) -> None:
         """A stored ui_theme_config field outranks the env var for that field.
 
         The env fallback only fills fields the stored config leaves blank, so the
         UI-driven flow is unchanged while an unstored field still resolves.
         """
         from litellm.proxy.proxy_server import proxy_config
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UIThemeSettingsResponse
 
-        stored_config = {
+        stored_config: Final[dict[str, object]] = {
             "litellm_settings": {
-                "ui_theme_config": {"logo_url": "https://db.example.com/logo.png"}
+                "ui_theme_config": {
+                    "logo_url": "https://db.example.com/logo.png",
+                    "logo_url_dark": "https://db.example.com/logo-dark.png",
+                }
             }
         }
 
-        async def mock_get_config():
+        async def mock_get_config() -> dict[str, object]:
             return stored_config
 
         monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
-        monkeypatch.setenv("UI_LOGO_PATH", "https://env.example.com/logo.png")
+        monkeypatch.setenv("UI_LOGO_PATH", env_logo)
+        monkeypatch.setenv("UI_LOGO_PATH_DARK", env_logo)
         monkeypatch.setenv("LITELLM_FAVICON_URL", "https://env.example.com/favicon.ico")
 
-        response = client.get("/get/ui_theme_settings")
+        response: Final = client.get("/get/ui_theme_settings")
 
         assert response.status_code == 200
-        values = response.json()["values"]
-        assert values["logo_url"] == "https://db.example.com/logo.png"
-        assert values["favicon_url"] == "https://env.example.com/favicon.ico"
+        result: Final = UIThemeSettingsResponse.model_validate(response.json())
+        assert result.values["logo_url"] == "https://db.example.com/logo.png"
+        assert result.values["logo_url_dark"] == "https://db.example.com/logo-dark.png"
+        assert result.values["favicon_url"] == "https://env.example.com/favicon.ico"
+        assert (result.logo_url_via_proxy, result.logo_url_dark_via_proxy) == (False, False)
 
     def test_get_ui_theme_settings_reports_unset_when_absent_everywhere(
         self, mock_proxy_config, monkeypatch
@@ -1403,22 +1413,45 @@ class TestProxySettingEndpoints:
         assert values["logo_url"] is None
         assert values["favicon_url"] is None
 
-    def test_get_ui_theme_settings_does_not_disclose_local_path_env_value(
-        self, mock_proxy_config, monkeypatch
-    ):
-        """This endpoint is public, so an env-configured local filesystem branding
-        path must never be surfaced to anonymous callers; only public http(s) URLs.
-        """
-        monkeypatch.setenv("UI_LOGO_PATH", "/mnt/secret/internal/logo.png")
+    @pytest.mark.usefixtures("mock_proxy_config")
+    @pytest.mark.parametrize("light,public_light,light_via_proxy", [
+        (None, None, False),
+        ("  ", None, False),
+        ("https://cdn.example.com/light.png", "https://cdn.example.com/light.png", False),
+        ("/mnt/secret/internal/light.png", None, True),
+    ])
+    @pytest.mark.parametrize("dark,public_dark,dark_via_proxy", [
+        (None, None, False),
+        ("  ", None, False),
+        ("https://cdn.example.com/dark.png", "https://cdn.example.com/dark.png", False),
+        ("/mnt/secret/internal/dark.png", None, True),
+    ])
+    def test_get_ui_theme_settings_separates_private_logo_rendering_from_settings(
+        self, monkeypatch: pytest.MonkeyPatch,
+        light: str | None, public_light: str | None, light_via_proxy: bool,
+        dark: str | None, public_dark: str | None, dark_via_proxy: bool,
+    ) -> None:
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UIThemeSettingsResponse
+
+        for key, value in (("UI_LOGO_PATH", light), ("UI_LOGO_PATH_DARK", dark)):
+            if value is None:
+                monkeypatch.delenv(key, raising=False)
+            else:
+                monkeypatch.setenv(key, value)
         monkeypatch.setenv("LITELLM_FAVICON_URL", "file:///etc/favicon.ico")
 
-        response = client.get("/get/ui_theme_settings")
+        response: Final = client.get("/get/ui_theme_settings")
 
         assert response.status_code == 200
-        values = response.json()["values"]
-        # the local path / file scheme is withheld rather than disclosed
-        assert values["logo_url"] is None
-        assert values["favicon_url"] is None
+        result: Final = UIThemeSettingsResponse.model_validate(response.json())
+        assert (result.values["logo_url"], result.values["logo_url_dark"]) == (public_light, public_dark)
+        assert (result.logo_url_via_proxy, result.logo_url_dark_via_proxy) == (light_via_proxy, dark_via_proxy)
+        assert result.values["favicon_url"] is None
+        assert "/mnt/secret/internal/" not in response.text
+        assert "file:///etc/favicon.ico" not in response.text
+        for hint in ("logo_url_via_proxy", "logo_url_dark_via_proxy"):
+            assert hint not in result.values
+            assert hint not in json.dumps(result.field_schema)
 
     def test_get_ui_settings(self, mock_auth, monkeypatch):
         """Test retrieving UI settings with allowlist sanitization"""

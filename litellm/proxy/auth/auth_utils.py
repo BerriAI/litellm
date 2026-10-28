@@ -48,6 +48,16 @@ from litellm.types.utils import CustomPricingLiteLLMParams, oauth_token_exchange
 from litellm.types.videos.main import DecodedVideoId
 
 
+def is_unauthorized_error(exception: BaseException | None) -> bool:
+    """True when the proxy itself rejected the caller's credentials with a 401."""
+    if not isinstance(exception, (HTTPException, ProxyException)):
+        return False
+
+    code: Final[object] = getattr(exception, "code", None)
+    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
+    return str(status_code) == str(status.HTTP_401_UNAUTHORIZED)
+
+
 def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
     """True when an authentication error rejects a malformed virtual key.
 
@@ -57,15 +67,7 @@ def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
     match would let a request body demote an authorization failure to the
     quiet log path.
     """
-    if not isinstance(exception, (HTTPException, ProxyException)):
-        return False
-
-    code: Final[object] = getattr(exception, "code", None)
-    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
-    if str(status_code) != str(status.HTTP_401_UNAUTHORIZED):
-        return False
-
-    return getattr(exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, False) is True
+    return is_unauthorized_error(exception) and getattr(exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, False) is True
 
 
 def log_model_access_denial(exc: BaseException) -> None:
@@ -736,7 +738,9 @@ def is_request_body_safe(
 
 def _reject_request_credential_params(litellm_params: Mapping[str, object], *, manages_deployments: bool) -> None:
     if manages_deployments:
-        reject_server_owned_wif_fields(litellm_params)
+        reject_server_owned_wif_fields(
+            MappingProxyType({key: value for key, value in litellm_params.items() if key != "chatgpt_auth_file"})
+        )
     else:
         reject_server_owned_wif_params(litellm_params)
         reject_federated_credential_reference(litellm_params)
