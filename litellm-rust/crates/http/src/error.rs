@@ -41,6 +41,8 @@ pub(crate) enum Repr {
     Request(#[source] http::Error),
     #[error("invalid request")]
     RequestUrl(#[source] reqwest::Error),
+    #[error("invalid request URL")]
+    ParseUrl(#[source] url::ParseError),
     #[error("request forwards the header {0:?}, which the signer computes")]
     ComputedHeader(String),
     #[error("request signing failed: a streaming body cannot be signed")]
@@ -179,6 +181,7 @@ impl Error {
             | Repr::RequestBody(_)
             | Repr::Request(_)
             | Repr::RequestUrl(_)
+            | Repr::ParseUrl(_)
             | Repr::ComputedHeader(_)
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
@@ -204,6 +207,7 @@ impl Error {
         match &*self.0 {
             Repr::Request(_)
             | Repr::RequestUrl(_)
+            | Repr::ParseUrl(_)
             | Repr::ComputedHeader(_)
             | Repr::UnsignableHeader(_)
             | Repr::WebSocketUrl(_)
@@ -247,6 +251,7 @@ impl Error {
             | Repr::RequestBody(_)
             | Repr::Request(_)
             | Repr::RequestUrl(_)
+            | Repr::ParseUrl(_)
             | Repr::ComputedHeader(_)
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
@@ -283,6 +288,7 @@ impl Error {
             | Repr::RequestBody(_)
             | Repr::Request(_)
             | Repr::RequestUrl(_)
+            | Repr::ParseUrl(_)
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
@@ -321,6 +327,7 @@ impl Error {
             | Repr::RequestBody(_)
             | Repr::Request(_)
             | Repr::RequestUrl(_)
+            | Repr::ParseUrl(_)
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
@@ -357,6 +364,7 @@ impl Error {
             | Repr::RequestBody(_)
             | Repr::Request(_)
             | Repr::RequestUrl(_)
+            | Repr::ParseUrl(_)
             | Repr::ComputedHeader(_)
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
@@ -392,6 +400,7 @@ impl Error {
             | Repr::RequestBody(_)
             | Repr::Request(_)
             | Repr::RequestUrl(_)
+            | Repr::ParseUrl(_)
             | Repr::ComputedHeader(_)
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
@@ -430,6 +439,7 @@ impl Error {
             | Repr::RequestBody(_)
             | Repr::Request(_)
             | Repr::RequestUrl(_)
+            | Repr::ParseUrl(_)
             | Repr::ComputedHeader(_)
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
@@ -464,6 +474,7 @@ impl Error {
             | Repr::RequestBody(_)
             | Repr::Request(_)
             | Repr::RequestUrl(_)
+            | Repr::ParseUrl(_)
             | Repr::ComputedHeader(_)
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)

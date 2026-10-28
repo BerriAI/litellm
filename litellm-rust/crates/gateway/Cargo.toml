@@ -20,6 +20,8 @@ litellm-gateway-ui.workspace = true
 litellm-auth-types.workspace = true
 litellm-config.workspace = true
 litellm-error.workspace = true
+litellm-circuit-breaker.workspace = true
+litellm-redis-client.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
 litellm-secrets.workspace = true
@@ -32,6 +34,7 @@ uuid.workspace = true
 tower-sessions-moka-store = "0.15.0"
 
 [dev-dependencies]
+litellm-redis-testing.workspace = true
 base64.workspace = true
 rstest.workspace = true
 tempfile.workspace = true

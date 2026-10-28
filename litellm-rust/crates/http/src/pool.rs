@@ -8,7 +8,7 @@ use reqwest::dns::Resolve;
 
 use crate::{
     client::Client,
-    config::HttpClientConfig,
+    config::{HttpClientConfig, Verify},
     error::{Error, Repr},
     proxy::EnvironmentProxies,
 };
@@ -67,6 +67,10 @@ impl HttpClientPool {
             },
             ClientVariant::WebSocket => HttpClientConfig {
                 http2: false,
+                verify: match &config.verify {
+                    Verify::BuiltInRoots => Verify::NativeRoots,
+                    verify => verify.clone(),
+                },
                 ..config.clone()
             },
             ClientVariant::Provider | ClientVariant::NoRedirect => config.clone(),

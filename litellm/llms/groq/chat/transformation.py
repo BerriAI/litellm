@@ -11,7 +11,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.prompt_templates.common_utils import strip_litellm_response_only_fields
+from litellm.litellm_core_utils.prompt_templates.common_utils import strip_litellm_internal_message_fields
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
 )
@@ -40,6 +40,7 @@ class GroqExecutedToolIdentity(LiteLLMBaseModel):
 
 
 _EXECUTED_TOOLS_ADAPTER: Final = TypeAdapter(tuple[GroqExecutedToolIdentity, ...])
+_ATTRIBUTE_VALUE: Final = TypeAdapter(object)
 
 
 class GroqChatConfig(OpenAILikeChatConfig):
@@ -153,7 +154,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
                 for k, v in _message.items():
                     if v is not None:
                         new_message[k] = v
-                messages[idx] = strip_litellm_response_only_fields(new_message)
+                messages[idx] = strip_litellm_internal_message_fields(new_message)
 
         if is_async:
             return super()._transform_messages(messages=messages, model=model, is_async=True)
@@ -324,7 +325,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
             json_mode=json_mode,
         )
 
-        original_service_tier: Final[object] = getattr(model_response, "service_tier")
+        original_service_tier: Final = _ATTRIBUTE_VALUE.validate_python(getattr(model_response, "service_tier"))
         mapped_service_tier: Final[Literal["auto", "default", "flex"]] = self._map_groq_service_tier(
             original_service_tier=original_service_tier
         )
