@@ -198,7 +198,7 @@ class ResponsesIDSecurity(CustomLogger):
         if comparison_id is None:
             return _NOTHING_AUTHORIZED
         authorized_options: Final = _with_comparison_response_id(
-            options, self._authorized_comparison_id(comparison_id, user_api_key_dict)
+            options, self.authorize_comparison_id(comparison_id, user_api_key_dict)
         )
         placed_options: Final = (
             {_PROMPT_CACHE_OPTIONS: authorized_options}
@@ -207,7 +207,7 @@ class ResponsesIDSecurity(CustomLogger):
         )
         return {**placed_options, COMPARISON_RESPONSE_ID_FIELD: comparison_id}
 
-    def _authorized_comparison_id(self, comparison_id: str, user_api_key_dict: "UserAPIKeyAuth") -> str:
+    def authorize_comparison_id(self, comparison_id: str, user_api_key_dict: "UserAPIKeyAuth") -> str:
         if not self._is_encrypted_response_id(comparison_id):
             return comparison_id
         return self.authorize_response_id(comparison_id, user_api_key_dict)

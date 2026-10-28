@@ -662,11 +662,13 @@ async def test_aresponses_websocket_keeps_routing_hints_out_of_the_relay_kwargs(
             litellm_logging_obj=MagicMock(),
             input=[{"type": "message", "role": "user", "content": "hi"}],
             previous_response_id="resp_prev",
+            prompt_cache_options={"comparison_response_id": "resp_compared"},
         )
 
         mock_ws.assert_awaited_once()
         assert "input" not in mock_ws.call_args.kwargs
         assert "previous_response_id" not in mock_ws.call_args.kwargs
+        assert "prompt_cache_options" not in mock_ws.call_args.kwargs
 
 
 _STRIPPED_WS_INPUT = [{"role": "user", "content": "hi"}]
