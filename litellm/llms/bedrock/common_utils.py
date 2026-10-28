@@ -367,6 +367,7 @@ _BEDROCK_STRICT_TOOLS_REJECTION: Final = re.compile(
     r"|Schemas contains too many (?:optional parameters|parameters with union types)"
     r"|[Cc]ompiled grammar (?:is too large|size)"
     r"|tools\.\d+\.custom(?:\.strict)?: "
+    r"|Grammar compilation timed out"
 )
 _TOOLS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _TOOL_SPEC_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -404,7 +405,9 @@ def bedrock_strict_tools_fallback(
     model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
 ) -> NativeOutputFallback | None:
     tools: Final = _TOOLS_ADAPTER.validate_python(optional_params.get("tools", ()))
-    supports_strict_tools: Final = bedrock_converse_supports_strict_tools(model)
+    supports_strict_tools: Final = bedrock_converse_supports_strict_tools(
+        bedrock_capability_model(model, litellm_params.get("base_model"))
+    )
     if not any(_sends_strict(tool, supports_strict_tools) for tool in tools):
         return None
     return NativeOutputFallback(

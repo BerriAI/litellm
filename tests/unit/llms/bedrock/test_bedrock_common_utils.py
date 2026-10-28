@@ -7,7 +7,6 @@ from litellm.llms.bedrock.common_utils import(
     AmazonBedrockGlobalConfig,
     BedrockModelInfo,
     NativeOutputFallback,
-    bedrock_converse_supports_strict_tools,
     bedrock_native_output_is_opt_in,
     bedrock_strict_tools_fallback,
     deployment_model_info,
@@ -2202,11 +2201,31 @@ def test_bedrock_strict_tools_fallback_is_none_without_a_strict_tool(optional_pa
     assert bedrock_strict_tools_fallback("us.anthropic.claude-sonnet-4-6", optional_params, {}) is None
 
 
-@pytest.mark.parametrize("model", ["us.anthropic.claude-sonnet-4-6", "us.amazon.nova-pro-v1:0"])
+_CLAUDE_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude"
+
+
+@pytest.mark.parametrize(
+    ("model", "litellm_params"),
+    [
+        ("us.anthropic.claude-sonnet-4-6", {}),
+        ("us.amazon.nova-pro-v1:0", {}),
+        (_CLAUDE_PROFILE_ARN, {"base_model": "bedrock/us.anthropic.claude-sonnet-4-6"}),
+        (_CLAUDE_PROFILE_ARN, {}),
+    ],
+    ids=["claude", "nova", "claude_profile_with_base_model", "profile_without_base_model"],
+)
 @pytest.mark.parametrize("strict", [True, False])
-def test_bedrock_strict_tools_fallback_retries_only_when_strict_reaches_bedrock(model: str, strict: bool) -> None:
-    tool: Final = {"type": "function", "function": {"name": "lookup", "strict": strict, "parameters": {}}}
+def test_bedrock_strict_tools_fallback_retries_only_when_the_request_sent_strict(
+    model: str, litellm_params: dict[str, object], strict: bool
+) -> None:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
-    fallback: Final = bedrock_strict_tools_fallback(model, {"tools": [tool]}, {})
+    tools: Final = [{"type": "function", "function": {"name": "lookup", "strict": strict, "parameters": {}}}]
+    request: Final = AmazonConverseConfig().transform_request(
+        model, [{"role": "user", "content": "hi"}], {"tools": tools}, {**litellm_params}, {}
+    )
+    sent_strict: Final = any("strict" in tool["toolSpec"] for tool in request["toolConfig"]["tools"])
 
-    assert (fallback is not None) == (strict and bedrock_converse_supports_strict_tools(model))
+    fallback: Final = bedrock_strict_tools_fallback(model, {"tools": tools}, litellm_params)
+
+    assert (fallback is not None) == sent_strict

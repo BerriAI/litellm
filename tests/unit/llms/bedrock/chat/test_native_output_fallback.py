@@ -124,8 +124,8 @@ def test_a_rejection_logs_the_retry_and_advises_opting_out_only_when_native_outp
 
 
 _STRICT_FALLBACK: Final = NativeOutputFallback(optional_params={"tools": "without_strict"}, litellm_params={})
-# Bedrock's 400s for strict tools, seen live on us.anthropic.claude-sonnet-4-6 on 2026-10-20 and quoted in issue #34388,
-# each answered 200 once the request dropped strict
+# Bedrock's 400s for strict tools, seen live on us.anthropic.claude-sonnet-4-6 from 2026-10-20 to 2026-10-28 and quoted
+# in issue #34388, each answered 200 once the request dropped strict
 _STRICT_TOOLS_REJECTIONS: Final = tuple(
     BedrockError(status_code=400, message=f'{{"message":"The model returned the following errors: {text}"}}')
     for text in (
@@ -138,6 +138,7 @@ _STRICT_TOOLS_REJECTIONS: Final = tuple(
         "tools.3.custom: For 'integer' type, property 'minimum' is not supported",
         "Compiled grammar size (410.4MB) exceeds maximum allowed size (300MB)",
         "tools.1.custom.strict: Extra inputs are not permitted",
+        "Grammar compilation timed out.",
     )
 )
 _TOO_MANY_STRICT_TOOLS: Final = _STRICT_TOOLS_REJECTIONS[0]
