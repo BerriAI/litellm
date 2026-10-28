@@ -16,6 +16,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
@@ -1652,24 +1653,27 @@ def _estimate_output_tokens(
 _OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_output_tokens")
 
 
+def _nested_field(request_body: Mapping[str, object], config_field: str, field: str) -> object:
+    config: Final = as_str_mapping(request_body.get(config_field))
+    return config.get(field) if config is not None else None
+
+
 def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
-    inference_config: Final = request_body.get("inferenceConfig")
-    generation_config: Final = request_body.get("generationConfig")
     candidates: Final = (
         *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
-        inference_config.get("maxTokens") if isinstance(inference_config, Mapping) else None,
-        generation_config.get("maxOutputTokens") if isinstance(generation_config, Mapping) else None,
+        _nested_field(request_body, "inferenceConfig", "maxTokens"),
+        _nested_field(request_body, "generationConfig", "maxOutputTokens"),
     )
     return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
 
 
-def _get_output_multiplier(request_body: dict) -> int:
-    output_multiplier = 1
-    for key in ("n", "best_of"):
-        value = _to_int(request_body.get(key))
-        if value is not None:
-            output_multiplier = max(output_multiplier, value)
-    return output_multiplier
+def _get_output_multiplier(request_body: Mapping[str, object]) -> int:
+    candidates: Final = (
+        request_body.get("n"),
+        request_body.get("best_of"),
+        _nested_field(request_body, "generationConfig", "candidateCount"),
+    )
+    return max((1, *(count for count in map(_to_int, candidates) if count is not None)))
 
 
 def _is_input_only_route(route: str) -> bool:

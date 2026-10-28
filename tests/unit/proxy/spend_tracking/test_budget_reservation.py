@@ -177,7 +177,7 @@ def test_bedrock_converse_body_reserves_the_prompt_not_the_context_window():
 
 
 GEMINI_PROMPT: Final = "Say hello in five words"
-GEMINI_SYSTEM: Final = "Answer tersely"
+GEMINI_SYSTEM_PARTS: Final = ("Answer tersely", "Use British spelling")
 
 
 @pytest.mark.parametrize(
@@ -190,14 +190,22 @@ GEMINI_SYSTEM: Final = "Answer tersely"
 )
 @pytest.mark.parametrize(
     ("native_output_config", "chat_output_limit"),
-    (({"generationConfig": {"maxOutputTokens": 5}}, {"max_tokens": 5}), ({}, {})),
+    (
+        ({"generationConfig": {"maxOutputTokens": 5}}, {"max_tokens": 5}),
+        ({"generationConfig": {"maxOutputTokens": 5, "candidateCount": 3}}, {"max_tokens": 5, "n": 3}),
+        ({}, {}),
+    ),
 )
+@pytest.mark.parametrize("system_texts", (GEMINI_SYSTEM_PARTS[:1], GEMINI_SYSTEM_PARTS))
 def test_gemini_generate_content_body_reserves_the_prompt_not_the_context_window(
-    route: str, native_output_config: dict[str, object], chat_output_limit: dict[str, object]
+    route: str,
+    native_output_config: dict[str, object],
+    chat_output_limit: dict[str, object],
+    system_texts: tuple[str, ...],
 ) -> None:
     native_cost: Final = estimate_request_max_cost(
         request_body={
-            "systemInstruction": {"parts": [{"text": GEMINI_SYSTEM}]},
+            "systemInstruction": {"parts": [{"text": text} for text in system_texts]},
             "contents": [{"role": "user", "parts": [{"text": GEMINI_PROMPT}]}],
             **native_output_config,
         },
@@ -209,7 +217,7 @@ def test_gemini_generate_content_body_reserves_the_prompt_not_the_context_window
         request_body={
             "model": "gemini-3.8-flash",
             "messages": [
-                {"role": "system", "content": GEMINI_SYSTEM},
+                {"role": "system", "content": [{"type": "text", "text": text} for text in system_texts]},
                 {"role": "user", "content": GEMINI_PROMPT},
             ],
             **chat_output_limit,
