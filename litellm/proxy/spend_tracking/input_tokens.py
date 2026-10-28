@@ -15,10 +15,13 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     billable_input_since_newest_compaction,
     holds_compaction_summary,
@@ -35,7 +38,20 @@ from litellm.rust_bridge.token_counter import (
 
 TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
 
-_INPUT_SIZE_FIELDS: Final = ("messages", "prompt", "input", "query", "documents", "tools", "tool_choice")
+_GEMINI_SYSTEM_INSTRUCTION_FIELDS: Final = ("systemInstruction", "system_instruction")
+_GeminiContents: TypeAlias = list[dict[str, object]] | dict[str, object]
+_GEMINI_CONTENTS: Final = TypeAdapter[_GeminiContents](_GeminiContents)
+_INPUT_SIZE_FIELDS: Final = (
+    "messages",
+    "prompt",
+    "input",
+    "query",
+    "documents",
+    "contents",
+    *_GEMINI_SYSTEM_INSTRUCTION_FIELDS,
+    "tools",
+    "tool_choice",
+)
 
 
 def _approximate_input_size(request_body: Mapping[str, object]) -> int:
@@ -48,7 +64,7 @@ def _approximate_input_size(request_body: Mapping[str, object]) -> int:
 
 
 async def count_input_tokens(
-    request_body: dict,
+    request_body: dict[str, object],
     raw_body: bytes | None,
     models: Sequence[str],
 ) -> Mapping[str, int]:
@@ -74,7 +90,7 @@ async def count_input_tokens(
 
 
 async def _count_group(
-    request_body: dict,
+    request_body: dict[str, object],
     raw_body: bytes | None,
     tokenizer: RustTokenizer | None,
     models: tuple[str, ...],
@@ -118,7 +134,7 @@ async def _native_counts(
 
 
 def _count_input_tokens_for_models(
-    request_body: dict,
+    request_body: dict[str, object],
     models: Sequence[str],
 ) -> Mapping[str, int]:
     return MappingProxyType(
@@ -142,6 +158,8 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
                 )
             except ValueError:
                 return _count_text_tokens(model=model, text=request_body.get("messages"))
+        if "contents" in request_body:
+            return _count_gemini_input_tokens(request_body=request_body, model=model)
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:
@@ -158,6 +176,20 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
     except Exception:
         verbose_proxy_logger.debug("Unable to count input tokens for budget reservation", exc_info=True)
     return None
+
+
+def _count_gemini_input_tokens(request_body: Mapping[str, object], model: str) -> int | None:
+    system_instruction: Final = next(
+        (request_body[field] for field in _GEMINI_SYSTEM_INSTRUCTION_FIELDS if field in request_body), None
+    )
+    translate: Final = GoogleGenAIAdapter().translate_generate_content_to_completion  # pyright: ignore[reportUnknownMemberType]  # adapter's **kwargs is untyped
+    chat_request: Final = translate(
+        model=model,
+        contents=_GEMINI_CONTENTS.validate_python(request_body["contents"]),
+        systemInstruction=system_instruction,
+        tools=request_body.get("tools"),
+    )
+    return count_input_tokens_for_model(request_body=chat_request, model=model)
 
 
 def _count_text_tokens(model: str, text: object) -> int:

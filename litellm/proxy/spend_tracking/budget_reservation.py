@@ -1654,9 +1654,11 @@ _OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_outpu
 
 def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
     inference_config: Final = request_body.get("inferenceConfig")
+    generation_config: Final = request_body.get("generationConfig")
     candidates: Final = (
         *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
         inference_config.get("maxTokens") if isinstance(inference_config, Mapping) else None,
+        generation_config.get("maxOutputTokens") if isinstance(generation_config, Mapping) else None,
     )
     return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
 

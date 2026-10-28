@@ -176,6 +176,52 @@ def test_bedrock_converse_body_reserves_the_prompt_not_the_context_window():
     assert invoke_cost < converse_cost < 2 * invoke_cost
 
 
+GEMINI_PROMPT: Final = "Say hello in five words"
+GEMINI_SYSTEM: Final = "Answer tersely"
+
+
+@pytest.mark.parametrize(
+    "route",
+    (
+        "/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
+        "/gemini/v1beta/models/gemini-3.8-flash:generateContent",
+        "/v1beta/models/gemini-3.8-flash:generateContent",
+    ),
+)
+@pytest.mark.parametrize(
+    ("native_output_config", "chat_output_limit"),
+    (({"generationConfig": {"maxOutputTokens": 5}}, {"max_tokens": 5}), ({}, {})),
+)
+def test_gemini_generate_content_body_reserves_the_prompt_not_the_context_window(
+    route: str, native_output_config: dict[str, object], chat_output_limit: dict[str, object]
+) -> None:
+    native_cost: Final = estimate_request_max_cost(
+        request_body={
+            "systemInstruction": {"parts": [{"text": GEMINI_SYSTEM}]},
+            "contents": [{"role": "user", "parts": [{"text": GEMINI_PROMPT}]}],
+            **native_output_config,
+        },
+        route=route,
+        llm_router=None,
+        input_token_counts={},
+    )
+    chat_cost: Final = estimate_request_max_cost(
+        request_body={
+            "model": "gemini-3.8-flash",
+            "messages": [
+                {"role": "system", "content": GEMINI_SYSTEM},
+                {"role": "user", "content": GEMINI_PROMPT},
+            ],
+            **chat_output_limit,
+        },
+        route="/chat/completions",
+        llm_router=None,
+        input_token_counts={},
+    )
+    assert native_cost is not None
+    assert native_cost == chat_cost
+
+
 def _tiered_deployment(input_cost_per_token: float) -> Deployment:
     return Deployment(
         model_name="tiered-group",
