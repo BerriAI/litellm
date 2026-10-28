@@ -6,10 +6,13 @@ Pins (PR2):
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi.testclient import TestClient
 
 from litellm import Router
 from litellm.proxy import proxy_server
@@ -83,6 +86,25 @@ def test_queue_chat_completions_happy(client, auth_as, patched_queue):
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         "priority": 0,
     }
+
+
+def test_queue_chat_completions_drops_client_sent_stream_usage_flags(
+    client: TestClient, auth_as: Callable[..., AbstractContextManager[None]], patched_queue: MagicMock
+) -> None:
+    payload: Final = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "priority": 0,
+        "_litellm_strip_stream_usage": True,
+        "_litellm_stream_usage_injected": True,
+    }
+    with auth_as():
+        response: Final = client.post("/queue/chat/completions", json=payload)
+    assert response.status_code == 200
+    forwarded: Final = patched_queue.schedule_acompletion.call_args.kwargs
+    assert "_litellm_strip_stream_usage" not in forwarded
+    assert "_litellm_stream_usage_injected" not in forwarded
+    assert forwarded["messages"] == [{"role": "user", "content": "hi"}]
 
 
 def test_queue_chat_completions_no_router_error(client, auth_as, queue_no_router):

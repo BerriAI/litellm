@@ -52,9 +52,9 @@ fn fallback_generalizations_are_typed(repo_root: PathBuf) {
 #[case::null_aliases(serde_json::json!({"litellm_provider": "test", "aliases": null}), "aliases must be an array")]
 #[ignore]
 fn registry_validation_rejects_malformed_entries(#[case] entry: Value, #[case] expected: &str) {
+    let error = validate_model_entry("test", &entry).unwrap_err();
     assert!(
-        validate_model_entry("test", &entry)
-            .unwrap_err()
+        litellm_error::Report::new(&error)
             .to_string()
             .contains(expected)
     );
