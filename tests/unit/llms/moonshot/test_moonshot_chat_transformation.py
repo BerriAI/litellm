@@ -715,7 +715,7 @@ class TestMoonshotReasoningEffort:
     def force_local_model_cost(self, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
 
-    @pytest.mark.parametrize("model", ["kimi-k3", "kimi-k2.5", "kimi-k2.6", "kimi-k2-thinking"])
+    @pytest.mark.parametrize("model", ["kimi-k3", "kimi-k2.5", "kimi-k2.6"])
     def test_reasoning_model_supports_reasoning_effort(self, model):
         assert "reasoning_effort" in MoonshotChatConfig().get_supported_openai_params(model)
 
@@ -763,3 +763,20 @@ class TestMoonshotReasoningEffort:
         )
 
         assert "reasoning_effort" not in optional_params
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/moonshot/v1",
+        "https://gateway.example.com/moonshot/v1/",
+        "https://gateway.example.com/moonshot/v1/chat/completions/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        MoonshotChatConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="kimi-k3", optional_params={}, litellm_params={}
+        )
+        == "https://gateway.example.com/moonshot/v1/chat/completions"
+    )

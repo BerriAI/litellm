@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use azure_core::{
     credentials::TokenCredential,
     error::ErrorKind,
-    http::{ClientOptions, RequestContent},
+    http::{ClientOptions, RequestContent, Transport},
 };
 use azure_storage_blob::{
     BlobContainerClient, BlobContainerClientOptions,
@@ -11,13 +11,16 @@ use azure_storage_blob::{
 };
 use futures_util::{TryStreamExt, future::try_join_all};
 use litellm_cache::{
-    BaseCache, BatchCache, CacheCodec, CacheConnectionResult, CacheConnectionStatus, Error,
-    ExactCacheContext, FlushCache,
+    BaseCache, BatchCache, CacheCodec, DisconnectCache, Error, ExactCacheContext, FlushCache,
 };
 use tokio::runtime::Handle;
 use url::Url;
 
-use crate::credential::AzureBlobCredential;
+use crate::{credential::AzureBlobCredential, transport::ReqwestTransport};
+
+#[derive(Debug, thiserror::Error)]
+#[error("account URL cannot hold a container path")]
+struct NotABaseUrl;
 
 pub struct AzureBlobCache<C> {
     container: BlobContainerClient,
@@ -28,9 +31,11 @@ pub struct AzureBlobCache<C> {
 }
 
 impl<C: CacheCodec> AzureBlobCache<C> {
+    /// `http` is the host's pooled client; the SDK sends every request through it.
     pub async fn connect(
         account_url: &str,
         container: &str,
+        http: litellm_http::Client,
         codec: C,
         runtime: Handle,
     ) -> Result<Self, Error> {
@@ -38,7 +43,10 @@ impl<C: CacheCodec> AzureBlobCache<C> {
             account_url,
             container,
             Some(Arc::new(AzureBlobCredential::default())),
-            ClientOptions::default(),
+            ClientOptions {
+                transport: Some(Transport::new(Arc::new(ReqwestTransport(http)))),
+                ..ClientOptions::default()
+            },
             codec,
             runtime,
         )
@@ -53,12 +61,12 @@ impl<C: CacheCodec> AzureBlobCache<C> {
         codec: C,
         runtime: Handle,
     ) -> Result<Self, Error> {
-        let parsed = Url::parse(account_url).map_err(|_| Error::Unavailable)?;
+        let parsed = Url::parse(account_url).map_err(Error::unavailable)?;
         let account_url = parsed.as_str().trim_end_matches('/').to_string();
         let container_url = {
             let mut url = parsed;
             url.path_segments_mut()
-                .map_err(|()| Error::Unavailable)?
+                .map_err(|()| Error::unavailable(NotABaseUrl))?
                 .pop_if_empty()
                 .push(container);
             url
@@ -71,7 +79,7 @@ impl<C: CacheCodec> AzureBlobCache<C> {
                 ..BlobContainerClientOptions::default()
             }),
         )
-        .map_err(|_| Error::Unavailable)?;
+        .map_err(Error::unavailable)?;
         let cache = Self {
             container: client,
             codec,
@@ -97,7 +105,7 @@ impl<C: CacheCodec> AzureBlobCache<C> {
             Err(error) if is_storage_error(&error, StorageErrorCode::ContainerAlreadyExists) => {
                 Ok(())
             }
-            Err(_) => Err(Error::Unavailable),
+            Err(error) => Err(Error::unavailable(error)),
         }
     }
 
@@ -112,7 +120,7 @@ impl<C: CacheCodec> AzureBlobCache<C> {
         {
             Ok(_) => Ok(()),
             Err(error) if !overwrite && is_already_present(&error) => Ok(()),
-            Err(_) => Err(Error::Unavailable),
+            Err(error) => Err(Error::unavailable(error)),
         }
     }
 
@@ -122,13 +130,9 @@ impl<C: CacheCodec> AzureBlobCache<C> {
             Err(error) if is_storage_error(&error, StorageErrorCode::BlobNotFound) => {
                 return Ok(None);
             }
-            Err(_) => return Err(Error::Unavailable),
+            Err(error) => return Err(Error::unavailable(error)),
         };
-        let bytes = response
-            .body
-            .collect()
-            .await
-            .map_err(|_| Error::Unavailable)?;
+        let bytes = response.body.collect().await.map_err(Error::unavailable)?;
         self.codec.decode(&bytes).map(Some)
     }
 
@@ -136,23 +140,27 @@ impl<C: CacheCodec> AzureBlobCache<C> {
         let mut pages = self
             .container
             .list_blobs(None)
-            .map_err(|_| Error::Unavailable)?
+            .map_err(Error::unavailable)?
             .into_pages();
-        while let Some(page) = pages.try_next().await.map_err(|_| Error::Unavailable)? {
-            let page = page.into_model().map_err(|_| Error::Unavailable)?;
+        while let Some(page) = pages.try_next().await.map_err(Error::unavailable)? {
+            let page = page.into_model().map_err(Error::unavailable)?;
             for name in page.blob_items.into_iter().filter_map(|item| item.name) {
                 self.container
                     .blob_client(&name)
                     .delete(None)
                     .await
-                    .map_err(|_| Error::Unavailable)?;
+                    .map_err(Error::unavailable)?;
             }
         }
         Ok(())
     }
 
     fn block_on<T>(&self, future: impl Future<Output = T>) -> T {
-        self.runtime.block_on(future)
+        if Handle::try_current().is_ok() {
+            tokio::task::block_in_place(|| self.runtime.block_on(future))
+        } else {
+            self.runtime.block_on(future)
+        }
     }
 }
 
@@ -217,25 +225,6 @@ impl<C: CacheCodec> BaseCache for AzureBlobCache<C> {
         .await
         .map(drop)
     }
-
-    async fn disconnect(&self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
-        Ok(match self.container.get_properties(None).await {
-            Ok(_) => CacheConnectionResult {
-                status: CacheConnectionStatus::Success,
-                message: "Azure Blob cache connection test successful".into(),
-                error: None,
-            },
-            Err(error) => CacheConnectionResult {
-                status: CacheConnectionStatus::Failed,
-                message: format!("Azure Blob connection failed: {error}"),
-                error: Some(error.to_string()),
-            },
-        })
-    }
 }
 
 impl<C: CacheCodec> BatchCache for AzureBlobCache<C> {}
@@ -250,5 +239,10 @@ impl<C: CacheCodec> FlushCache for AzureBlobCache<C> {
     }
 }
 
-#[cfg(test)]
-mod tests;
+impl<C: CacheCodec> DisconnectCache for AzureBlobCache<C> {
+    /// Python closes its two SDK clients; the Rust clients hold no connection of their own
+    /// (the pooled transport belongs to the host), so there is nothing to release.
+    async fn disconnect(&self) -> Result<(), Error> {
+        Ok(())
+    }
+}

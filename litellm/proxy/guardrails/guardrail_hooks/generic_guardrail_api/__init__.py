@@ -32,6 +32,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         additional_provider_specific_params=getattr(litellm_params, "additional_provider_specific_params", {}),
         unreachable_fallback=getattr(litellm_params, "unreachable_fallback", "fail_closed"),
         fail_on_error=getattr(litellm_params, "fail_on_error", True),
+        forward_messages_as_sent=getattr(litellm_params, "forward_messages_as_sent", False),
         extra_headers=getattr(litellm_params, "extra_headers", None),
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
@@ -39,6 +40,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         streaming_end_of_stream_only=_get_config_value(litellm_params, optional_params, "streaming_end_of_stream_only"),
         streaming_sampling_rate=_get_config_value(litellm_params, optional_params, "streaming_sampling_rate"),
         streaming_transform_mode=_get_config_value(litellm_params, optional_params, "streaming_transform_mode"),
+        streaming_buffer_until_moderated=_get_config_value(
+            litellm_params, optional_params, "streaming_buffer_until_moderated"
+        ),
+        timeout=litellm_params.timeout,
+        num_retries=litellm_params.num_retries,
     )
 
     litellm.logging_callback_manager.add_litellm_callback(_generic_guardrail_api_callback)

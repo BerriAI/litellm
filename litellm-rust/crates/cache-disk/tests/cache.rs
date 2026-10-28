@@ -7,8 +7,8 @@ use std::{
 };
 
 use litellm_cache::{
-    BaseCache, BatchCache, BatchEntry, CacheCodec, CounterCache, DeleteCache, ExactCacheContext,
-    FlushCache, JsonCodec,
+    BaseCache, BatchCache, BatchEntry, CacheCodec, CounterCache, DeleteCache, DisconnectCache,
+    ExactCacheContext, FlushCache, JsonCodec,
 };
 use litellm_cache_disk::{DiskCache, DiskStore, DiskcacheSqliteStore, StoredValue, ValueAdapter};
 use rstest::{fixture, rstest};
@@ -395,7 +395,7 @@ fn delete_flush_and_spilled_file_replacement_clean_up_storage(sandbox: Sandbox) 
 
 #[rstest]
 #[tokio::test]
-async fn async_operations_connection_and_delete_match_sync_operations(sandbox: Sandbox) {
+async fn async_operations_disconnect_and_delete_match_sync_operations(sandbox: Sandbox) {
     let cache = sandbox.cache::<Value>();
     let context = ExactCacheContext {
         ttl: Some(Duration::from_secs(60)),
@@ -424,8 +424,101 @@ async fn async_operations_connection_and_delete_match_sync_operations(sandbox: S
     );
     cache.async_delete_cache("a").await.unwrap();
     cache.async_flush_cache().await.unwrap();
+    cache.disconnect().await.unwrap();
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Increment {
+    Sync,
+    Async { refresh_ttl: bool },
+}
+
+impl Increment {
+    async fn apply(
+        self,
+        cache: &DiskCache<JsonCodec<Value>>,
+        key: &str,
+        amount: f64,
+        context: ExactCacheContext,
+    ) -> f64 {
+        match self {
+            Self::Sync => cache.increment_cache(key, amount, context).unwrap(),
+            Self::Async { refresh_ttl } => cache
+                .async_increment(key, amount, context, refresh_ttl)
+                .await
+                .unwrap(),
+        }
+    }
+}
+
+#[rstest]
+#[case::sync_missing(Increment::Sync, None, 3.0, 3.0)]
+#[case::sync_existing_int(Increment::Sync, Some(json!(7)), 5.0, 12.0)]
+#[case::sync_non_int(Increment::Sync, Some(json!("not-a-number")), 4.0, 4.0)]
+#[case::async_missing(Increment::Async { refresh_ttl: false }, None, 2.0, 2.0)]
+#[case::async_existing_int(Increment::Async { refresh_ttl: false }, Some(json!(10)), 5.0, 15.0)]
+#[case::async_non_int(Increment::Async { refresh_ttl: false }, Some(json!("corrupt")), 9.0, 9.0)]
+#[case::async_refresh_ttl_is_ignored(Increment::Async { refresh_ttl: true }, Some(json!(1)), 1.0, 2.0)]
+#[tokio::test]
+async fn increments_read_back_through_get_cache(
+    sandbox: Sandbox,
+    #[case] increment: Increment,
+    #[case] initial: Option<Value>,
+    #[case] amount: f64,
+    #[case] expected: f64,
+) {
+    let cache = sandbox.cache::<Value>();
+    let context = ExactCacheContext::default();
+    if let Some(initial) = initial {
+        cache
+            .async_set_cache("counter", initial, context.clone())
+            .await
+            .unwrap();
+    }
     assert_eq!(
-        cache.test_connection().await.unwrap().status,
-        litellm_cache::CacheConnectionStatus::Success
+        increment
+            .apply(&cache, "counter", amount, context.clone())
+            .await,
+        expected
     );
+    assert_eq!(
+        cache.get_cache("counter", &context).unwrap(),
+        Some(json!(expected as i64))
+    );
+}
+
+#[rstest]
+#[case::without_refresh(false)]
+#[case::with_refresh(true)]
+#[tokio::test]
+async fn async_increment_rewrites_ttl_on_every_write(sandbox: Sandbox, #[case] refresh_ttl: bool) {
+    let cache = sandbox.cache::<Value>();
+    let expiry = || {
+        sandbox
+            .db()
+            .query_row(
+                "SELECT expire_time IS NOT NULL FROM Cache WHERE key = 'counter'",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap()
+    };
+    let ttl = ExactCacheContext {
+        ttl: Some(Duration::from_secs(60)),
+    };
+    cache
+        .async_increment("counter", 1.0, ttl.clone(), refresh_ttl)
+        .await
+        .unwrap();
+    assert!(expiry());
+    cache
+        .async_increment("counter", 1.0, ExactCacheContext::default(), refresh_ttl)
+        .await
+        .unwrap();
+    assert!(!expiry());
+    cache
+        .async_increment("counter", 1.0, ttl, refresh_ttl)
+        .await
+        .unwrap();
+    assert!(expiry());
 }

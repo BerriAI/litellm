@@ -1,0 +1,162 @@
+suite: Lens managed setup
+set:
+  fullnameOverride: lens-test
+  lensWorker.enabled: true
+  lensWorker.publicUrl: https://traces.example
+release:
+  namespace: lens
+  name: lens-test
+templates:
+  - lens/deployment.yaml
+  - lens/clickhouse.yaml
+  - lens/secrets.yaml
+tests:
+  - it: generates private login, gateway and storage credentials
+    template: lens/secrets.yaml
+    asserts:
+      - hasDocuments:
+          count: 4
+      - matchRegex:
+          path: data.service-token
+          pattern: '^[A-Za-z0-9+/]{86}==$'
+        documentIndex: 0
+      - matchRegex:
+          path: data.password
+          pattern: '^[A-Za-z0-9+/]{86}==$'
+        documentIndex: 1
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+  - it: connects Lens to its private bundled storage
+    template: lens/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLICKHOUSE_HOST
+            value: lens-test-lens-clickhouse
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLICKHOUSE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: lens-test-lens-clickhouse
+                key: password
+  - it: stores traces on a persistent volume with the chosen storage class
+    template: lens/clickhouse.yaml
+    documentIndex: 1
+    set:
+      lensWorker.clickhouse.storage: 40Gi
+      lensWorker.clickhouse.storageClassName: fast
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec
+          value:
+            accessModes: [ReadWriteOnce]
+            storageClassName: fast
+            resources:
+              requests:
+                storage: 40Gi
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLICKHOUSE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: lens-test-lens-clickhouse
+                key: password
+  - it: keeps an existing external database instead of creating a new one
+    template: lens/clickhouse.yaml
+    set:
+      lensWorker.clickhouseSecret.name: external-clickhouse
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: leaves supplied secrets under their existing manager
+    template: lens/secrets.yaml
+    set:
+      lensWorker.clickhouseSecret.name: external-clickhouse
+      lensWorker.serviceTokenSecret.name: external-service
+      lensWorker.adminTokenSecret.name: external-admin
+      lensWorker.gateway.secretName: external-signing
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: creates no credentials or database when Lens is disabled
+    templates:
+      - lens/secrets.yaml
+      - lens/clickhouse.yaml
+    set:
+      lensWorker.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: requires an external database when bundled storage is explicitly disabled
+    template: lens/deployment.yaml
+    set:
+      lensWorker.clickhouse.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: Lens clickhouseSecret.name is required when bundled storage is disabled
+  - it: keeps storage names valid and uses the same name for the connection
+    set:
+      fullnameOverride: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      - matchRegex:
+          path: metadata.name
+          pattern: '^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$'
+        template: lens/clickhouse.yaml
+        documentIndex: 0
+      - matchRegex:
+          path: metadata.name
+          pattern: '^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$'
+        template: lens/clickhouse.yaml
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+        template: lens/clickhouse.yaml
+        documentIndex: 0
+      - equal:
+          path: spec.serviceName
+          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+        template: lens/clickhouse.yaml
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+        template: lens/secrets.yaml
+        documentIndex: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLICKHOUSE_HOST
+            value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+        template: lens/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLICKHOUSE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+                key: password
+        template: lens/deployment.yaml
+
+  - it: allows cold storage startup and inherits registry credentials
+    template: lens/clickhouse.yaml
+    documentIndex: 1
+    set:
+      imagePullSecrets: [{name: registry-auth}]
+    asserts:
+      - equal:
+          path: spec.template.spec.imagePullSecrets
+          value: [{name: registry-auth}]
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe
+          value:
+            httpGet: {path: /ping, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60

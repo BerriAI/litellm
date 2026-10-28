@@ -1,6 +1,8 @@
 import json
 import time
 import traceback
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -12,8 +14,8 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     version,
 )
 from litellm.types.llms.openai import AllMessageValues
@@ -43,7 +45,7 @@ class BytezChatConfig(BaseConfig):
     def __init__(
         self,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -230,7 +232,7 @@ class BytezChatConfig(BaseConfig):
 
         model_response.usage = usage
 
-        model_response._hidden_params["additional_headers"] = raw_response.headers
+        model_response.hidden_params["additional_headers"] = raw_response.headers
         message.provider_specific_fields = {
             "ratelimit-limit": raw_response.headers.get("ratelimit-limit"),
             "ratelimit-remaining": raw_response.headers.get("ratelimit-remaining"),
@@ -258,9 +260,12 @@ class BytezChatConfig(BaseConfig):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         try:
             response: Final = client.post(
@@ -300,6 +305,9 @@ class BytezChatConfig(BaseConfig):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.BYTEZ, params={})

@@ -6,7 +6,12 @@ use std::{
 
 use reqwest::dns::Resolve;
 
-use crate::{config::HttpClientConfig, error::Error, proxy::EnvironmentProxies};
+use crate::{
+    client::Client,
+    config::{HttpClientConfig, Verify},
+    error::{Error, Repr},
+    proxy::EnvironmentProxies,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ClientVariant {
@@ -14,6 +19,7 @@ pub enum ClientVariant {
     NoRedirect,
     Media,
     UnpinnedMedia,
+    WebSocket,
 }
 
 const CLIENT_TTL: Duration = Duration::from_secs(3600);
@@ -48,7 +54,7 @@ impl HttpClientPool {
         &self,
         config: &HttpClientConfig,
         variant: ClientVariant,
-    ) -> Result<reqwest::Client, Error> {
+    ) -> Result<Client, Error> {
         let effective = match variant {
             ClientVariant::Media => HttpClientConfig {
                 client_certificate: None,
@@ -59,17 +65,26 @@ impl HttpClientPool {
                 client_certificate: None,
                 ..config.clone()
             },
+            ClientVariant::WebSocket => HttpClientConfig {
+                http2: false,
+                verify: match &config.verify {
+                    Verify::BuiltInRoots => Verify::NativeRoots,
+                    verify => verify.clone(),
+                },
+                ..config.clone()
+            },
             ClientVariant::Provider | ClientVariant::NoRedirect => config.clone(),
         };
         let key = (effective, variant);
         if let Some(pooled) = self.lock().get(&key)
             && pooled.built_at.elapsed() < self.ttl
         {
-            return Ok(pooled.client.clone());
+            return Ok(Client::new(pooled.client.clone()));
         }
         let client = self
             .apply(variant, reqwest::ClientBuilder::try_from(&key.0)?)
-            .build()?;
+            .build()
+            .map_err(Repr::Client)?;
         self.lock().insert(
             key,
             PooledClient {
@@ -77,7 +92,7 @@ impl HttpClientPool {
                 built_at: Instant::now(),
             },
         );
-        Ok(client)
+        Ok(Client::new(client))
     }
 
     fn lock(&self) -> MutexGuard<'_, Clients> {
@@ -91,12 +106,12 @@ impl HttpClientPool {
     ) -> reqwest::ClientBuilder {
         match variant {
             ClientVariant::Provider => builder,
-            ClientVariant::NoRedirect | ClientVariant::UnpinnedMedia => {
+            ClientVariant::NoRedirect | ClientVariant::UnpinnedMedia | ClientVariant::WebSocket => {
                 builder.redirect(reqwest::redirect::Policy::none())
             }
             ClientVariant::Media => builder
                 .redirect(reqwest::redirect::Policy::none())
-                .dns_resolver2(Arc::clone(&self.media_resolver)),
+                .dns_resolver(Arc::clone(&self.media_resolver)),
         }
     }
 }
@@ -116,7 +131,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{HttpSettings, Resolution, Verify};
+    use crate::{ClientIdentity, HttpSettings, Resolution, Verify};
 
     struct FixedResolver(SocketAddr);
 
@@ -288,7 +303,9 @@ mod tests {
     fn media_variant_never_loads_the_client_certificate() {
         let pool = pool();
         let with_identity = HttpClientConfig {
-            client_certificate: Some(std::env::temp_dir().join("litellm-http-absent-client.pem")),
+            client_certificate: Some(ClientIdentity::Pem(
+                std::env::temp_dir().join("litellm-http-absent-client.pem"),
+            )),
             ..config("a")
         };
         assert!(

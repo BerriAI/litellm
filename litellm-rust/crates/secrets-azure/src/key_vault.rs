@@ -3,7 +3,7 @@ use std::sync::Arc;
 use litellm_auth_azure::{AzureAuthInputs, AzureAuthService, ConfigValue};
 use litellm_auth_types::{InputSource, Sourced};
 use litellm_core_utils::settings::Lookup;
-use litellm_secrets_types::{Secret, SecretValue};
+use litellm_secrets_types::{AzureOperationContext, BaseSecretManager, Secret, SecretValue};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC};
 use serde::Deserialize;
 
@@ -19,7 +19,7 @@ const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
 
 #[derive(Clone)]
 pub struct AzureKeyVault {
-    client: reqwest::Client,
+    client: litellm_http::Client,
     vault: reqwest::Url,
     auth: Arc<AzureAuthService>,
     inputs: Arc<AzureAuthInputs>,
@@ -33,12 +33,12 @@ struct SecretResponse {
 
 impl AzureKeyVault {
     pub fn with_client(
-        client: reqwest::Client,
+        client: litellm_http::Client,
         vault: reqwest::Url,
         environment: Arc<dyn Lookup + Send + Sync>,
     ) -> Result<Self, Error> {
         if vault.host_str().is_none() {
-            return Err(Error::VaultUri);
+            return Err(Error::VaultUri(None));
         }
         let inputs = AzureAuthInputs {
             azure_scope: ConfigValue::Value(Sourced::new(
@@ -57,15 +57,18 @@ impl AzureKeyVault {
         })
     }
 
-    pub fn new(environment: Arc<dyn Lookup + Send + Sync>) -> Result<Self, Error> {
+    pub fn new(
+        client: litellm_http::Client,
+        environment: Arc<dyn Lookup + Send + Sync>,
+    ) -> Result<Self, Error> {
         let value = environment
             .get(AZURE_KEY_VAULT_URI)
             .ok_or(Error::MissingEnvironment(AZURE_KEY_VAULT_URI))?;
-        let vault = reqwest::Url::parse(&value).map_err(|_| Error::VaultUri)?;
+        let vault = reqwest::Url::parse(&value).map_err(|error| Error::VaultUri(Some(error)))?;
         if vault.scheme() != "https" || vault.host_str().is_none() {
-            return Err(Error::VaultUri);
+            return Err(Error::VaultUri(None));
         }
-        Self::with_client(reqwest::Client::new(), vault, environment)
+        Self::with_client(client, vault, environment)
     }
 
     pub fn scope(&self) -> &str {
@@ -76,10 +79,13 @@ impl AzureKeyVault {
             .unwrap_or_default()
     }
 
-    pub async fn get_secret_from_azure_key_vault(
-        &self,
-        name: &str,
-    ) -> Result<Option<Secret>, Error> {
+    pub async fn get_secret(&self, name: &str) -> Result<Option<Secret>, Error> {
+        BaseSecretManager::async_read_secret(self, name, &AzureOperationContext::default())
+            .await
+            .map(|value| value.map(Secret::String))
+    }
+
+    async fn read(&self, name: &str) -> Result<Option<SecretValue>, Error> {
         let token = self
             .auth
             .get_azure_ad_token(&self.inputs, &|key| self.environment.get(key))
@@ -89,23 +95,27 @@ impl AzureKeyVault {
         let url = self
             .vault
             .join(&format!("secrets/{encoded_name}?api-version={API_VERSION}"))
-            .map_err(|_| Error::VaultUri)?;
+            .map_err(|error| Error::VaultUri(Some(error)))?;
         let response = self
             .client
             .get(url)
             .bearer_auth(token.value().secret().expose())
+            .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await
-            .map_err(Error::Http)?;
+            .map_err(|error| Error::Http(error.into()))?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
         if response.status() != reqwest::StatusCode::OK {
             return Err(Error::Status(response.status().as_u16()));
         }
-        let payload: SecretResponse = response.json().await.map_err(Error::Http)?;
+        let payload: SecretResponse = response
+            .json()
+            .await
+            .map_err(|error| Error::Http(error.into()))?;
         let value = payload.value.ok_or(Error::MissingValue)?;
-        Ok(Some(Secret::String(SecretValue::new(value))))
+        Ok(Some(SecretValue::new(value)))
     }
 }
 
@@ -115,4 +125,60 @@ fn scope_for(vault: &reqwest::Url) -> String {
         .split_once('.')
         .map_or(host, |(_, remainder)| remainder);
     format!("https://{resource}/.default")
+}
+
+impl BaseSecretManager for AzureKeyVault {
+    type Error = Error;
+    type Context = AzureOperationContext;
+
+    async fn async_read_secret(
+        &self,
+        name: &str,
+        context: &Self::Context,
+    ) -> Result<Option<SecretValue>, Error> {
+        match context.timeout {
+            Some(timeout) => tokio::time::timeout(timeout, self.read(name))
+                .await
+                .map_err(|_| Error::Timeout)?,
+            None => self.read(name).await,
+        }
+    }
+}
+
+pub trait AzureTokenProvider: Send + Sync {
+    fn get_token<'a>(
+        &'a self,
+        scope: &'a str,
+        environment: &'a (dyn Lookup + Send + Sync),
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SecretValue, Error>> + Send + 'a>>;
+}
+
+#[derive(Default)]
+pub struct NativeAzureTokenProvider {
+    auth: AzureAuthService,
+}
+
+impl AzureTokenProvider for NativeAzureTokenProvider {
+    fn get_token<'a>(
+        &'a self,
+        scope: &'a str,
+        environment: &'a (dyn Lookup + Send + Sync),
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SecretValue, Error>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let inputs = AzureAuthInputs {
+                azure_scope: ConfigValue::Value(Sourced::new(
+                    scope.to_owned(),
+                    InputSource::Deployment,
+                )),
+                enable_azure_ad_token_refresh: Sourced::new(true, InputSource::Deployment),
+                ..Default::default()
+            };
+            self.auth
+                .get_azure_ad_token(&inputs, &|name| environment.get(name))
+                .await?
+                .map(|token| SecretValue::new(token.value().secret().expose()))
+                .ok_or(Error::MissingCredentials)
+        })
+    }
 }

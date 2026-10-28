@@ -1,20 +1,41 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use strum::IntoStaticStr;
 
 use crate::SecretValue;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    IntoStaticStr,
+    PartialEq,
+    Serialize,
+    strum::VariantArray,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyManagementSystem {
+    #[strum(serialize = "google_kms")]
     GoogleKms,
+    #[strum(serialize = "azure_key_vault")]
     AzureKeyVault,
+    #[strum(serialize = "aws_secret_manager")]
     AwsSecretManager,
+    #[strum(serialize = "google_secret_manager")]
     GoogleSecretManager,
+    #[strum(serialize = "hashicorp_vault")]
     HashicorpVault,
+    #[strum(serialize = "cyberark")]
     Cyberark,
+    #[strum(serialize = "local")]
     Local,
+    #[strum(serialize = "aws_kms")]
     AwsKms,
+    #[strum(serialize = "custom")]
     Custom,
 }
 

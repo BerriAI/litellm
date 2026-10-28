@@ -3,18 +3,23 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Itera
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
-from litellm.llms.anthropic.experimental_pass_through.messages import handler as main
-from litellm.rust_bridge.catalog import Delivery, Route, RouteContext
-from litellm.rust_bridge.dispatch import PublicDispatch, call_hook
+from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.anthropic.messages.native import handler as main
+from litellm.rust_bridge import detectors
+from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
+from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.messages import detectors as route_detectors
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
-    LiteLLMMessagesRequest,
 )
 from litellm.rust_bridge.public_call import (
+    AsyncFlag,
+    NativeCall,
     bind,
-    optional_bool,
-    optional_mapping,
+    native_call,
+    native_call_hook,
     optional_sequence,
     optional_str,
     signature,
@@ -44,13 +49,21 @@ def _python_amessages() -> PythonAmessages:
 
 _PYTHON_MESSAGES: Final = _python_messages()
 _MESSAGES: Final = signature(_PYTHON_MESSAGES)
+_FLAG: Final = AsyncFlag("is_async", sync=_MESSAGES, is_set=bool)
 _PYTHON_AMESSAGES: Final = _python_amessages()
 _AMESSAGES: Final = signature(_PYTHON_AMESSAGES)
 
 
+def _native_kwargs(fields: Mapping[str, object], kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    stream_timeout: Final = kwargs.get("stream_timeout")
+    if fields.get("stream") is not True or stream_timeout is None:
+        return kwargs
+    return {**kwargs, "timeout": stream_timeout}
+
+
 def _public_request(
     legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object]
-) -> LiteLLMMessagesRequest | None:
+) -> NativeCall | None:
     fields: Final = bind(legacy, args, kwargs)
     if fields is None:
         return None
@@ -59,38 +72,80 @@ def _public_request(
     max_tokens: Final = fields.get("max_tokens")
     if not isinstance(model, str) or messages is None or not isinstance(max_tokens, int):
         return None
-    return LiteLLMMessagesRequest(
-        model=model,
-        messages=messages,
-        max_tokens=max_tokens,
-        stream=optional_bool(fields.get("stream")),
-        api_key=optional_str(fields.get("api_key")),
-        api_base=optional_str(fields.get("api_base")),
-        custom_llm_provider=optional_str(fields.get("custom_llm_provider")),
-        kwargs=optional_mapping(fields.get("kwargs")) or MappingProxyType({}),
+    return native_call(legacy, args, _native_kwargs(fields, kwargs))
+
+
+def _resolved(request: NativeCall) -> tuple[str, str | None]:
+    model: Final = str(request.resolved["model"])
+    provider: Final = optional_str(request.resolved.get("custom_llm_provider"))
+    try:
+        resolved_model, resolved_provider, _, _ = get_llm_provider(model, provider)
+    except BadRequestError:
+        return model, provider
+    return resolved_model, resolved_provider
+
+
+def _target(request: NativeCall, model: str, provider: str | None) -> Target:
+    requested_model: Final = str(request.resolved["model"])
+    model_info: Final = request.resolved.get("model_info")
+    api_base: Final = request.resolved.get("api_base")
+    native_config: Final = main._native_messages_config(  # pyright: ignore[reportPrivateUsage]  # the handler's own passthrough lookup
+        model, provider, model_info, api_base if isinstance(api_base, str) else None
     )
+    if native_config is not None:
+        return Target.MESSAGES
+    compacting: Final = request.resolved.get("compaction") is not None
+    if not compacting and main._should_route_to_responses_api(provider, requested_model, model, model_info):  # pyright: ignore[reportPrivateUsage]  # the handler's own translation choice
+        return Target.RESPONSES
+    return Target.CHAT_COMPLETIONS
 
 
-def _context(request: LiteLLMMessagesRequest) -> RouteContext:
+_FEATURES: Final[detectors.Detectors] = MappingProxyType(
+    {
+        **detectors.COMMON,
+        Feature.PROVIDER_AFFINITY: route_detectors.provider_affinity,
+        Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
+        Feature.RESPONSE_CACHE: detectors.response_cache,
+        Feature.MODIFY_PARAMS: detectors.modify_params,
+        Feature.WORKLOAD_IDENTITY: route_detectors.anthropic_workload_identity,
+        Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
+        Feature.STREAM_COST_INJECTION: route_detectors.stream_cost_injection,
+        Feature.THINKING_SIGNATURE_RETRY: route_detectors.thinking_signature_retry,
+    }
+)
+
+_ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
+    {
+        **_FEATURES,
+        Feature.PRE_REQUEST_HOOK: route_detectors.pre_request_hook,
+        Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
+        Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,
+    }
+)
+
+
+def _context(request: NativeCall, features: detectors.Detectors) -> RouteContext:
+    requested_model: Final = str(request.resolved["model"])
+    model, provider = _resolved(request)
     return RouteContext(
         Route.MESSAGES,
-        provider=request.custom_llm_provider,
-        model=request.model,
-        delivery=Delivery.STREAMING if request.stream else Delivery.COMPLETED,
+        provider=provider,
+        model=requested_model,
+        target=_target(request, model, provider),
+        features=detectors.detected(features, request),
     )
 
 
 _DISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_MESSAGES, args, kwargs),
-    context=_context,
-    bypass=lambda request: request.kwargs.get("is_async") is True,
+    context=lambda request: _context(request, _FEATURES),
 )
 
 _ADISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_AMESSAGES, args, kwargs),
-    context=_context,
+    context=lambda request: _context(request, _ASYNC_FEATURES),
 )
 
 
@@ -99,12 +154,14 @@ def anthropic_messages_handler(
     **kwargs: object,  # kwargs-ok: preserve the public Anthropic Messages call shape
 ) -> MessagesResult | Coroutine[object, object, MessagesResult]:
     python: Final = _PYTHON_MESSAGES
+    if _FLAG.requested(kwargs):
+        return anthropic_messages(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_MESSAGES,
-        native=call_hook,
+        native=native_call_hook,
     )
 
 
@@ -112,10 +169,10 @@ async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:
     python: Final = _PYTHON_AMESSAGES
     return await _ADISPATCH.arun(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_AMESSAGES,
-        native=call_hook,
+        native=native_call_hook,
     )
 
 

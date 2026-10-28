@@ -1,10 +1,8 @@
 use std::time::Duration;
 
-use litellm_cache::Error;
-use reqwest::Client;
+use litellm_cache::{Error, semantic::Embedder};
+use litellm_http::Client;
 use serde_json::Value;
-
-use crate::Embedder;
 
 pub struct OpenAiEmbedder {
     client: Client,
@@ -31,14 +29,16 @@ impl OpenAiEmbedder {
             timeout: config.timeout,
         }
     }
-}
 
-impl Embedder for OpenAiEmbedder {
-    fn model(&self) -> &str {
+    pub fn model(&self) -> &str {
         &self.model
     }
+}
 
-    async fn embed(&self, input: &str) -> Result<Vec<f32>, Error> {
+/// An OpenAI-compatible `/embeddings` call. It has no router to route on, so `metadata` is
+/// unused, and it only embeds asynchronously: sync cache calls block on the cache's runtime.
+impl Embedder for OpenAiEmbedder {
+    async fn async_embed(&self, input: &str, _metadata: Option<&Value>) -> Result<Vec<f32>, Error> {
         let request = self
             .client
             .post(format!("{}/embeddings", self.api_base))
@@ -55,10 +55,9 @@ impl Embedder for OpenAiEmbedder {
         }
         .send()
         .await
-        .map_err(|_| Error::Unavailable)?
-        .error_for_status()
-        .map_err(|_| Error::Unavailable)?;
-        let body: Value = response.json().await.map_err(|_| Error::Unavailable)?;
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(http_error)?;
+        let body: Value = response.json().await.map_err(http_error)?;
         body.get("data")
             .and_then(Value::as_array)
             .and_then(|data| data.first())
@@ -70,6 +69,14 @@ impl Embedder for OpenAiEmbedder {
                     .map(|value| value.as_f64().map(|value| value as f32))
                     .collect::<Option<Vec<_>>>()
             })
-            .ok_or(Error::Unavailable)
+            .ok_or(Error::unavailable(MissingEmbedding))
     }
 }
+
+fn http_error(error: reqwest::Error) -> Error {
+    Error::unavailable(litellm_http::Error::from(error))
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("embeddings response has no embedding")]
+struct MissingEmbedding;

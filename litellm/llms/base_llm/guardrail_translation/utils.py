@@ -4,10 +4,12 @@ import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _anthropic_stream_chunk_events(item: object) -> list[dict]:
@@ -30,7 +32,7 @@ def _anthropic_stream_chunk_events(item: object) -> list[dict]:
             if not payload or payload == "[DONE]":
                 continue
             try:
-                parsed = json.loads(payload)
+                parsed = _DECODED_JSON.validate_python(json.loads(payload))
             except json.JSONDecodeError:
                 continue
             if isinstance(parsed, dict):
@@ -192,7 +194,7 @@ def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsag
 
 
 def effective_skip_system_message_for_guardrail(guardrail_to_apply: object) -> bool:
-    per: Final = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
+    per: Final[object] = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
     if per is not None:
         return bool(per)
     import litellm
@@ -201,7 +203,7 @@ def effective_skip_system_message_for_guardrail(guardrail_to_apply: object) -> b
 
 
 def effective_skip_tool_message_for_guardrail(guardrail_to_apply: object) -> bool:
-    per: Final = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
+    per: Final[object] = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
     if per is not None:
         return bool(per)
     import litellm
@@ -290,6 +292,17 @@ def openai_tool_name(tool: object) -> str | None:
         return function_name if isinstance(function_name, str) else None
     flat_name: Final = tool.get("name")
     return flat_name if isinstance(flat_name, str) else None
+
+
+_FIELDS: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(strict=True))
+_ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
+
+
+def list_field(data: object, key: str) -> Sequence[object]:
+    try:
+        return _ITEMS.validate_python(_FIELDS.validate_python(data).get(key))
+    except ValidationError:
+        return ()
 
 
 def anthropic_tool_names(tool: object) -> tuple[str, ...]:
@@ -389,12 +402,12 @@ def message_text_slot_count(message: AllMessageValues) -> int:
 def _part_with_text(part: object, text: str) -> object:
     if not isinstance(part, Mapping):
         return part
-    return {**part, "text": text}  # mutable-ok: content parts stay JSON-plain dicts
+    return {**part, "text": text}
 
 
 def _content_with_slot_texts(content: Sequence[object], texts: Sequence[str]) -> Sequence[object]:
     remaining_texts: Final = iter(texts)
-    return [  # mutable-ok: message content stays a JSON list
+    return [
         _part_with_text(part, next(remaining_texts)) if _content_part_text(part) is not None else part
         for part in content
     ]
@@ -413,7 +426,7 @@ def message_with_slot_texts(message: AllMessageValues, texts: Sequence[str]) -> 
     if not isinstance(content, (str, list)):
         return message
     rewritten_content: Final = texts[0] if isinstance(content, str) else _content_with_slot_texts(content, texts)
-    rewritten: Final = {**message, "content": rewritten_content}  # mutable-ok: chat rows stay JSON-plain dicts
+    rewritten: Final = {**message, "content": rewritten_content}
     return cast("AllMessageValues", rewritten)  # cast-ok: the same row with only its text slots swapped
 
 

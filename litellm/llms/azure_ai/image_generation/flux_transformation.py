@@ -3,6 +3,7 @@ from types import MappingProxyType
 from typing import Final
 
 from litellm.exceptions import BadRequestError, UnsupportedParamsError
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.image_generation import GPTImageGenerationConfig
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 
@@ -52,7 +53,8 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
             return f"{api_base}?api-version={api_version}"
 
         provider_model_path: Final = AzureFoundryFluxImageGenerationConfig.get_flux2_provider_model_path(model)
-        return f"{api_base}/providers/blackforestlabs/v1/{provider_model_path}?api-version={api_version}"
+        flux_route: Final = f"providers/blackforestlabs/v1/{provider_model_path}"
+        return f"{join_api_base(api_base, flux_route)}?api-version={api_version}"
 
     @staticmethod
     def is_flux2_model(model: str) -> bool:
@@ -73,12 +75,10 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
         normalized_model: Final = model.lower().replace(".", "-").replace("_", "-")
         return "flux-2-flex" if "flux-2-flex" in normalized_model else "flux-2-pro"
 
-    def get_supported_openai_params(  # mutable-ok: inherited config contract returns a list
-        self, model: str
-    ) -> list[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         if not self.is_flux2_model(model):
             return super().get_supported_openai_params(model)
-        return [  # mutable-ok: BaseImageGenerationConfig requires a list
+        return [
             "n",
             "size",
             "output_format",
@@ -153,4 +153,4 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
                 for mapped_name, mapped_value in self._map_parameter(name, value, model)
             }
         )
-        return {**optional_params, **mapped_params}  # mutable-ok: inherited config contract returns a dict
+        return {**optional_params, **mapped_params}

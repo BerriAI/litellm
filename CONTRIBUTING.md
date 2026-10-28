@@ -14,7 +14,7 @@ Here are the core requirements for any PR submitted to LiteLLM:
 - [ ] **Add testing** - Adding at least 1 test is a hard requirement - [see details](#adding-testing)
 - [ ] **Ensure your PR passes all checks**:
   - [ ] [Linting / Formatting](#running-linting-and-formatting-checks) - `make lint`
-  - [ ] [The tests covering your change](#running-unit-tests) pass, e.g. `uv run pytest tests/test_litellm/<your_test_file>.py -v`. CI runs the full unit test matrix, so you don't need to run the whole suite locally
+  - [ ] [The tests covering your change](#running-unit-tests) pass, e.g. `uv run pytest tests/unit/<your_test_file>.py -v`. CI runs the full unit test matrix, so you don't need to run the whole suite locally
 
 #### UI PRs
 
@@ -39,12 +39,12 @@ git clone https://github.com/YOUR_USERNAME/litellm.git
 cd litellm
 
 # Create a new branch for your feature (see "Commit and Branch Conventions" below)
-git checkout -b feature/your-feature
+git checkout -b litellm_your_feature
 
 # Install development dependencies
 make install-dev
 
-# Install git hooks that enforce commit + branch conventions (one-time, opt-in)
+# Install git hooks that enforce commit conventions (one-time, opt-in)
 make install-hooks
 
 # Verify your setup works
@@ -55,7 +55,7 @@ That's it! Your local development environment is ready.
 
 ## Commit and Branch Conventions
 
-Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) and branches follow [Conventional Branches](https://conventional-branch.github.io/). Run `make install-hooks` once per clone to enable the local git hooks that enforce these — see the [contributor docs](https://docs.litellm.ai/docs/extras/contributing_code#commit-and-branch-conventions) for the full type list, examples, the protected-branch bypass list, and how to opt out.
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). Internal contributors name branches with the `litellm_` prefix and no `/`, and fork branches can use any name. Run `make install-hooks` once per clone to enable the local hook that enforces the commit convention. See the [contributor docs](https://docs.litellm.ai/docs/extras/contributing_code#commit-and-branch-conventions) for details
 
 ### 2. Development Workflow
 
@@ -72,14 +72,14 @@ make format
 make lint
 
 # Run the tests covering your change (CI runs the full suite)
-uv run pytest tests/test_litellm/<your_test_file>.py -v
+uv run pytest tests/unit/<your_test_file>.py -v
 
 # Commit your changes (must follow Conventional Commits — see above)
 git add .
 git commit -m "feat(scope): your descriptive commit message"
 
-# Push and create a PR (branch must follow Conventional Branches — see above)
-git push origin feature/your-feature
+# Push and create a PR
+git push origin litellm_your_feature
 ```
 
 ## Adding Testing
@@ -88,18 +88,20 @@ git push origin feature/your-feature
 
 ### Where to Add Tests
 
-Add your tests to the [`tests/test_litellm/` directory](https://github.com/BerriAI/litellm/tree/main/tests/test_litellm).
+Add your tests to the [`tests/unit/` directory](https://github.com/BerriAI/litellm/tree/main/tests/unit).
 
 - This directory mirrors the structure of the `litellm/` directory
 - **Only add mocked tests** - no real LLM API calls in this directory
 - For integration tests with real APIs, use the appropriate test directories
 
+Tests that call `litellm.register_model` or change `litellm.model_cost` should use the `local_model_cost_map` fixture from `tests/unit/conftest.py`. It provides a fresh catalog and restores the previous map, so pricing and capability overrides cannot leak into later tests
+
 ### File Naming Convention
 
-The `tests/test_litellm/` directory follows the same structure as `litellm/`:
+The `tests/unit/` directory follows the same structure as `litellm/`:
 
-- `litellm/proxy/caching_routes.py` → `tests/test_litellm/proxy/test_caching_routes.py`
-- `litellm/utils.py` → `tests/test_litellm/test_utils.py`
+- `litellm/proxy/caching_routes.py` → `tests/unit/proxy/test_caching_routes.py`
+- `litellm/utils.py` → `tests/unit/test_utils.py`
 
 ### Example Test
 
@@ -125,10 +127,10 @@ def test_your_feature():
 
 Run the tests covering your change:
 ```bash
-uv run pytest tests/test_litellm/test_your_file.py -v
+uv run pytest tests/unit/test_your_file.py -v
 ```
 
-`tests/test_litellm` holds thousands of tests, so running all of it locally takes a long time. CI runs it as a parallel matrix (`make test-unit-llms`, `make test-unit-proxy-core`, and the other `test-unit-*` targets) on beefier boxes, so if, for whatever reason, you must run the whole suite, it's better to rely on CI to do that.
+`tests/unit` holds thousands of tests, so running all of it locally takes a long time. CI runs it as a parallel matrix (`make test-unit-llms`, `make test-unit-proxy-core`, and the other `test-unit-*` targets) on beefier boxes, so if, for whatever reason, you must run the whole suite, it's better to rely on CI to do that.
 
 If you're running broader test suites, proxy tests, or anything that touches PostgreSQL-backed fixtures/plugins, install the full local test environment first:
 
@@ -136,7 +138,7 @@ If you're running broader test suites, proxy tests, or anything that touches Pos
 make install-test-deps
 ```
 
-This syncs the locked test environment used across the repo, including `psycopg` v3 plus `psycopg-binary` (used by `pytest-postgresql`), `psycopg2-binary` (used by some proxy E2E tests), and a generated Prisma client for DB-backed proxy tests, so pytest startup matches CI without manual package installs.
+This syncs the locked test environment used across the repo, including `psycopg` v3 plus `psycopg-binary`, `psycopg2-binary` (used by some proxy E2E tests), and a generated Prisma client for DB-backed proxy tests, so pytest startup matches CI without manual package installs.
 
 ### Running Linting and Formatting Checks
 

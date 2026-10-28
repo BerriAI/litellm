@@ -2,13 +2,16 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
-from collections.abc import AsyncIterator, Iterator
+import types
+from collections.abc import AsyncIterator, Iterator, Mapping
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
+from pydantic import BaseModel
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -22,7 +25,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-from ..credentials import get_token_creator
+from ..credentials import AICoreConfiguration, AICoreDeploymentList, get_token_creator
 from .handler import (
     AsyncSAPStreamIterator,
     GenAIHubOrchestrationError,
@@ -30,6 +33,7 @@ from .handler import (
 )
 from .models import (
     ChatCompletionTool,
+    ChatMessage,
     OrchestrationRequest,
     ResponseFormat,
     ResponseFormatJSONSchema,
@@ -52,48 +56,59 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
 )
 
 
-def validate_dict(data: dict, model) -> dict:
+def validate_dict(
+    data: Mapping[str, object], model: type[BaseModel]
+) -> dict:  # mutable-ok: pydantic validation boundary; both input and output are untyped wire dicts
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
+
+
+def _fold_message_cache_control(
+    message: Mapping[str, object],
+) -> Mapping[str, object]:
+    """Move a message-level cache_control marker onto the content block.
+
+    litellm's cache_control_injection_points hook attaches cache_control to the
+    message dict itself when content is a plain string.  The SAP message models
+    have no such top-level field, so it would be silently dropped.  When content
+    is a string, promote it to a one-element list so the marker survives.
+    When content is already a non-empty list whose last element is a
+        dict, propagate the marker onto that element — it marks the cache
+    breakpoint for the whole block.  In all other cases (empty list, None,
+    unrecognized type) the marker is silently dropped.
+    """
+    cache_control = message.get("cache_control")
+    if cache_control is None:
+        return message
+    base = {k: v for k, v in message.items() if k != "cache_control"}
+    content = message.get("content")
+    if isinstance(content, str):
+        base["content"] = [{"type": "text", "text": content, "cache_control": cache_control}]
+        return base
+    if isinstance(content, list) and content and isinstance(content[-1], dict):
+        base["content"] = [
+            *content[:-1],
+            {**content[-1], "cache_control": cache_control},
+        ]
+        return base
+    return base
+
+
+def _message_role_mapping(role: str) -> type[ChatMessage]:
+    return {
+        "user": SAPUserMessage,
+        "assistant": SAPAssistantMessage,
+        "tool": SAPToolChatMessage,
+    }.get(role, SAPMessage)
 
 
 def _messages_to_sap_template(messages: list[AllMessageValues]) -> list:
     template: Final = []
     for message in messages:
-        if message["role"] == "user":
-            template.append(validate_dict(message, SAPUserMessage))
-        elif message["role"] == "assistant":
-            template.append(validate_dict(message, SAPAssistantMessage))
-        elif message["role"] == "tool":
-            template.append(validate_dict(message, SAPToolChatMessage))
-        else:
-            template.append(validate_dict(message, SAPMessage))
+        folded_message = _fold_message_cache_control(message)
+        message_role_class = _message_role_mapping(str(folded_message["role"]))
+        validated_message = validate_dict(folded_message, message_role_class)
+        template.append(validated_message)
     return template
-
-
-def _tools_response_format_and_stream(optional_params: dict, model_params: dict) -> tuple[dict, dict, dict]:
-    tools_ = optional_params.pop("tools", [])
-    tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
-    tools: Final[dict] = {"tools": tools_} if tools_ else {}
-
-    response_format = model_params.pop("response_format", {})
-    resp_type: Final = response_format.get("type", None)
-    if resp_type:
-        if resp_type == "json_schema":
-            response_format = validate_dict(response_format, ResponseFormatJSONSchema)
-        else:
-            response_format = validate_dict(response_format, ResponseFormat)
-        response_format = {"response_format": response_format}
-
-    model_params.pop("stream", False)
-    stream_config: Final[dict] = {}
-    if "stream_options" in optional_params:
-        stream_options: Final = optional_params.pop("stream_options", {})
-        if "chunk_size" in stream_options:
-            stream_config["chunk_size"] = stream_options.get("chunk_size")
-        if "delimiters" in stream_options:
-            stream_config["delimiters"] = stream_options.get("delimiters")
-
-    return tools, response_format, stream_config
 
 
 class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
@@ -128,7 +143,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         tools: list | None = None,
         tool_choice: str | dict | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -171,12 +186,14 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         # Keep a short, tight client lifecycle here to avoid fd leaks
         client: Final = litellm.module_level_client
         # with httpx.Client(timeout=30) as client:
-        deployments: Final = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
+        deployments: Final[AICoreDeploymentList] = client.get(
+            join_api_base(self.base_url, "lm/deployments"), headers=self.headers
+        ).json()
         valid: Final[list[tuple[str, str]]] = []
         for dep in deployments.get("resources", []):
             if dep.get("scenarioId") == "orchestration":
-                cfg = client.get(
-                    f"{self.base_url}/lm/configurations/{dep['configurationId']}",
+                cfg: AICoreConfiguration = client.get(
+                    join_api_base(self.base_url, f"lm/configurations/{dep['configurationId']}"),
                     headers=self.headers,
                 ).json()
                 if cfg.get("executableId") == "orchestration":
@@ -249,7 +266,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ):
-        api_base_: Final = f"{self.deployment_url}/v2/completion"
+        api_base_: Final = join_api_base(self.deployment_url, "v2/completion")
         return api_base_
 
     def _build_prompt_module(
@@ -358,13 +375,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 )
             )
 
-        config_payload: Final[dict[str, Any]] = {
+        config_payload: Final[dict[str, object]] = {
             "modules": modules if len(modules) > 1 else modules[0],
         }
         if stream_config:
             config_payload["stream"] = stream_config
 
-        request_body: Final[dict[str, Any]] = {"config": config_payload}
+        request_body: Final[dict[str, object]] = {"config": config_payload}
         if placeholder_values is not None:
             request_body["placeholder_values"] = placeholder_values
 
@@ -431,6 +448,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         json_mode: bool | None = False,
     ):
         if sync_stream:
-            return SAPStreamIterator(response=streaming_response)
+            return SAPStreamIterator(response=streaming_response)  # pyright: ignore[reportArgumentType]  # streaming_response type matches at runtime
         else:
-            return AsyncSAPStreamIterator(response=streaming_response)
+            return AsyncSAPStreamIterator(response=streaming_response)  # pyright: ignore[reportArgumentType]  # streaming_response type matches at runtime

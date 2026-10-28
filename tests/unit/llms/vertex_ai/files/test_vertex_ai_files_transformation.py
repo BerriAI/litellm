@@ -5,13 +5,17 @@ Includes tests for Vertex AI batch output transformation to OpenAI format.
 
 import json
 import urllib.parse
+from collections.abc import Mapping
+from typing import Final
 from types import MappingProxyType
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 from unittest.mock import MagicMock
 
+import litellm
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
     _get_litellm_batch_custom_id_from_labels,
@@ -1185,10 +1189,21 @@ class TestConfiguredBucketNameResolution:
         assert config._get_configured_bucket_name({"gcs_bucket_name": "new", "bucket_name": "legacy"}) == "new"
 
     def test_should_fall_back_to_env(self, config, monkeypatch):
+        monkeypatch.delenv("GCS_BATCH_BUCKET_NAME", raising=False)
         monkeypatch.setenv("GCS_BUCKET_NAME", "env-bucket")
         assert config._get_configured_bucket_name({}) == "env-bucket"
 
+    def test_should_prefer_batch_env_over_logging_env(self, config, monkeypatch):
+        monkeypatch.setenv("GCS_BATCH_BUCKET_NAME", "batch-bucket")
+        monkeypatch.setenv("GCS_BUCKET_NAME", "logging-bucket")
+        assert config._get_configured_bucket_name({}) == "batch-bucket"
+
+    def test_should_prefer_litellm_params_over_batch_env(self, config, monkeypatch):
+        monkeypatch.setenv("GCS_BATCH_BUCKET_NAME", "batch-bucket")
+        assert config._get_configured_bucket_name({"gcs_bucket_name": "per-model-bucket"}) == "per-model-bucket"
+
     def test_should_raise_when_no_bucket_anywhere(self, config, monkeypatch):
+        monkeypatch.delenv("GCS_BATCH_BUCKET_NAME", raising=False)
         monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
         with pytest.raises(ValueError, match="GCS bucket_name is required"):
             config._get_configured_bucket_name({})
@@ -1276,6 +1291,33 @@ class TestVertexEmbeddingsBatchInputTranslation:
         (row,) = _wrap_entries([_embeddings_entry()])
 
         assert set(row["request"]) == {"content"}
+
+    def test_should_translate_a_file_block_with_video_metadata(self) -> None:
+        (row,) = _wrap_entries(
+            [
+                _embeddings_entry(
+                    body={
+                        "model": "gemini-embedding-2",
+                        "input": [
+                            {
+                                "type": "file",
+                                "file": {
+                                    "file_id": "gs://my-bucket/clip.mp4",
+                                    "video_metadata": {"start_offset": "3s", "end_offset": "6s"},
+                                },
+                            }
+                        ],
+                    }
+                )
+            ]
+        )
+
+        assert row["request"]["content"]["parts"] == [
+            {
+                "file_data": {"mime_type": "video/mp4", "file_uri": "gs://my-bucket/clip.mp4"},
+                "video_metadata": {"startOffset": "3s", "endOffset": "6s"},
+            }
+        ]
 
     def test_should_translate_multimodal_gcs_input(self):
         (row,) = _wrap_entries(
@@ -1445,6 +1487,197 @@ class TestVertexEmbeddingsBatchInputTranslation:
 
         assert "contents" in chat_row["request"]
         assert "content" in embeddings_row["request"]
+
+
+def _responses_entry(
+    body: Mapping[str, object] | None = None,
+    custom_id: str = "resp-1",
+    url: str = "/v1/responses",
+) -> dict[str, object]:
+    return {
+        "custom_id": custom_id,
+        "method": "POST",
+        "url": url,
+        "body": body
+        if body is not None
+        else {"model": "gemini-2.5-flash", "input": "What was the top headline in world news yesterday?"},
+    }
+
+
+class TestVertexResponsesBatchInputTranslation:
+    """
+    /v1/responses batch lines carry `input`, not `messages`, so they go through the
+    Responses-to-Chat bridge before the Gemini translation instead of uploading as an
+    empty text part.
+    """
+
+    def test_string_input_becomes_the_user_prompt(self):
+        (row,) = _wrap_entries([_responses_entry()])
+
+        assert row["request"]["contents"] == [
+            {"role": "user", "parts": [{"text": "What was the top headline in world news yesterday?"}]}
+        ]
+        assert row["request"]["labels"]["litellm_custom_id"] == "resp-1"
+
+    def test_instructions_and_input_items_map_like_real_time(self):
+        (row,) = _wrap_entries(
+            [
+                _responses_entry(
+                    body={
+                        "model": "gemini-2.5-flash",
+                        "instructions": "be terse",
+                        "input": [
+                            {"role": "user", "content": "what is 2+2?"},
+                            {"role": "assistant", "content": "4"},
+                            {"role": "user", "content": "and 3+3?"},
+                        ],
+                        "max_output_tokens": 32,
+                        "temperature": 0.2,
+                    }
+                )
+            ]
+        )
+
+        request = row["request"]
+        assert request["system_instruction"] == {"parts": [{"text": "be terse"}]}
+        assert [content["role"] for content in request["contents"]] == ["user", "model", "user"]
+        assert request["contents"][-1]["parts"] == [{"text": "and 3+3?"}]
+        assert request["generationConfig"]["max_output_tokens"] == 32
+        assert request["generationConfig"]["temperature"] == 0.2
+
+    def test_web_search_tool_keeps_the_prompt(self):
+        (row,) = _wrap_entries(
+            [
+                _responses_entry(
+                    body={
+                        "model": "gemini-2.5-flash",
+                        "input": "What was the top headline in world news yesterday?",
+                        "tools": [{"type": "web_search"}],
+                    }
+                )
+            ]
+        )
+
+        assert row["request"]["contents"] == [
+            {"role": "user", "parts": [{"text": "What was the top headline in world news yesterday?"}]}
+        ]
+        assert row["request"]["tools"]
+
+    def test_sdk_optional_keys_are_not_required_like_real_time(self):
+        (row,) = _wrap_entries(
+            [
+                _responses_entry(
+                    body={
+                        "model": "gemini-2.5-flash",
+                        "input": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "input_text", "text": "Weather in the pictured city?"},
+                                    {"type": "input_image", "image_url": "https://example.com/paris.png"},
+                                ],
+                            }
+                        ],
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "get_weather",
+                                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                            }
+                        ],
+                    }
+                )
+            ]
+        )
+
+        request = row["request"]
+        assert request["contents"][0]["parts"] == [
+            {"text": "Weather in the pictured city?"},
+            {"file_data": {"mime_type": "image/png", "file_uri": "https://example.com/paris.png"}},
+        ]
+        assert request["tools"][0]["function_declarations"][0]["name"] == "get_weather"
+
+    @pytest.mark.parametrize(
+        "url",
+        ["/v1/responses", "/v1/responses/", "/v1/responses?beta=1", "responses", "https://api.openai.com/v1/responses"],
+    )
+    def test_route_spellings_are_all_responses(self, url):
+        (row,) = _wrap_entries([_responses_entry(url=url)])
+
+        assert row["request"]["contents"][0]["parts"] == [
+            {"text": "What was the top headline in world news yesterday?"}
+        ]
+
+    def test_missing_input_fails_the_upload(self):
+        with pytest.raises(ValueError, match="missing required `input` field"):
+            _wrap_entries([_responses_entry(body={"model": "gemini-2.5-flash"})])
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            _responses_entry(
+                body={
+                    "model": "gemini-2.5-flash",
+                    "input": [{"role": "developer", "content": "be terse"}, {"role": "user", "content": "ping"}],
+                }
+            ),
+            {
+                "custom_id": "chat-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gemini-2.5-flash",
+                    "messages": [{"role": "developer", "content": "be terse"}, {"role": "user", "content": "ping"}],
+                },
+            },
+        ],
+        ids=["responses", "chat"],
+    )
+    def test_developer_role_becomes_the_system_instruction_like_real_time(self, entry):
+        (row,) = _wrap_entries([entry])
+
+        request = row["request"]
+        assert request["system_instruction"] == {"parts": [{"text": "be terse"}]}
+        assert request["contents"] == [{"role": "user", "parts": [{"text": "ping"}]}]
+
+
+_PRIORITY_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "level": {"type": "integer", "enum": [1, 2, 5]},
+        "mode": {"type": "string", "enum": ["fast", "slow"]},
+    },
+}
+
+
+class TestVertexBatchIntegerEnums:
+    """
+    Vertex batch reads each row's string enum values back as numbers and then fails the
+    row, so batch rows drop integer enums on every model, as before Gemini 3 sent them.
+    """
+
+    @pytest.mark.parametrize("model", ["gemini-3.8-flash", "vertex-batch-alias"])
+    def test_tool_rows_drop_integer_enums_and_keep_string_enums(self, model: str):
+        (row,) = _wrap_entries(
+            [
+                {
+                    "custom_id": "enum-1",
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "model": model,
+                        "messages": [{"role": "user", "content": "Set priority 3"}],
+                        "tools": [
+                            {"type": "function", "function": {"name": "set_priority", "parameters": _PRIORITY_SCHEMA}}
+                        ],
+                    },
+                }
+            ]
+        )
+
+        properties: Final = row["request"]["tools"][0]["function_declarations"][0]["parameters"]["properties"]
+        assert "enum" not in properties["level"]
+        assert properties["mode"]["enum"] == ["fast", "slow"]
 
 
 class TestVertexEmbeddingsBatchOutputTranslation:
@@ -1757,3 +1990,58 @@ class TestVertexEmbeddingsBatchOutputTranslation:
         content = json.dumps(legacy_row).encode("utf-8")
 
         assert config._try_transform_vertex_batch_output_to_openai(content) == content
+
+
+_SAMPLING_KNOBS: Final = MappingProxyType({"temperature": 0, "top_p": 0.5, "top_k": 3})
+
+
+def _chat_entry(model: str, knobs: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "custom_id": "request-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5, **knobs},
+        }
+    )
+
+
+def _generation_config(row: Mapping[str, object]) -> object:
+    request: Final = TypeAdapter(dict[str, object]).validate_python(row["request"])
+    return request["generationConfig"]
+
+
+def _flag_model_as_no_sampling(monkeypatch: pytest.MonkeyPatch, model: str) -> None:
+    monkeypatch.setitem(litellm.model_cost, model, {"supports_sampling_params": False})
+
+
+def test_batch_row_for_a_flagged_gemini_model_raises_a_400_naming_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A batch file row gets the same contract as a real-time call: the knobs Google ignores are refused
+    with a 400 that names drop_params instead of silently vanishing from the uploaded row"""
+    _flag_model_as_no_sampling(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"temperature, top_p, top_k.*drop_params"):
+        _wrap_entries([_chat_entry("gemini-zeta-9", _SAMPLING_KNOBS)])
+
+
+def test_batch_row_with_null_knobs_for_a_flagged_gemini_model_is_not_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A null knob means no override, the same as on a real-time call, so it must not fail the upload"""
+    _flag_model_as_no_sampling(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    (row,) = _wrap_entries([_chat_entry("gemini-zeta-9", {"temperature": None, "top_p": None, "top_k": None})])
+    assert _generation_config(row) == {"max_output_tokens": 5}
+
+
+def test_batch_row_for_a_flagged_gemini_model_drops_the_knobs_under_global_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _flag_model_as_no_sampling(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", True)
+    (row,) = _wrap_entries([_chat_entry("gemini-zeta-9", _SAMPLING_KNOBS)])
+    assert _generation_config(row) == {"max_output_tokens": 5}
+
+
+def test_batch_row_for_an_unflagged_gemini_model_keeps_the_knobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    (row,) = _wrap_entries([_chat_entry("gemini-2.5-flash", _SAMPLING_KNOBS)])
+    assert _generation_config(row) == {"max_output_tokens": 5, **_SAMPLING_KNOBS}

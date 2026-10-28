@@ -1,10 +1,11 @@
+import builtins
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, Optional, Union
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_function_web_search import ActionSearchSource, ResponseFunctionWebSearch
-from pydantic import PrivateAttr
-from typing_extensions import Any, TypedDict
+from pydantic import ConfigDict, PrivateAttr
+from typing_extensions import TypedDict
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 
@@ -50,7 +51,7 @@ def build_web_search_call(
     query: Final = tool_input.get("query", "") if isinstance(tool_input, Mapping) else ""
     content: Final = result.get("content") if isinstance(result, Mapping) else None
     result_items: Final = content if isinstance(content, Sequence) and not isinstance(content, (str, bytes)) else ()
-    sources: Final = [  # mutable-ok: official SDK expects a source list
+    sources: Final = [
         ActionSearchSource(type="url", url=url)
         for item in result_items
         if isinstance(item, Mapping)
@@ -62,10 +63,10 @@ def build_web_search_call(
         id=f"ws_{tool_id}",
         type="web_search_call",
         status=status or ("failed" if failed else "completed"),
-        action={  # mutable-ok: official SDK expects an action mapping
+        action={
             "type": "search",
             "query": query if isinstance(query, str) else "",
-            "queries": [query] if isinstance(query, str) and query else [],  # mutable-ok: SDK list field
+            "queries": [query] if isinstance(query, str) and query else [],
             "sources": sources,
         },
     )
@@ -99,7 +100,7 @@ class OutputCodeInterpreterCall(BaseLiteLLMOpenAIResponseObject):
 
 
 def build_code_interpreter_log_outputs(
-    content: Any,
+    content: object,
 ) -> list[OutputCodeInterpreterCallLog] | None:
     """Convert Anthropic bash_code_execution stdout/stderr to log outputs.
 
@@ -130,6 +131,17 @@ class CustomToolCallOutputItem(BaseLiteLLMOpenAIResponseObject):
     name: str
     input: str
     status: Literal["in_progress", "completed", "incomplete"] | None = None
+
+
+class OutputToolSearchCall(BaseLiteLLMOpenAIResponseObject):
+    model_config = ConfigDict(extra="allow", frozen=True, protected_namespaces=())
+
+    id: str
+    arguments: object
+    call_id: str | None = None
+    execution: Literal["server", "client"]
+    status: Literal["in_progress", "completed", "incomplete"]
+    type: Literal["tool_search_call"]
 
 
 class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
@@ -163,6 +175,14 @@ class DeleteResponseResult(BaseLiteLLMOpenAIResponseObject):
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
 
 class DecodedResponseId(TypedDict, total=False):

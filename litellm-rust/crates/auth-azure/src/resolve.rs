@@ -1,8 +1,8 @@
-use litellm_auth_types::Error;
 use litellm_auth_types::{
     CredentialFileRef, CredentialLookup, CredentialRef, InputSource, ResolvedCredential,
     SecretValue, Sourced, TokenProviderHandle,
 };
+use litellm_auth_types::{Error, ErrorDetail};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -91,7 +91,9 @@ impl AzureAuthService {
             AzureCredentialPlan::Caller(caller) => {
                 let credential = caller.acquire().await?;
                 if credential.secret().expose().is_empty() {
-                    return Err(Error::EmptyAzureToken);
+                    return Err(Error::EmptyCallerCredential {
+                        caller: "Azure AD token provider",
+                    });
                 }
                 Ok(Some(Sourced::new(credential, InputSource::Deployment)))
             }
@@ -104,7 +106,9 @@ impl AzureAuthService {
             } => {
                 let assertion = resolve_reference(inputs, env_lookup, reference.value())
                     .await?
-                    .ok_or(Error::UnresolvedOidcReference)?;
+                    .ok_or(Error::CredentialAcquisition(ErrorDetail::Unresolved {
+                        subject: "Azure OIDC reference",
+                    }))?;
                 let request = ValidatedAzureRequest::new(NativeAzureRequest::ClientAssertion {
                     tenant_id,
                     client_id,
@@ -136,7 +140,13 @@ impl AzureAuthService {
                         Err(error) => failures.push(error),
                     }
                 }
-                Err(Error::CredentialChain(failures))
+                match failures.pop() {
+                    Some(last) => Err(Error::CredentialChain {
+                        last: Box::new(last),
+                        earlier: failures,
+                    }),
+                    None => Ok(None),
+                }
             }
             AzureCredentialPlan::Missing => Ok(None),
         }
@@ -167,7 +177,12 @@ pub(crate) fn select_auth_plan(
                 .map(|selector| Sourced::new(selector, value.source()))
         })
         .transpose()
-        .map_err(|_| Error::InvalidAzureSelector)?;
+        .map_err(|error| {
+            Error::InvalidConfiguration(ErrorDetail::failed(
+                "Azure credential selector parsing",
+                error,
+            ))
+        })?;
     let federated_token_file = configured_string(
         &inputs.federated_token_file,
         AZURE_FEDERATED_TOKEN_FILE_ENV,
@@ -257,7 +272,12 @@ fn select_native_plan(
     let selection_source = selected.source();
 
     match selected.into_value() {
-        AzureCredentialType::ClientSecretCredential => Err(Error::MissingClientSecretFields),
+        AzureCredentialType::ClientSecretCredential => {
+            Err(Error::InvalidConfiguration(ErrorDetail::MissingSettings {
+                credential: "ClientSecretCredential",
+                settings: "tenant_id, client_id, and client_secret",
+            }))
+        }
         AzureCredentialType::WorkloadIdentityCredential => {
             Ok(AzureCredentialPlan::Native(ValidatedAzureRequest::new(
                 workload_request(tenant_id, client_id, federated_token_file, scope, authority)?,
@@ -341,11 +361,18 @@ fn workload_request(
     authority: Option<Sourced<String>>,
 ) -> Result<NativeAzureRequest, Error> {
     Ok(NativeAzureRequest::WorkloadIdentity {
-        tenant_id: tenant_id.ok_or(Error::MissingWorkloadTenant)?,
-        client_id: client_id.ok_or(Error::MissingWorkloadClient)?,
-        token_file_path: token_file_path.ok_or(Error::MissingWorkloadTokenFile)?,
+        tenant_id: tenant_id.ok_or(workload_requires("tenant_id"))?,
+        client_id: client_id.ok_or(workload_requires("client_id"))?,
+        token_file_path: token_file_path.ok_or(workload_requires("azure_federated_token_file"))?,
         scope,
         authority,
+    })
+}
+
+fn workload_requires(settings: &'static str) -> Error {
+    Error::InvalidConfiguration(ErrorDetail::MissingSettings {
+        credential: "WorkloadIdentityCredential",
+        settings,
     })
 }
 
@@ -397,7 +424,7 @@ async fn resolve_reference(
             let resolver = inputs
                 .credential_resolver
                 .as_ref()
-                .ok_or(Error::MissingHostResolver)?;
+                .ok_or(Error::InvalidConfiguration(ErrorDetail::MissingResolver))?;
             resolver.resolve(reference).await?
         }
     };
@@ -415,7 +442,9 @@ fn oidc_reference(
     };
     let value = token.value().expose();
     if token.source() == InputSource::Request && value.starts_with("oidc/") {
-        return Err(Error::RequestAzureCredentialReference);
+        return Err(Error::InvalidConfiguration(
+            ErrorDetail::RequestControlledReference { provider: "Azure" },
+        ));
     }
     if let Some(name) = value.strip_prefix("oidc/env/") {
         return non_empty_reference(name, "OIDC environment reference")
@@ -437,14 +466,18 @@ fn oidc_reference(
         )));
     }
     if value.starts_with("oidc/") {
-        return Err(Error::UnsupportedOidcReference);
+        return Err(Error::InvalidConfiguration(
+            ErrorDetail::UnsupportedReference,
+        ));
     }
     Ok(None)
 }
 
-fn non_empty_reference(value: &str, kind: &str) -> Result<String, Error> {
+fn non_empty_reference(value: &str, kind: &'static str) -> Result<String, Error> {
     if value.is_empty() {
-        return Err(Error::EmptyReference(kind.to_string()));
+        return Err(Error::InvalidConfiguration(ErrorDetail::Empty {
+            subject: kind,
+        }));
     }
     Ok(value.to_string())
 }
@@ -493,7 +526,9 @@ mod tests {
                         expires_on: None,
                     })
                 } else {
-                    Err(Error::AzureTokenAcquisition(format!("{kind} failed")))
+                    Err(Error::CredentialAcquisition(
+                        litellm_auth_types::ErrorDetail::Unresolved { subject: kind },
+                    ))
                 }
             })
         }
@@ -599,10 +634,14 @@ mod tests {
         )))
         .expect_err("unsupported backend must fail validation");
 
-        assert!(error.to_string().contains("unsupported OIDC reference"));
+        assert!(
+            litellm_error::Report::new(&error)
+                .to_string()
+                .contains("unsupported OIDC reference")
+        );
     }
 
-    #[test]
+    #[rstest::rstest]
     fn request_oidc_reference_is_rejected_before_lookup() {
         let params = json!({
             "azure_ad_token": "oidc/env/ASSERTION",
@@ -624,7 +663,12 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(matches!(error, Error::RequestAzureCredentialReference));
+        assert!(
+            litellm_error::Report::new(&error)
+                .to_string()
+                .contains("request-controlled Azure credential references are not allowed"),
+            "{error:?}"
+        );
     }
 
     #[tokio::test]
@@ -685,7 +729,16 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, Error::CredentialChain(errors) if errors.len() == 2));
+        assert!(matches!(&error, Error::CredentialChain { earlier, .. } if earlier.len() == 1));
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(
+            report.contains("managed-identity did not resolve"),
+            "{report}"
+        );
+        assert!(
+            report.contains("developer-tools did not resolve"),
+            "{report}"
+        );
     }
 
     #[derive(Debug)]
@@ -723,6 +776,7 @@ mod tests {
         assert_eq!(credential.value().secret().expose(), "caller-token");
     }
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn empty_caller_token_is_rejected() {
         let error = AzureAuthService::default()
@@ -730,6 +784,11 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, Error::EmptyAzureToken));
+        assert_eq!(
+            error,
+            Error::EmptyCallerCredential {
+                caller: "Azure AD token provider"
+            }
+        );
     }
 }

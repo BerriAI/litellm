@@ -15,18 +15,18 @@ instead of full-model writes, which trip ``prisma.errors.DataError`` on rows
 carrying fields the update input type rejects (see #27730).
 """
 
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final
+from typing import Final, Protocol, runtime_checkable
 
 from litellm.repositories.prisma_protocols import BatchTable, PrismaBatch
 
 
 def _spend_reset_data(budget_reset_at: datetime | None, spend_decrement: float) -> Mapping[str, object]:
-    spend: Final[object] = {"decrement": spend_decrement}  # mutable-ok: prisma update payload must be a dict
-    return {"spend": spend, "budget_reset_at": budget_reset_at}  # mutable-ok: prisma update payload must be a dict
+    spend: Final[object] = {"decrement": spend_decrement}
+    return {"spend": spend, "budget_reset_at": budget_reset_at}
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +35,7 @@ class KeySpendResetWrites:
 
     def queue_spend_reset(self, token: str, budget_reset_at: datetime | None, spend_decrement: float) -> None:
         self.table.update(
-            where={"token": token},  # mutable-ok: prisma where filter must be a dict
+            where={"token": token},
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
@@ -46,7 +46,7 @@ class UserSpendResetWrites:
 
     def queue_spend_reset(self, user_id: str, budget_reset_at: datetime | None, spend_decrement: float) -> None:
         self.table.update(
-            where={"user_id": user_id},  # mutable-ok: prisma where filter must be a dict
+            where={"user_id": user_id},
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
@@ -57,9 +57,16 @@ class TeamSpendResetWrites:
 
     def queue_spend_reset(self, team_id: str, budget_reset_at: datetime | None, spend_decrement: float) -> None:
         self.table.update(
-            where={"team_id": team_id},  # mutable-ok: prisma where filter must be a dict
+            where={"team_id": team_id},
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
+
+
+@runtime_checkable
+class SpendResetWrites(Protocol):
+    def queue_spend_zero(self, where: Mapping[str, object]) -> None: ...
+
+    def queue_spend_decrement(self, where: Mapping[str, object], amount: float) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,8 +81,32 @@ class LinkedSpendResetWrites:
         cascade's read and its commit survives the reset instead of being erased."""
         self.table.update_many(
             where=where,
-            data={"spend": {"decrement": amount}},  # mutable-ok: prisma update payload must be a dict
+            data={"spend": {"decrement": amount}},
         )
+
+
+# Membership rows written before total_spend existed (migration 20260421135425, default 0) hold their
+# history only in spend. Zeroing spend would erase it, so the floor lands in the same batch, ahead of the reset.
+_TEAM_MEMBERSHIP_TOTAL_SPEND_REPAIR_SQL: Final = """
+UPDATE "LiteLLM_TeamMembership"
+SET total_spend = spend
+WHERE budget_id = ANY($1::text[]) AND spend > total_spend
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class TeamMembershipSpendResetWrites:
+    resets: LinkedSpendResetWrites
+    batch: PrismaBatch
+
+    def queue_spend_zero(self, where: Mapping[str, object]) -> None:
+        self.resets.queue_spend_zero(where)
+
+    def queue_spend_decrement(self, where: Mapping[str, object], amount: float) -> None:
+        self.resets.queue_spend_decrement(where, amount)
+
+    def queue_total_spend_repair(self, budget_ids: Sequence[str]) -> None:
+        self.batch.execute_raw(_TEAM_MEMBERSHIP_TOTAL_SPEND_REPAIR_SQL, list(budget_ids))
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,20 +128,21 @@ class SpendResetUnitOfWork:
 
 @dataclass(frozen=True, slots=True)
 class BudgetCascadeUnitOfWork:
-    """Every write a budget-tier reset performs, bound to one batch.
+    """Every write a budget-tier reset performs in its final batch.
 
     The dependent spend rows and the budget rows' ``budget_reset_at`` advance
     must land together: advancing the window without zeroing the spend it
     gates leaves the dependents pinned at their cap until the next window.
+    End users are the exception, paged and committed ahead of this batch by
+    ``enduser_spend_reset_unit_of_work`` because one tier can gate millions.
     """
 
-    team_memberships: LinkedSpendResetWrites
+    team_memberships: TeamMembershipSpendResetWrites
     keys: LinkedSpendResetWrites
     organizations: LinkedSpendResetWrites
     tags: LinkedSpendResetWrites
     model_access_groups: LinkedSpendResetWrites
     projects: LinkedSpendResetWrites
-    endusers: LinkedSpendResetWrites
     budgets: BudgetWindowWrites
 
 
@@ -131,13 +163,25 @@ async def budget_cascade_unit_of_work(
 ) -> AsyncGenerator[BudgetCascadeUnitOfWork, None]:
     batch = new_batch()
     yield BudgetCascadeUnitOfWork(
-        team_memberships=LinkedSpendResetWrites(table=batch.litellm_teammembership),
+        team_memberships=TeamMembershipSpendResetWrites(
+            resets=LinkedSpendResetWrites(table=batch.litellm_teammembership), batch=batch
+        ),
         keys=LinkedSpendResetWrites(table=batch.litellm_verificationtoken),
         organizations=LinkedSpendResetWrites(table=batch.litellm_organizationtable),
         tags=LinkedSpendResetWrites(table=batch.litellm_tagtable),
         model_access_groups=LinkedSpendResetWrites(table=batch.litellm_modelaccessgroupbudgettable),
         projects=LinkedSpendResetWrites(table=batch.litellm_projecttable),
-        endusers=LinkedSpendResetWrites(table=batch.litellm_endusertable),
         budgets=BudgetWindowWrites(table=batch.litellm_budgettable),
     )
+    await batch.commit()
+
+
+@asynccontextmanager
+async def enduser_spend_reset_unit_of_work(
+    new_batch: Callable[[], PrismaBatch],
+) -> AsyncGenerator[LinkedSpendResetWrites, None]:
+    """One page of end-user spend resets, committed on its own so a statement
+    never grows with the end-user population."""
+    batch: Final = new_batch()
+    yield LinkedSpendResetWrites(table=batch.litellm_endusertable)
     await batch.commit()

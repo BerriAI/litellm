@@ -2,8 +2,9 @@ from collections.abc import Sequence
 from enum import Enum
 from typing import Any, Final, Literal, Optional, Union
 
-from pydantic import BaseModel
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class LiteLLMCacheType(str, Enum):
@@ -74,7 +75,7 @@ class RedisPipelineSetOperation(TypedDict):
     """
 
     key: str
-    value: Any
+    value: object
     ttl: int | None
 
 
@@ -114,7 +115,7 @@ DynamicCacheControl = TypedDict(
 )
 
 
-class CachePingResponse(BaseModel):
+class CachePingResponse(LiteLLMBaseModel):
     status: str
     cache_type: str
     ping_response: bool | None = None
@@ -125,24 +126,30 @@ class CachePingResponse(BaseModel):
     health_check_cache_params: dict | None = None
 
 
-class HealthCheckCacheParams(BaseModel):
+class HealthCheckCacheParams(LiteLLMBaseModel):
     """
     Cache Params returned on /cache/ping call
     """
 
     host: str | None = None
     port: str | int | None = None
-    redis_kwargs: dict[str, Any] | None = None
+    redis_kwargs: dict[str, object] | None = None
     namespace: str | None = None
     redis_version: str | int | float | None = None
+
+
+EMBEDDING_CACHE_FORMAT_VERSION: Final = 2
+
+CACHED_STREAM_EVENTS_KEY: Final = "litellm_cached_anthropic_sse_events"
 
 
 class CachedEmbedding(TypedDict):
     """Type definition for cached embedding objects"""
 
-    embedding: list[float] | None
-    index: int | None
-    object: str | None
-    model: str | None
-    prompt_tokens: int | None
-    prompt_tokens_details: dict | None
+    embedding: ReadOnly[list[float] | str | None]
+    index: ReadOnly[int | None]
+    object: ReadOnly[str | None]
+    model: ReadOnly[str | None]
+    prompt_tokens: ReadOnly[int | None]
+    prompt_tokens_details: ReadOnly[dict | None]
+    format_version: ReadOnly[int]

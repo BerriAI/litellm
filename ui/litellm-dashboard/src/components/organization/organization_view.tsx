@@ -27,6 +27,7 @@ import ObjectPermissionsView from "../object_permissions_view";
 import MemberModal from "../team/EditMembership";
 import { OrgSettingsForm } from "./org-settings/OrgSettingsForm";
 import { ORGANIZATION_TAB_URL_KEY, ORGANIZATION_TABS, type OrganizationTab } from "./organizationTabs";
+import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -134,6 +135,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     {
       title: "Spend (USD)",
       key: "spend",
+      numeric: true,
       sortValue: (record: Member) => orgMemberFor(record)?.spend ?? null,
       render: (record: Member) => <MoneyCell value={orgMemberFor(record)?.spend} decimals={4} />,
     },
@@ -192,7 +194,15 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
             <Card>
               <CardContent>
-                <p className="text-sm text-muted-foreground">Budget Status</p>
+                <p className="text-sm text-muted-foreground">
+                  Budget Status
+                  <BudgetPeriodTooltip
+                    spend={orgData.spend}
+                    maxBudget={orgData.litellm_budget_table.max_budget}
+                    budgetDuration={orgData.litellm_budget_table.budget_duration}
+                    budgetResetAt={orgData.litellm_budget_table.budget_reset_at}
+                  />
+                </p>
                 <div className="mt-2 text-sm text-foreground">
                   <p className="text-xl font-semibold">${formatNumberWithCommas(orgData.spend, 4)}</p>
                   <p>

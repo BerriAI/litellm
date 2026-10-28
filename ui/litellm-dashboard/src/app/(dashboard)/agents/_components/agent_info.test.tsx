@@ -2,6 +2,7 @@ import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import AgentInfoView from "./agent_info";
+import AgentFormFields from "./agent_form_fields";
 import * as networking from "@/components/networking";
 import type { Agent } from "@/components/agents/types";
 
@@ -9,10 +10,15 @@ vi.mock("@/components/networking", () => ({
   getAgentInfo: vi.fn(),
   getAgentCreateMetadata: vi.fn(),
   patchAgentCall: vi.fn(),
+  triggerAgentKillSwitchCall: vi.fn(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useKeys: () => ({ data: { keys: [] }, isLoading: false, refetch: vi.fn() }),
+}));
+
+vi.mock("./AgentIdentityDetails", () => ({
+  AgentIdentityDetails: () => null,
 }));
 
 vi.mock("./agent_card_discovery", () => ({
@@ -20,7 +26,7 @@ vi.mock("./agent_card_discovery", () => ({
 }));
 
 vi.mock("./agent_form_fields", () => ({
-  default: () => <div data-testid="agent-form-fields" />,
+  default: vi.fn(() => <div data-testid="agent-form-fields" />),
   unmountedA2AFieldNames: () => [],
 }));
 
@@ -75,9 +81,14 @@ const agent = {
 
 describe("AgentInfoView settings", () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.mocked(AgentFormFields)
+      .mockReset()
+      .mockImplementation(() => <div data-testid="agent-form-fields" />);
     vi.mocked(networking.getAgentInfo).mockReset().mockResolvedValue(agent);
     vi.mocked(networking.getAgentCreateMetadata).mockReset().mockResolvedValue([]);
     vi.mocked(networking.patchAgentCall).mockReset().mockResolvedValue({});
+    vi.mocked(networking.triggerAgentKillSwitchCall).mockReset();
   });
 
   it("submits the edited agent when Save Changes is pressed", async () => {
@@ -99,6 +110,23 @@ describe("AgentInfoView settings", () => {
     const clearedMcpGrants = { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} };
     expect(payload.object_permission).toEqual(clearedMcpGrants);
     expect(payload.access_group_ids).toEqual([]);
+  });
+
+  it("saves unrelated settings when the existing card has no description", async () => {
+    const actual = await vi.importActual<typeof import("./agent_form_fields")>("./agent_form_fields");
+    vi.mocked(AgentFormFields).mockImplementation(actual.default);
+    const { description: _description, ...card } = agent.agent_card_params ?? {};
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({ ...agent, agent_card_params: card });
+    render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Settings" }));
+    expect(await screen.findByLabelText("Description")).toHaveValue("");
+    fireEvent.change(screen.getByLabelText("TPM Limit"), { target: { value: "42" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save Changes/ }));
+    await waitFor(() => expect(networking.patchAgentCall).toHaveBeenCalledOnce());
+    const [, , payload] = vi.mocked(networking.patchAgentCall).mock.calls[0];
+    expect(payload.tpm_limit).toBe(42);
+    expect(payload.agent_card_params?.description).toBe("");
   });
 
   it("sends the newly attached access group in the update payload", async () => {
@@ -157,5 +185,30 @@ describe("AgentInfoView settings", () => {
 
     expect(await screen.findByText("Access Groups")).toBeInTheDocument();
     expect(screen.getByText("None")).toBeInTheDocument();
+  });
+
+  it("renders the kill switch Danger Zone for admins with the configured webhook", async () => {
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...agent,
+      kill_switch: { url: "https://ops.example.com/kill", method: "DELETE" },
+    });
+    render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
+
+    const dangerZone = await screen.findByRole("region", { name: "Danger Zone" });
+    expect(dangerZone).toHaveTextContent("DELETE https://ops.example.com/kill");
+    expect(screen.getByRole("button", { name: "Fire Kill Switch" })).toBeInTheDocument();
+    expect(screen.queryByText("Kill Switch")).not.toBeInTheDocument();
+  });
+
+  it("hides the Danger Zone from non-admins", async () => {
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...agent,
+      kill_switch: { url: "https://ops.example.com/kill", method: "POST" },
+    });
+    render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={false} />);
+
+    expect(await screen.findByRole("heading", { name: "support-agent" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Danger Zone" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Fire Kill Switch" })).not.toBeInTheDocument();
   });
 });

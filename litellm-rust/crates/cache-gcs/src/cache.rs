@@ -2,11 +2,11 @@ use std::{future::Future, sync::Arc, time::Duration};
 
 use futures_util::future::try_join_all;
 use litellm_cache::{
-    BaseCache, BatchCache, BatchEntry, CacheCodec, CacheConnectionResult, Error, ExactCacheContext,
+    BaseCache, BatchCache, BatchEntry, CacheCodec, DisconnectCache, Error, ExactCacheContext,
     FlushCache,
 };
+use litellm_http::Client;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_encode};
-use reqwest::Client;
 
 use crate::{GcpTokenSource, TokenSource};
 
@@ -24,6 +24,14 @@ pub fn key_prefix(gcs_path: Option<&str>) -> String {
         _ => String::new(),
     }
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("GCS answered {0}")]
+struct UnexpectedStatus(reqwest::StatusCode);
+
+#[derive(Debug, thiserror::Error)]
+#[error("GCS cache worker thread panicked")]
+struct WorkerPanicked;
 
 #[derive(Clone, Debug)]
 pub struct GcsConfig {
@@ -53,25 +61,25 @@ pub struct GcsCache<S: CacheCodec> {
 }
 
 impl<S: CacheCodec> GcsCache<S> {
-    pub fn new(config: GcsConfig, codec: S) -> Result<Self, Error> {
+    pub fn new(config: GcsConfig, client: Client, codec: S) -> Self {
         let token = Arc::new(GcpTokenSource::new(config.path_service_account.clone()));
-        Self::with_token_source(config, codec, token)
+        Self::with_token_source(config, client, codec, token)
     }
 
     pub fn with_token_source(
         config: GcsConfig,
+        client: Client,
         codec: S,
         token: Arc<dyn TokenSource>,
-    ) -> Result<Self, Error> {
-        let client = Client::builder().build().map_err(|_| Error::Unavailable)?;
+    ) -> Self {
         let key_prefix = key_prefix(config.gcs_path.as_deref());
-        Ok(Self {
+        Self {
             config,
             key_prefix,
             client,
             token,
             codec,
-        })
+        }
     }
 
     pub fn bucket_name(&self) -> &str {
@@ -114,9 +122,9 @@ impl<S: CacheCodec> GcsCache<S> {
             .body(payload)
             .send()
             .await
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(|error| Error::unavailable(litellm_http::Error::from(error)))?;
         if !response.status().is_success() {
-            return Err(Error::Unavailable);
+            return Err(Error::unavailable(UnexpectedStatus(response.status())));
         }
         Ok(())
     }
@@ -135,18 +143,18 @@ impl<S: CacheCodec> GcsCache<S> {
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .send()
             .await
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(|error| Error::unavailable(litellm_http::Error::from(error)))?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
         if !response.status().is_success() {
-            return Err(Error::Unavailable);
+            return Err(Error::unavailable(UnexpectedStatus(response.status())));
         }
-        let body = response.bytes().await.map_err(|_| Error::Unavailable)?;
-        self.codec
-            .decode(&body)
-            .map(Some)
-            .map_err(|_| Error::InvalidEntry)
+        let body = response
+            .bytes()
+            .await
+            .map_err(|error| Error::unavailable(litellm_http::Error::from(error)))?;
+        self.codec.decode(&body).map(Some)
     }
 
     fn run_sync<T, F>(future: F) -> Result<T, Error>
@@ -154,26 +162,26 @@ impl<S: CacheCodec> GcsCache<S> {
         F: Future<Output = Result<T, Error>> + Send,
         T: Send,
     {
-        let run = || {
+        let run = |future: F| {
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|_| Error::Unavailable)
+                .map_err(Error::unavailable)
                 .and_then(|runtime| runtime.block_on(future))
         };
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
-                return tokio::task::block_in_place(run);
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| handle.block_on(future))
             }
-            return std::thread::scope(|scope| {
+            Ok(_) => std::thread::scope(|scope| {
                 scope
-                    .spawn(run)
+                    .spawn(|| run(future))
                     .join()
-                    .map_err(|_| Error::Unavailable)
+                    .map_err(|_| Error::unavailable(WorkerPanicked))
                     .and_then(|result| result)
-            });
+            }),
+            Err(_) => run(future),
         }
-        run()
     }
 }
 
@@ -222,13 +230,11 @@ impl<S: CacheCodec> BaseCache for GcsCache<S> {
         .await
         .map(|_| ())
     }
+}
 
+impl<S: CacheCodec> DisconnectCache for GcsCache<S> {
     async fn disconnect(&self) -> Result<(), Error> {
         Ok(())
-    }
-
-    async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
-        Err(Error::UnsupportedOperation)
     }
 }
 
@@ -244,7 +250,7 @@ impl<S: CacheCodec> BatchCache for GcsCache<S> {
                 match self.async_get_cache(&key, &context).await {
                     Ok(Some(value)) => Ok(BatchEntry::Hit(value)),
                     Ok(None) => Ok(BatchEntry::Miss),
-                    Err(Error::InvalidEntry) => Ok(BatchEntry::Invalid),
+                    Err(Error::InvalidEntry(_)) => Ok(BatchEntry::Invalid),
                     Err(error) => Err(error),
                 }
             }

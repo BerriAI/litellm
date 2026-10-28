@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { CircleAlert } from "lucide-react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { PasswordInput } from "@/components/shared/PasswordInput";
@@ -11,11 +11,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FieldGroup } from "@/components/ui/field";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { changePasswordCall, getProxyBaseUrl } from "@/components/networking";
+import { changePasswordCall, getProxyBaseUrl, getUiPageUrl } from "@/components/networking";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
-import { clearTokenCookies } from "@/utils/cookieUtils";
+import { revokeSessionAndClearClientState } from "@/app/(dashboard)/hooks/useLogout";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
 
 const changePasswordSchema = z
@@ -47,9 +47,11 @@ export function ChangePasswordForm() {
       await changePasswordCall(accessToken, values.currentPassword, values.newPassword);
       if (passwordResetRequired) {
         // The session key was minted restricted; only a fresh login lifts it.
+        // Revoke it server-side too (best-effort) so it doesn't sit valid
+        // until the expiry reaper gets to it.
         toast.success("Password updated. Please log in with your new password.");
-        clearTokenCookies();
-        window.location.replace(getLoginUrl(getProxyBaseUrl()));
+        await revokeSessionAndClearClientState(accessToken);
+        window.location.replace(getUiPageUrl(getLoginUrl(getProxyBaseUrl())));
         return;
       }
       toast.success("Password updated");

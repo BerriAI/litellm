@@ -7,6 +7,9 @@ twelvelabs.pegasus-1-2-v1:0
 us.twelvelabs.pegasus-1-2-v1:0
 eu.twelvelabs.pegasus-1-2-v1:0
 global.twelvelabs.pegasus-1-2-v1:0
+us.twelvelabs.pegasus-1-5-v1:0
+global.twelvelabs.pegasus-1-5-v1:0
+twelvelabs.pegasus-1-5-v1:0
 amazon.titan-text-express-v1
 amazon.titan-text-lite-v1
 amazon.titan-text-premier-v1:0
@@ -90,6 +93,7 @@ bedrock/eu-west-2/meta.llama3-70b-instruct-v1:0
 bedrock/eu-west-2/meta.llama3-8b-instruct-v1:0
 bedrock/eu-west-2/minimax.minimax-m2.1
 bedrock/eu-west-2/minimax.minimax-m2.5
+bedrock/eu-west-2/nvidia.nemotron-super-3-120b
 bedrock/eu-west-2/qwen.qwen3-coder-next
 bedrock/eu-west-2/qwen.qwen3-next-80b-a3b
 bedrock/eu-west-3/mistral.mistral-7b-instruct-v0:2
@@ -234,6 +238,7 @@ bedrock/us-gov-west-1/openai.gpt-oss-120b-1:0
 bedrock/us-gov-west-1/anthropic.claude-sonnet-5
 bedrock/us-gov-west-1/anthropic.claude-opus-4-8
 bedrock/us-gov-west-1/anthropic.claude-opus-5
+bedrock/us-gov-west-1/anthropic.claude-opus-5-5
 bedrock/us-gov-west-1/anthropic.claude-fable-5-1
 bedrock/us-gov-east-1/nvidia.nemotron-nano-3-30b
 bedrock/us-gov-east-1/nvidia.nemotron-nano-12b-v2
@@ -244,5 +249,6 @@ bedrock/us-gov-east-1/openai.gpt-oss-120b-1:0
 bedrock/us-gov-east-1/anthropic.claude-sonnet-5
 bedrock/us-gov-east-1/anthropic.claude-opus-4-8
 bedrock/us-gov-east-1/anthropic.claude-opus-5
+bedrock/us-gov-east-1/anthropic.claude-opus-5-5
 bedrock/us-gov-east-1/anthropic.claude-fable-5-1
 bedrock/ap-southeast-2/qwen.qwen3-next-80b-a3b

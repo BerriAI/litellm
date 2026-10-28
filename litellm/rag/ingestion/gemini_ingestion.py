@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final, cast
 
+from pydantic import ConfigDict
+
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     header_value,
@@ -17,10 +20,18 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.gemini.common_utils import GeminiModelInfo
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm import Router
     from litellm.types.rag import RAGIngestOptions
+
+
+class _WhiteSpaceConfig(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, hide_input_in_errors=True)
+
+    max_tokens_per_chunk: object = 800
+    max_overlap_tokens: object = 400
 
 
 class GeminiRAGIngestion(BaseRAGIngestion):
@@ -97,7 +108,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             raise ValueError("GEMINI_API_BASE is required")
 
         api_version: Final = "v1beta"
-        base_url: Final = f"{api_base}/{api_version}"
+        base_url: Final = join_api_base(api_base, api_version)
 
         # Create File Search store if not provided
         if not vector_store_id:
@@ -138,7 +149,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         Returns:
             Store name (format: fileSearchStores/xxxxxxx)
         """
-        url: Final = f"{base_url}/fileSearchStores"
+        url: Final = join_api_base(base_url, "fileSearchStores")
 
         request_body: Final = {"displayName": display_name}
 
@@ -226,7 +237,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         # base_url is like: https://generativelanguage.googleapis.com/v1beta
         # We need: https://generativelanguage.googleapis.com/upload/v1beta/{store_id}:uploadToFileSearchStore
         api_base: Final = base_url.replace("/v1beta", "")  # Get base without version
-        url: Final = f"{api_base}/upload/v1beta/{vector_store_id}:uploadToFileSearchStore"
+        url: Final = join_api_base(api_base, f"upload/v1beta/{vector_store_id}:uploadToFileSearchStore")
 
         # Build request body with chunking config and metadata if provided
         request_body: Final[dict[str, object]] = {"displayName": filename}
@@ -234,12 +245,13 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         # Add chunking configuration if provided
         chunking_strategy: Final = self.chunking_strategy
         if chunking_strategy and isinstance(chunking_strategy, dict):
-            white_space_config: Final = chunking_strategy.get("white_space_config")
+            white_space_config: Final[object] = chunking_strategy.get("white_space_config")
             if white_space_config:
+                white_space: Final = _WhiteSpaceConfig.model_validate(white_space_config)
                 request_body["chunkingConfig"] = {
                     "whiteSpaceConfig": {
-                        "maxTokensPerChunk": white_space_config.get("max_tokens_per_chunk", 800),
-                        "maxOverlapTokens": white_space_config.get("max_overlap_tokens", 400),
+                        "maxTokensPerChunk": white_space.max_tokens_per_chunk,
+                        "maxOverlapTokens": white_space.max_overlap_tokens,
                     }
                 }
 
