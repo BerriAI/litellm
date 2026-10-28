@@ -8569,9 +8569,8 @@ async def test_execute_mcp_tool_hands_hooks_nothing_for_a_never_listed_operation
 
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hooks_no_description():
-    """The listing tools/call runs on its own when this worker does not yet expose the tool is never served
-    to the caller, so it leaves the caller's listed slot empty and the pre-call hooks still get name and
-    arguments only, as on main."""
+    """Without catalog guardrails, an implicit routing lookup leaves the caller's listed slot empty,
+    so pre-call hooks get only the name and arguments."""
     manager = mcp_operations.global_mcp_server_manager
     server = _never_listed_passthrough_server()
     manager.registry[server.server_id] = server
@@ -8579,8 +8578,10 @@ async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hoo
     upstream = AsyncMock()
     upstream.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
     proxy_logging = _mock_mcp_proxy_logging()
+    proxy_logging.has_pre_call_guardrails.return_value = False
     proxy_logging.create_mcp_request_object_from_kwargs = MagicMock(return_value={})
     proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+    proxy_logging.convert_mcp_to_llm_format = MagicMock(return_value={})
     proxy_logging.pre_call_hook = AsyncMock(return_value={})
     proxy_logging.during_call_hook = AsyncMock(return_value=None)
     fetch_tools = AsyncMock(
@@ -10941,7 +10942,7 @@ class TestListFiltersHonorThePrefixBoundary:
 
         assert _tool_name_matches("eiG-read_wiki_contents", ["deepwiki_cfg-read_wiki_contents"], server)
 
-    def test_discovery_hides_exactly_what_dispatch_refuses(self, monkeypatch):
+    def test_discovery_hides_exactly_what_dispatch_refuses(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Both halves of one decision, driven through both production paths.
 
         A spelling the blocklist enforces but the filter misses leaves a blocked
@@ -10963,7 +10964,10 @@ class TestListFiltersHonorThePrefixBoundary:
 
         monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
 
-        def _server(**overrides):
+        def _server(
+            allowed_tools: list[str] | None = None,
+            disallowed_tools: list[str] | None = None,
+        ) -> MCPServer:
             return MCPServer(
                 server_id=self.SERVER_ID,
                 name="deepwiki_prod",
@@ -10972,27 +10976,35 @@ class TestListFiltersHonorThePrefixBoundary:
                 short_prefix="eiG",
                 url="http://127.0.0.1:5115/mcp",
                 transport=MCPTransport.http,
-                **overrides,
+                allowed_tools=allowed_tools,
+                disallowed_tools=disallowed_tools,
             )
 
-        manager = MCPServerManager()
+        manager: Final = MCPServerManager()
         manager._create_prefixed_tools(
             [MCPTool(name="read_wiki_contents", description="", inputSchema={"type": "object"})],
             _server(),
         )
-        registered = sorted(manager.tool_name_to_mcp_server_name_mapping)
+        registered: Final = sorted(manager.tool_name_to_mcp_server_name_mapping)
         assert len(registered) > 1
 
-        published = MCPTool(name="eiG-read_wiki_contents", description="", inputSchema={"type": "object"})
+        published: Final = MCPTool(name="eiG-read_wiki_contents", description="", inputSchema={"type": "object"})
         for spelling in registered:
-            for entry, expected in ((spelling, True), (spelling.upper(), False)):
-                server = _server(disallowed_tools=[entry])
+            policies: Final[tuple[tuple[list[str] | None, list[str], bool], ...]] = (
+                (None, [spelling], True),
+                (None, [spelling.upper()], False),
+                (["read_wiki_contents"], [spelling], True),
+                ([spelling], ["read_wiki_contents"], True),
+                ([spelling], [spelling.upper()], False),
+            )
+            for allowed_tools, disallowed_tools, expected in policies:
+                server: Final = _server(allowed_tools, disallowed_tools)
 
-                refused = not manager.check_allowed_or_banned_tools("read_wiki_contents", server)
-                hidden = filter_tools_by_allowed_tools([published], server) == []
+                refused: Final = not manager.check_allowed_or_banned_tools("read_wiki_contents", server)
+                hidden: Final = filter_tools_by_allowed_tools([published], server) == []
 
-                assert refused == hidden, entry
-                assert refused is expected, entry
+                assert refused == hidden, (allowed_tools, disallowed_tools)
+                assert refused is expected, (allowed_tools, disallowed_tools)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

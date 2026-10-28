@@ -302,6 +302,7 @@ jobs:
               tests/unit/llms/modelscope
               tests/unit/llms/mongodb
               tests/unit/llms/moonshot
+              tests/unit/llms/morph
               tests/unit/llms/nadir
               tests/unit/llms/nebius
               tests/unit/llms/neosantara
@@ -952,7 +953,7 @@ jobs:
             dist: loadscope
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        timeout-minutes: 3
+        timeout-minutes: ${{ matrix.shard == 'db-and-spend' && 10 || 3 }}
         with:
           persist-credentials: false
           fetch-depth: ${{ matrix.shard == 'db-and-spend' && '0' || '1' }}
