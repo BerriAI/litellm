@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import can_key_call_requested_models
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -122,9 +123,16 @@ async def image_generation(
         if isinstance(model, str):
             reject_url_valued_destination("model", model)
 
-        data["model"] = resolve_inference_model(
+        resolved_model: Final = resolve_inference_model(
             data.get("model"), general_settings, user_model, model, kind="image_generation"
         )
+        data["model"] = resolved_model
+        # Auth checked the body model; the deployment path model wins here, so
+        # authorize the resolved name before any alias rewrite.
+        if llm_router is not None:
+            await can_key_call_requested_models(
+                model=resolved_model, valid_token=user_api_key_dict, llm_router=llm_router
+            )
 
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
@@ -156,7 +164,6 @@ async def image_generation(
             route_type="aimage_generation",
             llm_router=llm_router,
             user_model=user_model,
-            user_api_key_dict=user_api_key_dict,
         )
         response = await llm_call
 

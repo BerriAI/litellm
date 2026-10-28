@@ -90,6 +90,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
+    can_key_call_requested_models,
     can_key_call_resolved_model,
     is_model_cost_zero,
     request_skips_budget_checks,
@@ -2364,13 +2365,20 @@ class ProxyBaseLLMRequestProcessing:
         if isinstance(model, str):
             reject_url_valued_destination("model", model)
 
-        self.data["model"] = resolve_inference_model(
+        resolved_model: Final = resolve_inference_model(
             self.data.get("model"),
             general_settings,
             user_model,
             model,
             kind="image_edit" if route_type == "aimage_edit" else "completion",
         )
+        self.data["model"] = resolved_model
+        # Auth checked the body model; the endpoint model from the URL wins here, so
+        # authorize the resolved name before any alias rewrite.
+        if llm_router is not None:
+            await can_key_call_requested_models(
+                model=resolved_model, valid_token=user_api_key_dict, llm_router=llm_router
+            )
 
         # override with user settings, these are params passed via cli
         if user_temperature:

@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import json
 from collections import OrderedDict
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
@@ -710,22 +710,6 @@ def _merge_router_settings_override(
     return _ROUTER_ONLY_SETTINGS.intersection(router_settings_from_override)
 
 
-def _models_to_authorize(model: object) -> Iterator[str]:
-    """Each model the dispatch can reach, split the way auth splits the request model.
-
-    A comma-separated value is a batch the router fans out, and a list is a set of
-    names, so every non-empty part is authorized on its own.
-    """
-    items: Final[tuple[object, ...]] = tuple(model) if isinstance(model, list) else (model,)  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # a list body model holds unknown element types
-    for item in items:
-        if not isinstance(item, str):
-            continue
-        for part in item.split(","):
-            name = part.strip()
-            if name:
-                yield name
-
-
 async def route_request(
     data: dict,
     llm_router: LitellmRouter | None,
@@ -736,22 +720,6 @@ async def route_request(
     """
     Common helper to route the request
     """
-    # Enforce the key and team allowlist on the model that will actually be routed,
-    # not only the body model auth read. Routes that bind the model from the URL
-    # resolve it into data["model"] before dispatch, so this is the single place
-    # that covers every route, including ones added later.
-    dispatched_model: Final = data.get("model")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # route_request takes an untyped dict body
-    if user_api_key_dict is not None and llm_router is not None:
-        from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
-
-        for model_name in _models_to_authorize(dispatched_model):  # pyright: ignore[reportUnknownArgumentType]  # dispatched_model comes from the untyped dict body
-            await can_key_call_resolved_model(
-                model=model_name,
-                llm_model_list=llm_router.model_list,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Router.model_list is an untyped list
-                valid_token=user_api_key_dict,
-                llm_router=llm_router,
-            )
-
     router_only_settings_from_override: Final = _merge_router_settings_override(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
     try:
         return await _route_request_single_attempt(

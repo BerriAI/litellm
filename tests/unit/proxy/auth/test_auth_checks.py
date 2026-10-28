@@ -2380,3 +2380,56 @@ async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_
 
     assert refilled == []
     assert redis.entries == {}
+
+
+def _requested_models_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake", "mock_response": f"from {name}"},
+            }
+            for name in ("model-a", "model-b", "model-c")
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested",
+    ["model-c", "model-a,model-c", ["model-a", "model-c"]],
+    ids=["single", "comma_batch", "list"],
+)
+async def test_can_key_call_requested_models_denies_any_model_outside_allowlist(requested):
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_requested_models
+
+    key = UserAPIKeyAuth(api_key="sk-test", models=["model-a", "model-b"])
+    with pytest.raises(ProxyException) as exc:
+        await can_key_call_requested_models(requested, key, _requested_models_router())
+    assert exc.value.type == ProxyErrorTypes.key_model_access_denied.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested",
+    ["model-a", "model-a,model-b", ["model-a", "model-b"]],
+    ids=["single", "comma_batch", "list"],
+)
+async def test_can_key_call_requested_models_allows_models_inside_allowlist(requested):
+    from litellm.proxy.auth.auth_checks import can_key_call_requested_models
+
+    key = UserAPIKeyAuth(api_key="sk-test", models=["model-a", "model-b"])
+    # Returns None without raising for any form that stays inside the allowlist.
+    assert await can_key_call_requested_models(requested, key, _requested_models_router()) is None
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_requested_models_preserves_a_global_alias_grant(monkeypatch):
+    from litellm.proxy.auth.auth_checks import can_key_call_requested_models
+
+    monkeypatch.setattr(litellm, "model_alias_map", {"friendly": "model-a"})
+    key = UserAPIKeyAuth(api_key="sk-test", models=["friendly"])
+    # A key allowed the alias may call the alias name; resolution to model-a happens
+    # after this check, so the grant must not be denied here.
+    assert await can_key_call_requested_models("friendly", key, _requested_models_router()) is None

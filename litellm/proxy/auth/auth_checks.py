@@ -5561,6 +5561,42 @@ async def _personal_key_owner(
         return None
 
 
+def _requested_model_names(model: object) -> Iterator[str]:
+    """Each model name a request can route to, split the way auth reads the request model.
+
+    A comma-separated value is a batch the router fans out and a list is a set of
+    names, so every non-empty part is a name of its own.
+    """
+    items: Final[tuple[object, ...]] = tuple(model) if isinstance(model, list) else (model,)  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # a list body model holds unknown element types
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        for part in item.split(","):
+            name = part.strip()
+            if name:
+                yield name
+
+
+async def can_key_call_requested_models(
+    model: object,
+    valid_token: UserAPIKeyAuth,
+    llm_router: litellm.Router,
+) -> None:
+    """Authorize every model a request resolves to, before any alias rewrite.
+
+    Call this where an endpoint model from the URL path or query is resolved into the
+    request. The names checked are the ones the caller asked for, so global, key and
+    team alias grants apply exactly as they do in auth, which reads the body model.
+    """
+    for name in _requested_model_names(model):
+        await can_key_call_resolved_model(
+            model=name,
+            llm_model_list=llm_router.model_list,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Router.model_list is an untyped list
+            valid_token=valid_token,
+            llm_router=llm_router,
+        )
+
+
 async def can_key_call_resolved_model(
     model: str,
     llm_model_list: Sequence[object] | None,
