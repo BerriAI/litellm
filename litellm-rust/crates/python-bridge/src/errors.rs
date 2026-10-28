@@ -134,6 +134,10 @@ mod tests {
         }),
         false
     )]
+    #[case::post_call_decline(
+        Error::post_call(Error::Declined(Decline::new("result rejected"))),
+        false
+    )]
     fn route_failures_are_terminal(#[case] error: Error, #[case] is_request: bool) {
         Python::initialize();
         Python::attach(|py| {
