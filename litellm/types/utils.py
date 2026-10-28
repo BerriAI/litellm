@@ -4360,6 +4360,7 @@ server_owned_wif_litellm_params: Final = (
     + openai_wif_litellm_params
     + oauth_token_exchange_litellm_params
     + github_copilot_oauth_litellm_params
+    + ("chatgpt_auth_file",)
 )
 secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
 
@@ -4414,6 +4415,7 @@ GenericBudgetConfigType = dict[str, BudgetConfig]
 
 
 class LlmProviders(str, Enum):
+    REFUSELESS = "refuseless"
     OPENAI = "openai"
     CHATGPT = "chatgpt"
     OPENAI_LIKE = "openai_like"  # embedding only
@@ -4441,6 +4443,7 @@ class LlmProviders(str, Enum):
     VERTEX_AI = "vertex_ai"
     VERTEX_AI_BETA = "vertex_ai_beta"
     GEMINI = "gemini"
+    ABLITERATION = "abliteration"
     AI21 = "ai21"
     BASETEN = "baseten"
     BLACK_FOREST_LABS = "black_forest_labs"
@@ -4641,6 +4644,7 @@ class SearchProviders(str, Enum):
     NIMBLE = "nimble"
     BING_GROUNDING = "bing_grounding"
     DEEPSEEK = "deepseek"
+    XAI = "xai"
 
 
 # Create a set of all search provider values for quick lookup

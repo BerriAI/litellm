@@ -250,10 +250,21 @@
       "/v1/messages"
     ]
   },
+  "refuseless": {
+    "base_url": "https://api.refuseless.com/v1",
+    "api_key_env": "REFUSELESS_API_KEY",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
+  },
   "topxai": {
     "base_url": "https://ai.topxea.com/v1",
     "api_key_env": "TOPXAI_API_KEY",
     "api_base_env": "TOPXAI_API_BASE",
-    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
   }
 }

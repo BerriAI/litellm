@@ -1792,6 +1792,30 @@ export interface paths {
         patch: operations["azure_speech_proxy_route_azure_speech__endpoint__patch"];
         trace?: never;
     };
+    "/backend-api/codex/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Codex Passthrough Route
+         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication.
+         */
+        get: operations["codex_passthrough_route_backend_api_codex__endpoint__get"];
+        put?: never;
+        /**
+         * Codex Passthrough Route
+         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication.
+         */
+        post: operations["codex_passthrough_route_backend_api_codex__endpoint__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/batches": {
         parameters: {
             query?: never;
@@ -4348,7 +4372,7 @@ export interface paths {
         };
         /**
          * List End User
-         * @description [Admin-only] List all available customers
+         * @description [Admin-only] List customers in pages of up to 100, ordered by user ID. Defaults to 50 customers per page.
          *
          *     Example curl:
          *     ```
@@ -5026,7 +5050,7 @@ export interface paths {
         };
         /**
          * List End User
-         * @description [Admin-only] List all available customers
+         * @description [Admin-only] List customers in pages of up to 100, ordered by user ID. Defaults to 50 customers per page.
          *
          *     Example curl:
          *     ```
@@ -23704,6 +23728,7 @@ export interface paths {
          *         page / size: Pagination controls (defaults: page=1, size=50).
          *         search: Case-insensitive partial match on model name or team public name.
          *         modelId: Return a single deployment by LiteLLM model id.
+         *         use_stored_params: With modelId, return only persisted litellm_params keys, retaining normal redaction.
          *         teamId: Filter to models with direct access or team membership for this team id.
          *         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
          *         blocked: Filter by routing status (false = active, true = paused).
@@ -28688,7 +28713,7 @@ export interface components {
         ChatCompletionAssistantMessage: {
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             /** Content */
-            content?: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionThinkingBlock"] | components["schemas"]["ChatCompletionRedactedThinkingBlock"] | components["schemas"]["ChatCompletionImageObject"])[] | null;
+            content?: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionThinkingBlock"] | components["schemas"]["ChatCompletionRedactedThinkingBlock"] | components["schemas"]["ChatCompletionImageObject"] | components["schemas"]["ChatCompletionAudioObject"] | components["schemas"]["ChatCompletionFileObject"])[] | null;
             function_call?: components["schemas"]["ChatCompletionToolCallFunctionChunk"] | null;
             /** Name */
             name?: string | null;
@@ -28719,7 +28744,8 @@ export interface components {
         };
         /** ChatCompletionAudioObject */
         ChatCompletionAudioObject: {
-            input_audio: components["schemas"]["InputAudio"];
+            cache_control?: components["schemas"]["ChatCompletionCachedContent"];
+            input_audio: components["schemas"]["ChatCompletionInputAudio"];
             /**
              * Type
              * @constant
@@ -28848,6 +28874,17 @@ export interface components {
             format?: string;
             /** Url */
             url: string;
+            /** Video Metadata */
+            video_metadata?: {
+                [key: string]: unknown;
+            };
+        };
+        /** ChatCompletionInputAudio */
+        ChatCompletionInputAudio: {
+            /** Data */
+            data: string;
+            /** Format */
+            format: string;
         };
         /** ChatCompletionMessageCustomToolCall */
         ChatCompletionMessageCustomToolCall: {
@@ -29000,7 +29037,7 @@ export interface components {
         /** ChatCompletionToolMessage */
         ChatCompletionToolMessage: {
             /** Content */
-            content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"] | components["schemas"]["ChatCompletionToolReferenceObject"])[];
+            content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"] | components["schemas"]["ChatCompletionAudioObject"] | components["schemas"]["ChatCompletionFileObject"] | components["schemas"]["ChatCompletionToolReferenceObject"])[];
             /**
              * Role
              * @constant
@@ -33584,16 +33621,6 @@ export interface components {
              */
             type: "base64";
         };
-        /** InputAudio */
-        InputAudio: {
-            /** Data */
-            data: string;
-            /**
-             * Format
-             * @enum {string}
-             */
-            format: "wav" | "mp3";
-        };
         /** InputTokensDetails */
         InputTokensDetails: {
             /** Audio Tokens */
@@ -35042,7 +35069,7 @@ export interface components {
             created_at: string;
             /** Created By */
             created_by: string;
-            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
+            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | null;
             /**
              * Members
              * @default []
@@ -35309,6 +35336,11 @@ export interface components {
             cache_read_input_token_cost_priority?: number | null;
             /** Cache Read Input Token Cost Ultrafast */
             cache_read_input_token_cost_ultrafast?: number | null;
+            /**
+             * Chatgpt Auth File
+             * @description Path to a ChatGPT OAuth auth.json for this deployment.
+             */
+            chatgpt_auth_file?: string | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Client Id */
@@ -40492,6 +40524,21 @@ export interface components {
             guardrail_name?: string | null;
             litellm_params?: components["schemas"]["BaseLitellmParams"] | null;
         };
+        /** PatchModelRequest */
+        PatchModelRequest: {
+            /** Blocked */
+            blocked?: boolean | null;
+            litellm_params?: components["schemas"]["updateLiteLLMParams"] | null;
+            /**
+             * Litellm Params To Remove
+             * @description Top-level litellm_params keys to delete. Omitted parameters remain unchanged. The required model key and keys also supplied in litellm_params cannot be removed. Removing an absent key or repeating a key is a no-op.
+             * @default []
+             */
+            litellm_params_to_remove: string[];
+            model_info?: components["schemas"]["litellm__types__router__ModelInfo"] | null;
+            /** Model Name */
+            model_name?: string | null;
+        };
         /** PatchPromptRequest */
         PatchPromptRequest: {
             litellm_params?: components["schemas"]["PromptLiteLLMParams"] | null;
@@ -42575,10 +42622,10 @@ export interface components {
             match_threshold: number;
             /**
              * Max Tokens From Tier Model
-             * @description Set max_tokens on every routed request to the output ceiling of the tier model it lands on, replacing whatever the caller sent. A caller behind an auto-router cannot pick one value that fits every tier: the smallest tier's ceiling starves a bigger tier's thinking budget, and a bigger tier's ceiling is rejected by the smallest. The ceiling is the smallest max_output_tokens across the tier model's deployments, read from each deployment's model_info and then the model cost map; a tier model with a deployment whose ceiling is unknown keeps the caller's value. A max_tokens, max_completion_tokens or max_output_tokens in the tier's own litellm_params still wins. Set false to forward the caller's value unchanged.
+             * @description Set max_tokens on every routed request to the output ceiling of the tier model it lands on, replacing whatever the caller sent. A caller behind an auto-router cannot pick one value that fits every tier: the smallest tier's ceiling starves a bigger tier's thinking budget, and a bigger tier's ceiling is rejected by the smallest. The ceiling is the smallest max_output_tokens across the tier model's deployments, read from each deployment's model_info and then the model cost map; a tier model with a deployment whose ceiling is unknown keeps the caller's value. A max_tokens, max_completion_tokens or max_output_tokens in the tier's own litellm_params still wins. Set "clamp" to keep a smaller positive caller value and cap a larger one at the ceiling. Set false to forward the caller's value unchanged.
              * @default true
              */
-            max_tokens_from_tier_model: boolean;
+            max_tokens_from_tier_model: boolean | "clamp";
             /**
              * Modality Pin Override
              * @description Let modality_routing replace a kept session-affinity pin on the turns that carry an image. Without this, a session pinned to a text-only model fails every image turn with a provider 400, since the pin is exempt from the modality gate. When enabled, such a turn routes to a capable model for that request only and the stored pin is left untouched, so the next text turn replays the session's own model; the override is reported as cause modality_pin_override and is never itself pinned. Inert unless modality_routing is also enabled.
@@ -48049,6 +48096,16 @@ export interface components {
             field_schema: {
                 [key: string]: unknown;
             };
+            /**
+             * Logo Url Dark Via Proxy
+             * @default false
+             */
+            logo_url_dark_via_proxy: boolean;
+            /**
+             * Logo Url Via Proxy
+             * @default false
+             */
+            logo_url_via_proxy: boolean;
             /** Values */
             values: {
                 [key: string]: unknown;
@@ -48090,6 +48147,11 @@ export interface components {
             server_root_path: string;
             /** Sso Configured */
             sso_configured: boolean;
+            /**
+             * Use Si Terminology
+             * @default false
+             */
+            use_si_terminology: boolean;
             /**
              * Workers
              * @default []
@@ -50660,6 +50722,11 @@ export interface components {
             cache_read_input_token_cost_priority?: number | null;
             /** Cache Read Input Token Cost Ultrafast */
             cache_read_input_token_cost_ultrafast?: number | null;
+            /**
+             * Chatgpt Auth File
+             * @description Path to a ChatGPT OAuth auth.json for this deployment.
+             */
+            chatgpt_auth_file?: string | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Client Id */
@@ -53724,6 +53791,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    codex_passthrough_route_backend_api_codex__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: "models" | "responses";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    codex_passthrough_route_backend_api_codex__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: "models" | "responses";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Unmodified Codex response or server-sent events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -57582,7 +57720,14 @@ export interface operations {
     };
     list_end_user_customer_list_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Page number */
+                page?: number;
+                /** @description Number of customers per page */
+                page_size?: number;
+                /** @description Case-insensitive search by customer ID or alias */
+                search?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -57596,6 +57741,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustomerResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -58617,7 +58771,14 @@ export interface operations {
     };
     list_end_user_end_user_list_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Page number */
+                page?: number;
+                /** @description Number of customers per page */
+                page_size?: number;
+                /** @description Case-insensitive search by customer ID or alias */
+                search?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -58631,6 +58792,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustomerResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -65585,7 +65755,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["updateDeployment"];
+                "application/json": components["schemas"]["PatchModelRequest"];
             };
         };
         responses: {
@@ -83932,6 +84102,8 @@ export interface operations {
                 search?: string | null;
                 /** @description Search for a specific model by its unique ID */
                 modelId?: string | null;
+                /** @description With modelId, omit runtime-only litellm_params defaults from a DB-stored model's editor view. */
+                use_stored_params?: boolean;
                 /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
                 teamId?: string | null;
                 /** @description Field to sort by. Options: model_name, created_at, updated_at, costs, status */
