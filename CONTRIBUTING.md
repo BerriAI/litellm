@@ -94,6 +94,8 @@ Add your tests to the [`tests/unit/` directory](https://github.com/BerriAI/litel
 - **Only add mocked tests** - no real LLM API calls in this directory
 - For integration tests with real APIs, use the appropriate test directories
 
+Tests that call `litellm.register_model` or change `litellm.model_cost` should use the `local_model_cost_map` fixture from `tests/unit/conftest.py`. It provides a fresh catalog and restores the previous map, so pricing and capability overrides cannot leak into later tests
+
 ### File Naming Convention
 
 The `tests/unit/` directory follows the same structure as `litellm/`:

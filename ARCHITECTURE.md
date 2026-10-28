@@ -239,6 +239,8 @@ graph LR
 7. `DBSpendUpdateWriter.update_database()` queues spend increments to Redis
 8. Background job `update_spend` flushes queued spend to PostgreSQL every 60s
 
+Cost lookup falls back to the response model when the provider-reported name cannot be priced. Explicitly registered zero rates remain zero, and custom deployment pricing or an explicit `base_model` retain precedence
+
 ### Data Access Layer (Models & Repositories)
 
 Database entities and the operations on them live in two packages at the root of `litellm/` so both the gateway (`proxy/`) and the SDK can use them without importing proxy internals:
