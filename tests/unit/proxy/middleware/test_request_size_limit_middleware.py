@@ -1,7 +1,9 @@
+from typing import Final
+
 import pytest
 from starlette.responses import JSONResponse
 from starlette.testclient import TestClient
-from starlette.types import Message
+from starlette.types import Message, Receive, Scope, Send
 
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
@@ -135,15 +137,15 @@ async def test_request_size_limit_middleware_rejects_streamed_body_without_conte
     assert received_body_bytes == 1024 * 1024
 
 
-def test_an_oversized_messages_request_gets_the_anthropic_request_too_large_error():
-    async def app(scope, receive, send):
+def test_an_oversized_messages_request_gets_the_anthropic_request_too_large_error() -> None:
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
         await JSONResponse({"ok": True})(scope, receive, send)
 
-    client = TestClient(
+    client: Final = TestClient(
         RequestSizeLimitMiddleware(app, get_max_request_size_mb=lambda: 1, is_request_size_limit_enabled=lambda: True)
     )
 
-    response = client.post(
+    response: Final = client.post(
         "/v1/messages", content=b"x" * (1024 * 1024 + 1), headers={"content-type": "application/json"}
     )
 

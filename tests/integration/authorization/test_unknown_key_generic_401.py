@@ -55,6 +55,7 @@ class _AnthropicErrorDetail(BaseModel):
 
     type: str
     message: str
+    litellm_error_type: str
 
 
 class _AnthropicErrorResponse(BaseModel):
@@ -67,7 +68,9 @@ class _AnthropicErrorResponse(BaseModel):
 GENERIC_ERROR: Final = _ProxyError(message=GENERIC_MESSAGE, type="token_not_found_in_db", param="key", code="401")
 MESSAGES_PATH: Final = "/v1/messages"
 ANTHROPIC_ENVELOPE_PATHS: Final = frozenset({MESSAGES_PATH, "/anthropic/v1/messages"})
-ANTHROPIC_GENERIC_ERROR: Final = _AnthropicErrorDetail(type="authentication_error", message=GENERIC_MESSAGE)
+ANTHROPIC_GENERIC_ERROR: Final = _AnthropicErrorDetail(
+    type="authentication_error", message=GENERIC_MESSAGE, litellm_error_type=GENERIC_ERROR.type
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,7 +149,6 @@ def _assert_messages_refusal(response: httpx.Response, *secrets: str) -> None:
 
 
 def _assert_refusal(path: str, response: httpx.Response, *secrets: str) -> None:
-    """The Messages and Anthropic pass-through routes answer the Anthropic envelope, every other route the OpenAI one."""
     if path in ANTHROPIC_ENVELOPE_PATHS:
         _assert_messages_refusal(response, *secrets)
     else:
@@ -398,8 +400,6 @@ async def _send_async(client: httpx.AsyncClient, route: _Route, key: str) -> htt
 
 
 async def _burst(owned: OwnedProxy, keys: tuple[str, ...]) -> tuple[tuple[_Route, httpx.Response], ...]:
-    """Each key's response paired with the route it was sent on, so the caller asserts the
-    envelope the route actually answered with."""
     routes: Final = tuple(ROUTES[BURST_ROUTES[index % len(BURST_ROUTES)]] for index in range(len(keys)))
     async with httpx.AsyncClient(base_url=str(owned.gateway.client.base_url), timeout=60, trust_env=False) as client:
         responses: Final = await asyncio.gather(

@@ -151,9 +151,6 @@ def error_type(response: httpx.Response) -> str:
 
 
 def budget_refusal_error_type(route: str) -> str:
-    """The ``error.type`` a budget refusal carries on a route label from ``ROUTES``: the
-    Anthropic envelope on Messages (its budget refusal is raised in
-    ``user_api_key_auth``), the OpenAI ``budget_exceeded`` type on the other routes."""
     return "invalid_request_error" if route == "messages" else "budget_exceeded"
 
 

@@ -683,7 +683,7 @@ async def test_non_http_scopes_reach_the_app_untouched(scope: Scope):
 )
 def test_a_messages_body_the_proxy_cannot_take_gets_the_anthropic_envelope(
     body: bytes, max_mb: float, status_code: int, anthropic_type: str, message: str | None
-):
+) -> None:
     response: Final = _post(
         _client(max_decompressed_body_size_mb=max_mb),
         ZSTD_FRAME_MAGIC + body if message is None else body,
