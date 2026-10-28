@@ -37,10 +37,12 @@ ALLOWLIST = os.path.join(os.path.dirname(__file__), "router_surface_allowlist.js
 # Files that make up the router itself. Their access to Router members is internal.
 ROUTER_FILES = {
     "litellm/router.py",
+    "litellm/router_api.py",
+    "litellm/router_deprecated.py",
 }
 # Classes whose members count as Router members (Router and the mixins it is built from).
-ROUTER_CLASS_FILES = ["litellm/router.py"]
-ROUTER_CLASS_NAMES = {"Router"}
+ROUTER_CLASS_FILES = ["litellm/router.py", "litellm/router_deprecated.py"]
+ROUTER_CLASS_NAMES = {"Router", "DeprecatedRouterMembers"}
 
 SCAN_ROOTS = ["litellm", "enterprise"]
 SKIP_DIRS = {

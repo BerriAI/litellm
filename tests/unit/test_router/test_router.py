@@ -2290,7 +2290,7 @@ def test_with_router_resolved_session_model(session, expected):
 
 def test_router_get_model_access_groups_team_only_models():
     """
-    Test that Router.get_model_access_groups returns the correct response for team-only models
+    Test that Router._core_get_model_access_groups returns the correct response for team-only models
     """
     router = litellm.Router(
         model_list=[
@@ -2409,7 +2409,7 @@ def test_model_group_info_cost_from_db_model_info():
     )
 
     with patch.object(
-        router, "get_deployment_model_info", side_effect=Exception("not found")
+        router, "_core_get_deployment_model_info", side_effect=Exception("not found")
     ):
         result = router._cached_get_model_group_info("my-custom-model")
         assert result is not None
@@ -2439,7 +2439,7 @@ def test_model_group_info_cost_none_when_db_model_info_has_no_cost():
     )
 
     with patch.object(
-        router, "get_deployment_model_info", side_effect=Exception("not found")
+        router, "_core_get_deployment_model_info", side_effect=Exception("not found")
     ):
         result = router._cached_get_model_group_info("my-custom-model-no-cost")
         assert result is not None
@@ -2823,7 +2823,7 @@ def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selecto
         },
     )
     assert router.routing_strategy == "lar1"
-    assert "async_get_available_deployment" in router.__dict__
+    assert "_core_async_get_available_deployment" in router.__dict__
 
     router._switch_routing_strategy("usage-based-routing-v2", {})
     assert router.lowesttpm_logger_v2 is not None
@@ -2894,7 +2894,7 @@ def test_model_group_info_with_stringified_cost_values():
         return None
 
     with patch.object(
-        router, "get_deployment_model_info", side_effect=_model_info_with_str_costs
+        router, "_core_get_deployment_model_info", side_effect=_model_info_with_str_costs
     ):
         result = router._set_model_group_info(
             model_group="my-custom-model",
@@ -2942,7 +2942,7 @@ def test_model_group_info_db_fallback_with_stringified_cost_values():
     )
 
     with patch.object(
-        router, "get_deployment_model_info", side_effect=Exception("not found")
+        router, "_core_get_deployment_model_info", side_effect=Exception("not found")
     ):
         result = router._set_model_group_info(
             model_group="my-custom-model",
@@ -7371,7 +7371,7 @@ async def test_async_function_with_fallbacks_common_utils():
 
 
 def test_should_include_deployment():
-    """Test that Router.should_include_deployment returns the correct response"""
+    """Test that Router._core_should_include_deployment returns the correct response"""
     router = litellm.Router(
         model_list=[
             {
@@ -7426,7 +7426,7 @@ def test_pre_call_checks_skips_token_count_without_max_input_tokens(monkeypatch)
         ],
         enable_pre_call_checks=True,
     )
-    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {})
+    monkeypatch.setattr(router, "_core_get_router_model_info", lambda **kwargs: {})
 
     calls = []
     monkeypatch.setattr(
@@ -7460,7 +7460,7 @@ def test_pre_call_checks_counts_once_and_filters_on_max_input_tokens(monkeypatch
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+        router, "_core_get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
     )
 
     calls = []
@@ -7494,7 +7494,7 @@ def test_pre_call_checks_uses_precounted_tokens(monkeypatch):
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+        router, "_core_get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
     )
 
     calls = []
@@ -7528,7 +7528,7 @@ async def test_async_get_healthy_deployments_counts_tokens_off_the_event_loop(mo
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1_000_000}
+        router, "_core_get_router_model_info", lambda **kwargs: {"max_input_tokens": 1_000_000}
     )
 
     counting_threads = []
@@ -7578,7 +7578,7 @@ def test_pre_call_checks_need_token_count(monkeypatch, model_info, expected):
         ],
         enable_pre_call_checks=True,
     )
-    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: model_info)
+    monkeypatch.setattr(router, "_core_get_router_model_info", lambda **kwargs: model_info)
 
     deployments = [
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
@@ -7604,7 +7604,7 @@ def test_deployment_max_input_tokens_survives_an_unmappable_deployment(monkeypat
             raise ValueError("This model isn't mapped yet.")
         return {"max_input_tokens": 100}
 
-    monkeypatch.setattr(router, "get_router_model_info", flaky_model_info)
+    monkeypatch.setattr(router, "_core_get_router_model_info", flaky_model_info)
 
     unmapped = {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "unmapped"}}
     mapped = {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "mapped"}}
@@ -7626,7 +7626,7 @@ def test_pre_call_checks_does_not_recount_inline_after_an_off_loop_failure(monke
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+        router, "_core_get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
     )
 
     calls = []
@@ -7661,7 +7661,7 @@ async def test_async_get_healthy_deployments_never_recounts_on_the_loop(monkeypa
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+        router, "_core_get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
     )
 
     counting_threads = []
@@ -7698,7 +7698,7 @@ async def test_acount_pre_call_check_tokens_leaves_the_event_loop_free(monkeypat
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+        router, "_core_get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
     )
 
     deployments = [
@@ -7732,7 +7732,7 @@ async def test_acount_pre_call_check_tokens_skips_without_max_input_tokens(monke
         ],
         enable_pre_call_checks=True,
     )
-    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {})
+    monkeypatch.setattr(router, "_core_get_router_model_info", lambda **kwargs: {})
 
     calls = []
     monkeypatch.setattr(
@@ -7766,7 +7766,7 @@ def test_pre_call_checks_counts_tokens_from_responses_input_string(monkeypatch):
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1}
+        router, "_core_get_router_model_info", lambda **kwargs: {"max_input_tokens": 1}
     )
 
     deployments = [
@@ -7793,7 +7793,7 @@ def test_pre_call_checks_counts_tokens_from_responses_input_list(monkeypatch):
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1}
+        router, "_core_get_router_model_info", lambda **kwargs: {"max_input_tokens": 1}
     )
 
     deployments = [
@@ -7837,7 +7837,7 @@ def test_pre_call_checks_counts_responses_instructions_tokens(monkeypatch):
     assert with_instructions_tokens > input_only_tokens
 
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": input_only_tokens}
+        router, "_core_get_router_model_info", lambda **kwargs: {"max_input_tokens": input_only_tokens}
     )
     with pytest.raises(litellm.ContextWindowExceededError):
         router._pre_call_checks(
@@ -7908,7 +7908,7 @@ def test_pre_call_checks_counts_tool_definition_tokens(monkeypatch, prompt_kwarg
         messages=prompt_kwargs.get("messages"), input=prompt_kwargs.get("input")
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": prompt_only_tokens}
+        router, "_core_get_router_model_info", lambda **kwargs: {"max_input_tokens": prompt_only_tokens}
     )
 
     assert len(router._pre_call_checks(model="m", healthy_deployments=deployments, **prompt_kwargs)) == 1
@@ -7949,7 +7949,7 @@ def test_pre_call_checks_counts_anthropic_system_tokens(monkeypatch, system):
     messages = [{"role": "user", "content": "hi"}]
 
     messages_only_tokens = router._count_pre_call_check_tokens(messages=messages, input=None)
-    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": messages_only_tokens})
+    monkeypatch.setattr(router, "_core_get_router_model_info", lambda **kwargs: {"max_input_tokens": messages_only_tokens})
 
     assert len(router._pre_call_checks(model="m", healthy_deployments=deployments, messages=messages)) == 1
     with pytest.raises(litellm.ContextWindowExceededError):
@@ -8068,7 +8068,7 @@ def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+        router, "_core_get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
     )
 
     counted: list[dict] = []
@@ -9415,7 +9415,7 @@ def test_deployment_usable_by_team_uses_dynamic_model_info_get():
         def get(self, key: str) -> str | None:
             return "team-b" if key == "team_id" else None
 
-    assert litellm.Router.deployment_usable_by_team({"model_info": ModelInfo()}, "team-a") is False
+    assert litellm.Router._core_deployment_usable_by_team({"model_info": ModelInfo()}, "team-a") is False
 
 
 def test_get_deployment_credentials_with_provider_skips_other_team_wildcard():
@@ -11062,7 +11062,7 @@ def test_access_group_filter_empty_does_not_bypass_via_litellm_model_fallback(
             team_id=team_id,
         )
 
-    monkeypatch.setattr(router, "get_model_access_groups", fake_get_model_access_groups)
+    monkeypatch.setattr(router, "_core_get_model_access_groups", fake_get_model_access_groups)
 
     scoped_key = UserAPIKeyAuth(
         api_key="hashed-key",
@@ -11139,7 +11139,7 @@ def test_access_group_block_does_not_silently_use_default_fallback_model(
             team_id=team_id,
         )
 
-    monkeypatch.setattr(router, "get_model_access_groups", fake_get_model_access_groups)
+    monkeypatch.setattr(router, "_core_get_model_access_groups", fake_get_model_access_groups)
 
     scoped_key = UserAPIKeyAuth(
         api_key="hashed-key",
@@ -11208,7 +11208,7 @@ def test_access_group_block_via_litellm_model_branch_does_not_use_default_fallba
             team_id=team_id,
         )
 
-    monkeypatch.setattr(router, "get_model_access_groups", fake_get_model_access_groups)
+    monkeypatch.setattr(router, "_core_get_model_access_groups", fake_get_model_access_groups)
 
     scoped_key = UserAPIKeyAuth(
         api_key="hashed-key",
@@ -11709,7 +11709,7 @@ def test_get_deployment_credentials_with_provider_returns_none_for_blocked_deplo
 
 def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
     """
-    Exercises Router.is_deployment_blocked so router_code_coverage.py (AST call graph)
+    Exercises Router._core_is_deployment_blocked so router_code_coverage.py (AST call graph)
     marks the helper as covered by router-named tests.
     """
     import types
@@ -11720,15 +11720,15 @@ def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
     blocked_dep = router.get_deployment("dep-0")
     unblocked_dep = router.get_deployment("dep-1")
     assert blocked_dep is not None and unblocked_dep is not None
-    assert litellm.Router.is_deployment_blocked(blocked_dep) is True
-    assert litellm.Router.is_deployment_blocked(unblocked_dep) is False
+    assert litellm.Router._core_is_deployment_blocked(blocked_dep) is True
+    assert litellm.Router._core_is_deployment_blocked(unblocked_dep) is False
 
     # No model_info on deployment object → treated as not blocked
-    assert litellm.Router.is_deployment_blocked(object()) is False
+    assert litellm.Router._core_is_deployment_blocked(object()) is False
     missing_blocked = types.SimpleNamespace()
-    assert litellm.Router.is_deployment_blocked(types.SimpleNamespace(model_info=missing_blocked)) is False
+    assert litellm.Router._core_is_deployment_blocked(types.SimpleNamespace(model_info=missing_blocked)) is False
     assert (
-        litellm.Router.is_deployment_blocked(types.SimpleNamespace(model_info=types.SimpleNamespace(blocked=True)))
+        litellm.Router._core_is_deployment_blocked(types.SimpleNamespace(model_info=types.SimpleNamespace(blocked=True)))
         is True
     )
 
@@ -14319,7 +14319,7 @@ def test_pre_call_checks_uses_deployment_model_when_model_info_lookup_raises(mon
     def _raise_unmapped(**kwargs):
         raise ValueError("This model isn't mapped yet")
 
-    monkeypatch.setattr(router, "get_router_model_info", _raise_unmapped)
+    monkeypatch.setattr(router, "_core_get_router_model_info", _raise_unmapped)
 
     seen: list[tuple] = []
     original_get_supported_openai_params = litellm.get_supported_openai_params
@@ -16510,7 +16510,7 @@ def test_model_group_info_intersects_supported_reasoning_efforts():
             "supports_xhigh_reasoning_effort": False,
         }
 
-    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+    with patch.object(router, "_core_get_deployment_model_info", side_effect=_model_info):
         result = router._set_model_group_info(
             model_group="smart-group",
             user_facing_model_group_name="smart-group",
@@ -16554,7 +16554,7 @@ def test_model_group_info_reasoning_efforts_are_unknown_when_any_deployment_is_o
             }
         return {"key": model_name, "litellm_provider": "openai", "mode": None, "supports_reasoning": None}
 
-    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+    with patch.object(router, "_core_get_deployment_model_info", side_effect=_model_info):
         result = router._set_model_group_info(
             model_group="smart-group",
             user_facing_model_group_name="smart-group",
@@ -16689,7 +16689,7 @@ def test_model_group_info_reasoning_efforts_empty_on_a_mapped_non_reasoning_depl
             }
         return {"key": model_name, "litellm_provider": "openai", "mode": "chat", "supports_reasoning": None}
 
-    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+    with patch.object(router, "_core_get_deployment_model_info", side_effect=_model_info):
         result = router._set_model_group_info(
             model_group="mixed-group",
             user_facing_model_group_name="mixed-group",
@@ -16730,7 +16730,7 @@ def test_model_group_info_reasoning_efforts_ignore_a_value_declared_in_model_inf
             info["supported_reasoning_efforts"] = ("high",)
         return info
 
-    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+    with patch.object(router, "_core_get_deployment_model_info", side_effect=_model_info):
         result = router._set_model_group_info(
             model_group="declared-group",
             user_facing_model_group_name="declared-group",
@@ -16764,7 +16764,7 @@ def test_model_group_info_survives_a_junk_typed_operator_effort_value():
             "supported_reasoning_efforts": "high",
         }
 
-    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+    with patch.object(router, "_core_get_deployment_model_info", side_effect=_model_info):
         result = router._set_model_group_info(
             model_group="junk-declared-group",
             user_facing_model_group_name="junk-declared-group",
@@ -23151,7 +23151,7 @@ def test_a_failed_routing_read_prefetch_logs_the_request_model_without_its_line_
     def fail_lookup(model_name: str | None = None, team_id: str | None = None) -> None:
         raise RuntimeError(f"no deployments for {model_name}")
 
-    monkeypatch.setattr(router, "get_model_list", fail_lookup)
+    monkeypatch.setattr(router, "_core_get_model_list", fail_lookup)
     caplog.clear()
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
@@ -25161,7 +25161,7 @@ async def test_router_acancel_batch_removes_unresolved_credential_name():
     mock_response.status = "cancelled"
 
     with (
-        patch.object(router, "get_deployment_credentials_with_provider", return_value=None),
+        patch.object(router, "_core_get_deployment_credentials_with_provider", return_value=None),
         patch.object(litellm, "acancel_batch", new_callable=AsyncMock) as mock_cancel,
     ):
         mock_cancel.return_value = mock_response
@@ -28197,7 +28197,7 @@ def test_reset_custom_routing_strategy():
     router.set_custom_routing_strategy(SpecialEndpointRoutingStrategy(router))
 
     assert "get_available_deployment" in router.__dict__
-    assert "async_get_available_deployment" in router.__dict__
+    assert "_core_async_get_available_deployment" in router.__dict__
 
     router._reset_custom_routing_strategy()
 
@@ -30306,7 +30306,7 @@ def test_team_model_has_alternatives_when_a_delete_starts_after_its_deployment_l
     has_alternatives: Final = _read_during_held_write(
         lambda: router.team_model_has_alternatives("deployment-3"),
         lambda: router.delete_deployment("deployment-0"),
-        write_after=Router.get_deployment.__code__,
+        write_after=Router._core_get_deployment.__code__,
     )
 
     assert has_alternatives is True
