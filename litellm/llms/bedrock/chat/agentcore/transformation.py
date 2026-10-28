@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import quote
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -18,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -49,6 +51,8 @@ else:
     LiteLLMLoggingObj = Any
     HTTPHandler = Any
     AsyncHTTPHandler = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
@@ -98,14 +102,14 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         # Build the base endpoint URL for AgentCore
         # Note: We don't use get_runtime_endpoint as AgentCore has its own endpoint structure
         if aws_bedrock_runtime_endpoint:
-            base_url = aws_bedrock_runtime_endpoint
+            base_url = f"{aws_bedrock_runtime_endpoint}"
         else:
             base_url = f"https://bedrock-agentcore.{region}.{get_aws_dns_suffix(region)}"
 
         # Based on boto3 client.invoke_agent_runtime, the path is:
         # /runtimes/{URL-ENCODED-ARN}/invocations?qualifier=<value>
         encoded_arn: Final = quote(agent_runtime_arn, safe="")
-        endpoint_url = f"{base_url}/runtimes/{encoded_arn}/invocations"
+        endpoint_url = join_api_base(base_url, f"runtimes/{encoded_arn}/invocations")
 
         # Add qualifier as query parameter if provided
         if "qualifier" in optional_params:
@@ -313,7 +317,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return None
 
         try:
-            data: Final[object] = json.loads(json_str)
+            data: Final = _DECODED_JSON.validate_python(json.loads(json_str))
             # Skip non-dict data (some lines contain JSON strings)
             return data if isinstance(data, dict) else None
         except json.JSONDecodeError:
@@ -481,7 +485,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         if "application/json" in content_type:
             # Direct JSON response
             verbose_logger.debug("Parsing JSON response")
-            response_json: Final[object] = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
             verbose_logger.debug("Response JSON: %s", response_json)
             return self._parse_json_response(response_json)
         else:
@@ -565,7 +569,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                     continue
 
                 try:
-                    data_obj = json.loads(json_str)
+                    data_obj = _DECODED_JSON.validate_python(json.loads(json_str))
                     if not isinstance(data_obj, dict):
                         continue
 
@@ -705,7 +709,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             )
             try:
                 body: Final = response.read()
-                response_json: Final[object] = json.loads(body)
+                response_json: Final = _DECODED_JSON.validate_python(json.loads(body))
             except (json.JSONDecodeError, Exception) as e:
                 raise BedrockError(
                     status_code=response.status_code,
@@ -787,7 +791,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                     continue
 
                 try:
-                    data_obj = json.loads(json_str)
+                    data_obj = _DECODED_JSON.validate_python(json.loads(json_str))
                     if not isinstance(data_obj, dict):
                         continue
 
@@ -927,7 +931,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             )
             try:
                 body: Final = await response.aread()
-                response_json: Final[object] = json.loads(body)
+                response_json: Final = _DECODED_JSON.validate_python(json.loads(body))
             except (json.JSONDecodeError, Exception) as e:
                 raise BedrockError(
                     status_code=response.status_code,

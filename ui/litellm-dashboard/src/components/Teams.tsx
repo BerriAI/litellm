@@ -295,7 +295,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
   const defaultBudgetDuration: string | undefined = defaultTeamSettings?.values?.budget_duration ?? undefined;
   const budgetDurationPlaceholder = defaultBudgetDuration
     ? `Default: ${getBudgetDurationLabel(defaultBudgetDuration)} (${defaultBudgetDuration})`
-    : "n/a";
+    : undefined;
 
   // Add this useEffect to fetch guardrails
   useEffect(() => {
@@ -825,7 +825,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                     {({ id, value, onChange }) => (
                       <BudgetDurationDropdown
                         id={id}
-                        showNeverResets
+                        showNeverResets={Boolean(defaultBudgetDuration)}
                         placeholder={budgetDurationPlaceholder}
                         value={value}
                         onChange={(next) => onChange(next ?? undefined)}

@@ -135,6 +135,7 @@ import ResetMemberBudgetsDialog from "./ResetMemberBudgetsDialog";
 import { customBudgetMemberUserIds, shouldPromptMemberBudgetReset } from "./memberBudgetReset";
 import { useMemberBudgetReset } from "./useMemberBudgetReset";
 import { fetchClient } from "@/lib/http/api";
+import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
@@ -1375,7 +1376,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       children: (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           <Card className="block p-6">
-            <p>Budget Status</p>
+            <p>
+              Budget Status
+              <BudgetPeriodTooltip
+                spend={info.spend}
+                maxBudget={info.max_budget}
+                budgetDuration={info.budget_duration}
+                budgetResetAt={info.budget_reset_at}
+              />
+            </p>
             <div className="mt-2">
               <h3 className="text-lg font-medium">${formatNumberWithCommas(info.spend, 2)}</h3>
               <p>of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 2)}`}</p>

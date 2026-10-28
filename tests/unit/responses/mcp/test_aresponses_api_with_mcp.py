@@ -17,7 +17,6 @@ import respx
 from mcp.types import CallToolResult, ListToolsResult, TextContent
 from mcp.types import Tool as MCPTool
 
-
 # Import required modules
 import litellm
 from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError
@@ -25,14 +24,15 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.langfuse.langfuse import langfuse_trace_id, langfuse_trace_metadata
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.xai.common_utils import xai_reported_cost_in_usd
-from litellm.proxy._experimental.mcp_server import mcp_server_manager
-from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk
-from litellm.proxy.utils import _failure_fields_to_lift
+from litellm.proxy.mcp_server import mcp_server_manager
+from litellm.proxy.mcp_server.faults.list_outcomes import ServerListOk
+from litellm.proxy.utils import _estimate_dispatched_failure_usage, _failure_fields_to_lift
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
 from litellm.types.llms.openai import (
+    OpenAIMcpServerTool,
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
-    OpenAIMcpServerTool,
     ToolParam,
 )
 from litellm.types.utils import ModelResponse, StandardLoggingPayload, Usage
@@ -1078,10 +1078,11 @@ async def test_aresponses_mcp_call_does_not_forward_admission_authorization(
     import types
     from unittest.mock import AsyncMock
 
-    from mcp.types import CallToolResult, TextContent, Tool as MCPTool
+    from mcp.types import CallToolResult, TextContent
+    from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._experimental.mcp_server import mcp_server_manager
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.mcp_server import mcp_server_manager
     from litellm.types.mcp import MCPAuth, MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -1184,6 +1185,7 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
     sent to the LLM to ensure no duplication occurs.
     """
     from unittest.mock import AsyncMock, patch
+
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
@@ -1714,7 +1716,7 @@ async def _auto_execute_through_mcp_server(
         sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         SimpleNamespace(
             catalog=SimpleNamespace(operation=nullcontext),
             get_registry=MagicMock(return_value={}),
@@ -1980,7 +1982,22 @@ async def test_non_stream_auto_execute_failing_every_retry_bills_each_paid_first
     failure_row_fields: Final = _failure_fields_to_lift(MappingProxyType({"litellm_logging_obj": logging_obj}))
     billed_usage: Final = failure_row_fields["combined_usage_object"]
     assert isinstance(billed_usage, Usage)
-    assert (billed_usage.prompt_tokens, billed_usage.completion_tokens) == billed_tokens
+    estimated_failure_usage: Final = (
+        _estimate_dispatched_failure_usage(
+            model="gpt-5.6",
+            request_input=logging_obj.model_call_details.get("messages"),
+            system_input=None,
+        )
+        if not retried_first_rounds
+        else None
+    )
+    expected_prompt_tokens: Final = billed_tokens[0] + (
+        estimated_failure_usage.prompt_tokens if estimated_failure_usage is not None else 0
+    )
+    assert (billed_usage.prompt_tokens, billed_usage.completion_tokens) == (
+        expected_prompt_tokens,
+        billed_tokens[1],
+    )
     assert failure_row_fields["response_cost"] == pytest.approx(
         _round_cost(_ROUND_ONE_BODY) + sum(_round_cost(body) for body in retried_first_rounds)
     )
@@ -2026,7 +2043,7 @@ def _serve_the_demo_mcp_listing(monkeypatch: pytest.MonkeyPatch) -> _ListingReco
         sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         SimpleNamespace(
             catalog=SimpleNamespace(operation=nullcontext),
             get_registry=MagicMock(return_value={}),
@@ -2038,11 +2055,11 @@ def _serve_the_demo_mcp_listing(monkeypatch: pytest.MonkeyPatch) -> _ListingReco
         ),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers",
+        "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
         AsyncMock(return_value=[demo_server]),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.catalog.get_filtered_server_tools",
+        "litellm.proxy.mcp_server.catalog.get_filtered_server_tools",
         AsyncMock(return_value=(ListToolsResult(tools=[echo_tool]), ServerListOk(tool_count=1))),
     )
     listing_recorder: Final = _ListingRecorder()
@@ -2369,8 +2386,11 @@ def _first_index(events: Sequence[object], event_type: str) -> int:
 
 
 async def _scripted_mcp_stream(
-    model: str, upstream_url: str, rounds: Sequence[bytes]
-) -> tuple[tuple[object, ...], respx.Route, AsyncMock, AsyncMock]:
+    model: str,
+    upstream_url: str,
+    rounds: Sequence[bytes],
+    max_agentic_loops: int | None = None,
+) -> tuple[tuple[object, ...], respx.Route, AsyncMock, AsyncMock, MCPEnhancedStreamingIterator]:
     upstream: Final = respx.post(upstream_url).mock(
         side_effect=[httpx.Response(200, content=body, headers=SSE_HEADERS) for body in rounds]
     )
@@ -2387,9 +2407,11 @@ async def _scripted_mcp_stream(
             tool_choice="required",
             input=[{"role": "user", "type": "message", "content": "What's the weather in San Francisco?"}],
             stream=True,
+            **({"max_agentic_loops": max_agentic_loops} if max_agentic_loops is not None else {}),
         )
+        assert isinstance(response, MCPEnhancedStreamingIterator)
         events: Final = tuple([event async for event in response])
-    return events, upstream, fetch, execute
+    return events, upstream, fetch, execute, response
 
 
 @pytest.mark.asyncio
@@ -2402,7 +2424,7 @@ async def test_streaming_responses_api_with_mcp_tools(
     model, upstream_url, tool_round, answer_round = SCRIPTED_PROVIDERS[provider]
 
     with caplog.at_level(logging.ERROR):
-        events, upstream, fetch, execute = await _scripted_mcp_stream(
+        events, upstream, fetch, execute, _ = await _scripted_mcp_stream(
             model, upstream_url, (tool_round(), answer_round())
         )
 
@@ -2423,6 +2445,22 @@ async def test_streaming_responses_api_with_mcp_tools(
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_streaming_mcp_iterator_uses_max_agentic_loops_from_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    model, upstream_url, tool_round, answer_round = SCRIPTED_PROVIDERS["openai"]
+
+    _, _, _, _, iterator = await _scripted_mcp_stream(
+        model,
+        upstream_url,
+        (tool_round(), answer_round()),
+        max_agentic_loops=7,
+    )
+
+    assert iterator.max_tool_call_rounds == 7
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_streaming_mcp_event_order_and_response_id_consistency(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -2430,7 +2468,7 @@ async def test_streaming_mcp_event_order_and_response_id_consistency(
     model, upstream_url, tool_round, answer_round = SCRIPTED_PROVIDERS["openai"]
 
     with caplog.at_level(logging.ERROR):
-        events, _, _, _ = await _scripted_mcp_stream(model, upstream_url, (tool_round(), answer_round()))
+        events, _, _, _, _ = await _scripted_mcp_stream(model, upstream_url, (tool_round(), answer_round()))
 
     created: Final = _first_index(events, "response.created")
     in_progress: Final = _first_index(events, "response.in_progress")

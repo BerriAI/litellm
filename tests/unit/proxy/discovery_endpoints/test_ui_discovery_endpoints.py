@@ -501,3 +501,25 @@ def test_ui_config_tells_the_dashboard_whether_stdio_mcp_servers_are_enabled(mon
 
     assert response.status_code == 200
     assert response.json()["mcp_stdio_enabled"] is expected
+
+
+@pytest.mark.parametrize(("flag", "expected"), [(None, False), ("false", False), ("true", True), ("TRUE", True)])
+def test_ui_config_tells_the_dashboard_whether_to_use_si_terminology(
+    monkeypatch: pytest.MonkeyPatch, flag: str | None, expected: bool
+) -> None:
+    if flag is None:
+        monkeypatch.delenv("LITELLM_UI_USE_SI_TERMINOLOGY", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_UI_USE_SI_TERMINOLOGY", flag)
+    app: Final[FastAPI] = FastAPI()
+    app.include_router(router)
+
+    with (
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
+        patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=False),
+    ):
+        response: Final = TestClient(app).get("/.well-known/litellm-ui-config")
+
+    assert response.status_code == 200
+    assert response.json()["use_si_terminology"] is expected
