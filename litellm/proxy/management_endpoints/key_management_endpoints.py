@@ -1667,16 +1667,23 @@ async def _common_key_generation_helper(
     if "tags" in data_json:
         from litellm.proxy.proxy_server import premium_user
 
-        if premium_user is not True and data_json["tags"] is not None:
-            raise ValueError(f"Only premium users can add tags to keys. {CommonProxyErrors.not_premium_user.value}")
+        tags = data_json.get("tags")
+        if premium_user is not True and isinstance(tags, list) and len(tags) > 0:
+            raise ValueError(
+                f"Only premium users can add tags to keys. {CommonProxyErrors.not_premium_user.value}"
+            )
 
         _metadata: Final = data_json.get("metadata")
-        if not _metadata:
-            data_json["metadata"] = {"tags": data_json["tags"]}
+        if tags is None:
+            if isinstance(_metadata, dict):
+                _metadata.pop("tags", None)
+            data_json.pop("tags", None)
         else:
-            data_json["metadata"]["tags"] = data_json["tags"]
-
-        data_json.pop("tags")
+            if not _metadata:
+                data_json["metadata"] = {"tags": tags}
+            else:
+                data_json["metadata"]["tags"] = tags
+            data_json.pop("tags")
 
     # Validate MCP servers in object_permission are within team scope
     _is_proxy_admin_caller: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
