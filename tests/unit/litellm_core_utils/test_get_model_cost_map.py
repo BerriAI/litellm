@@ -1197,22 +1197,24 @@ def test_a_fetched_row_that_fails_validation_is_replaced_by_bundled_or_left_out(
     assert "gpt-4o" in warnings[0].getMessage() and "acme/new" in warnings[0].getMessage()
 
 
-def test_a_field_the_fetched_row_lacks_is_served_from_bundled():
+def test_a_field_the_fetched_row_lacks_is_not_served():
     module, catalog = _bound_catalog()
-    bundled_max_output_tokens = module.model_cost["gpt-4o"]["max_output_tokens"]
 
     catalog.install(_remote(lambda document: document["gpt-4o"].pop("max_output_tokens")))
 
-    assert module.model_cost["gpt-4o"]["max_output_tokens"] == bundled_max_output_tokens
+    assert "max_output_tokens" not in module.model_cost["gpt-4o"]
 
 
-def test_a_key_the_fetched_map_lacks_stays_until_the_map_writes_it_as_null():
+@pytest.mark.parametrize(
+    "drop",
+    [lambda document: document.pop("gpt-4o"), lambda document: document.update({"gpt-4o": None})],
+    ids=["left_out", "null"],
+)
+def test_a_key_the_fetched_map_does_not_serve_is_removed(drop) -> None:
     module, catalog = _bound_catalog()
 
-    catalog.install(_remote(lambda document: document.pop("gpt-4o")))
-    assert "gpt-4o" in module.model_cost
+    catalog.install(_remote(drop))
 
-    catalog.install(_remote(lambda document: document.update({"gpt-4o": None})))
     assert "gpt-4o" not in module.model_cost
 
 

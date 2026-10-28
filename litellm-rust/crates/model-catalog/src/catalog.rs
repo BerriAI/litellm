@@ -61,7 +61,6 @@ pub struct Catalog {
     store: Store<CatalogRows>,
     sections: Vec<Section>,
     fallback_generalizations: Option<FallbackGeneralizations>,
-    removals: Vec<String>,
 }
 
 /// Models and aliases, an alias served as its owner's row
@@ -143,10 +142,8 @@ impl Catalog {
         let mut sections = Vec::new();
         let mut entries = IndexMap::with_capacity(document.len());
         let mut alias_lists = Vec::new();
-        let mut removals = Vec::new();
         for (index, (name, value)) in document.into_iter().enumerate() {
             if value.is_null() && !is_section(&name) {
-                removals.push(name.clone());
                 sections.push(Section {
                     index,
                     key: name,
@@ -217,7 +214,6 @@ impl Catalog {
                 store: Store::new(CatalogRows { entries, aliases }),
                 sections,
                 fallback_generalizations,
-                removals,
             },
             errors: problems,
         })
@@ -390,11 +386,6 @@ impl Catalog {
             .collect();
         catalog.names = name_index(&catalog.entries, &catalog.aliases);
         (catalog, rejections)
-    }
-
-    /// Keys written as `null`, which a fetched document uses to retire a row it no longer serves
-    pub fn removals(&self) -> impl Iterator<Item = &str> {
-        self.removals.iter().map(String::as_str)
     }
 
     pub fn unrecognized(&self) -> impl Iterator<Item = (&str, &str)> {

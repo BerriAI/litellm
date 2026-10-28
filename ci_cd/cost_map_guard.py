@@ -6,8 +6,9 @@ skips them, since merging it keeps the base branch's copies and its head tree on
 branch was cut from. Pull requests from the cost map sync bot (branches named litellm_cost_map_sync_*) always
 get the file checks and additionally may only touch those two files and may only add or update models.
 
-Installed wheels layer a fetched map over their bundled one, so a key or a price or ``supports_*`` field the map
-leaves out is still served from the wheel. Every pull request that drops one must write it as ``null`` instead.
+Installed wheels serve the fetched map's rows as written, so a dropped field or model is gone everywhere at once. A
+model is deleted only after its ``deprecation_date`` has passed at the merge base, and a row is never ``null``,
+since released wheels crash on one.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from types import MappingProxyType
 from typing import Final
 
@@ -94,31 +96,30 @@ def _entries(cost_map: CostMap) -> dict[str, dict[str, object]]:
     return {key: entry for key, entry in cost_map.items() if isinstance(entry, dict)}
 
 
-def _retired_by_null(field: str) -> bool:
-    return "cost" in field or field in ("tiered_pricing", "off_peak_pricing") or field.startswith("supports_")
+def _past_deprecation(entry: object, today: date) -> bool:
+    if not isinstance(entry, dict) or not isinstance(deprecation_date := entry.get("deprecation_date"), str):
+        return False
+    try:
+        return date.fromisoformat(deprecation_date) <= today
+    except ValueError:
+        return False
 
 
-def _silent_removal_failures(base: Snapshot, head_map: CostMap) -> tuple[str, ...]:
+def _removal_failures(base: Snapshot, head_map: CostMap) -> tuple[str, ...]:
     base_map: Final = _parse_object(base.cost_map, COST_MAP_PATH)
     if isinstance(base_map, str):
         return ()
-    head_entries: Final = _entries(head_map)
-    removed_fields: Final = tuple(
-        f"{key}.{field}"
-        for key, entry in _entries(base_map).items()
-        if key in head_entries
-        for field in entry
-        if _retired_by_null(field) and field not in head_entries[key]
-    )
+    today: Final = date.today()
     return (
         *(
-            f"{key} is removed without a null; write it as null so older wheels stop serving it"
-            for key in base_map
-            if key not in head_map and key not in SPECIAL_ROOT_KEYS
+            f"{key} is null, which released wheels crash on. Delete it once its deprecation_date has passed"
+            for key, entry in head_map.items()
+            if entry is None
         ),
         *(
-            f"{ref} is removed without a null; write it as null so older wheels stop serving it"
-            for ref in removed_fields
+            f"{key} is removed before a past deprecation_date; set deprecation_date first"
+            for key, entry in base_map.items()
+            if key not in head_map and key not in SPECIAL_ROOT_KEYS and not _past_deprecation(entry, today)
         ),
     )
 
@@ -179,7 +180,7 @@ def guard_failures(
         *_file_failures(
             head, head_map, evaluation_output_price_sources=evaluation_output_price_sources
         ),
-        *_silent_removal_failures(base, head_map),
+        *_removal_failures(base, head_map),
         *(_bot_failures(base, head_map, changed_files) if bot else ()),
     )
 

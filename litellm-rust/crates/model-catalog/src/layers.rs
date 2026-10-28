@@ -1,20 +1,12 @@
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use serde_json::Value;
 
 use crate::catalog::Catalog;
 use crate::register::Registrations;
 use crate::wire::Fields;
 
 const ALIASES: &str = "aliases";
-
-/// One field of a fetched row over the layer below, RFC 7386. An absent field inherits, JSON `null` is `Remove`
-#[derive(Clone, Debug, PartialEq)]
-pub enum Patch {
-    Set(Value),
-    Remove,
-}
 
 /// The four layers served rows are composed from, lowest first
 #[derive(Clone, Debug)]
@@ -28,15 +20,6 @@ pub struct Layers {
     /// 3, `register(persist=True)`, applied over every install
     #[expect(dead_code, reason = "07 applies registrations over the fetched layer")]
     persisted: Registrations,
-}
-
-impl Patch {
-    pub fn from_value(value: &Value) -> Self {
-        match value {
-            Value::Null => Self::Remove,
-            value => Self::Set(value.clone()),
-        }
-    }
 }
 
 impl Layers {
@@ -55,33 +38,14 @@ impl Layers {
         self.transient.clear();
     }
 
-    /// What install writes. A fetched row patches the bundled row field by field, a fetched `null` row removes it
+    /// What install writes. The fetched map replaces bundled whole, bundled only shows through its rejected rows
     pub fn compose(&self) -> IndexMap<String, Fields> {
-        let mut rows: IndexMap<String, Fields> = self
-            .bundled
+        self.fetched
+            .as_deref()
+            .unwrap_or(&self.bundled)
             .served()
             .map(|(key, fields)| (key.to_owned(), without_aliases(fields)))
-            .collect();
-        let Some(fetched) = &self.fetched else {
-            return rows;
-        };
-        for key in fetched.removals() {
-            rows.shift_remove(key);
-        }
-        for (key, fields) in fetched.served() {
-            let row = rows.entry(key.to_owned()).or_default();
-            for (field, value) in fields.iter().filter(|(field, _)| *field != ALIASES) {
-                match Patch::from_value(value) {
-                    Patch::Set(value) => {
-                        row.insert(field.clone(), value);
-                    }
-                    Patch::Remove => {
-                        row.shift_remove(field);
-                    }
-                }
-            }
-        }
-        rows
+            .collect()
     }
 
     /// The canonical key an alias is served under, from the fetched layer first
