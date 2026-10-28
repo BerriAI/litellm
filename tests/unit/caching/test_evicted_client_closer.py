@@ -311,6 +311,37 @@ def test_async_client_from_collected_loop_is_not_closed_by_fresh_loops() -> None
     assert client.close_calls == 0
 
 
+def test_async_client_queued_on_a_live_loop_is_closed_only_by_that_loop() -> None:
+    clock: Final = FakeClock()
+    closer: Final = EvictedClientCloser(grace_seconds=0, clock=clock)
+    client: Final = RecordingAsyncClient()
+    closer.mark_owned(client)
+    owner_loop: Final = asyncio.new_event_loop()
+    other_loop: Final = asyncio.new_event_loop()
+
+    async def schedule() -> None:
+        closer.schedule(client)
+
+    async def reap() -> None:
+        closer.reap()
+        await asyncio.sleep(0)
+
+    try:
+        owner_loop.run_until_complete(schedule())
+        other_loop.run_until_complete(reap())
+        closes_after_other_loop_reaped: Final = client.close_calls
+        pending_after_other_loop_reaped: Final = closer.pending_count
+        owner_loop.run_until_complete(reap())
+    finally:
+        other_loop.close()
+        owner_loop.close()
+
+    assert closes_after_other_loop_reaped == 0
+    assert pending_after_other_loop_reaped == 1
+    assert client.close_calls == 1
+    assert closer.pending_count == 0
+
+
 def test_closes_queued_on_a_collected_loop_free_capacity() -> None:
     clock: Final = FakeClock()
     closer: Final = EvictedClientCloser(grace_seconds=0, max_pending=1, clock=clock)
