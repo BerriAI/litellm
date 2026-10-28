@@ -1,4 +1,5 @@
 import os
+import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Final
 
@@ -37,6 +38,19 @@ def infer_credential_type_from_environment() -> AzureCredentialType:
         return AzureCredentialType.DefaultAzureCredential
 
 
+def single_flight_bearer_token_provider(credential: "TokenProvider", scope: str) -> Callable[[], str]:
+    from azure.identity import get_bearer_token_provider
+
+    provider: Final = get_bearer_token_provider(credential, scope)
+    lock: Final = threading.Lock()
+
+    def single_flight() -> str:
+        with lock:
+            return provider()
+
+    return single_flight
+
+
 def get_azure_ad_token_provider(
     azure_scope: str | None = None,
     azure_credential: AzureCredentialType | None = None,
@@ -65,7 +79,6 @@ def get_azure_ad_token_provider(
         DefaultAzureCredential,
         ManagedIdentityCredential,
         WorkloadIdentityCredential,
-        get_bearer_token_provider,
     )
 
     if azure_scope is None:
@@ -133,4 +146,4 @@ def get_azure_ad_token_provider(
     if credential is None:
         raise ValueError("No credential provided")
 
-    return get_bearer_token_provider(credential, azure_scope)
+    return single_flight_bearer_token_provider(credential, azure_scope)

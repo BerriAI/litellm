@@ -24,6 +24,7 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIAsyncHTTPClient, OpenAIHTTPClient
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
+    single_flight_bearer_token_provider,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -107,9 +108,9 @@ def _cached_entra_id_token_provider(
     to expiry, so reusing the provider keeps one AAD round trip per token lifetime instead of one
     per request.
     """
-    from azure.identity import ClientSecretCredential, get_bearer_token_provider
+    from azure.identity import ClientSecretCredential
 
-    return get_bearer_token_provider(ClientSecretCredential(tenant_id, client_id, client_secret), scope)
+    return single_flight_bearer_token_provider(ClientSecretCredential(tenant_id, client_id, client_secret), scope)
 
 
 @lru_cache(maxsize=128)
@@ -119,14 +120,14 @@ def _cached_username_password_token_provider(
     azure_password: str,
     scope: str,
 ) -> Callable[[], str]:
-    from azure.identity import UsernamePasswordCredential, get_bearer_token_provider
+    from azure.identity import UsernamePasswordCredential
 
     credential: Final = UsernamePasswordCredential(
         client_id=client_id,
         username=azure_username,
         password=azure_password,
     )
-    return get_bearer_token_provider(credential, scope)
+    return single_flight_bearer_token_provider(credential, scope)
 
 
 @lru_cache(maxsize=128)

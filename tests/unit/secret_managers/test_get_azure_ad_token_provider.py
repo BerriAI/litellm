@@ -1,16 +1,23 @@
 import json
 import os
-from typing import Optional
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from queue import SimpleQueue
+from typing import Final, Optional
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 
 import pytest
+from azure.core.credentials import AccessToken
 from azure.core.exceptions import ClientAuthenticationError
 
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
     infer_credential_type_from_environment,
+    single_flight_bearer_token_provider,
 )
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
@@ -423,3 +430,35 @@ class TestGetAzureAdTokenProvider:
         # Test that the returned callable works
         token = result()
         assert token == "mock-default-token"
+
+
+_CONCURRENT_CALLERS: Final = 4
+
+
+@dataclass(frozen=True, slots=True)
+class _HeldCredential:
+    requests: SimpleQueue[tuple[str, ...]] = field(default_factory=SimpleQueue)
+    everyone_asked: threading.Event = field(default_factory=threading.Event)
+    release: threading.Event = field(default_factory=threading.Event)
+
+    def get_token(self, *scopes: str, **_: object) -> AccessToken:
+        self.requests.put(scopes)
+        if self.requests.qsize() >= _CONCURRENT_CALLERS:
+            self.everyone_asked.set()
+        self.release.wait(5)
+        return AccessToken("shared-token", int(time.time()) + 3600)
+
+
+def test_concurrent_cold_callers_share_one_token_request() -> None:
+    credential: Final = _HeldCredential()
+    provider: Final = single_flight_bearer_token_provider(credential, "api://audit/.default")
+
+    with ThreadPoolExecutor(max_workers=_CONCURRENT_CALLERS) as pool:
+        calls: Final = tuple(pool.submit(provider) for _ in range(_CONCURRENT_CALLERS))
+        assert credential.requests.get(timeout=5) == ("api://audit/.default",)
+        credential.everyone_asked.wait(0.5)
+        credential.release.set()
+        tokens: Final = tuple(call.result(timeout=5) for call in calls)
+
+    assert tokens == ("shared-token",) * _CONCURRENT_CALLERS
+    assert credential.requests.qsize() == 0
