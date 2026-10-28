@@ -141,10 +141,13 @@ async fn provider_call(
         &env_lookup,
     )?;
 
-    let body = config.transform_anthropic_messages_request(
-        trimmed,
-        &MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params),
-    )?;
+    let body = config.request_body(
+        config.transform_anthropic_messages_request(
+            trimmed,
+            &MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params),
+        )?,
+        &validated.headers,
+    );
     let environment = ValidatedEnvironment {
         headers: config.request_headers(
             with_default_headers(validated.headers, config.default_headers()),
@@ -519,6 +522,49 @@ mod tests {
         assert_eq!(
             (auth.as_slice(), call.wire.url.as_str()),
             (expected_auth, expected_url)
+        );
+    }
+
+    #[rstest]
+    #[case::sdk_2("2026-10-21", "2026-10-21")]
+    #[case::sdk_1("2023-06-01", "vertex-2023-10-16")]
+    #[tokio::test]
+    async fn vertex_gets_the_requested_version_in_the_body_alone(
+        shaping: MessagesShaping,
+        #[case] requested: &str,
+        #[case] body_version: &str,
+    ) {
+        let call = provider_call_with_secrets(
+            MessagesCall {
+                body: body(
+                    json!({"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+                ),
+                api_key: None,
+                api_base: Some("https://vertex.test".into()),
+                custom_llm_provider: Some("vertex_ai".into()),
+                litellm_params: Default::default(),
+                extra_headers: Some(Map::from_iter([
+                    ("authorization".to_string(), json!("Bearer vertex-token")),
+                    ("anthropic-version".to_string(), json!(requested)),
+                ])),
+                provider_specific_header: None,
+                timeout: None,
+                shaping,
+            },
+            &|name: &str| (name == "VERTEXAI_PROJECT").then(|| "version-project".to_string()),
+        )
+        .await
+        .unwrap();
+        let version_headers: Vec<&str> = call
+            .wire
+            .headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-version"))
+            .map(|(_, value)| value.as_str())
+            .collect();
+        assert_eq!(
+            (version_headers, &call.wire.body["anthropic_version"]),
+            (Vec::<&str>::new(), &json!(body_version))
         );
     }
 

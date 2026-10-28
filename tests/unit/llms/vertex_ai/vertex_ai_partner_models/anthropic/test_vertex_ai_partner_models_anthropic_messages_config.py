@@ -96,11 +96,19 @@ async def test_messages_auth_load_and_refresh_leave_the_event_loop(stream: bool,
     assert headers == {"Authorization": "Bearer incoming", "anthropic-beta": "retained-beta", "x-request-id": "req-1"}
 
 
-@pytest.mark.parametrize("version_header", ("anthropic-version", "Anthropic-Version"))
+@pytest.mark.parametrize(
+    ("caller_headers", "body_version"),
+    (
+        ({"anthropic-version": "2026-10-21"}, "2026-10-21"),
+        ({"Anthropic-Version": "2026-10-21"}, "2026-10-21"),
+        ({"anthropic-version": "2023-06-01"}, "vertex-2023-10-16"),
+        ({}, "vertex-2023-10-16"),
+    ),
+)
 @pytest.mark.asyncio
-async def test_caller_anthropic_version_header_never_reaches_vertex(version_header: str) -> None:
-    """Vertex reads the API version from the body and answers 400 when a forwarded header names another one,
-    which anthropic SDK 2.x always sends."""
+async def test_caller_anthropic_version_reaches_vertex_only_in_the_body(
+    caller_headers: dict[str, str], body_version: str
+) -> None:
     vertex_response: Final = MagicMock()
     vertex_response.json.return_value = {
         "id": "msg_1",
@@ -134,7 +142,7 @@ async def test_caller_anthropic_version_header_never_reaches_vertex(version_head
             client=client,
             provider_specific_header={
                 "custom_llm_provider": "vertex_ai",
-                "extra_headers": {version_header: "2026-10-21", "x-request-id": "req-1"},
+                "extra_headers": {**caller_headers, "x-request-id": "req-1"},
             },
         )
 
@@ -142,7 +150,7 @@ async def test_caller_anthropic_version_header_never_reaches_vertex(version_head
     sent_header_names: Final = {name.lower() for name in sent["headers"]}
     assert "anthropic-version" not in sent_header_names
     assert sent["headers"]["x-request-id"] == "req-1"
-    assert json.loads(sent["data"])["anthropic_version"] == "vertex-2023-10-16"
+    assert json.loads(sent["data"])["anthropic_version"] == body_version
 
 
 def test_validate_environment_uses_vertex_ai_location():

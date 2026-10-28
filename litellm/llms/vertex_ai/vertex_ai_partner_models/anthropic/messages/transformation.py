@@ -18,6 +18,22 @@ from ....vertex_llm_base import VertexBase
 from ..output_params_utils import sanitize_vertex_anthropic_output_params
 
 _VERSION_HEADER_VERTEX_READS_FROM_BODY: Final = "anthropic-version"
+_VERTEX_DEFAULT_VERSION: Final = "vertex-2023-10-16"
+_FIRST_PARTY_VERSIONS_SERVED_AS_VERTEX_DEFAULT: Final = frozenset({"2023-01-01", "2023-06-01"})
+
+
+def _vertex_version(headers: Mapping[str, object]) -> str:
+    requested: Final = next(
+        (value for name, value in headers.items() if name.lower() == _VERSION_HEADER_VERTEX_READS_FROM_BODY),
+        None,
+    )
+    if not isinstance(requested, str) or requested in _FIRST_PARTY_VERSIONS_SERVED_AS_VERTEX_DEFAULT:
+        return _VERTEX_DEFAULT_VERSION
+    return requested
+
+
+def _without_version_header(headers: Mapping[str, str]) -> dict[str, str]:  # mutable-ok: the caller sends these headers
+    return {name: value for name, value in headers.items() if name.lower() != _VERSION_HEADER_VERTEX_READS_FROM_BODY}
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
@@ -112,9 +128,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         vertex_ai_location: str | None,
     ) -> tuple[dict[str, str], str | None]:  # mutable-ok: the caller consumes request headers
         # Router shallow-copies litellm_params, so headers may be shared between requests.
-        request_headers: Final = {
-            name: value for name, value in headers.items() if name.lower() != _VERSION_HEADER_VERTEX_READS_FROM_BODY
-        }
+        request_headers: Final = dict(headers)
         request_headers["Authorization"] = f"Bearer {access_token}"
 
         api_base = self.get_complete_vertex_url(
@@ -202,7 +216,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         messages: list[dict],
         anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, object],  # mutable-ok: mirrors the provider transform contract
     ) -> dict:
         anthropic_messages_request: Final = super().transform_anthropic_messages_request(
             model=model,
@@ -216,10 +230,23 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
         self._remove_scope_from_cache_control(anthropic_messages_request)
 
-        anthropic_messages_request["anthropic_version"] = "vertex-2023-10-16"
+        anthropic_messages_request["anthropic_version"] = _vertex_version(headers)
 
         anthropic_messages_request.pop("model", None)  # do not pass model in request body to vertex ai
 
         sanitize_vertex_anthropic_output_params(anthropic_messages_request, model)
 
         return anthropic_messages_request
+
+    def sign_request(
+        self,
+        headers: Mapping[str, str],
+        optional_params: Mapping[str, object],
+        request_data: Mapping[str, object],
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict[str, str], bytes | None]:  # mutable-ok: the caller sends these headers
+        return _without_version_header(headers), None
