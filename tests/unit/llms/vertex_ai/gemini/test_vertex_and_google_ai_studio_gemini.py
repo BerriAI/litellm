@@ -10695,7 +10695,7 @@ async def _gemini_stream(is_async: bool, chunks: tuple[bytes, ...]) -> list[Mode
 
 
 @pytest.mark.parametrize("is_async", [True, False])
-async def test_gemini_stream_keeps_text_and_usage_when_a_part_contains_a_unicode_line_separator(is_async: bool):
+async def test_gemini_stream_keeps_text_and_usage_when_a_part_contains_a_unicode_line_separator(is_async: bool) -> None:
     events: Final = (
         {"candidates": [{"content": {"role": "model", "parts": [{"text": "line one\u2028line two"}]}}]},
         {

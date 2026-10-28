@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from typing import Final
 
 import httpx
 import pytest
@@ -226,9 +227,9 @@ async def test_accumulate_wxo_sse_text_ignores_non_dict_json_events():
 
 
 @pytest.mark.asyncio
-async def test_accumulate_wxo_sse_text_keeps_unicode_line_separators_inside_an_event():
-    separated_text = "before\u2028between\u2029after"
-    response = _sse_response([f"data: {json.dumps({'results': separated_text}, ensure_ascii=False)}", ""])
+async def test_accumulate_wxo_sse_text_keeps_unicode_line_separators_inside_an_event() -> None:
+    separated_text: Final = "before\u2028between\u2029after"
+    response: Final = _sse_response([f"data: {json.dumps({'results': separated_text}, ensure_ascii=False)}", ""])
 
     assert await WatsonxOrchestrateHandler._accumulate_wxo_sse_text(response) == separated_text
 

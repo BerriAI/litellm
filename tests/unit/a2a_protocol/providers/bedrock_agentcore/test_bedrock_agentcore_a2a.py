@@ -581,7 +581,7 @@ class TestStreaming:
                     text=f"data: {json.dumps(event, ensure_ascii=False)}\n\n",
                 )
             )
-            events = [
+            events: Final = [
                 streamed
                 async for streamed in BedrockAgentCoreA2AConfig().handle_streaming(
                     request_id="req-001",

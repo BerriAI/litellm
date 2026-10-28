@@ -1,6 +1,6 @@
 import copy
 import json
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -2160,7 +2160,7 @@ def mock_chat_response_nonanthropic_prompt_caching() -> Dict[str, Any]:
 def mock_http_handler_chat_streaming_response() -> MagicMock:
     mock_stream_chunks = mock_chat_streaming_response_chunks()
 
-    def mock_iter_text():
+    def mock_iter_text() -> Iterator[str]:
         for chunk in mock_stream_chunks:
             for line in chunk.splitlines():
                 yield f"{line}\n"
@@ -2175,7 +2175,7 @@ def mock_http_handler_chat_streaming_response() -> MagicMock:
 def mock_http_handler_chat_async_streaming_response() -> MagicMock:
     mock_stream_chunks = mock_chat_streaming_response_chunks()
 
-    async def mock_aiter_text():
+    async def mock_aiter_text() -> AsyncIterator[str]:
         for chunk in mock_stream_chunks:
             for line in chunk.splitlines():
                 yield f"{line}\n"

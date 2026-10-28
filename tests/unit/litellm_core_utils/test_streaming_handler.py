@@ -591,7 +591,7 @@ async def test_merged_reasoning_stream_keeps_think_tags_balanced(
     chunks: tuple[ModelResponseStream, ...],
     expected_content: str,
     expected_tool_calls: int,
-):
+) -> None:
     response: Final = CustomStreamWrapper(
         completion_stream=ModelResponseListIterator(model_responses=[chunk.model_copy(deep=True) for chunk in chunks]),
         model="deepseek-reasoner",

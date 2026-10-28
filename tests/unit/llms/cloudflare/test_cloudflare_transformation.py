@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -426,7 +426,7 @@ def test_acompletion_cloudflare_stream(sync_mode, monkeypatch):
 
     if sync_mode:
 
-        def _iter_text():
+        def _iter_text() -> Iterator[str]:
             for chunk in raw_chunks:
                 yield f"data: {chunk}\n\n"
             yield "data: [DONE]\n\n"
@@ -449,7 +449,7 @@ def test_acompletion_cloudflare_stream(sync_mode, monkeypatch):
             mock_post.assert_called_once()
     else:
 
-        async def _aiter_text():
+        async def _aiter_text() -> AsyncIterator[str]:
             for chunk in raw_chunks:
                 yield f"data: {chunk}\n\n"
             yield "data: [DONE]\n\n"

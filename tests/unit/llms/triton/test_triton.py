@@ -1,5 +1,7 @@
 import json
 import traceback
+from collections.abc import Iterator
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -210,8 +212,8 @@ def test_completion_triton_generate_api(stream, monkeypatch, respx_mock):
         mock_response = MagicMock()
         if stream:
 
-            def mock_iter_text():
-                mock_output = "".join(
+            def mock_iter_text() -> Iterator[str]:
+                mock_output: Final = "".join(
                     [
                         'data: {"model_name":"ensemble","model_version":"1","sequence_end":false,"sequence_id":0,"sequence_start":false,"text_output":"'
                         + t

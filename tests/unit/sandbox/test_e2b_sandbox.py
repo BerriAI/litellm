@@ -7,6 +7,7 @@ integration tests live in tests/integration/sandbox/test_e2b_sandbox.py.
 """
 
 import json
+from typing import Final
 
 import httpx
 import pytest
@@ -249,15 +250,15 @@ def test_parse_lines_skips_non_json_lines():
 
 
 @pytest.mark.asyncio
-async def test_run_code_keeps_unicode_line_separators_inside_stdout():
-    separated_text = "before\u2028between\u2029after\n"
-    client = FakeHTTPClient(
+async def test_run_code_keeps_unicode_line_separators_inside_stdout() -> None:
+    separated_text: Final = "before\u2028between\u2029after\n"
+    client: Final = FakeHTTPClient(
         execute_lines=[json.dumps({"type": "stdout", "text": separated_text, "timestamp": 1}, ensure_ascii=False)]
     )
-    handle = ContainerHandle(id="sbx_sep", provider="e2b", domain="e2b.app")
+    handle: Final = ContainerHandle(id="sbx_sep", provider="e2b", domain="e2b.app")
     handle._hidden_params = {"envd_access_token": "tok"}
 
-    result = await E2BSandboxConfig().arun_code(container=handle, code="print(text)", client=client)
+    result: Final = await E2BSandboxConfig().arun_code(container=handle, code="print(text)", client=client)
 
     assert result.stdout == separated_text
 

@@ -2703,7 +2703,7 @@ async def test_forward_jsonrpc_sse_is_untouched_while_keepalives_are_unconfigure
 
 
 @pytest.mark.asyncio
-async def test_forward_jsonrpc_sse_keeps_unicode_line_separators_inside_an_event(monkeypatch):
+async def test_forward_jsonrpc_sse_keeps_unicode_line_separators_inside_an_event(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", None)
     separated_text: Final = "before\u2028between\u2029after"
     event: Final = {
@@ -2716,8 +2716,8 @@ async def test_forward_jsonrpc_sse_keeps_unicode_line_separators_inside_an_event
         "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
         return_value=_sse_agent_handler(_sse_upstream_response(f"data: {json.dumps(event, ensure_ascii=False)}")),
     ):
-        response = await _resubscribe_response()
-        chunks = [chunk async for chunk in response.body_iterator]
+        response: Final = await _resubscribe_response()
+        chunks: Final = [chunk async for chunk in response.body_iterator]
 
     assert [json.loads(chunk.removeprefix("data: "))["result"]["parts"][0]["text"] for chunk in chunks] == [
         separated_text

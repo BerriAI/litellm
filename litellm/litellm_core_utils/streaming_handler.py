@@ -1937,8 +1937,6 @@ class CustomStreamWrapper:
         return model_response
 
     def _final_chunk_for_logging(self, processed_chunk: "ModelResponseStream") -> "ModelResponseStream | None":
-        # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
-        # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
         if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
             return processed_chunk
         if processed_chunk.choices[0].delta.content is None:
