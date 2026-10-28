@@ -6062,7 +6062,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             model_id=optional_params.get("model_id"),
         )
-        if mock_response or mock_tool_calls or mock_timeout:
+        if mock_response is not None or mock_tool_calls or mock_timeout:
             kwargs.pop("mock_timeout", None)  # remove for any fallbacks triggered
             return mock_completion(
                 model,
@@ -7177,6 +7177,7 @@ def embedding(
                 custom_llm_provider="gemini",
                 api_key=gemini_api_key,
                 api_base=api_base,
+                timeout=timeout,
                 client=client,
                 extra_headers=headers,
                 drop_params=drop_unsupported_params,
@@ -7230,6 +7231,7 @@ def embedding(
                     custom_llm_provider="vertex_ai",
                     api_key=None,
                     api_base=api_base,
+                    timeout=timeout,
                     client=client,
                     extra_headers=headers,
                     drop_params=drop_unsupported_params,
