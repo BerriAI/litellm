@@ -456,6 +456,26 @@ def test_completion_cost_bills_requested_model_when_response_names_an_unmapped_d
     )
 
 
+def test_completion_cost_bills_requested_model_when_stream_reports_an_unmapped_display_name(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requested_model: Final = "fireworks_ai/accounts/fireworks/models/sol-display-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        requested_model,
+        {"litellm_provider": "fireworks_ai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    response: Final = ModelResponse(model="accounts/fireworks/models/sol-display-test", choices=[], usage=usage)
+    response._hidden_params["provider_response_model"] = "Sol Display Max"
+
+    cost: Final = completion_cost(
+        completion_response=response, model=requested_model, custom_llm_provider="fireworks_ai"
+    )
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost[requested_model], usage))
+
+
 def test_completion_cost_bills_requested_model_when_response_row_has_no_rates(
     _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

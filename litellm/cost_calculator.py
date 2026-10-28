@@ -996,19 +996,18 @@ def select_model_name_for_cost_calc(
         else:
             return_model = model
 
-    elif base_model is not None or bedrock_pricing_model is not None or provider_response_model is not None:
-        return_model = base_model if base_model is not None else bedrock_pricing_model or provider_response_model
+    elif base_model is not None or bedrock_pricing_model is not None:
+        return_model = base_model if base_model is not None else bedrock_pricing_model
+
+    elif provider_response_model is not None:
+        return _served_or_priced_requested_model(provider_response_model, model, custom_llm_provider, priced_region)
 
     elif completion_response_model is None and hidden_params is not None:
         if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:
             return_model = hidden_params.get("model", model)
 
     if return_model is None and completion_response_model is not None:
-        return _served_or_priced_requested_model(
-            served=_cost_map_model_name(completion_response_model, custom_llm_provider, priced_region),
-            requested=_cost_map_model_name(model, custom_llm_provider, None) if model is not None else None,
-            custom_llm_provider=custom_llm_provider,
-        )
+        return _served_or_priced_requested_model(completion_response_model, model, custom_llm_provider, priced_region)
 
     if return_model is None and model is not None:
         return_model = model
@@ -1035,8 +1034,14 @@ def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
     return rule_info is not None and _cost_map_entry_prices_anything(rule_info)
 
 
-def _served_or_priced_requested_model(served: str, requested: str | None, custom_llm_provider: str | None) -> str:
-    if requested is None or requested == served or _resolves_to_rates(served, custom_llm_provider):
+def _served_or_priced_requested_model(
+    served_model: str, requested_model: str | None, custom_llm_provider: str | None, priced_region: str | None
+) -> str:
+    served: Final = _cost_map_model_name(served_model, custom_llm_provider, priced_region)
+    if requested_model is None:
+        return served
+    requested: Final = _cost_map_model_name(requested_model, custom_llm_provider, None)
+    if requested == served or _resolves_to_rates(served, custom_llm_provider):
         return served
     return requested if _resolves_to_rates(requested, custom_llm_provider) else served
 
