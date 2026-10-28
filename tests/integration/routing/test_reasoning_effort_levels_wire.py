@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -8,9 +9,11 @@ import anthropic
 import httpx
 import openai
 import pytest
+from integration._support.anthropic_sse import message_json
 from integration._support.client import Gateway, eventually, list_value, object_value, string_value
 from integration._support.openai_wire import openai_error
-from integration._support.wire import Request, wire_server
+from integration._support.vertex import service_account_json
+from integration._support.wire import Reply, Request, wire_server
 from integration.routing._reasoning_effort_levels_support import (
     AZURE_API_VERSION,
     CLAUDE,
@@ -34,6 +37,7 @@ from integration.routing._reasoning_effort_levels_support import (
     marker_of,
     messages_request,
     new_marker,
+    path_of,
     prompt,
     provider_reply,
     responses_request,
@@ -49,6 +53,7 @@ _ADAPTIVE: Final[dict[str, JsonValue]] = {"type": "adaptive"}
 _STRING_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": "2048"}
 _XHIGH_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": 9000}
 _BOOL_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": True}
+_FALSE_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": False}
 _NULL_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": None}
 _LIST_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": [2048]}
 _EMPTY_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": ""}
@@ -67,6 +72,8 @@ _KIMI_INFO: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort
 _CLAUDE_INFO: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": list(CLAUDE_LEVELS)})
 _GPT_INFO: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": list(GPT_LEVELS)})
 _UNDECLARED: Final[Mapping[str, JsonValue]] = MappingProxyType({})
+_EMPTY_DECLARATION: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": []})
+_NONE_ONLY_DECLARATION: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": ["none"]})
 _ECHOED_MAP_KEY: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {"key": "azure/chat-latest", "litellm_provider": "azure"}
 )
@@ -320,6 +327,7 @@ _OPENAI_RESPONSES: Final = "/v1/responses"
 _AZURE_RESPONSES: Final = f"/openai/responses?api-version={AZURE_API_VERSION}"
 _UNSUPPORTED: Final = "does not support parameters"
 _GEMINI: Final = f"/models/{GEMINI}:generateContent"
+_DATABRICKS: Final = "/chat/completions"
 
 CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
     {
@@ -1750,6 +1758,139 @@ CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
             _anthropic_chat_without_effort(_ADAPTIVE),
             _ANTHROPIC,
         ),
+        "chat-anthropic-false-budget-400": Cell(
+            CHAT, "anthropic", _CLAUDE_INFO, {"thinking": _FALSE_BUDGET}, None, _ANTHROPIC, 400, _NON_NUMERIC_BUDGET
+        ),
+        "chat-anthropic-undeclared-null-budget-400": Cell(
+            CHAT, "anthropic", _UNDECLARED, {"thinking": _NULL_BUDGET}, None, _ANTHROPIC, 400, _NON_NUMERIC_BUDGET
+        ),
+        "chat-anthropic-undeclared-false-budget-drop-params-sends-adaptive-without-effort": Cell(
+            CHAT,
+            "anthropic",
+            _UNDECLARED,
+            {"thinking": _FALSE_BUDGET, "drop_params": True},
+            _anthropic_chat_without_effort(_ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "chat-anthropic-undeclared-missing-budget-sends-low": Cell(
+            CHAT,
+            "anthropic",
+            _UNDECLARED,
+            {"thinking": _MISSING_BUDGET},
+            _anthropic_chat("low", _ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "messages-anthropic-undeclared-false-budget-400": Cell(
+            MESSAGES, "anthropic", _UNDECLARED, {"thinking": _FALSE_BUDGET}, None, _ANTHROPIC, 400, _NON_NUMERIC_BUDGET
+        ),
+        "messages-anthropic-empty-string-budget-400": Cell(
+            MESSAGES, "anthropic", _CLAUDE_INFO, {"thinking": _EMPTY_BUDGET}, None, _ANTHROPIC, 400, _NON_NUMERIC_BUDGET
+        ),
+        "messages-anthropic-undeclared-null-budget-drop-params-sends-adaptive-without-effort": Cell(
+            MESSAGES,
+            "anthropic",
+            _UNDECLARED,
+            {"thinking": _NULL_BUDGET, "drop_params": True},
+            _native_messages(None, _ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "responses-anthropic-false-budget-400": Cell(
+            RESPONSES,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"thinking": _FALSE_BUDGET},
+            None,
+            _ANTHROPIC,
+            400,
+            _NON_NUMERIC_BUDGET,
+        ),
+        "chat-converse-undeclared-false-budget-400": Cell(
+            CHAT,
+            "bedrock_converse",
+            _UNDECLARED,
+            {"thinking": _FALSE_BUDGET},
+            None,
+            _CONVERSE,
+            400,
+            _NON_NUMERIC_BUDGET,
+        ),
+        "messages-invoke-undeclared-null-budget-400": Cell(
+            MESSAGES, "bedrock_invoke", _UNDECLARED, {"thinking": _NULL_BUDGET}, None, _INVOKE, 400, _NON_NUMERIC_BUDGET
+        ),
+        "chat-databricks-claude-undeclared-false-budget-400": Cell(
+            CHAT,
+            "databricks_claude",
+            _UNDECLARED,
+            {"thinking": _FALSE_BUDGET},
+            None,
+            _DATABRICKS,
+            400,
+            _NON_NUMERIC_BUDGET,
+        ),
+        "chat-anthropic-empty-declaration-budget-drop-params-sends-adaptive-without-effort": Cell(
+            CHAT,
+            "anthropic",
+            _EMPTY_DECLARATION,
+            {"thinking": _BUDGET, "drop_params": True},
+            _anthropic_chat_without_effort(_ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "chat-anthropic-none-only-declaration-budget-drop-params-sends-adaptive-without-effort": Cell(
+            CHAT,
+            "anthropic",
+            _NONE_ONLY_DECLARATION,
+            {"thinking": _BUDGET, "drop_params": True},
+            _anthropic_chat_without_effort(_ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "chat-anthropic-empty-declaration-budget-keeps-its-effort": Cell(
+            CHAT,
+            "anthropic",
+            _EMPTY_DECLARATION,
+            {"thinking": _BUDGET},
+            _anthropic_chat("medium", _ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "chat-converse-empty-declaration-budget-drop-params-sends-adaptive-without-effort": Cell(
+            CHAT,
+            "bedrock_converse",
+            _EMPTY_DECLARATION,
+            {"thinking": _BUDGET, "drop_params": True},
+            _converse_chat_without_effort(_ADAPTIVE),
+            _CONVERSE,
+        ),
+        "messages-anthropic-empty-declaration-budget-drop-params-sends-adaptive-without-effort": Cell(
+            MESSAGES,
+            "anthropic",
+            _EMPTY_DECLARATION,
+            {"thinking": _BUDGET, "drop_params": True},
+            _native_messages(None, _ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "messages-anthropic-none-only-declaration-budget-drop-params-sends-adaptive-without-effort": Cell(
+            MESSAGES,
+            "anthropic",
+            _NONE_ONLY_DECLARATION,
+            {"thinking": _BUDGET, "drop_params": True},
+            _native_messages(None, _ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "messages-anthropic-empty-declaration-budget-keeps-its-effort": Cell(
+            MESSAGES,
+            "anthropic",
+            _EMPTY_DECLARATION,
+            {"thinking": _BUDGET},
+            _native_messages({"effort": "medium"}, _ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "messages-converse-empty-declaration-budget-drop-params-sends-adaptive-without-effort": Cell(
+            MESSAGES,
+            "bedrock_converse",
+            _EMPTY_DECLARATION,
+            {"thinking": _BUDGET, "drop_params": True},
+            _converse_messages(None),
+            _CONVERSE,
+        ),
     }
 )
 
@@ -1848,6 +1989,97 @@ def test_a_deployment_opted_into_bedrock_native_output_keeps_it_beside_its_decla
     assert _bedrock_native_schema(body, invoke=target == _INVOKE) == _NATIVE_OUTPUT_SCHEMA, body
     assert {"toolConfig", "tools"}.isdisjoint(body), body
     assert sent_effort(received[0]) == "high", body
+
+
+_NATIVE_OUTPUT_REJECTION: Final = (
+    "The model returned the following errors: output_config.format: Extra inputs are not permitted"
+)
+
+
+def _rejecting_native_output(request: Request) -> Reply:
+    native: Final = _bedrock_native_schema(body_of(request), invoke=path_of(request).endswith("/invoke"))
+    if native is None:
+        return provider_reply(request)
+    return Reply(status=400, body=json.dumps({"message": _NATIVE_OUTPUT_REJECTION}).encode())
+
+
+@pytest.mark.parametrize(
+    ("kind", "target"), [("bedrock_converse", _CONVERSE), ("bedrock_invoke", _INVOKE)], ids=["converse", "invoke"]
+)
+def test_the_retry_after_bedrock_rejects_native_output_keeps_the_declared_level(
+    gateway: Gateway, kind: str, target: str
+) -> None:
+    marker: Final = new_marker()
+    response_format: Final[dict[str, JsonValue]] = {
+        "type": "json_schema",
+        "json_schema": {"name": "answer", "schema": _NATIVE_OUTPUT_SCHEMA},
+    }
+    with wire_server(_rejecting_native_output) as wire, gateway.scenario() as scenario:
+        model: Final = deployment(scenario, kind, wire, _CLAUDE_INFO_WITH_NATIVE_OUTPUT)
+        response: Final = gateway.request(
+            "POST", CHAT, chat_request(model, marker, response_format=response_format, thinking=_BUDGET)
+        )
+        received: Final = wire.drain()
+    assert response.status_code == 200, response.text[:2000]
+    assert [(request.method, request.target) for request in received] == [("POST", target), ("POST", target)]
+    rejected, retried = (body_of(request) for request in received)
+    assert _bedrock_native_schema(rejected, invoke=target == _INVOKE) == _NATIVE_OUTPUT_SCHEMA, rejected
+    assert _bedrock_native_schema(retried, invoke=target == _INVOKE) is None, retried
+    assert [sent_effort(request) for request in received] == ["high", "high"], [rejected, retried]
+
+
+_VERTEX_PROJECT: Final = "scripted-project"
+_VERTEX_LOCATION: Final = "us-east5"
+_VERTEX_TOKEN: Final = "/_oauth/token"
+_VERTEX_RAW_PREDICT: Final = (
+    f"/v1/projects/{_VERTEX_PROJECT}/locations/{_VERTEX_LOCATION}/publishers/anthropic/models/{CLAUDE}:rawPredict"
+)
+_VERTEX_ACCESS_TOKEN: Final = json.dumps({"access_token": "scripted", "token_type": "Bearer", "expires_in": 3600})
+
+
+def _vertex_reply(request: Request) -> Reply:
+    if request.target == _VERTEX_TOKEN:
+        return Reply(body=_VERTEX_ACCESS_TOKEN.encode())
+    marker: Final = marker_of(request)
+    return Reply(body=message_json(f"msg_{marker}", CLAUDE, answer(marker)))
+
+
+@pytest.mark.parametrize(
+    ("route", "fields", "effort", "status"),
+    [
+        pytest.param(CHAT, {"reasoning_effort": "medium"}, "high", 200, id="chat-medium-to-high"),
+        pytest.param(MESSAGES, {"thinking": _BUDGET}, "high", 200, id="messages-budget-to-high"),
+        pytest.param(CHAT, {"thinking": _FALSE_BUDGET}, None, 400, id="chat-false-budget-400"),
+    ],
+)
+def test_a_vertex_ai_claude_deployment_gets_one_of_its_declared_levels(
+    gateway: Gateway, route: str, fields: dict[str, JsonValue], effort: str | None, status: int
+) -> None:
+    marker: Final = new_marker()
+    with wire_server(_vertex_reply) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"vertex_ai/{CLAUDE}",
+            api_base=wire.url,
+            api_key=None,
+            vertex_project=_VERTEX_PROJECT,
+            vertex_location=_VERTEX_LOCATION,
+            vertex_credentials=service_account_json(_VERTEX_PROJECT, wire.url),
+            model_info=dict(_CLAUDE_INFO),
+        )
+        body: Final = (
+            chat_request(model, marker, **fields) if route == CHAT else messages_request(model, marker, **fields)
+        )
+        response: Final = gateway.request("POST", route, body)
+        received: Final = tuple(request for request in wire.drain() if request.target != _VERTEX_TOKEN)
+    assert response.status_code == status, response.text[:2000]
+    if effort is None:
+        assert _NON_NUMERIC_BUDGET in response.text, response.text[:2000]
+        assert received == (), [request.body[:300] for request in received]
+        return
+    assert answer(marker) in response.text, response.text[:2000]
+    assert [(request.method, request.target) for request in received] == [("POST", _VERTEX_RAW_PREDICT)]
+    sent: Final = body_of(received[0])
+    assert object_value(sent["output_config"])["effort"] == effort, sent
 
 
 def _single(received: tuple[Request, ...], marker: str) -> Request:
