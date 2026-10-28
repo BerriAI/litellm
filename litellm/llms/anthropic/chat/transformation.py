@@ -112,6 +112,7 @@ from litellm.utils import (
     cached_get_model_info_helper,
     get_max_tokens,
     has_tool_call_blocks,
+    is_generalized_model_info,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_mid_conversation_system,
     supports_reasoning,
@@ -454,6 +455,11 @@ def _none_on_error(lookup: Callable[[], int | None]) -> int | None:
         return None
 
 
+def _host_row_max_output_tokens(model: str, custom_llm_provider: str) -> int | None:
+    info: Final = cached_get_model_info_helper(model, custom_llm_provider)
+    return None if is_generalized_model_info(info) else info.get("max_output_tokens")
+
+
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
@@ -515,22 +521,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     @staticmethod
     def get_max_tokens_for_model(model: str | None = None, custom_llm_provider: str | None = None) -> int:
         """
-        Get the max output tokens for a given model on the host that serves it.
-        Falls back to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var) if model is not found.
+        Get the max output tokens for a given model from its own cost-map row, else from the
+        serving host's row. Falls back to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var)
+        if neither row exists.
         """
         if model is None:
             return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+        max_tokens: Final = _none_on_error(lambda: get_max_tokens(model))
+        if max_tokens is not None:
+            return max_tokens
         host_max_tokens: Final = (
             None
             if custom_llm_provider is None
-            else _none_on_error(
-                lambda: cached_get_model_info_helper(model, custom_llm_provider).get("max_output_tokens")
-            )
+            else _none_on_error(lambda: _host_row_max_output_tokens(model, custom_llm_provider))
         )
-        if host_max_tokens is not None:
-            return host_max_tokens
-        max_tokens: Final = _none_on_error(lambda: get_max_tokens(model))
-        return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if max_tokens is None else max_tokens
+        return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if host_max_tokens is None else host_max_tokens
 
     @staticmethod
     def convert_tool_use_to_openai_format(
