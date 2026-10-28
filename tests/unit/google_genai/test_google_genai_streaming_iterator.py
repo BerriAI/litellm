@@ -62,7 +62,9 @@ def _logging_obj(
     ],
 )
 def test_streaming_logging_targets_the_provider_that_served_the_request(
-    iterator_cls: type,
+    iterator_cls: (
+        type[AsyncGoogleGenAIGenerateContentStreamingIterator] | type[GoogleGenAIGenerateContentStreamingIterator]
+    ),
     custom_llm_provider: str,
     expected_endpoint_type: EndpointType,
 ):
@@ -188,7 +190,11 @@ async def _first_chunk(
     "iterator_cls",
     [AsyncGoogleGenAIGenerateContentStreamingIterator, GoogleGenAIGenerateContentStreamingIterator],
 )
-async def test_streaming_iterator_keeps_unicode_line_separators_inside_the_event(iterator_cls: type) -> None:
+async def test_streaming_iterator_keeps_unicode_line_separators_inside_the_event(
+    iterator_cls: (
+        type[AsyncGoogleGenAIGenerateContentStreamingIterator] | type[GoogleGenAIGenerateContentStreamingIterator]
+    ),
+) -> None:
     payload: Final = {"candidates": [{"content": {"parts": [{"text": _LINE_SEPARATED_TEXT}]}}]}
     event: Final = f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
     iterator: Final = iterator_cls(
@@ -203,7 +209,9 @@ async def test_streaming_iterator_keeps_unicode_line_separators_inside_the_event
     chunk: Final = await _first_chunk(iterator)
 
     assert chunk == event.encode()
-    assert json.loads(chunk[len(b"data: ") : -2])["candidates"][0]["content"]["parts"][0]["text"] == _LINE_SEPARATED_TEXT
+    assert (
+        json.loads(chunk[len(b"data: ") : -2])["candidates"][0]["content"]["parts"][0]["text"] == _LINE_SEPARATED_TEXT
+    )
 
 
 def _gemini_event(text: str, finish_reason: str | None = None) -> str:

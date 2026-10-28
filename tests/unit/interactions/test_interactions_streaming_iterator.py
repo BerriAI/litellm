@@ -16,7 +16,10 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.interactions import streaming_iterator as interactions_streaming_iterator_module
-from litellm.interactions.streaming_iterator import InteractionsAPIStreamingIterator, SyncInteractionsAPIStreamingIterator
+from litellm.interactions.streaming_iterator import (
+    InteractionsAPIStreamingIterator,
+    SyncInteractionsAPIStreamingIterator,
+)
 from litellm.litellm_core_utils import thread_pool_executor as thread_pool_executor_module
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig
@@ -163,11 +166,15 @@ async def _first_event(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("iterator_cls", [InteractionsAPIStreamingIterator, SyncInteractionsAPIStreamingIterator])
-async def test_stream_keeps_unicode_line_separators_inside_the_delta_text(iterator_cls: type) -> None:
+async def test_stream_keeps_unicode_line_separators_inside_the_delta_text(
+    iterator_cls: type[InteractionsAPIStreamingIterator] | type[SyncInteractionsAPIStreamingIterator],
+) -> None:
     delta: Final = {"type": "text", "text": _LINE_SEPARATED_TEXT}
     event: Final = {"event_type": "step.delta", "id": "interaction-1", "delta": delta}
     iterator: Final = iterator_cls(
-        response=httpx.Response(200, stream=httpx.ByteStream(f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode())),
+        response=httpx.Response(
+            200, stream=httpx.ByteStream(f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode())
+        ),
         model="gemini/gemini-3.1-pro-preview",
         interactions_api_config=GoogleAIStudioInteractionsConfig(),
         logging_obj=LitellmLogging(
