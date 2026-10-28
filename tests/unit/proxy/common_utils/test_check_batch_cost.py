@@ -4161,7 +4161,7 @@ class TestBatchLineItemsFromThePoller:
         scheme, and no later poll can read that object either."""
         from litellm.llms.vertex_ai.common_utils import VertexAIError
 
-        journal: list = []
+        journal: list[str] = []
         row, instance = self._setup(journal, output_file_id="gs://bucket/job-1/predictions.jsonl")
         missing: Final = VertexAIError(status_code=status_code, message=f"No such object: {missing_object}")
 
