@@ -21,6 +21,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -28,6 +29,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     replayed_tool_search_tool_names,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import pruned_allowed_tool_choice
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
@@ -43,6 +45,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     merge_guardrailed_scoped_messages,
     merge_returned_tools_into_request_tools,
     openai_tool_name,
+    removed_tool_names,
     role_out_of_guardrail_scope,
     scoped_structured_message_indices,
     stream_item_field,
@@ -65,6 +68,8 @@ from litellm.types.utils import (
     StreamingChoices,
 )
 
+_REQUEST_DATA: Final = TypeAdapter(object)
+
 if TYPE_CHECKING:
     from fastapi import HTTPException
 
@@ -74,6 +79,17 @@ if TYPE_CHECKING:
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+
+def _write_guardrailed_tools(request: object, request_tools: Sequence[ChatCompletionToolParam]) -> None:
+    pruned_tool_choice: Final = pruned_allowed_tool_choice(
+        request, removed_tool_names(list_field(request, "tools"), request_tools)
+    )
+    if not isinstance(request, dict):
+        return
+    request["tools"] = request_tools  # rebind-ok: in-place request rewrite
+    if pruned_tool_choice is not None:
+        request["tool_choice"] = pruned_tool_choice  # rebind-ok: in-place request rewrite
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -176,14 +192,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrailed_tool_calls: Final = guardrailed_inputs.get("tool_calls", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
-                data["tools"] = (
-                    merge_returned_tools_into_request_tools(
-                        request_tools=tools,
-                        returned_tools=guardrailed_tools,
-                        tool_name=openai_tool_name,
-                    )
-                    if scan_only_tool_results
-                    else guardrailed_tools
+                _write_guardrailed_tools(
+                    _REQUEST_DATA.validate_python(data),
+                    (
+                        merge_returned_tools_into_request_tools(
+                            request_tools=tools,
+                            returned_tools=guardrailed_tools,
+                            tool_name=openai_tool_name,
+                        )
+                        if scan_only_tool_results
+                        else guardrailed_tools
+                    ),
                 )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")

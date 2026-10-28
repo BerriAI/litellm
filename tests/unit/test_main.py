@@ -5503,6 +5503,105 @@ def test_drop_params_keeps_a_dropped_stream_chunk_size_out_of_the_provider_reque
     assert sent["model"] == "gpt-4.1-mini"
 
 
+ALLOWED_TOOLS_REQUEST_TOOLS: Final = [
+    {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "get_time", "parameters": {"type": "object", "properties": {}}}},
+]
+NESTED_ALLOWED_TOOLS: Final = {
+    "type": "allowed_tools",
+    "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+}
+FLAT_ALLOWED_TOOLS: Final = {
+    "type": "allowed_tools",
+    "mode": "required",
+    "tools": [{"type": "function", "name": "get_time"}],
+}
+
+
+def _mock_chat_completion(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(url__regex=r"http://localhost:12346/.*chat/completions.*").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-allowed-tools",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+
+@pytest.mark.parametrize("tool_choice", [NESTED_ALLOWED_TOOLS, FLAT_ALLOWED_TOOLS], ids=["nested", "flat"])
+@pytest.mark.parametrize(
+    ("model", "provider_kwargs"),
+    [
+        ("openai/gpt-4.1-mini", {"api_base": "http://localhost:12346/v1"}),
+        ("litellm_proxy/gpt-4.1-mini", {"api_base": "http://localhost:12346/v1"}),
+        ("azure_ai/DeepSeek-V4-Flash", {"api_base": "http://localhost:12346/models"}),
+        ("azure/gpt-4.1-mini", {"api_base": "http://localhost:12346", "api_version": "2025-04-01-preview"}),
+    ],
+)
+def test_completion_sends_allowed_tools_nested_to_openai_shaped_providers(
+    respx_mock: respx.MockRouter, model: str, provider_kwargs: Mapping[str, str], tool_choice: Mapping[str, object]
+) -> None:
+    mock_route: Final = _mock_chat_completion(respx_mock)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "What time is it?"}],
+        tools=ALLOWED_TOOLS_REQUEST_TOOLS,
+        tool_choice=tool_choice,
+        api_key="fake_api_key",
+        **provider_kwargs,
+    )
+
+    assert mock_route.called
+    assert json.loads(respx_mock.calls[0].request.content)["tool_choice"] == NESTED_ALLOWED_TOOLS
+
+
+@pytest.mark.parametrize(
+    "model", ["anthropic/claude-haiku-4-5", "gemini/gemini-2.5-flash", "ollama/llama3", "deepseek/deepseek-chat"]
+)
+def test_completion_rejects_allowed_tools_a_provider_cannot_take(model: str) -> None:
+    with pytest.raises(
+        litellm.UnsupportedParamsError, match="does not support an allowed_tools tool_choice"
+    ) as exc_info:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "What time is it?"}],
+            tools=ALLOWED_TOOLS_REQUEST_TOOLS,
+            tool_choice=NESTED_ALLOWED_TOOLS,
+            mock_response="hi",
+        )
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize("drop", ["per_call", "global"])
+def test_drop_params_sends_tools_without_an_allowed_tools_choice_a_provider_cannot_take(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, drop: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop == "global")
+    mock_route: Final = _mock_chat_completion(respx_mock)
+
+    litellm.completion(
+        model="deepseek/deepseek-chat",
+        messages=[{"role": "user", "content": "What time is it?"}],
+        tools=ALLOWED_TOOLS_REQUEST_TOOLS,
+        tool_choice=FLAT_ALLOWED_TOOLS,
+        api_base="http://localhost:12346/v1",
+        api_key="fake_api_key",
+        drop_params=drop == "per_call",
+    )
+
+    assert mock_route.called
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert "tool_choice" not in sent, sent
+    assert [tool["function"]["name"] for tool in sent["tools"]] == ["get_weather", "get_time"]
+
+
 @pytest.mark.asyncio
 async def test_global_drop_params_drops_an_invalid_stream_chunk_size_on_acompletion(
     monkeypatch: pytest.MonkeyPatch,

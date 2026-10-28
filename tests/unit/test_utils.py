@@ -8309,6 +8309,8 @@ def test_validate_tool_choice_allowed_tools_takes_the_chat_shape(tool_choice):
         {"type": "allowed_tools", "mode": "required"},
         {"type": "allowed_tools", "allowed_tools": {"mode": "sometimes", "tools": []}},
         {"type": "allowed_tools", "allowed_tools": "get_weather", "mode": "auto"},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": []}},
+        {"type": "allowed_tools", "mode": "auto", "tools": []},
     ],
 )
 def test_validate_tool_choice_malformed_allowed_tools_is_a_400(tool_choice):
@@ -8317,53 +8319,15 @@ def test_validate_tool_choice_malformed_allowed_tools_is_a_400(tool_choice):
     assert exc_info.value.status_code == 400
 
 
-ALLOWED_TOOLS_REQUEST_TOOLS: Final = [
-    {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}}
-]
-
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-@pytest.mark.parametrize(("model", "custom_llm_provider"), [("gpt-5.5", "openai"), ("gpt-5.5", "azure")])
-def test_get_optional_params_keeps_allowed_tools_for_openai_shaped_providers(model, custom_llm_provider):
-    optional_params = get_optional_params(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        tools=ALLOWED_TOOLS_REQUEST_TOOLS,
+def test_get_optional_params_leaves_allowed_tools_to_its_caller():
+    """Direct callers like Bedrock batch build provider params here, so the provider check stays in completion()."""
+    optional_params: Final = get_optional_params(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        custom_llm_provider="bedrock",
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
         tool_choice=CHAT_ALLOWED_TOOLS,
     )
-    assert optional_params["tool_choice"] == CHAT_ALLOWED_TOOLS
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-@pytest.mark.parametrize(
-    ("model", "custom_llm_provider"),
-    [("claude-haiku-4-5", "anthropic"), ("gemini-2.5-flash", "gemini"), ("deepseek-chat", "deepseek")],
-)
-def test_get_optional_params_rejects_allowed_tools_a_provider_cannot_take(model, custom_llm_provider):
-    with pytest.raises(litellm.UnsupportedParamsError, match="does not support an allowed_tools tool_choice") as exc_info:
-        get_optional_params(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            tools=ALLOWED_TOOLS_REQUEST_TOOLS,
-            tool_choice=CHAT_ALLOWED_TOOLS,
-        )
-    assert exc_info.value.status_code == 400
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-@pytest.mark.parametrize(
-    ("model", "custom_llm_provider"),
-    [("claude-haiku-4-5", "anthropic"), ("gemini-2.5-flash", "gemini"), ("deepseek-chat", "deepseek")],
-)
-def test_get_optional_params_drops_allowed_tools_under_drop_params(model, custom_llm_provider):
-    optional_params = get_optional_params(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        tools=ALLOWED_TOOLS_REQUEST_TOOLS,
-        tool_choice=CHAT_ALLOWED_TOOLS,
-        drop_params=True,
-    )
-    assert "tool_choice" not in optional_params
     assert optional_params["tools"]
 
 

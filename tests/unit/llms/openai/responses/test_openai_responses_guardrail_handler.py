@@ -2718,6 +2718,18 @@ class ToolAppendingGuardrail(CustomGuardrail):
         return inputs
 
 
+class ToolDroppingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        inputs["tools"] = [tool for tool in inputs.get("tools") or [] if tool["function"]["name"] != "get_time"]
+        return inputs
+
+
 class TestOpenAIResponsesHandlerToolInjection:
     """A tool a guardrail injects must survive the write-back to Responses format."""
 
@@ -2756,6 +2768,40 @@ class TestOpenAIResponsesHandlerToolInjection:
         names = [t.get("name") for t in result["tools"]]
         assert "get_weather" in names
         assert "injected_tool" in names
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("allowed_names", "expected"),
+        [
+            (
+                ["get_weather", "get_time"],
+                {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_weather"}]},
+            ),
+            (["get_time"], "none"),
+        ],
+        ids=["one_allowed_tool_removed", "every_allowed_tool_removed"],
+    )
+    async def test_a_tool_the_guardrail_removes_is_pruned_from_allowed_tools(self, allowed_names, expected):
+        data = {
+            "input": [{"role": "user", "content": "What time is it?", "type": "message"}],
+            "tools": [
+                {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+                {"type": "function", "name": "get_time", "parameters": {"type": "object", "properties": {}}},
+            ],
+            "tool_choice": {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [{"type": "function", "name": name} for name in allowed_names],
+            },
+            "model": "gpt-4",
+        }
+
+        result = await OpenAIResponsesHandler().process_input_messages(
+            data, ToolDroppingGuardrail(guardrail_name="test")
+        )
+
+        assert [tool["name"] for tool in result["tools"]] == ["get_weather"]
+        assert result["tool_choice"] == expected
 
 
 COMPRESSED_MARKER = "[compressed document; retrieve the full text with hash=b573993006976af767214fac]"

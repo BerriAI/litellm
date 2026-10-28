@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -292,6 +292,11 @@ def openai_tool_name(tool: object) -> str | None:
         return function_name if isinstance(function_name, str) else None
     flat_name: Final = tool.get("name")
     return flat_name if isinstance(flat_name, str) else None
+
+
+def removed_tool_names(request_tools: Iterable[object], kept_tools: Iterable[object]) -> frozenset[str]:
+    kept_names: Final = frozenset(filter(None, map(openai_tool_name, kept_tools)))
+    return frozenset(filter(None, map(openai_tool_name, request_tools))) - kept_names
 
 
 _FIELDS: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(strict=True))

@@ -29,8 +29,8 @@ from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
-    ALLOWED_TOOL_CHOICE_ADAPTER,
-    to_responses_allowed_tool_choice,
+    ALLOWED_TOOL_CHOICE,
+    responses_allowed_tool_choice,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -753,7 +753,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return choice_type
         if choice_type == "allowed_tools":
             with suppress(ValidationError):
-                return to_responses_allowed_tool_choice(ALLOWED_TOOL_CHOICE_ADAPTER.validate_python(tool_choice))
+                return responses_allowed_tool_choice(ALLOWED_TOOL_CHOICE.validate_python(tool_choice))
         if choice_type not in ("function", "custom"):
             return tool_choice
         if isinstance(tool_choice.get("name"), str) and tool_choice.get("name"):

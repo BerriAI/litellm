@@ -594,6 +594,67 @@ async def test_semantic_filter_hook_preserves_native_tools():
 
 @requires_semantic_router
 @pytest.mark.asyncio
+async def test_semantic_filter_hook_prunes_filtered_mcp_tools_from_allowed_tools():
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.proxy.mcp_server.semantic_tool_filter import SemanticMCPToolFilter
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router = Mock()
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=2,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    mcp_tools = [
+        MCPTool(name=f"mcp_tool_{i}", description=f"MCP tool {i}", inputSchema={"type": "object"}) for i in range(5)
+    ]
+    filter_instance._build_router(mcp_tools)
+    native_tool = {"type": "function", "function": {"name": "get_current_weather", "parameters": {"type": "object"}}}
+    allowed_names = [*(tool.name for tool in mcp_tools), "get_current_weather"]
+
+    result = await SemanticToolFilterHook(filter_instance).async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data={
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "What is the weather?"}],
+            "tools": [*mcp_tools, native_tool],
+            "tool_choice": {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [{"type": "function", "name": name} for name in allowed_names],
+            },
+            "metadata": {},
+        },
+        call_type="completion",
+    )
+
+    kept_mcp_names = [tool.name for tool in result["tools"] if isinstance(tool, MCPTool)]
+    assert len(kept_mcp_names) < len(mcp_tools)
+    assert result["tool_choice"] == {
+        "type": "allowed_tools",
+        "mode": "required",
+        "tools": [{"type": "function", "name": name} for name in [*kept_mcp_names, "get_current_weather"]],
+    }
+
+
+@requires_semantic_router
+@pytest.mark.asyncio
 async def test_semantic_filter_hook_all_native_tools():
     """
     Regression test: all-native request.

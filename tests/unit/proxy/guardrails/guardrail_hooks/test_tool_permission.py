@@ -751,6 +751,62 @@ class TestToolPermissionGuardrail:
         assert new_data["function_call"] == "none"
         assert new_data["tool_choice"] == "none"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool_choice", "expected"),
+        [
+            (
+                {
+                    "type": "allowed_tools",
+                    "allowed_tools": {
+                        "mode": "required",
+                        "tools": [
+                            {"type": "function", "function": {"name": "Bash"}},
+                            {"type": "function", "function": {"name": "Read"}},
+                        ],
+                    },
+                },
+                {
+                    "type": "allowed_tools",
+                    "allowed_tools": {
+                        "mode": "required",
+                        "tools": [{"type": "function", "function": {"name": "Bash"}}],
+                    },
+                },
+            ),
+            (
+                {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "Read"}]},
+                "none",
+            ),
+        ],
+        ids=["some_allowed_tools_denied", "every_allowed_tool_denied"],
+    )
+    async def test_async_pre_call_hook_rewrite_mode_prunes_denied_tools_from_allowed_tools(self, tool_choice, expected):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="test-tool-permission",
+            rules=self.test_rules,
+            default_action="deny",
+            on_disallowed_action="rewrite",
+        )
+        data = {
+            "tools": [
+                {"type": "function", "function": {"name": "Bash"}},
+                {"type": "function", "function": {"name": "Read"}},
+            ],
+            "tool_choice": tool_choice,
+        }
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            new_data = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(default_in_memory_ttl=1),
+                data=data,
+                call_type="completion",
+            )
+
+        assert isinstance(new_data, dict)
+        assert new_data["tool_choice"] == expected
+
     @staticmethod
     def _tool_search_turn(*loaded_names: str) -> dict:
         return {

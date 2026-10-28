@@ -19,6 +19,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import pruned_allowed_tool_choice
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
@@ -688,10 +689,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         verbose_proxy_logger.info("Blocking %s unauthorized tool uses", len(denied_tool_names))
 
-        # Create a mapping of tool_use_id to error result
-        error_tool_names: Final = set()
-        for tool_use in denied_tool_names:
-            error_tool_names.add(tool_use)
+        error_tool_names: Final = frozenset(denied_tool_names)
 
         tools: Final[list[ChatCompletionToolParam] | None] = data.get("tools")
         if tools is not None:
@@ -712,14 +710,15 @@ class ToolPermissionGuardrail(CustomGuardrail):
         named_tool_choice: Final = self._get_named_tool_choice(data)
         if named_tool_choice in error_tool_names:
             data["tool_choice"] = "none"
+        pruned_tool_choice: Final = pruned_allowed_tool_choice(_REQUEST_DATA.validate_python(data), error_tool_names)
+        if pruned_tool_choice is not None:
+            data["tool_choice"] = pruned_tool_choice  # rebind-ok: rewrite mode edits the request in place
 
         named_function_call: Final = self._get_named_function_call(data)
         if named_function_call in error_tool_names:
             data["function_call"] = "none"
 
-        messages: Final = without_tool_search_items_loading(
-            _REQUEST_DATA.validate_python(data), frozenset(denied_tool_names)
-        )
+        messages: Final = without_tool_search_items_loading(_REQUEST_DATA.validate_python(data), error_tool_names)
         if messages is not None:
             data["messages"] = messages  # rebind-ok: rewrite mode edits the request in place
 

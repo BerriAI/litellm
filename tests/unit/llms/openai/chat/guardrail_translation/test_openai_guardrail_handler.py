@@ -80,6 +80,18 @@ class MockGuardrail(CustomGuardrail):
         return result
 
 
+class ToolDroppingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        inputs["tools"] = [tool for tool in inputs.get("tools") or [] if tool["function"]["name"] != "get_time"]
+        return inputs
+
+
 class MockCopiedToolCallGuardrail(CustomGuardrail):
     """Mock guardrail that returns copied tool calls instead of mutating inputs."""
 
@@ -2365,3 +2377,45 @@ class TestStreamingScanKey:
         for released in (text_only, finished_tool_call):
             ended = handler.released_stream_as_ended(released)
             assert len(ended) == len(released) and all(a is b for a, b in zip(ended, released, strict=True))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allowed_names", "expected"),
+    [
+        (
+            ["get_weather", "get_time"],
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "required",
+                    "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+                },
+            },
+        ),
+        (["get_time"], "none"),
+    ],
+    ids=["one_allowed_tool_removed", "every_allowed_tool_removed"],
+)
+async def test_a_tool_the_guardrail_removes_is_pruned_from_allowed_tools(allowed_names, expected):
+    data = {
+        "messages": [{"role": "user", "content": "What time is it?"}],
+        "tools": [
+            {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}},
+            {"type": "function", "function": {"name": "get_time", "parameters": {"type": "object"}}},
+        ],
+        "tool_choice": {
+            "type": "allowed_tools",
+            "allowed_tools": {
+                "mode": "required",
+                "tools": [{"type": "function", "function": {"name": name}} for name in allowed_names],
+            },
+        },
+    }
+
+    result = await OpenAIChatCompletionsHandler().process_input_messages(
+        data, ToolDroppingGuardrail(guardrail_name="test")
+    )
+
+    assert [tool["function"]["name"] for tool in result["tools"]] == ["get_weather"]
+    assert result["tool_choice"] == expected

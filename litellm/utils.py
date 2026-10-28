@@ -82,11 +82,7 @@ from litellm.constants import (
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
-from litellm.litellm_core_utils.allowed_tools_tool_choice import (
-    ALLOWED_TOOL_CHOICE_ADAPTER,
-    PROVIDERS_ACCEPTING_ALLOWED_TOOLS,
-    to_chat_allowed_tool_choice,
-)
+from litellm.litellm_core_utils.allowed_tools_tool_choice import ALLOWED_TOOL_CHOICE, chat_allowed_tool_choice
 from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     normalize_drop_params,
@@ -5107,17 +5103,6 @@ def get_optional_params(
     _check_valid_arg(
         supported_params=supported_params or [],
     )
-    match non_default_params:
-        case {"tool_choice": {"type": "allowed_tools"}} if custom_llm_provider not in PROVIDERS_ACCEPTING_ALLOWED_TOOLS:
-            if litellm.drop_params is not True and drop_params is not True:
-                raise UnsupportedParamsError(
-                    message=f"{custom_llm_provider} does not support an allowed_tools tool_choice, for model={model}. To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
-                    model=model,
-                    llm_provider=custom_llm_provider,
-                )
-            del non_default_params["tool_choice"]
-        case dict():
-            pass
     ## raise exception if provider doesn't support passed in param
     if custom_llm_provider == "anthropic":
         ## check if unsupported param passed in
@@ -9033,7 +9018,7 @@ def validate_chat_completion_tool_choice(
 
         if tool_choice_type == "allowed_tools":
             try:
-                return dict(to_chat_allowed_tool_choice(ALLOWED_TOOL_CHOICE_ADAPTER.validate_python(tool_choice)))
+                return dict(chat_allowed_tool_choice(ALLOWED_TOOL_CHOICE.validate_python(tool_choice)))
             except ValidationError as exc:
                 raise BadRequestError(
                     message=f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec. {exc}",

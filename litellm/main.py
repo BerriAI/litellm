@@ -69,6 +69,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.allowed_tools_tool_choice import allowed_tool_choice_dropped
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
@@ -5709,7 +5710,7 @@ def completion(
             ),
         )
         routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
-        drop_unsupported_reasoning: Final = (
+        drops_unsupported_params: Final = (
             litellm.drop_params is True or normalize_drop_params(routing_kwargs.get("drop_params")) is True
         )
         reasoning_model_group: Final = model_group_from_metadata(
@@ -5724,7 +5725,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             deployment_model_info=routing_kwargs.get("model_info"),
             model_group=reasoning_model_group,
-            drop_params=drop_unsupported_reasoning,
+            drop_params=drops_unsupported_params,
         )
         resolved_reasoning_effort: Final = chat_reasoning.effort.value
         resolved_output_config: Final = chat_reasoning.output_config
@@ -5859,7 +5860,16 @@ def completion(
             "response_format": response_format,
             "seed": seed,
             "tools": tools,
-            "tool_choice": tool_choice,
+            "tool_choice": (
+                None
+                if allowed_tool_choice_dropped(
+                    _OPAQUE_VALUE_ADAPTER.validate_python(tool_choice),
+                    custom_llm_provider=custom_llm_provider,
+                    model=model,
+                    drop_params=drops_unsupported_params,
+                )
+                else tool_choice
+            ),
             "max_retries": max_retries,
             "logprobs": logprobs,
             "top_logprobs": top_logprobs,

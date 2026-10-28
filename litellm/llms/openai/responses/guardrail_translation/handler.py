@@ -47,6 +47,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     OpenAiResponsesToChatCompletionStreamIterator,
     tool_call_dict_from_output_item,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import pruned_allowed_tool_choice
 from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
@@ -58,6 +59,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
     list_field,
     merge_guardrailed_scoped_messages,
+    removed_tool_names,
     role_out_of_guardrail_scope,
     scoped_structured_message_indices,
     stream_item_field,
@@ -117,6 +119,7 @@ if TYPE_CHECKING:
 
 
 _COMPACTION_SUMMARY_POSITION: Final = -1
+_REQUEST_DATA: Final = TypeAdapter(object)
 
 
 def _output_compaction_summary(item: object) -> str | None:
@@ -817,9 +820,13 @@ class OpenAIResponsesHandler(BaseTranslation):
     ) -> None:
         if guardrailed_tools is None:
             return
-        data["tools"] = list(  # rebind-ok: in-place request rewrite
-            merge_guardrailed_tools(original_tools, flattened_tool_groups, guardrailed_tools)
+        merged_tools: Final = list(merge_guardrailed_tools(original_tools, flattened_tool_groups, guardrailed_tools))
+        data["tools"] = merged_tools  # rebind-ok: in-place request rewrite
+        pruned_tool_choice: Final = pruned_allowed_tool_choice(
+            _REQUEST_DATA.validate_python(data), removed_tool_names(original_tools, merged_tools)
         )
+        if pruned_tool_choice is not None:
+            data["tool_choice"] = pruned_tool_choice  # rebind-ok: in-place request rewrite
 
     def _extract_input_text_and_images(
         self,
