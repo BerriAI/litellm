@@ -53,6 +53,14 @@ def _google_contents(value: JsonValue) -> JsonValue:
             return other
 
 
+def _google_system_part(value: JsonValue) -> JsonValue:
+    match value:
+        case {"text": None, **fields} if any(field is not None for field in fields.values()):
+            return fields
+        case _:
+            return value
+
+
 _GOOGLE_REPEATED_FIELD: Final = BeforeValidator(_google_repeated_field)
 
 
@@ -63,7 +71,10 @@ class _GoogleCountTokensTextPart(BaseModel):
 
 class _GoogleCountTokensSystemInstruction(BaseModel):
     model_config = ConfigDict(frozen=True)
-    parts: Annotated[tuple[_GoogleCountTokensTextPart, ...], _GOOGLE_REPEATED_FIELD] = ()
+    parts: Annotated[
+        tuple[Annotated[_GoogleCountTokensTextPart, BeforeValidator(_google_system_part)], ...],
+        _GOOGLE_REPEATED_FIELD,
+    ] = ()
 
 
 class _GoogleCountTokensFunctionDeclaration(BaseModel):

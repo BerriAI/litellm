@@ -123,6 +123,7 @@ _CONTENTS: Final = {"contents": [_TURN]}
         ({"systemInstruction": {"parts": None}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {"parts": [{"text": None}, {"text": "Follow these rules"}]}}, _SYSTEM),
         ({"systemInstruction": {"parts": {"text": None}}}, _NO_SYSTEM_PARTS),
+        ({"systemInstruction": {"parts": {"text": None, "inlineData": None}}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {}}, _NO_SYSTEM_PARTS),
         ({"tools": None}, {}),
         ({"tools": [None]}, {}),
@@ -149,10 +150,29 @@ def test_google_count_tokens_counts_every_google_spelling_of_a_repeated_field_li
 
 
 @pytest.mark.parametrize(
+    "malformed",
+    (
+        {"tools": "lookup"},
+        {"tools": [{"functionDeclarations": "lookup"}]},
+        {"systemInstruction": {"parts": 7}},
+        {"contents": 5},
+        {"contents": ["Count this request"]},
+    ),
+)
+def test_google_count_tokens_rejects_a_scalar_where_google_expects_an_object_or_list(
+    malformed: dict[str, JsonValue],
+) -> None:
+    with pytest.raises(ValidationError):
+        _google_count_tokens_request("counted", {"contents": [_TURN], **malformed})
+
+
+@pytest.mark.parametrize(
     "parts",
     (
         {"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}},
         [{"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}],
+        {"text": None, "inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}},
+        [{"text": "Follow these rules"}, {"text": None, "fileData": {"fileUri": "gs://bucket/rules.pdf"}}],
     ),
 )
 def test_google_count_tokens_rejects_media_only_system_parts(parts: JsonValue) -> None:
