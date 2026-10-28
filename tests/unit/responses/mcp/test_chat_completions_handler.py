@@ -1,13 +1,18 @@
 import asyncio
+import gc
 import json
+import queue
 import sys
 import types
-from collections.abc import Mapping, Sequence
+import warnings
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from types import MappingProxyType
 from typing import Final, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import respx
 from httpx import Response
@@ -25,7 +30,8 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.utils import ModelResponse, StandardLoggingPayload
+from litellm.types.utils import ModelResponse, ModelResponseStream, StandardLoggingPayload, Usage
+from litellm.utils import CustomStreamWrapper
 
 
 @pytest.mark.asyncio
@@ -1600,18 +1606,28 @@ async def _settled() -> None:
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
 
 
-async def _auto_execute_chat_echo(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, rounds: Sequence[Response], call_id: str
-) -> tuple[_ChatRoundRecorder, ModelResponse | Exception]:
+async def _settled_once(logged: Callable[[], bool]) -> None:
+    for _ in range(200):
+        if logged():
+            break
+        await asyncio.sleep(0.01)
+    await _settled()
+
+
+def _serve_chat_rounds(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, rounds: Sequence[Response]
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post("https://mcp-chat-rounds.example.com/v1/chat/completions").mock(side_effect=list(rounds))
-    recorder: Final = _ChatRoundRecorder()
-    logging_obj: Final = Logging(
+
+
+def _chat_rounds_logging_obj(recorder: _ChatRoundRecorder, call_id: str, stream: bool) -> Logging:
+    return Logging(
         model="openai/gpt-5.6",
         messages=[{"role": "user", "content": "Call echo with PING"}],
-        stream=False,
+        stream=stream,
         call_type="acompletion",
         start_time=datetime(2026, 1, 1),
         litellm_call_id=call_id,
@@ -1619,6 +1635,10 @@ async def _auto_execute_chat_echo(
         dynamic_async_success_callbacks=[recorder],
         dynamic_async_failure_callbacks=[recorder],
     )
+
+
+@contextmanager
+def _echo_tool_served() -> Iterator[None]:
     echo_tool: Final = MCPTool.model_validate(
         {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
         by_name=False,
@@ -1635,6 +1655,16 @@ async def _auto_execute_chat_echo(
             AsyncMock(return_value=[{"tool_call_id": "call_echo", "result": "PING", "name": "echo"}]),
         ),
     ):
+        yield
+
+
+async def _auto_execute_chat_echo(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, rounds: Sequence[Response], call_id: str
+) -> tuple[_ChatRoundRecorder, ModelResponse | Exception]:
+    _serve_chat_rounds(respx_mock, monkeypatch, rounds)
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, call_id, stream=False)
+    with _echo_tool_served():
         try:
             response: Final = await litellm.acompletion(
                 model="openai/gpt-5.6",
@@ -1712,3 +1742,339 @@ async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follo
     assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71, 19)
     assert recorder.failed[0]["response_cost"] == pytest.approx(_chat_round_cost(_CHAT_ROUND_ONE))
     assert recorder.failed[0]["response_cost"] > 0
+
+
+_FIXED_MARGIN: Final = 0.001
+
+
+def _chat_stream_events(body: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    completed: Final = json.loads(json.dumps(body, default=dict))
+    choice: Final = completed["choices"][0]
+    message: Final = choice["message"]
+    calls: Final = message.get("tool_calls") or []
+    delta: Final = (
+        {**message, "tool_calls": [{**call, "index": index} for index, call in enumerate(calls)]} if calls else message
+    )
+    head: Final = {"id": completed["id"], "object": "chat.completion.chunk", "created": 1, "model": completed["model"]}
+    return (
+        {**head, "choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
+        {**head, "choices": [{"index": 0, "delta": {}, "finish_reason": choice["finish_reason"]}]},
+        {**head, "choices": [], "usage": completed["usage"]},
+    )
+
+
+def _sse(events: Sequence[Mapping[str, object]]) -> bytes:
+    return b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in events)
+
+
+def _streamed(body: Mapping[str, object]) -> Response:
+    return Response(
+        200,
+        content=_sse(_chat_stream_events(body)) + b"data: [DONE]\n\n",
+        headers={"content-type": "text/event-stream"},
+    )
+
+
+class _CutOnceTheAnswerStarts(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield _sse(_chat_stream_events(_CHAT_ROUND_TWO)[:1])
+        raise httpx.ReadError("connection reset mid-stream")
+
+
+def _cut_once_the_answer_starts() -> Response:
+    return Response(200, stream=_CutOnceTheAnswerStarts(), headers={"content-type": "text/event-stream"})
+
+
+async def _open_chat_echo_stream(logging_obj: Logging) -> CustomStreamWrapper:
+    stream: Final = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Call echo with PING"}],
+        tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
+        api_key="sk-mcp-chat-rounds",
+        api_base="https://mcp-chat-rounds.example.com/v1",
+        stream=True,
+        stream_options={"include_usage": True},
+        litellm_logging_obj=logging_obj,
+    )
+    assert isinstance(stream, CustomStreamWrapper)
+    return stream
+
+
+async def _read_all(stream: CustomStreamWrapper) -> tuple[ModelResponseStream, ...]:
+    return tuple([chunk async for chunk in stream])
+
+
+async def _read_until(stream: CustomStreamWrapper, content: str) -> None:
+    async for chunk in stream:
+        if chunk.choices and chunk.choices[0].delta.content == content:
+            return
+    pytest.fail(f"the stream never sent {content!r}")
+
+
+def _streamed_usage(chunks: Sequence[ModelResponseStream]) -> Usage:
+    usages: Final = tuple(usage for chunk in chunks if isinstance(usage := getattr(chunk, "usage", None), Usage))
+    assert len(usages) == 1, usages
+    return usages[0]
+
+
+def _assert_one_stream_row_bills_both_rounds_once(
+    logged: Sequence[StandardLoggingPayload], chunks: Sequence[ModelResponseStream]
+) -> None:
+    charged_once: Final = _chat_round_cost(_CHAT_ROUND_ONE) + _chat_round_cost(_CHAT_ROUND_TWO) - _FIXED_MARGIN
+    assert len(logged) == 1
+    row: Final = logged[0]
+    assert row["id"] == chunks[-1].id
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (71 + 149, 19 + 5)
+    assert row["metadata"]["usage_object"]["prompt_tokens_details"]["cached_tokens"] == 32 + 64
+    assert row["response_cost"] == pytest.approx(charged_once)
+    assert row["cost_breakdown"]["total_cost"] == pytest.approx(charged_once)
+    usage: Final = _streamed_usage(chunks)
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (71 + 149, 19 + 5, 90 + 154)
+
+
+def _assert_one_row_bills_round_one(logged: Sequence[StandardLoggingPayload]) -> None:
+    assert len(logged) == 1
+    assert (logged[0]["prompt_tokens"], logged[0]["completion_tokens"]) == (71, 19)
+    assert logged[0]["response_cost"] == pytest.approx(_chat_round_cost(_CHAT_ROUND_ONE))
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_deferred_for_a_post_call_guardrail_logs_both_rounds_once_when_the_proxy_releases(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), _streamed(_CHAT_ROUND_TWO)))
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-rounds-deferred", stream=True)
+
+    with _echo_tool_served():
+        stream: Final = await _open_chat_echo_stream(logging_obj)
+        ProxyBaseLLMRequestProcessing(data={})._arm_deferred_stream_dispatch(
+            response=stream, route_type="acompletion", user_api_key_dict=MagicMock(), logging_obj=logging_obj
+        )
+        chunks: Final = await _read_all(stream)
+    await _settled()
+    logged_before_release: Final = recorder.logged
+    ProxyLogging.fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+    await _settled_once(lambda: len(recorder.logged) > 0)
+
+    assert logged_before_release == ()
+    _assert_one_stream_row_bills_both_rounds_once(recorder.logged, chunks)
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_blocked_by_a_post_call_guardrail_bills_both_rounds_on_the_failure_row(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.exceptions import GuardrailRaisedException
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), _streamed(_CHAT_ROUND_TWO)))
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-rounds-blocked", stream=True)
+    blocked: Final = GuardrailRaisedException(guardrail_name="output-policy", message="blocked")
+
+    with _echo_tool_served():
+        stream: Final = await _open_chat_echo_stream(logging_obj)
+        ProxyBaseLLMRequestProcessing(data={})._arm_deferred_stream_dispatch(
+            response=stream, route_type="acompletion", user_api_key_dict=MagicMock(), logging_obj=logging_obj
+        )
+        await _read_all(stream)
+    assert ProxyLogging._discard_deferred_stream_logging_for_failure({"litellm_logging_obj": logging_obj}, blocked)
+    await logging_obj.async_failure_handler(blocked, "blocked by output-policy")
+    await _settled_once(lambda: len(recorder.failed) > 0)
+
+    charged_once: Final = _chat_round_cost(_CHAT_ROUND_ONE) + _chat_round_cost(_CHAT_ROUND_TWO) - _FIXED_MARGIN
+    assert recorder.logged == ()
+    assert len(recorder.failed) == 1
+    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71 + 149, 19 + 5)
+    assert recorder.failed[0]["response_cost"] == pytest.approx(charged_once)
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_answered_without_a_tool_call_logs_its_one_round_once_the_answer_finishes(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_TWO),))
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-one-round", stream=True)
+
+    with _echo_tool_served():
+        stream: Final = await _open_chat_echo_stream(logging_obj)
+        async for chunk in stream:
+            if chunk.choices and chunk.choices[0].finish_reason is not None:
+                break
+        await _settled_once(lambda: len(recorder.logged) > 0)
+        logged_once_the_answer_finished: Final = recorder.logged
+        await _read_all(stream)
+        await _settled()
+
+    assert len(logged_once_the_answer_finished) == 1
+    assert recorder.logged == logged_once_the_answer_finished
+    assert recorder.logged[0]["id"] == _CHAT_ROUND_TWO["id"]
+    assert (recorder.logged[0]["prompt_tokens"], recorder.logged[0]["completion_tokens"]) == (149, 5)
+    assert recorder.logged[0]["response_cost"] == pytest.approx(_chat_round_cost(_CHAT_ROUND_TWO))
+    assert recorder.failed == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closes", (True, False), ids=("aclose", "dropped"))
+async def test_stream_auto_execute_bills_the_finished_first_round_when_the_caller_stops_reading_the_follow_up(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, closes: bool
+):
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), _streamed(_CHAT_ROUND_TWO)))
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-caller-stops", stream=True)
+
+    async def stop_reading_once_the_follow_up_answers() -> None:
+        stream: Final = await _open_chat_echo_stream(logging_obj)
+        await _read_until(stream, "PING")
+        if closes:
+            await stream.aclose()
+
+    with _echo_tool_served():
+        await stop_reading_once_the_follow_up_answers()
+        await _settled_once(lambda: len(recorder.logged) > 0)
+
+    _assert_one_row_bills_round_one(recorder.logged)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deferred_for_a_post_call_guardrail", [False, True])
+async def test_stream_auto_execute_bills_a_broken_follow_up_on_its_own_failure_row_with_no_second_fixed_margin(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, deferred_for_a_post_call_guardrail: bool
+):
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.utils import ProxyLogging, _failure_fields_to_lift
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), _cut_once_the_answer_starts()))
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-follow-up-breaks", stream=True)
+    request_data: Final = MappingProxyType({"litellm_logging_obj": logging_obj})
+
+    with _echo_tool_served():
+        stream: Final = await _open_chat_echo_stream(logging_obj)
+        if deferred_for_a_post_call_guardrail:
+            ProxyBaseLLMRequestProcessing(data={})._arm_deferred_stream_dispatch(
+                response=stream, route_type="acompletion", user_api_key_dict=MagicMock(), logging_obj=logging_obj
+            )
+        with pytest.raises(litellm.ServiceUnavailableError) as broken:
+            await _read_all(stream)
+    if not ProxyLogging._discard_deferred_stream_logging_for_failure(dict(request_data), broken.value):
+        ProxyLogging.fire_deferred_stream_logging(dict(request_data))
+    await _settled_once(lambda: len(recorder.logged) > 0 and len(recorder.failed) > 0)
+
+    _assert_one_row_bills_round_one(recorder.logged)
+    assert len(recorder.failed) == 1
+    failed: Final = recorder.failed[0]
+    unmargined: Final = (
+        litellm.completion_cost(
+            completion_response=ModelResponse(
+                model="gpt-5.6",
+                usage=Usage(
+                    prompt_tokens=failed["prompt_tokens"],
+                    completion_tokens=failed["completion_tokens"],
+                    total_tokens=failed["total_tokens"],
+                ),
+            ),
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+        )
+        - _FIXED_MARGIN
+    )
+    assert failed["completion_tokens"] > 0
+    assert failed["response_cost"] == pytest.approx(unmargined)
+    request_failure: Final = _failure_fields_to_lift(request_data)
+    assert cast(StandardLoggingPayload, request_failure["standard_logging_object"])["id"] != recorder.logged[0]["id"]
+    assert request_failure["response_cost"] == pytest.approx(unmargined)
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_leaves_no_deferred_log_armed_for_the_proxy_to_orphan_after_its_first_chunk(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), _streamed(_CHAT_ROUND_TWO)))
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-first-chunk-read-ahead", stream=True)
+
+    with _echo_tool_served():
+        stream: Final = await _open_chat_echo_stream(logging_obj)
+        rest: Final = stream.__aiter__()
+        first_chunk: Final = await rest.__anext__()
+        armed_after_the_first_chunk: Final = getattr(logging_obj, "_on_deferred_stream_complete", None)
+        chunks: Final = (first_chunk, *[chunk async for chunk in rest])
+    await _settled_once(lambda: len(recorder.logged) > 0)
+
+    assert armed_after_the_first_chunk is None
+    _assert_one_stream_row_bills_both_rounds_once(recorder.logged, chunks)
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_whose_follow_up_streams_nothing_still_bills_the_first_round_once(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    nothing_streamed: Final = Response(200, content=b"data: [DONE]\n\n", headers={"content-type": "text/event-stream"})
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), nothing_streamed))
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-empty-follow-up", stream=True)
+
+    with _echo_tool_served():
+        await _read_all(await _open_chat_echo_stream(logging_obj))
+    await _settled_once(lambda: len(recorder.logged) > 0)
+
+    _assert_one_row_bills_round_one(recorder.logged)
+
+
+async def _stream_read_until_the_follow_up_answers(
+    logging_obj: Logging, opened: "queue.SimpleQueue[CustomStreamWrapper]"
+) -> None:
+    stream: Final = await _open_chat_echo_stream(logging_obj)
+    await _read_until(stream, "PING")
+    opened.put(stream)
+
+
+_CHAT_STREAM_BILLING_NAMES: Final = ("MCPStreamingIterator", "ChatStreamRoundBilling", "_log_success")
+
+
+def _names_chat_stream_billing(text: str) -> bool:
+    return any(name in text for name in _CHAT_STREAM_BILLING_NAMES)
+
+
+class _UnraisableRecorder:
+    def __init__(self) -> None:
+        self.raised: tuple[str, ...] = ()
+
+    def __call__(self, unraisable: "sys.UnraisableHookArgs") -> None:
+        self.raised = (*self.raised, f"{unraisable.object!r}: {unraisable.exc_value!r}")
+
+
+def test_stream_auto_execute_dropped_after_its_event_loop_closed_discards_its_parked_log_cleanly(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), _streamed(_CHAT_ROUND_TWO)))
+    recorder: Final = _ChatRoundRecorder()
+    unraisable: Final = _UnraisableRecorder()
+    opened: Final = queue.SimpleQueue[CustomStreamWrapper]()
+    gc.collect()
+    monkeypatch.setattr(sys, "unraisablehook", unraisable)
+
+    with _echo_tool_served(), warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        asyncio.run(
+            _stream_read_until_the_follow_up_answers(
+                _chat_rounds_logging_obj(recorder, "mcp-chat-stream-loop-closed", stream=True), opened
+            )
+        )
+        opened.get_nowait()
+        gc.collect()
+
+    assert recorder.logged == ()
+    assert [raised for raised in unraisable.raised if _names_chat_stream_billing(raised)] == []
+    assert [str(warning.message) for warning in caught if _names_chat_stream_billing(str(warning.message))] == []

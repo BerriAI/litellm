@@ -950,6 +950,57 @@ def test_nonstream_failed_follow_up_bills_round_one_on_the_failure_row(
         )
 
 
+def _streamed_chunks(response: httpx.Response) -> tuple[dict[str, object], ...]:
+    return tuple(
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ") and line != "data: [DONE]"
+    )
+
+
+def test_streaming_chat_auto_execute_logs_the_answer_and_bills_both_rounds(gateway: Gateway) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND)
+    with _rig(gateway, "chat", billing=billing, prices=PRICES) as rig:
+        response: Final = rig.send(_granted_key(rig), [AUTO], stream=True, stream_options={"include_usage": True})
+        assert response.status_code == 200, response.text
+        chunks: Final = _streamed_chunks(response)
+        text: Final = "".join(
+            str(chunk["choices"][0]["delta"].get("content") or "") for chunk in chunks if chunk.get("choices")
+        )
+        assert text == ANSWER, response.text
+        usages: Final = tuple(chunk["usage"] for chunk in chunks if chunk.get("usage"))
+        assert usages, response.text
+        rows: Final = _spend_rows(response.headers["x-litellm-call-id"], "acompletion", "success")
+        assert len(rows) == 1, rows
+        row: Final = rows[0]
+        assert row["request_id"] == chunks[-1]["id"], (row, chunks[-1])
+        assert (row["prompt_tokens"], row["completion_tokens"]) == (
+            FIRST_ROUND[0] + FOLLOW_UP_ROUND[0],
+            FIRST_ROUND[1] + FOLLOW_UP_ROUND[1],
+        ), row
+        assert float(str(row["spend"])) == pytest.approx(_price(FIRST_ROUND, FOLLOW_UP_ROUND)), row
+        final_usage: Final = usages[-1]
+        assert (final_usage["prompt_tokens"], final_usage["completion_tokens"], final_usage["total_tokens"]) == (
+            row["prompt_tokens"],
+            row["completion_tokens"],
+            sum((*FIRST_ROUND, *FOLLOW_UP_ROUND)),
+        ), usages
+
+
+def test_streaming_chat_auto_execute_whose_follow_up_fails_bills_round_one_once(gateway: Gateway) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND, follow_up_fails=True)
+    with _rig(gateway, "chat", billing=billing, prices=PRICES) as rig:
+        response: Final = rig.send(_granted_key(rig), [AUTO], stream=True, stream_options={"include_usage": True})
+        assert FOLLOW_UP_OUTAGE in response.text, response.text
+        call_id: Final = response.headers["x-litellm-call-id"]
+        succeeded: Final = _spend_rows(call_id, "acompletion", "success")
+        assert len(succeeded) == 1, succeeded
+        assert (succeeded[0]["prompt_tokens"], succeeded[0]["completion_tokens"]) == FIRST_ROUND, succeeded
+        assert float(str(succeeded[0]["spend"])) == pytest.approx(_price(FIRST_ROUND)), succeeded
+        failed: Final = _spend_rows(call_id, "acompletion", "failure")
+        assert [float(str(row["spend"])) for row in failed] == [0.0], failed
+
+
 def _tool_rows(call_id: str, expected: int) -> list[dict[str, JsonValue]]:
     return eventually(
         lambda: read_rows(
