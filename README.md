@@ -660,7 +660,7 @@ This covers:
 
 We welcome contributions to LiteLLM! Whether you're fixing bugs, adding features, or improving documentation, we appreciate your help.
 
-[LiteLLM OSS Champions](https://www.litellm.ai/champions) is our program for trusted OSS contributors, who get their own Slack channel with our team, a voice in the roadmap, and exclusive swag
+[LiteLLM OSS Champions](https://www.litellm.ai/champions) is our program for trusted OSS contributors, who get their own Slack channel with our team and a voice in the roadmap
 
 ## Quick Start for Contributors
 
