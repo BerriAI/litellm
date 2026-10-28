@@ -7,6 +7,7 @@ from litellm.llms.bedrock.common_utils import(
     AmazonBedrockGlobalConfig,
     BedrockModelInfo,
     NativeOutputFallback,
+    bedrock_converse_supports_strict_tools,
     bedrock_native_output_is_opt_in,
     bedrock_strict_tools_fallback,
     deployment_model_info,
@@ -2166,6 +2167,7 @@ def test_bedrock_strict_tools_fallback_drops_only_strict_and_keeps_everything_el
     litellm_params: Final = {"drop_params": True}
 
     fallback: Final = bedrock_strict_tools_fallback(
+        "us.anthropic.claude-sonnet-4-6",
         {"tools": [strict_tool, plain_tool, anthropic_tool, bedrock_tool], "maxTokens": 16, "stream": True},
         litellm_params,
     )
@@ -2196,5 +2198,15 @@ def test_bedrock_strict_tools_fallback_drops_only_strict_and_keeps_everything_el
     ],
     ids=["no_tools", "no_strict_tool", "no_strict_tool_spec"],
 )
-def test_bedrock_strict_tools_fallback_is_none_without_a_strict_tool(optional_params):
-    assert bedrock_strict_tools_fallback(optional_params, {}) is None
+def test_bedrock_strict_tools_fallback_is_none_without_a_strict_tool(optional_params: dict[str, object]) -> None:
+    assert bedrock_strict_tools_fallback("us.anthropic.claude-sonnet-4-6", optional_params, {}) is None
+
+
+@pytest.mark.parametrize("model", ["us.anthropic.claude-sonnet-4-6", "us.amazon.nova-pro-v1:0"])
+@pytest.mark.parametrize("strict", [True, False])
+def test_bedrock_strict_tools_fallback_retries_only_when_strict_reaches_bedrock(model: str, strict: bool) -> None:
+    tool: Final = {"type": "function", "function": {"name": "lookup", "strict": strict, "parameters": {}}}
+
+    fallback: Final = bedrock_strict_tools_fallback(model, {"tools": [tool]}, {})
+
+    assert (fallback is not None) == (strict and bedrock_converse_supports_strict_tools(model))

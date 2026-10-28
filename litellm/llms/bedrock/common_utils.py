@@ -392,15 +392,24 @@ def _without_strict(tool: Mapping[str, object]) -> Mapping[str, object]:
     return {**tool, spec_key: {key: value for key, value in spec.items() if key != "strict"}}
 
 
+def _sends_strict(tool: Mapping[str, object], supports_strict_tools: bool) -> bool:
+    if "toolSpec" in tool:
+        return "strict" in _TOOL_SPEC_ADAPTER.validate_python(tool["toolSpec"])
+    if "function" not in tool:
+        return False
+    return supports_strict_tools and bool(_TOOL_SPEC_ADAPTER.validate_python(tool["function"]).get("strict"))
+
+
 def bedrock_strict_tools_fallback(
-    optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
 ) -> NativeOutputFallback | None:
     tools: Final = _TOOLS_ADAPTER.validate_python(optional_params.get("tools", ()))
-    tools_without_strict: Final = tuple(_without_strict(tool) for tool in tools)
-    if tools_without_strict == tools:
+    supports_strict_tools: Final = bedrock_converse_supports_strict_tools(model)
+    if not any(_sends_strict(tool, supports_strict_tools) for tool in tools):
         return None
     return NativeOutputFallback(
-        optional_params={**optional_params, "tools": list(tools_without_strict)}, litellm_params=litellm_params
+        optional_params={**optional_params, "tools": [_without_strict(tool) for tool in tools]},
+        litellm_params=litellm_params,
     )
 
 

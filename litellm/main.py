@@ -4385,7 +4385,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             ),
             converse_model,
             strict_tools_fallback=(
-                partial(bedrock_strict_tools_fallback, converse_params, dict(litellm_params))
+                partial(bedrock_strict_tools_fallback, converse_model, converse_params, dict(litellm_params))
                 if drops_unsupported_params(litellm_params.get("drop_params"))
                 else None
             ),
