@@ -54,6 +54,7 @@ from litellm.integrations.custom_guardrail import (
     without_server_streaming_classification,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     get_metadata_variable_name_from_kwargs,
@@ -150,6 +151,8 @@ from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
 from .upstream_usage_headers import (
     UpstreamReportedUsage,
+    apply_upstream_reported_model,
+    apply_upstream_reported_operation,
     apply_upstream_reported_usage,
 )
 
@@ -856,6 +859,7 @@ def _build_passthrough_failure_request_payload(
     logging_obj: LiteLLMLoggingObj | None,
     custom_llm_provider: str | None,
     upstream_usage: UpstreamReportedUsage | None = None,
+    upstream_model: str | None = None,
 ) -> dict:
     """Build the ``request_data`` dict passed to ``post_call_failure_hook``.
 
@@ -866,6 +870,8 @@ def _build_passthrough_failure_request_payload(
     ``upstream_usage`` carries the cost and tokens an upstream reported on an
     error response. Spend tracking only attributes a recovered cost when it
     comes paired with a usage object, so both keys are written together.
+    ``upstream_model`` is the model name the upstream reported, which replaces
+    the body's ``model`` on the failure row just as it does on a success row.
     """
     request_payload: Final[dict] = dict(cast(Mapping[str, object], parsed_body or {}))  # cast-ok: json body
     if kwargs:
@@ -879,6 +885,8 @@ def _build_passthrough_failure_request_payload(
     if upstream_usage is not None:
         request_payload["response_cost"] = upstream_usage.response_cost or 0.0
         request_payload["combined_usage_object"] = Usage(total_tokens=upstream_usage.total_tokens or 0)
+    if upstream_model is not None:
+        request_payload["model"] = upstream_model
     return request_payload
 
 
@@ -1128,6 +1136,7 @@ async def pass_through_request(
     guardrails_config: dict | None = None,
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
+    operation: GenAIOperation | None = None,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1149,6 +1158,7 @@ async def pass_through_request(
         timeout: Optional per-endpoint timeout in seconds. Falls back to
             general_settings.pass_through_request_timeout, then 600s.
         upstream_headers_filter: Optional last rewrite of the headers sent upstream, after x-pass- expansion
+        operation: Optional GenAI operation the route reports, unless the upstream names its own
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1347,6 +1357,8 @@ async def pass_through_request(
             call_type="pass_through_endpoint",
         )
         logging_obj.model_call_details["litellm_call_id"] = litellm_call_id
+        if operation is not None:
+            logging_obj.model_call_details[PASSTHROUGH_OPERATION_KEY] = operation
 
         ## PASSTHROUGH MANAGED ID RESOLUTION (INPUT) ##
         # Resolve managed IDs in path, query params, and body back to raw
@@ -1543,6 +1555,11 @@ async def pass_through_request(
                 logging_obj=logging_obj,
                 headers=response.headers,
             )
+            upstream_model = apply_upstream_reported_model(  # rebind-ok: bound once per branch, like upstream_usage
+                logging_obj=logging_obj,
+                headers=response.headers,
+            )
+            apply_upstream_reported_operation(logging_obj, response.headers)
 
             relay_response: Final = await _log_passthrough_upstream_failure(
                 response=response,
@@ -1553,6 +1570,7 @@ async def pass_through_request(
                     logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
                     upstream_usage=upstream_usage,
+                    upstream_model=upstream_model,
                 ),
                 logging_obj=logging_obj,
             )
@@ -1631,6 +1649,11 @@ async def pass_through_request(
             logging_obj=logging_obj,
             headers=response.headers,
         )
+        upstream_model = apply_upstream_reported_model(  # rebind-ok: bound once per branch, like upstream_usage
+            logging_obj=logging_obj,
+            headers=response.headers,
+        )
+        apply_upstream_reported_operation(logging_obj, response.headers)
 
         if _is_streaming_response(response) is True:
             logging_obj.stream = True
@@ -1645,6 +1668,7 @@ async def pass_through_request(
                     logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
                     upstream_usage=upstream_usage,
+                    upstream_model=upstream_model,
                 ),
                 logging_obj=logging_obj,
             )
@@ -1745,6 +1769,7 @@ async def pass_through_request(
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
             upstream_usage=upstream_usage,
+            upstream_model=upstream_model,
         )
         failure_request_payload["response_body"] = response_body
         await _log_passthrough_upstream_failure(
@@ -2144,6 +2169,7 @@ def create_pass_through_route(
     config_file_path: str | None = None,
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
+    operation: GenAIOperation | None = None,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -2284,6 +2310,7 @@ def create_pass_through_route(
                         guardrails_config=cast(dict | None, param_guardrails),
                         timeout=cast(float | None, param_timeout),
                         upstream_headers_filter=upstream_headers_filter,
+                        operation=operation,
                     )
                 finally:
                     if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
@@ -3215,6 +3242,7 @@ class InitPassThroughEndpointHelpers:
                 guardrails=guardrails,
                 config_file_path=config_file_path,
                 timeout=timeout,
+                operation=GenAIOperation.LITELLM_PASSTHROUGH,
             ),
             methods=methods,
             dependencies=dependencies,
@@ -3299,6 +3327,7 @@ class InitPassThroughEndpointHelpers:
                 guardrails=guardrails,
                 config_file_path=config_file_path,
                 timeout=timeout,
+                operation=GenAIOperation.LITELLM_PASSTHROUGH,
             ),
             methods=methods,
             dependencies=dependencies,

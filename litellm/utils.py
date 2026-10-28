@@ -7003,6 +7003,8 @@ def get_model_info_helper(
                 supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
                 supports_max_reasoning_effort=_model_info.get("supports_max_reasoning_effort", None),
                 reasoning_effort_levels=_model_info.get("reasoning_effort_levels", None),
+                reasoning_modes=_model_info.get("reasoning_modes", None),
+                reasoning_contexts=_model_info.get("reasoning_contexts", None),
                 default_reasoning_effort=_model_info.get("default_reasoning_effort", None),
                 bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
                 bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
@@ -9615,18 +9617,19 @@ class ProviderConfigManager:
             return litellm.HostedVLLMDecisionsConfig()
         if provider == LlmProviders.LM_STUDIO:
             return litellm.LMStudioDecisionsConfig()
+        if provider in (LlmProviders.OLLAMA, LlmProviders.OLLAMA_CHAT):
+            return litellm.OllamaDecisionsConfig()
         if provider == LlmProviders.LAYA:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
-        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE):
+        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI):
             configs: Final = {
                 LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
                 LlmProviders.AZURE: litellm.AzureDecisionsConfig,
+                LlmProviders.AZURE_AI: litellm.AzureAIDecisionsConfig,
             }
             return configs[provider]()
-        if provider == LlmProviders.AZURE_AI:
-            return litellm.AzureAIDecisionsConfig()
         return None
 
     @staticmethod
@@ -10639,6 +10642,7 @@ class ProviderConfigManager:
         from litellm.llms.serper.search.transformation import SerperSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
         from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
+        from litellm.llms.xai.search.transformation import XAISearchConfig
         from litellm.llms.you_com.search.transformation import YouComSearchConfig
 
         PROVIDER_TO_CONFIG_MAP: Final = {
@@ -10663,6 +10667,7 @@ class ProviderConfigManager:
             SearchProviders.NIMBLE: NimbleSearchConfig,
             SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
             SearchProviders.DEEPSEEK: DeepSeekSearchConfig,
+            SearchProviders.XAI: XAISearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

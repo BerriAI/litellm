@@ -761,13 +761,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
     def _create_initial_usage_delta(self) -> UsageDelta:
         """
-        Estimate prompt tokens for message_start without consuming upstream chunks.
+        Optionally estimate prompt tokens without consuming upstream chunks.
 
         Output and cache counts start at zero. Provider usage in message_delta
         remains authoritative. Failed estimates fall back to zero.
         """
         return UsageDelta(
-            input_tokens=self._estimate_initial_input_tokens(),
+            input_tokens=(
+                self._estimate_initial_input_tokens()
+                if litellm.anthropic_messages_estimate_initial_input_tokens is True
+                else 0
+            ),
             output_tokens=0,
             cache_creation_input_tokens=0,
             cache_read_input_tokens=0,

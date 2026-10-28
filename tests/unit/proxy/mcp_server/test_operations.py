@@ -834,6 +834,7 @@ async def test_tools_call_pre_call_hook_rejection_does_not_enforce_mcp_server_rp
     )
     rate_limit_error: Final = ProxyRateLimitError(detail="ordinary key rate limit")
     proxy_logging: Final = MagicMock()
+    proxy_logging.has_pre_call_guardrails.return_value = False
     proxy_logging.create_mcp_request_object_from_kwargs.return_value = {}
     proxy_logging.convert_mcp_to_llm_format.return_value = {}
     proxy_logging.pre_call_hook = AsyncMock(side_effect=rate_limit_error)

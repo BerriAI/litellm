@@ -1484,7 +1484,7 @@ async def test_concurrent_bridge_calls_use_their_own_served_metadata(monkeypatch
             ((tool.description, tool.input_schema) for tool in upstream), key=str
         )
         await manager.call_tool("bridge", "echo", {"probe": "bridge"}, user_api_key_auth=user, proxy_logging_obj=logger)
-        assert guardrail.calls[-1] == (None, None)
+        assert guardrail.calls[-1] == (upstream[0].description, upstream[0].input_schema)
         await manager._get_tools_from_server(
             server, user_api_key_auth=user, proxy_logging_obj=logger, record_listing=True
         )

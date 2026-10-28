@@ -13,6 +13,7 @@ the JSON-serialized payloads. ``trace_attributes`` maps the caller's trace contr
 import json
 from collections.abc import Callable
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Final
 
 from litellm.integrations.langfuse.langfuse_otel_attributes import serialize_langfuse_datetime
@@ -24,6 +25,7 @@ from litellm.integrations.otel.mappers.utils import (
     output_messages,
     serialize_messages,
 )
+from litellm.integrations.otel.model.metadata import IDENTITY_METADATA_FIELDS
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     LLMRequestParams,
@@ -37,6 +39,15 @@ LANGFUSE_TRACE_NAME: Final = "langfuse.trace.name"
 LANGFUSE_TRACE_USER_ID: Final = "user.id"
 LANGFUSE_TRACE_SESSION_ID: Final = "session.id"
 LANGFUSE_TRACE_TAGS: Final = "langfuse.trace.tags"
+LANGFUSE_OBSERVATION_METADATA: Final = "langfuse.observation.metadata"
+LANGFUSE_TRACE_METADATA_PREFIX: Final = "langfuse.trace.metadata."
+LANGFUSE_REQUEST_METADATA_ATTRIBUTES: Final[frozenset[str]] = frozenset(
+    {LANGFUSE_OBSERVATION_METADATA, *(f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}" for name in IDENTITY_METADATA_FIELDS)}
+)
+
+
+def _identity_field(name: str) -> Callable[[LLMCallSpanData], AttrValue | None]:
+    return lambda d: d.request_metadata.get(name)
 
 
 class LangfuseMapper:
@@ -51,6 +62,9 @@ class LangfuseMapper:
             serialize_langfuse_datetime(datetime.fromtimestamp(d.completion_start_seconds, tz=timezone.utc))
             if d.completion_start_seconds is not None
             else None
+        ),
+        **MappingProxyType(
+            {f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}": _identity_field(name) for name in IDENTITY_METADATA_FIELDS}
         ),
     }
 
@@ -75,6 +89,7 @@ class LangfuseMapper:
 
     # JSON-payload attributes: each builder returns the serialized blob or None.
     _BLOB_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
+        LANGFUSE_OBSERVATION_METADATA: lambda d: json_if(dict(d.request_metadata)),
         "langfuse.observation.model.parameters": lambda d: json_if(
             collect(LangfuseMapper._MODEL_PARAMS, d.request_params)
         ),

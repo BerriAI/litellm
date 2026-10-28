@@ -6760,6 +6760,7 @@ async def _run_upstream_reporting_passthrough(
     status_code: int = 200,
     cost_per_request: float | None = None,
     request_headers: Mapping[str, str] | None = None,
+    request_body: Mapping[str, object] | None = None,
 ) -> tuple[list[object], MagicMock]:
     """Drive a generic pass-through against an upstream that reports its own
     cost/usage. Returns (recorded standard logging payloads, proxy logging mock)."""
@@ -6775,13 +6776,14 @@ async def _run_upstream_reporting_passthrough(
     )
     try:
         with ExitStack() as stack:
-            mock_proxy_logging, enqueued = _enter_upstream_usage_mocks(stack, {})
+            mock_proxy_logging, enqueued = _enter_upstream_usage_mocks(stack, dict(request_body or {}))
             with _recording_success_callback() as recorder:
                 await pass_through_request(
                     request=_relay_client_request(method="POST", headers=request_headers),
                     target="http://internal-api.test/v1/summarize",
                     custom_headers={},
                     user_api_key_dict=UserAPIKeyAuth(api_key="sk-upstream-usage", team_id="team-fil"),
+                    custom_body=dict(request_body) if request_body else None,
                     cost_per_request=cost_per_request,
                 )
                 for coroutine in enqueued:
@@ -6880,12 +6882,72 @@ async def test_passthrough_error_response_without_usage_headers_records_no_spend
     assert "combined_usage_object" not in request_data
 
 
+_UPSTREAM_SUMMARIZER_HEADERS: Final = MappingProxyType(
+    {
+        "x-litellm-response-cost": "0.0123",
+        "x-litellm-total-tokens": "4210",
+        "x-litellm-upstream-model": "support-summarizer",
+    }
+)
+
+
 @pytest.mark.asyncio
-async def test_streaming_passthrough_records_cost_and_tokens_reported_by_upstream():
+@pytest.mark.parametrize("request_body", [None, {"model": "gpt-4o"}], ids=["no_body_model", "body_model"])
+async def test_passthrough_records_model_reported_by_upstream(request_body: Mapping[str, object] | None):
+    """A product endpoint takes no `model`, so without the header its spend lands
+    under `unknown`. The upstream's name wins over a body `model` too, and the
+    reported cost is kept even though the name is not in the price map."""
+    payloads, _ = await _run_upstream_reporting_passthrough(_UPSTREAM_SUMMARIZER_HEADERS, request_body=request_body)
+
+    assert len(payloads) == 1
+    logged: Final = cast(types_utils.StandardLoggingPayload, payloads[0])
+    assert (logged["model"], logged["response_cost"], logged["total_tokens"]) == (
+        "support-summarizer",
+        0.0123,
+        4210,
+    ), logged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_body", "expected_model"),
+    [(None, "unknown"), ({"model": "gpt-4o"}, "gpt-4o")],
+    ids=["no_body_model", "body_model"],
+)
+async def test_passthrough_without_model_header_keeps_request_model(
+    request_body: Mapping[str, object] | None, expected_model: str
+):
+    payloads, _ = await _run_upstream_reporting_passthrough(
+        {"x-litellm-response-cost": "0.0123", "x-litellm-total-tokens": "4210"}, request_body=request_body
+    )
+
+    assert len(payloads) == 1
+    assert cast(types_utils.StandardLoggingPayload, payloads[0])["model"] == expected_model, payloads[0]
+
+
+@pytest.mark.asyncio
+async def test_passthrough_records_upstream_reported_model_on_error_response():
+    import litellm
+
+    _, mock_proxy_logging = await _run_upstream_reporting_passthrough(
+        _UPSTREAM_SUMMARIZER_HEADERS, status_code=500, request_body={"model": "gpt-4o"}
+    )
+
+    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+    request_data: Final = mock_proxy_logging.post_call_failure_hook.await_args.kwargs["request_data"]
+    assert (request_data["model"], request_data["response_cost"], request_data["combined_usage_object"]) == (
+        "support-summarizer",
+        0.0123,
+        litellm.Usage(total_tokens=4210),
+    ), request_data
+
+
+@pytest.mark.asyncio
+async def test_streaming_passthrough_records_cost_tokens_and_model_reported_by_upstream():
     """
-    The totals are reported in the response headers, which are known before the
-    first byte of the stream, so a streamed pass-through must record the same
-    spend a buffered one does.
+    The totals and model name are reported in the response headers, which are
+    known before the first byte of the stream, so a streamed pass-through must
+    record the same spend and model a buffered one does.
     """
     from fastapi.responses import StreamingResponse
 
@@ -6898,6 +6960,7 @@ async def test_streaming_passthrough_records_cost_and_tokens_reported_by_upstrea
                 "content-type": "text/event-stream",
                 "x-litellm-response-cost": "0.00312",
                 "x-litellm-total-tokens": "4021",
+                "x-litellm-upstream-model": "support-summarizer",
             },
             stream=_RecordingUpstreamByteStream((b'data: {"delta": "hi"}\n\n',)),
         ),
@@ -6924,6 +6987,7 @@ async def test_streaming_passthrough_records_cost_and_tokens_reported_by_upstrea
     assert len(recorder.payloads) == 1
     assert recorder.payloads[0]["response_cost"] == 0.00312
     assert recorder.payloads[0]["total_tokens"] == 4021
+    assert recorder.payloads[0]["model"] == "support-summarizer"
 
 
 @pytest.mark.asyncio
