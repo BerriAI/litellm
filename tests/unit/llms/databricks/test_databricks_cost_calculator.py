@@ -255,9 +255,15 @@ def test_cost_per_token_bills_the_served_priority_tier(
     assert completion_cost == pytest.approx(40 * 0.002)
 
 
+RATES_WITHOUT_A_PRIORITY_FIELD: Final = frozenset({"input_cost_per_image_token"})
+
+
 def _is_standard_rate_key(key: str) -> bool:
-    return ("_cost_per_" in key or key.endswith("_token_cost")) and "dbu" not in key and not key.endswith(
-        ("_priority", "_flex", "_batches")
+    return (
+        ("_cost_per_" in key or key.endswith("_token_cost"))
+        and "dbu" not in key
+        and key not in RATES_WITHOUT_A_PRIORITY_FIELD
+        and not key.endswith(("_priority", "_flex", "_batches"))
     )
 
 

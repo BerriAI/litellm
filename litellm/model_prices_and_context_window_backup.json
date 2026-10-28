@@ -21594,7 +21594,6 @@
         "output_cost_per_token_priority": 3.37498e-06,
         "cache_read_input_token_cost_priority": 5.628e-08,
         "cache_creation_input_token_cost_priority": 5.6252e-07,
-        "input_cost_per_image_token_priority": 5.6252e-07,
         "input_cost_per_audio_token_priority": 1.12497e-06,
         "cache_read_input_audio_token_cost_priority": 1.1249e-07
     },
@@ -21729,7 +21728,6 @@
         "output_cost_per_token_priority": 6.75003e-06,
         "cache_read_input_token_cost_priority": 1.1249e-07,
         "cache_creation_input_token_cost_priority": 1.12497e-06,
-        "input_cost_per_image_token_priority": 1.12497e-06,
         "input_cost_per_audio_token_priority": 2.25001e-06,
         "cache_read_input_audio_token_cost_priority": 2.2498e-07
     },
