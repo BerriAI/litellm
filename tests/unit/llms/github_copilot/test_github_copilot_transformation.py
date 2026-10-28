@@ -178,6 +178,74 @@ def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
         litellm.disable_copilot_system_to_assistant = original_flag
 
 
+def test_transform_messages_flattens_text_only_system_content_list():
+    """Test that text-only content lists on system messages are flattened to a single string (fixes #48568)."""
+    import litellm
+    from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
+
+    config = GithubCopilotConfig()
+    original_flag = litellm.disable_copilot_system_to_assistant
+    try:
+        # Case 1: disable_copilot_system_to_assistant = True (role remains system)
+        litellm.disable_copilot_system_to_assistant = True
+        messages = [
+            {"role": "system", "content": [{"type": "text", "text": "You are a helpful assistant."}]},
+            {"role": "user", "content": "What is 2+2?"},
+        ]
+        out = config.transform_messages(messages, model="github_copilot/claude-sonnet-5")
+        assert out[0]["role"] == "system"
+        assert out[0]["content"] == "You are a helpful assistant."
+        assert out[1]["role"] == "user"
+
+        # Case 2: disable_copilot_system_to_assistant = False (role converted to assistant)
+        litellm.disable_copilot_system_to_assistant = False
+        out = config.transform_messages(messages, model="github_copilot/claude-sonnet-5")
+        assert out[0]["role"] == "assistant"
+        assert out[0]["content"] == "You are a helpful assistant."
+        assert out[1]["role"] == "user"
+    finally:
+        litellm.disable_copilot_system_to_assistant = original_flag
+
+
+def test_transform_messages_flattens_multiple_text_blocks_and_preserves_cache_control():
+    """Test multiple text blocks are joined and explicit cache_control is promoted to message level."""
+    from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
+
+    config = GithubCopilotConfig()
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "Part 1. "},
+                {"type": "text", "text": "Part 2.", "cache_control": {"type": "ephemeral"}},
+            ],
+        },
+        {"role": "user", "content": "Hello"},
+    ]
+    out = config.transform_messages(messages, model="github_copilot/claude-sonnet-5")
+    assert out[0]["content"] == "Part 1. Part 2."
+    assert out[0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_transform_messages_leaves_non_text_content_blocks_intact():
+    """Test non-text blocks (such as image_url) are left untouched as a list."""
+    from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
+
+    config = GithubCopilotConfig()
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "Describe image:"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/test.png"}},
+            ],
+        },
+    ]
+    out = config.transform_messages(messages, model="github_copilot/claude-sonnet-5")
+    assert isinstance(out[0]["content"], list)
+    assert len(out[0]["content"]) == 2
+
+
 def test_x_initiator_header_user_request():
     """Test that user-only messages result in X-Initiator: user header"""
     config = GithubCopilotConfig()
