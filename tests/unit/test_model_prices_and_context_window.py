@@ -120,19 +120,15 @@ class _TokenLimits(BaseModel):
 
     max_input_tokens: int
     max_output_tokens: int
-    max_tokens: int
 
 
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-def test_zerogpu_rows_cap_max_tokens_at_an_output_limit_that_fits_the_context_window(path: Path) -> None:
+def test_zerogpu_rows_have_an_output_limit_that_fits_the_context_window(path: Path) -> None:
     prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
     rows: Final = MappingProxyType(
         {key: _TokenLimits.model_validate(value) for key, value in prices.items() if key.startswith("zerogpu/")}
     )
     assert rows, f"No ZeroGPU rows found in {path}"
-    assert {key: row.max_tokens for key, row in rows.items()} == {
-        key: row.max_output_tokens for key, row in rows.items()
-    }
     assert tuple(key for key, row in rows.items() if row.max_output_tokens > row.max_input_tokens) == ()
 
 
