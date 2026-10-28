@@ -1016,6 +1016,8 @@ def test_model_group_info_reports_every_price_the_proxy_bills_at_the_highest_dep
                     "output_cost_per_image_2K": "Infinity",
                     "input_cost_per_token": "NaN",
                     "custom_tags": ["images"],
+                    "cost_center": 4021,
+                    "input_dbu_cost_per_token": 7e-07,
                 },
             },
             {
@@ -1057,6 +1059,7 @@ def test_model_group_info_reports_every_price_the_proxy_bills_at_the_highest_dep
         "output_cost_per_image_2K": None,
     }
     assert group["input_cost_per_token"] is None
+    assert (group.get("cost_center"), group.get("input_dbu_cost_per_token")) == (None, None)
 
 
 def test_model_group_info_lists_only_the_api_base_of_a_clientside_auth_param(

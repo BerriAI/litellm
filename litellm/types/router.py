@@ -982,13 +982,22 @@ def price_as_float(value: object) -> float | None:
         return None
     try:
         price: Final = float(value)
-    except ValueError:
+    except (ValueError, OverflowError):
         return None
     return price if math.isfinite(price) else None
 
 
+def _outprices(price: float, listed: object) -> bool:
+    listed_price: Final = price_as_float(listed)
+    return listed_price is None or price > listed_price
+
+
+def is_usd_price_key(key: str) -> bool:
+    return ("cost_per_" in key or "token_cost" in key) and "_dbu_" not in key
+
+
 def model_info_prices(model_info: Mapping[str, object]) -> Mapping[str, float]:
-    candidates: Final = ((key, price_as_float(value)) for key, value in model_info.items() if "cost" in key)
+    candidates: Final = ((key, price_as_float(value)) for key, value in model_info.items() if is_usd_price_key(key))
     return MappingProxyType({key: price for key, price in candidates if price is not None})
 
 
@@ -1042,22 +1051,16 @@ class ModelGroupInfo(LiteLLMBaseModel):
         if not isinstance(data, Mapping):
             return data
         fields: Final = _RAW_FIELDS.validate_python(data)
-        declared: Final = {key: value for key, value in fields.items() if key in cls.model_fields and "cost" not in key}
+        field_names: Final = cls.model_fields.keys()
+        declared: Final = {
+            key: value for key, value in fields.items() if key in field_names and not is_usd_price_key(key)
+        }
         return {**declared, **model_info_prices(fields)}
 
-    @property
-    def prices(self) -> Mapping[str, float]:
-        return model_info_prices({**vars(self), **self.__pydantic_extra__})
-
-    def with_higher_prices(self, model_info: Mapping[str, object]) -> "ModelGroupInfo":
-        current: Final = self.prices
-        return self.model_copy(
-            update={
-                key: price
-                for key, price in model_info_prices(model_info).items()
-                if key not in current or price > current[key]
-            }
-        )
+    def with_higher_prices(self, prices: Mapping[str, float]) -> "ModelGroupInfo":
+        listed: Final[Mapping[str, object]] = {**vars(self), **self.__pydantic_extra__}
+        higher: Final = {key: price for key, price in prices.items() if _outprices(price, listed.get(key))}
+        return self.model_copy(update=higher) if higher else self
 
 
 class AssistantsTypedDict(TypedDict):

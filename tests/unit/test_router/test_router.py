@@ -2509,7 +2509,6 @@ def test_model_group_info_reports_every_price_at_the_highest_across_deployments(
             "input_cost_per_token_priority": 6e-06,
             "input_cost_per_token_above_272k_tokens": 4e-06,
             "input_cost_per_token_batches": 1e-06,
-            "input_dbu_cost_per_token": 7e-07,
         },
     )
     router: Final = litellm.Router(
@@ -2523,6 +2522,9 @@ def test_model_group_info_reports_every_price_at_the_highest_across_deployments(
                     "output_cost_per_video_per_second": "free",
                     "output_cost_per_second": "inf",
                     "search_context_cost_per_query": {"search_context_size_low": 0.01},
+                    "input_dbu_cost_per_token": 7e-07,
+                    "cost_center": 4021,
+                    "cost_allocation_pct": "30",
                 },
             }
             for index in deployment_order
@@ -2539,13 +2541,15 @@ def test_model_group_info_reports_every_price_at_the_highest_across_deployments(
         "input_cost_per_token_priority": 6e-06,
         "input_cost_per_token_above_272k_tokens": 8e-06,
         "input_cost_per_token_batches": 1e-06,
-        "input_dbu_cost_per_token": 7e-07,
     }
     assert reported.keys().isdisjoint(
         {
             "output_cost_per_video_per_second",
             "output_cost_per_second",
             "search_context_cost_per_query",
+            "input_dbu_cost_per_token",
+            "cost_center",
+            "cost_allocation_pct",
             "litellm_provider",
             "key",
             "id",
@@ -2560,14 +2564,18 @@ def test_model_group_info_lists_cost_map_prices_outside_the_typed_model_info(mon
         "output_cost_per_image": 0.08,
         "output_cost_per_image_0.5K": 0.06,
         "output_cost_per_image_4K": 0.16,
-        "input_dbu_cost_per_token": 0.0002,
     }
     monkeypatch.setattr(
         litellm,
         "model_cost",
         {
             **litellm.model_cost,
-            "made-up-resolution-model": {"litellm_provider": "openai", "mode": "image_generation", **cost_map_prices},
+            "made-up-resolution-model": {
+                "litellm_provider": "openai",
+                "mode": "image_generation",
+                **cost_map_prices,
+                "input_dbu_cost_per_token": 0.0002,
+            },
         },
     )
     _invalidate_model_cost_lowercase_map()
@@ -2585,6 +2593,7 @@ def test_model_group_info_lists_cost_map_prices_outside_the_typed_model_info(mon
     assert info is not None
     reported: Final = info.model_dump()
     assert {key: reported.get(key) for key in cost_map_prices} == cost_map_prices
+    assert "input_dbu_cost_per_token" not in reported
 
 
 def test_model_group_info_still_validates_from_attributes():
@@ -2945,6 +2954,7 @@ def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selecto
         ("Infinity", None),
         ("-inf", None),
         (float("nan"), None),
+        (10**400, None),
     ],
 )
 def test_price_as_float(value: object, expected: float | None):

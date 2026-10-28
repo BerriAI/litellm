@@ -511,10 +511,10 @@ RouterStrategySelector: TypeAlias = (
 )
 
 
-def _cost_map_prices(model_info: Mapping[str, object]) -> Mapping[str, float]:
+def _deployment_prices(model_info: Mapping[str, object]) -> Mapping[str, float]:
     cost_map_key: Final = model_info.get("key")
     entry: Final = raw_cost_map_entry(cost_map_key) if isinstance(cost_map_key, str) else None
-    return model_info_prices(entry) if entry is not None else MappingProxyType({})
+    return model_info_prices(model_info if entry is None else {**entry, **model_info})
 
 
 def model_info_is_active_for_environment(model_info: Mapping[str, object] | None) -> bool:
@@ -12592,8 +12592,8 @@ class Router:
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
                         "description": model_group_description,
-                        **_cost_map_prices(model_info),
                         **model_info,
+                        **_deployment_prices(model_info),
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
                         "supported_endpoints": None,
@@ -12627,7 +12627,7 @@ class Router:
                     )
                 ):
                     model_group_info.max_output_tokens = model_info["max_output_tokens"]
-                model_group_info = model_group_info.with_higher_prices({**_cost_map_prices(model_info), **model_info})
+                model_group_info = model_group_info.with_higher_prices(_deployment_prices(model_info))
                 if (
                     model_info.get("supports_parallel_function_calling", None) is not None
                     and model_info["supports_parallel_function_calling"] is True
