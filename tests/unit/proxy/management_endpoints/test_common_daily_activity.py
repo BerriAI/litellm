@@ -2551,3 +2551,84 @@ async def test_get_daily_activity_rejects_non_canonical_dates_before_querying(st
     assert error.value.detail == {"error": "start_date and end_date must be valid YYYY-MM-DD dates"}
     mock_table.count.assert_not_awaited()
     mock_table.find_many.assert_not_awaited()
+
+
+@pytest.mark.parametrize("missing", [None, ""])
+def test_missing_dimensions_preserve_all_paginated_metrics(missing: str | None) -> None:
+    records: Final = (
+        _daily_user_spend_record(user_id="user", api_key="", spend=-0.25, model=missing, model_group=missing),
+        _daily_user_spend_record(user_id="user", api_key="", spend=0.0, model=missing, model_group=missing),
+    )
+    result: Final = common_daily_activity_module._aggregate_spend_records_sync(
+        records=records, api_key_metadata={}, entity_id_field="user_id", entity_metadata_field=None
+    )
+    day: Final = result["results"][0]
+    assert day.metrics == result["totals"]
+    for bucket in (
+        day.breakdown.models["unknown-model"],
+        day.breakdown.model_groups["unknown-model-group"],
+        day.breakdown.providers["openai"],
+        day.breakdown.endpoints["/chat/completions"],
+        day.breakdown.entities["user"],
+    ):
+        assert bucket.metrics == day.metrics
+        assert bucket.api_key_breakdown == day.breakdown.api_keys
+    key: Final = day.breakdown.api_keys["unattributed"]
+    assert key.metrics == day.metrics
+    assert key.metadata.model_dump(exclude_none=True) == {"key_alias": "Unattributed", "key_exists": False}
+
+
+def test_normalized_rollups_add_colliding_model_metrics_and_keep_key_identities() -> None:
+    records: Final = (
+        _grouping_row(common_daily_activity_module._GROUP_DATE_MODEL, model=None, spend=1.0),
+        _grouping_row(common_daily_activity_module._GROUP_DATE_MODEL, model="", spend=2.0),
+        _grouping_row(common_daily_activity_module._GROUP_DATE_MODEL, model="unknown-model", spend=3.0),
+        _grouping_row(common_daily_activity_module._GROUP_DATE_MODEL_API_KEY, model=None, api_key="", spend=1.0),
+        _grouping_row(common_daily_activity_module._GROUP_DATE_MODEL_API_KEY, model="", api_key="", spend=2.0),
+        _grouping_row(
+            common_daily_activity_module._GROUP_DATE_MODEL_API_KEY,
+            model="unknown-model",
+            api_key="unattributed",
+            spend=3.0,
+        ),
+        _grouping_row(common_daily_activity_module._GROUP_DATE_API_KEY, api_key="", spend=3.0),
+        _grouping_row(common_daily_activity_module._GROUP_DATE_API_KEY, api_key="unattributed", spend=3.0),
+        _grouping_row(common_daily_activity_module._GROUP_DATE_API_KEY, api_key="raw:unattributed", spend=4.0),
+    )
+    result: Final = common_daily_activity_module._aggregate_grouping_sets_records_sync(
+        records=records, api_key_metadata={}
+    )
+    breakdown: Final = result["results"][0].breakdown
+    assert breakdown.models["unknown-model"].metrics.spend == 6.0
+    assert {key: value.metrics.spend for key, value in breakdown.models["unknown-model"].api_key_breakdown.items()} == {
+        "unattributed": 3.0,
+        "raw:unattributed": 3.0,
+    }
+    assert {key: value.metrics.spend for key, value in breakdown.api_keys.items()} == {
+        "unattributed": 3.0,
+        "raw:unattributed": 3.0,
+        "raw:raw:unattributed": 4.0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "group", "expected_group"),
+    [
+        (None, None, "unknown-model-group"),
+        ("", "", "unknown-model-group"),
+        (None, "configured-group", "configured-group"),
+        ("provider-model", "", "provider-model"),
+        ("unknown-model", "", "unknown-model"),
+        (" ", "", " "),
+    ],
+)
+def test_model_group_uses_raw_model_before_unknown_group(
+    model: str | None, group: str | None, expected_group: str
+) -> None:
+    result: Final = common_daily_activity_module._aggregate_spend_records_sync(
+        records=(_daily_user_spend_record(user_id="user", api_key="key", spend=1.0, model=model, model_group=group),),
+        api_key_metadata={},
+        entity_id_field=None,
+        entity_metadata_field=None,
+    )
+    assert tuple(result["results"][0].breakdown.model_groups) == (expected_group,)

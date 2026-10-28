@@ -22,6 +22,7 @@ from litellm.proxy.spend_tracking.key_metadata_recovery import (
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.daily_activity_buckets import api_key_bucket, model_bucket, model_group_bucket
 from litellm.repositories.daily_activity_repository import DailyActivityRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BreakdownMetrics,
@@ -176,7 +177,9 @@ class _AggregatedSpendData(TypedDict):
     totals: ReadOnly[SpendMetrics]
 
 
-def _key_metadata(api_key_metadata: Mapping[str, KeyMetadataRow], api_key: str) -> KeyMetadata:
+def _key_metadata(api_key_metadata: Mapping[str, KeyMetadataRow], api_key: str | None) -> KeyMetadata:
+    if not api_key:
+        return KeyMetadata(key_alias="Unattributed", key_exists=False)
     meta: Final = api_key_metadata.get(api_key)
     return KeyMetadata(
         key_alias=meta.key_alias if meta is not None else None,
@@ -296,13 +299,14 @@ def update_breakdown_metrics(
     parent bucket but never appear as an api_key row, and are kept out of the
     per-request provider breakdown."""
 
+    api_key: Final = api_key_bucket(record.api_key)
     is_ptu_sentinel: Final = record.api_key == PTU_SENTINEL_API_KEY
 
     # A PTU sentinel row keys on the deployment id so a rename cannot move it, and carries
     # the operator-facing name in model_group. The breakdown key is rendered directly as a
     # label, so display the name; two deployments sharing one name merge here, which is
     # what the write path used to do by collapsing them into a single row.
-    model_key: Final = (record.model_group or record.model) if is_ptu_sentinel else record.model
+    model_key: Final = (record.model_group or record.model) if is_ptu_sentinel else model_bucket(record.model)
 
     # Update model breakdown
     if model_key and model_key not in breakdown.models:
@@ -315,18 +319,18 @@ def update_breakdown_metrics(
 
         if not is_ptu_sentinel:
             # Update API key breakdown for this model
-            if record.api_key not in breakdown.models[model_key].api_key_breakdown:
-                breakdown.models[model_key].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
+            if api_key not in breakdown.models[model_key].api_key_breakdown:
+                breakdown.models[model_key].api_key_breakdown[api_key] = KeyMetricWithMetadata(
                     metrics=SpendMetrics(),
                     metadata=_key_metadata(api_key_metadata, record.api_key),
                 )
-            breakdown.models[model_key].api_key_breakdown[record.api_key].metrics = update_metrics(
-                breakdown.models[model_key].api_key_breakdown[record.api_key].metrics,
+            breakdown.models[model_key].api_key_breakdown[api_key].metrics = update_metrics(
+                breakdown.models[model_key].api_key_breakdown[api_key].metrics,
                 record,
             )
 
     # Update model group breakdown
-    model_group_key: Final = record.model_group or record.model
+    model_group_key: Final = model_group_bucket(record.model_group, record.model)
     if model_group_key and model_group_key not in breakdown.model_groups:
         breakdown.model_groups[model_group_key] = MetricWithMetadata(
             metrics=SpendMetrics(),
@@ -339,13 +343,13 @@ def update_breakdown_metrics(
 
         if not is_ptu_sentinel:
             # Update API key breakdown for this model
-            if record.api_key not in breakdown.model_groups[model_group_key].api_key_breakdown:
-                breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
+            if api_key not in breakdown.model_groups[model_group_key].api_key_breakdown:
+                breakdown.model_groups[model_group_key].api_key_breakdown[api_key] = KeyMetricWithMetadata(
                     metrics=SpendMetrics(),
                     metadata=_key_metadata(api_key_metadata, record.api_key),
                 )
-            breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key].metrics = update_metrics(
-                breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key].metrics,
+            breakdown.model_groups[model_group_key].api_key_breakdown[api_key].metrics = update_metrics(
+                breakdown.model_groups[model_group_key].api_key_breakdown[api_key].metrics,
                 record,
             )
 
@@ -360,18 +364,16 @@ def update_breakdown_metrics(
         )
 
         # Update API key breakdown for this MCP server
-        if record.api_key not in breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown:
-            breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[record.api_key] = (
-                KeyMetricWithMetadata(
-                    metrics=SpendMetrics(),
-                    metadata=_key_metadata(api_key_metadata, record.api_key),
-                )
+        if api_key not in breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown:
+            breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[api_key] = KeyMetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata=_key_metadata(api_key_metadata, record.api_key),
             )
 
         breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[
             record.api_key
         ].metrics = update_metrics(
-            breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[record.api_key].metrics,
+            breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[api_key].metrics,
             record,
         )
 
@@ -386,13 +388,13 @@ def update_breakdown_metrics(
         breakdown.providers[provider].metrics = update_metrics(breakdown.providers[provider].metrics, record)
 
         # Update API key breakdown for this provider
-        if record.api_key not in breakdown.providers[provider].api_key_breakdown:
-            breakdown.providers[provider].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
+        if api_key not in breakdown.providers[provider].api_key_breakdown:
+            breakdown.providers[provider].api_key_breakdown[api_key] = KeyMetricWithMetadata(
                 metrics=SpendMetrics(),
                 metadata=_key_metadata(api_key_metadata, record.api_key),
             )
-        breakdown.providers[provider].api_key_breakdown[record.api_key].metrics = update_metrics(
-            breakdown.providers[provider].api_key_breakdown[record.api_key].metrics,
+        breakdown.providers[provider].api_key_breakdown[api_key].metrics = update_metrics(
+            breakdown.providers[provider].api_key_breakdown[api_key].metrics,
             record,
         )
 
@@ -408,24 +410,24 @@ def update_breakdown_metrics(
         )
 
         # Update API key breakdown for this endpoint
-        if record.api_key not in breakdown.endpoints[record.endpoint].api_key_breakdown:
-            breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
+        if api_key not in breakdown.endpoints[record.endpoint].api_key_breakdown:
+            breakdown.endpoints[record.endpoint].api_key_breakdown[api_key] = KeyMetricWithMetadata(
                 metrics=SpendMetrics(),
                 metadata=_key_metadata(api_key_metadata, record.api_key),
             )
-        breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key].metrics = update_metrics(
-            breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key].metrics,
+        breakdown.endpoints[record.endpoint].api_key_breakdown[api_key].metrics = update_metrics(
+            breakdown.endpoints[record.endpoint].api_key_breakdown[api_key].metrics,
             record,
         )
 
     if not is_ptu_sentinel:
         # Update api key breakdown
-        if record.api_key not in breakdown.api_keys:
-            breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(
+        if api_key not in breakdown.api_keys:
+            breakdown.api_keys[api_key] = KeyMetricWithMetadata(
                 metrics=SpendMetrics(),
                 metadata=_key_metadata(api_key_metadata, record.api_key),
             )
-        breakdown.api_keys[record.api_key].metrics = update_metrics(breakdown.api_keys[record.api_key].metrics, record)
+        breakdown.api_keys[api_key].metrics = update_metrics(breakdown.api_keys[api_key].metrics, record)
 
     # Update entity-specific metrics if entity_id_field is provided
     if entity_id_field:
@@ -439,13 +441,13 @@ def update_breakdown_metrics(
 
         if not is_ptu_sentinel:
             # Update API key breakdown for this entity
-            if record.api_key not in breakdown.entities[entity_value].api_key_breakdown:
-                breakdown.entities[entity_value].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
+            if api_key not in breakdown.entities[entity_value].api_key_breakdown:
+                breakdown.entities[entity_value].api_key_breakdown[api_key] = KeyMetricWithMetadata(
                     metrics=SpendMetrics(),
                     metadata=_key_metadata(api_key_metadata, record.api_key),
                 )
-            breakdown.entities[entity_value].api_key_breakdown[record.api_key].metrics = update_metrics(
-                breakdown.entities[entity_value].api_key_breakdown[record.api_key].metrics,
+            breakdown.entities[entity_value].api_key_breakdown[api_key].metrics = update_metrics(
+                breakdown.entities[entity_value].api_key_breakdown[api_key].metrics,
                 record,
             )
 
@@ -709,6 +711,28 @@ _GROUP_DATE_ENDPOINT: Final = 62  # 0b0111110
 _GROUP_DATE_ENDPOINT_API_KEY: Final = 30  # 0b0011110
 
 
+def sum_spend_metrics(metrics: Sequence[SpendMetrics]) -> SpendMetrics:
+    return SpendMetrics(
+        spend=sum(metric.spend for metric in metrics),
+        flat_cost=sum(metric.flat_cost for metric in metrics),
+        prompt_tokens=sum(metric.prompt_tokens for metric in metrics),
+        completion_tokens=sum(metric.completion_tokens for metric in metrics),
+        cache_read_input_tokens=sum(metric.cache_read_input_tokens for metric in metrics),
+        cache_creation_input_tokens=sum(metric.cache_creation_input_tokens for metric in metrics),
+        compression_saved_tokens=sum(metric.compression_saved_tokens for metric in metrics),
+        compression_savings_spend=sum(metric.compression_savings_spend for metric in metrics),
+        prompt_caching_savings_spend=sum(metric.prompt_caching_savings_spend for metric in metrics),
+        gateway_injected_caching_savings_spend=sum(metric.gateway_injected_caching_savings_spend for metric in metrics),
+        autorouter_savings_spend=sum(metric.autorouter_savings_spend for metric in metrics),
+        total_tokens=sum(metric.total_tokens for metric in metrics),
+        successful_requests=sum(metric.successful_requests for metric in metrics),
+        failed_requests=sum(metric.failed_requests for metric in metrics),
+        api_requests=sum(metric.api_requests for metric in metrics),
+        total_response_time_ms=sum(metric.total_response_time_ms for metric in metrics),
+        timed_requests=sum(metric.timed_requests for metric in metrics),
+    )
+
+
 def _record_to_spend_metrics(record: RollupMetricsRow) -> SpendMetrics:
     """Build a SpendMetrics directly from one already-aggregated rollup row.
 
@@ -765,20 +789,23 @@ def _aggregate_grouping_sets_records_sync(
         if existing is None:
             target[key] = MetricWithMetadata(metrics=metrics, metadata={})
         else:
-            existing.metrics = metrics
+            existing.metrics = sum_spend_metrics((existing.metrics, metrics))
 
     def assign_api_key_breakdown(
         target: dict[str, MetricWithMetadata],
         parent_key: str,
-        api_key: str,
+        api_key: str | None,
         metrics: SpendMetrics,
     ) -> None:
         parent = target.get(parent_key)
         if parent is None:
             parent = MetricWithMetadata(metrics=SpendMetrics(), metadata={})
             target[parent_key] = parent
-        parent.api_key_breakdown[api_key] = KeyMetricWithMetadata(
-            metrics=metrics, metadata=_key_metadata(api_key_metadata, api_key)
+        bucket_key: Final = api_key_bucket(api_key)
+        previous: Final = parent.api_key_breakdown.get(bucket_key)
+        parent.api_key_breakdown[bucket_key] = KeyMetricWithMetadata(
+            metrics=sum_spend_metrics((previous.metrics, metrics)) if previous is not None else metrics,
+            metadata=_key_metadata(api_key_metadata, api_key),
         )
 
     for record in records:
@@ -797,25 +824,23 @@ def _aggregate_grouping_sets_records_sync(
         breakdown = ensure_date(record.date)["breakdown"]
 
         if level == _GROUP_DATE_API_KEY:
-            if record.api_key and not is_ptu_sentinel:
-                breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(
+            if not is_ptu_sentinel:
+                breakdown.api_keys[api_key_bucket(record.api_key)] = KeyMetricWithMetadata(
                     metrics=metrics,
                     metadata=_key_metadata(api_key_metadata, record.api_key),
                 )
         elif level == _GROUP_DATE_MODEL:
-            if record.model:
-                assign_metric_with_metadata(breakdown.models, record.model, metrics)
+            assign_metric_with_metadata(breakdown.models, model_bucket(record.model), metrics)
         elif level == _GROUP_DATE_MODEL_API_KEY:
-            if record.model and record.api_key and not is_ptu_sentinel:
-                assign_api_key_breakdown(breakdown.models, record.model, record.api_key, metrics)
+            if not is_ptu_sentinel:
+                assign_api_key_breakdown(breakdown.models, model_bucket(record.model), record.api_key, metrics)
         elif level == _GROUP_DATE_MODEL_GROUP:
-            if record.model_group:
-                assign_metric_with_metadata(breakdown.model_groups, record.model_group, metrics)
+            assign_metric_with_metadata(breakdown.model_groups, model_group_bucket(record.model_group, None), metrics)
         elif level == _GROUP_DATE_MODEL_GROUP_API_KEY:
-            if record.model_group and record.api_key and not is_ptu_sentinel:
+            if not is_ptu_sentinel:
                 assign_api_key_breakdown(
                     breakdown.model_groups,
-                    record.model_group,
+                    model_group_bucket(record.model_group, None),
                     record.api_key,
                     metrics,
                 )
@@ -830,14 +855,14 @@ def _aggregate_grouping_sets_records_sync(
             provider = record.custom_llm_provider or "unknown"
             assign_metric_with_metadata(breakdown.providers, provider, provider_metrics)
         elif level == _GROUP_DATE_PROVIDER_API_KEY:
-            if record.api_key and not is_ptu_sentinel:
+            if not is_ptu_sentinel:
                 provider = record.custom_llm_provider or "unknown"
                 assign_api_key_breakdown(breakdown.providers, provider, record.api_key, metrics)
         elif level == _GROUP_DATE_MCP:
             if record.mcp_namespaced_tool_name:
                 assign_metric_with_metadata(breakdown.mcp_servers, record.mcp_namespaced_tool_name, metrics)
         elif level == _GROUP_DATE_MCP_API_KEY:
-            if record.mcp_namespaced_tool_name and record.api_key:
+            if record.mcp_namespaced_tool_name and not is_ptu_sentinel:
                 assign_api_key_breakdown(
                     breakdown.mcp_servers,
                     record.mcp_namespaced_tool_name,
@@ -848,7 +873,7 @@ def _aggregate_grouping_sets_records_sync(
             if record.endpoint:
                 assign_metric_with_metadata(breakdown.endpoints, record.endpoint, metrics)
         elif level == _GROUP_DATE_ENDPOINT_API_KEY:
-            if record.endpoint and record.api_key:
+            if record.endpoint and not is_ptu_sentinel:
                 assign_api_key_breakdown(breakdown.endpoints, record.endpoint, record.api_key, metrics)
 
     results: Final = [
@@ -1007,8 +1032,8 @@ def _fold_entity_rollups_sync(
         metrics = _record_to_spend_metrics(row)
         if row.api_key_rolled:
             bucket.metrics = metrics
-        elif row.api_key and row.api_key != PTU_SENTINEL_API_KEY:
-            bucket.api_key_breakdown[row.api_key] = KeyMetricWithMetadata(
+        elif row.api_key != PTU_SENTINEL_API_KEY:
+            bucket.api_key_breakdown[api_key_bucket(row.api_key)] = KeyMetricWithMetadata(
                 metrics=metrics, metadata=_key_metadata(api_key_metadata, row.api_key)
             )
 

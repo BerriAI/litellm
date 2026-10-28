@@ -8,11 +8,13 @@ from typing import Final
 from typing_extensions import assert_never
 
 from litellm import constants
-from litellm.constants import PTU_SENTINEL_API_KEY
+from litellm.constants import PTU_SENTINEL_API_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
+from litellm.repositories.daily_activity_buckets import UNKNOWN_MODEL_GROUP
 from litellm.types.repositories.daily_activity import DailyActivityScope, DailyActivityTable, ExportType
 
 _API_KEY_ROLLED_UP_BIT: Final = 32
-_MODEL_GROUP_EXPR: Final = "COALESCE(NULLIF(model_group, ''), model)"
+_MODEL_EXPR: Final = f"COALESCE(NULLIF(model, ''), '{UNKNOWN_MODEL_SPEND_LOG_MODEL}')"
+_MODEL_GROUP_EXPR: Final = f"COALESCE(NULLIF(model_group, ''), NULLIF(model, ''), '{UNKNOWN_MODEL_GROUP}')"
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,13 +164,13 @@ def build_aggregated_sql(scope: DailyActivityScope, *, api_key_limit: int) -> Sq
         (SELECT
             date,
             NULL::text AS api_key,
-            model,
+            {_MODEL_EXPR} AS model,
             {_MODEL_GROUP_EXPR} AS model_group,
             custom_llm_provider,
             mcp_namespaced_tool_name,
             endpoint,
             (GROUPING(date) << 6) | {_API_KEY_ROLLED_UP_BIT}
-                | GROUPING(model, {_MODEL_GROUP_EXPR},
+                | GROUPING({_MODEL_EXPR}, {_MODEL_GROUP_EXPR},
                            custom_llm_provider, mcp_namespaced_tool_name,
                            endpoint) AS group_level,
             NULL::bigint AS distinct_api_keys,{metric_select}
@@ -176,7 +178,7 @@ def build_aggregated_sql(scope: DailyActivityScope, *, api_key_limit: int) -> Sq
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
             (date),
-            (date, model),
+            (date, {_MODEL_EXPR}),
             (date, {_MODEL_GROUP_EXPR}),
             (date, custom_llm_provider),
             (date, mcp_namespaced_tool_name),
@@ -190,12 +192,12 @@ def build_aggregated_sql(scope: DailyActivityScope, *, api_key_limit: int) -> Sq
         SELECT
             date,
             api_key,
-            model,
+            {_MODEL_EXPR} AS model,
             {_MODEL_GROUP_EXPR} AS model_group,
             custom_llm_provider,
             mcp_namespaced_tool_name,
             endpoint,
-            GROUPING(date, api_key, model, {_MODEL_GROUP_EXPR},
+            GROUPING(date, api_key, {_MODEL_EXPR}, {_MODEL_GROUP_EXPR},
                      custom_llm_provider, mcp_namespaced_tool_name,
                      endpoint) AS group_level,
             MAX(top_api_keys.distinct_api_keys) AS distinct_api_keys,{metric_select}
@@ -203,7 +205,7 @@ def build_aggregated_sql(scope: DailyActivityScope, *, api_key_limit: int) -> Sq
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
             (date, api_key),
-            (date, model, api_key),
+            (date, {_MODEL_EXPR}, api_key),
             (date, {_MODEL_GROUP_EXPR}, api_key),
             (date, custom_llm_provider, api_key),
             (date, mcp_namespaced_tool_name, api_key),
