@@ -337,6 +337,21 @@ def _create_ssl_context(
 def get_ssl_verify(
     ssl_verify: bool | str | None = None,
 ) -> bool | str:
+    """resolve_ssl_verify, refusing disabled TLS verification under LITELLM_FIPS_MODE."""
+    resolved: Final = resolve_ssl_verify(ssl_verify)
+    if resolved is not False:
+        return resolved
+
+    from litellm.proxy.common_utils.fips import TLS_VERIFICATION_DISABLED, FipsModeError, is_fips_mode
+
+    if is_fips_mode():
+        raise FipsModeError(TLS_VERIFICATION_DISABLED)
+    return resolved
+
+
+def resolve_ssl_verify(
+    ssl_verify: bool | str | None = None,
+) -> bool | str:
     """
     Common utility to resolve the SSL verification setting.
     Prioritizes:
@@ -369,16 +384,6 @@ def get_ssl_verify(
         ssl_cert_file: Final = os.getenv("SSL_CERT_FILE")
         if ssl_cert_file and os.path.exists(ssl_cert_file):
             return ssl_cert_file
-
-    if ssl_verify is False:
-        from litellm.proxy.common_utils.fips import FIPS_MODE_ENV_VAR, FipsModeError, is_fips_mode
-
-        if is_fips_mode():
-            raise FipsModeError(
-                f"{FIPS_MODE_ENV_VAR} is on but TLS certificate verification is disabled by SSL_VERIFY, "
-                "litellm_settings.ssl_verify or a model's ssl_verify. Remove the override, or point ssl_verify at a "
-                "CA bundle."
-            )
 
     return ssl_verify if ssl_verify is not None else True
 

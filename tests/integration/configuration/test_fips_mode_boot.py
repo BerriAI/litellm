@@ -58,5 +58,7 @@ def test_fips_mode_refuses_to_start_on_a_value_that_is_not_a_boolean(gateway: Ga
 
 def test_fips_mode_off_starts_with_tls_verification_disabled(gateway: Gateway, tmp_path: Path) -> None:
     config: Final = _config(tmp_path, gateway.upstream_url, ssl_verify=False)
-    with owned_proxy(gateway, tmp_path, {"SSL_VERIFY": "false"}, config=config) as proxy:
+    with owned_proxy(
+        gateway, tmp_path, {"SSL_VERIFY": "false"}, config=config, remove_environment=("LITELLM_FIPS_MODE",)
+    ) as proxy:
         assert proxy.client.get("/health/readiness").status_code == 200

@@ -1,5 +1,6 @@
 import _hashlib
 from contextlib import nullcontext
+from typing import Final
 from unittest.mock import Mock
 
 import pytest
@@ -18,20 +19,20 @@ from litellm.proxy.common_utils.fips import (
 )
 
 
-def _fake_openssl(monkeypatch, *, fips_flag: int, md5_refused: bool) -> None:
-    real_new = _hashlib.new
+def _fake_openssl(monkeypatch: pytest.MonkeyPatch, *, fips_flag: int, md5_refused: bool) -> None:
+    real_new: Final = _hashlib.new
 
-    def new(name, data=b"", **kwargs):
+    def new(name: str, data: bytes = b"", *, usedforsecurity: bool = True) -> _hashlib.HASH:
         if name == "md5" and md5_refused:
             raise _hashlib.UnsupportedDigestmodError("unsupported hash type")
-        return real_new(name, data, **kwargs)
+        return real_new(name, data, usedforsecurity=usedforsecurity)
 
     monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: fips_flag)
     monkeypatch.setattr(_hashlib, "new", new)
 
 
 @pytest.mark.parametrize("value, expected", [("true", True), (" TRUE ", True), ("false", False), (None, False)])
-def test_is_fips_mode(monkeypatch, value, expected):
+def test_is_fips_mode(monkeypatch: pytest.MonkeyPatch, value: str | None, expected: bool) -> None:
     if value is None:
         monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
     else:
@@ -44,12 +45,14 @@ def test_is_fips_mode(monkeypatch, value, expected):
     [(1, True, True), (0, True, False), (1, False, False)],
     ids=["fips", "fips-flag-off", "md5-allowed"],
 )
-def test_openssl_enforces_fips_needs_the_fips_flag_and_a_refused_md5(monkeypatch, fips_flag, md5_refused, enforces):
+def test_openssl_enforces_fips_needs_the_fips_flag_and_a_refused_md5(
+    monkeypatch: pytest.MonkeyPatch, fips_flag: int, md5_refused: bool, enforces: bool
+) -> None:
     _fake_openssl(monkeypatch, fips_flag=fips_flag, md5_refused=md5_refused)
     assert openssl_enforces_fips() is enforces
 
 
-def test_openssl_without_get_fips_mode_does_not_enforce_fips(monkeypatch):
+def test_openssl_without_get_fips_mode_does_not_enforce_fips(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delattr(_hashlib, "get_fips_mode")
     assert openssl_enforces_fips() is False
 
@@ -60,23 +63,28 @@ def test_openssl_without_get_fips_mode_does_not_enforce_fips(monkeypatch):
     ids=["fips", "fips-flag-off", "sha256-broken"],
 )
 def test_cryptography_enforces_fips_needs_the_fips_flag_and_a_working_sha256(
-    monkeypatch, fips_enabled, sha256_broken, enforces
-):
+    monkeypatch: pytest.MonkeyPatch, fips_enabled: bool, sha256_broken: bool, enforces: bool
+) -> None:
     monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: fips_enabled)
     if sha256_broken:
         monkeypatch.setattr(hashes, "Hash", Mock(side_effect=InternalError("Unknown OpenSSL error", [])))
     assert cryptography_enforces_fips() is enforces
 
 
-def test_cryptography_without_is_fips_enabled_does_not_enforce_fips(monkeypatch):
+def test_cryptography_without_is_fips_enabled_does_not_enforce_fips(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delattr(rust_openssl, "is_fips_enabled")
     assert cryptography_enforces_fips() is False
 
 
-def test_this_runners_openssl_does_not_enforce_fips():
+def test_this_runners_python_openssl_does_not_enforce_fips() -> None:
     if _hashlib.get_fips_mode() == 1:
-        pytest.skip("this runner's OpenSSL is in FIPS mode")
+        pytest.skip("this runner's Python OpenSSL is in FIPS mode")
     assert openssl_enforces_fips() is False
+
+
+def test_this_runners_cryptography_openssl_does_not_enforce_fips() -> None:
+    if rust_openssl.is_fips_enabled():
+        pytest.skip("this runner's cryptography OpenSSL is in FIPS mode")
     assert cryptography_enforces_fips() is False
 
 
@@ -106,8 +114,14 @@ def test_this_runners_openssl_does_not_enforce_fips():
     ],
 )
 def test_enforce_fips_mode(
-    monkeypatch, fips_mode, ssl_verify_env, ssl_verify_setting, openssl_fips, cryptography_fips, refusal
-):
+    monkeypatch: pytest.MonkeyPatch,
+    fips_mode: str | None,
+    ssl_verify_env: str | None,
+    ssl_verify_setting: bool,
+    openssl_fips: bool,
+    cryptography_fips: bool,
+    refusal: str | None,
+) -> None:
     for name, value in (("LITELLM_FIPS_MODE", fips_mode), ("SSL_VERIFY", ssl_verify_env)):
         if value is None:
             monkeypatch.delenv(name, raising=False)
@@ -122,7 +136,9 @@ def test_enforce_fips_mode(
 
 
 @pytest.mark.parametrize("fips_mode, refused", [("true", True), ("false", False)], ids=["fips", "fips-off"])
-def test_a_model_that_turns_tls_verification_off_is_refused_in_fips_mode(monkeypatch, fips_mode, refused):
+def test_a_model_that_turns_tls_verification_off_is_refused_in_fips_mode(
+    monkeypatch: pytest.MonkeyPatch, fips_mode: str, refused: bool
+) -> None:
     monkeypatch.setenv("LITELLM_FIPS_MODE", fips_mode)
     with pytest.raises(FipsModeError, match="or a model's ssl_verify") if refused else nullcontext():
         assert get_ssl_verify(ssl_verify=False) is False

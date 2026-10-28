@@ -4,6 +4,10 @@ from typing import Final
 from litellm.secret_managers.main import str_to_bool
 
 FIPS_MODE_ENV_VAR: Final = "LITELLM_FIPS_MODE"
+TLS_VERIFICATION_DISABLED: Final = (
+    f"{FIPS_MODE_ENV_VAR} is on but TLS certificate verification is disabled by SSL_VERIFY, "
+    "litellm_settings.ssl_verify or a model's ssl_verify. Remove the override, or point ssl_verify at a CA bundle."
+)
 
 
 class FipsModeError(Exception):
@@ -47,26 +51,35 @@ def cryptography_enforces_fips() -> bool:
     return True
 
 
-def enforce_fips_mode() -> None:
-    """Refuse to start when LITELLM_FIPS_MODE is not a boolean, or is on but TLS verification is off
-    or Python's or the cryptography library's OpenSSL does not enforce FIPS."""
+def fips_mode_refusal() -> str | None:
+    """Why the proxy must not start: LITELLM_FIPS_MODE is not a boolean, or is on but TLS verification is off
+    or Python's or the cryptography library's OpenSSL does not enforce FIPS. None when it may start."""
     value: Final = os.getenv(FIPS_MODE_ENV_VAR)
     if value and str_to_bool(value) is None:
-        raise FipsModeError(f"{FIPS_MODE_ENV_VAR}={value!r} is not a boolean. Set it to true or false, or unset it.")
+        return f"{FIPS_MODE_ENV_VAR}={value!r} is not a boolean. Set it to true or false, or unset it."
     if not is_fips_mode():
-        return
+        return None
 
-    from litellm.llms.custom_httpx.http_handler import get_ssl_verify
+    from litellm.llms.custom_httpx.http_handler import resolve_ssl_verify
 
-    get_ssl_verify()  # raises FipsModeError when SSL_VERIFY or litellm_settings.ssl_verify turns verification off
+    if resolve_ssl_verify() is False:
+        return TLS_VERIFICATION_DISABLED
     if not openssl_enforces_fips():
-        raise FipsModeError(
+        return (
             f"{FIPS_MODE_ENV_VAR} is on but OpenSSL does not enforce FIPS. Run the proxy on an OpenSSL with "
             f"its FIPS provider active and default_properties = fips=yes, or unset {FIPS_MODE_ENV_VAR}."
         )
     if not cryptography_enforces_fips():
-        raise FipsModeError(
+        return (
             f"{FIPS_MODE_ENV_VAR} is on but the cryptography library's OpenSSL has no working FIPS provider. Build it "
             "against the system OpenSSL (pip install --no-binary cryptography cryptography), or unset "
             f"{FIPS_MODE_ENV_VAR}."
         )
+    return None
+
+
+def enforce_fips_mode() -> None:
+    """Raise FipsModeError with the fips_mode_refusal reason, if there is one."""
+    refusal: Final = fips_mode_refusal()
+    if refusal is not None:
+        raise FipsModeError(refusal)
