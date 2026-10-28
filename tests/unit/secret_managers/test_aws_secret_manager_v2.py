@@ -664,3 +664,16 @@ async def test_end_to_end_iam_role_secret_write():
             print("Delete Response:", delete_response)
         except Exception as e:
             print(f"Cleanup failed: {e}")
+
+
+def test_missing_botocore_keeps_dependency_identity():
+    from unittest.mock import patch
+
+    import pytest
+
+    from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
+
+    with patch.dict("sys.modules", {"botocore": None}):
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3") as caught:
+            AWSSecretsManagerV2()._prepare_request(action="GetSecretValue", secret_name="test-secret")
+    assert caught.value.name == "botocore"

@@ -169,9 +169,13 @@ def strategy_router_dependencies(
                 else ()
             )
             + (
-                _named(
-                    f"{accounting_provider}/{decision_classifier.get('model', 'jev-latest')}",
-                    "evaluation",
+                (
+                    _named(decision_classifier.get("deployment_name"), "classifier")
+                    if decision_classifier.get("deployment_name")
+                    else _named(
+                        f"{accounting_provider}/{decision_classifier.get('model', 'jev-latest')}",
+                        "evaluation",
+                    )
                 )
                 if complexity.get("classifier_type") == "oss_classifier"
                 else ()

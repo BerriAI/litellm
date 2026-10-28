@@ -467,7 +467,7 @@ async def get_cache_settings(
         if prisma_client is not None:
             cache_config = await _cache_config_table(prisma_client).find_unique(where={"id": "cache_config"})
             if cache_config is not None and cache_config.cache_settings:
-                stored = proxy_config._decrypt_db_variables(
+                stored = proxy_config.decrypt_db_variables(  # rebind-ok: pre-existing rebinding on a rename-only line
                     variables_dict=_parse_stored_settings(cache_config.cache_settings)
                 )
 
@@ -534,8 +534,10 @@ async def test_cache_connection(
             try:
                 existing_row: Final = await _cache_config_table(prisma_client).find_unique(where={"id": "cache_config"})
                 if existing_row is not None and existing_row.cache_settings:
-                    saved_settings = proxy_config._decrypt_db_variables(
-                        variables_dict=_parse_stored_settings(existing_row.cache_settings)
+                    saved_settings = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                        proxy_config.decrypt_db_variables(
+                            variables_dict=_parse_stored_settings(existing_row.cache_settings)
+                        )
                     )
             except Exception:  # noqa: BLE001 - a saved-settings lookup failure must not block a connection test
                 saved_settings = {}
@@ -614,7 +616,9 @@ async def update_cache_settings(
         saved_settings: dict[str, object] = {}
         if existing_row is not None and existing_row.cache_settings:
             before_settings = _parse_stored_settings(existing_row.cache_settings)
-            saved_settings = proxy_config._decrypt_db_variables(variables_dict=before_settings)
+            saved_settings = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                proxy_config.decrypt_db_variables(variables_dict=before_settings)
+            )
         action: Final[AUDIT_ACTIONS] = "updated" if existing_row is not None else "created"
 
         # Preserve stored secrets behind any redacted or omitted credential, then
@@ -622,7 +626,7 @@ async def update_cache_settings(
         cache_settings: Final = _resolve_cache_url_precedence(_merge_over_saved(request.cache_settings, saved_settings))
 
         # Encrypt sensitive fields (keep redis_type for storage)
-        encrypted_settings: Final = proxy_config._encrypt_env_variables(environment_variables=cache_settings)
+        encrypted_settings: Final = proxy_config.encrypt_env_variables(environment_variables=cache_settings)
 
         # Save to database
         await _cache_config_table(prisma_client).upsert(
@@ -640,13 +644,13 @@ async def update_cache_settings(
 
         # Reinitialize cache with new settings
         # Decrypt for initialization
-        decrypted_settings: Final = proxy_config._decrypt_db_variables(variables_dict=encrypted_settings)
+        decrypted_settings: Final = proxy_config.decrypt_db_variables(variables_dict=encrypted_settings)
 
         # Remove redis_type if present (UI-only field, not a Cache parameter)
         cache_params: Final = {k: v for k, v in decrypted_settings.items() if k != "redis_type"}
 
         # Initialize cache (frontend sends type="redis", not redis_type)
-        proxy_config._init_cache(cache_params=cache_params)
+        proxy_config.init_cache(cache_params=cache_params)
 
         # Update the last cache params to avoid reinitializing unnecessarily
         CacheSettingsManager.update_cache_params(cache_params)

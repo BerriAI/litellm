@@ -3,6 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginModeProvider } from "@/contexts/PluginModeContext";
+import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
 import { DashboardHeader } from "./DashboardHeader";
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/ui/logs" }));
@@ -57,7 +58,9 @@ async function openTools() {
   render(
     <QueryClientProvider client={client}>
       <PluginModeProvider accessToken="test-session">
-        <DashboardHeader />
+        <CommandPaletteProvider>
+          <DashboardHeader accessToken={null} />
+        </CommandPaletteProvider>
       </PluginModeProvider>
     </QueryClientProvider>,
   );
@@ -71,7 +74,7 @@ describe("mobile header nested controls", () => {
     "selects a portalled gateway item with %s without dismissing More",
     async (pointer) => {
       const { user, tools } = await openTools();
-      await user.click(within(tools).getByRole("button", { name: "AI Gateway" }));
+      await user.click(within(tools).getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
       const item = await screen.findByRole("menuitem", { name: "Metrics" });
       if (pointer === "touch") {
         await user.pointer([
@@ -81,7 +84,7 @@ describe("mobile header nested controls", () => {
       } else {
         await user.click(item);
       }
-      expect(within(tools).getByRole("button", { name: "Metrics" })).toBeVisible();
+      expect(within(tools).getByRole("button", { name: "Switch workspace, current: Metrics" })).toBeVisible();
       expect(screen.getByRole("dialog", { name: "Gateway tools" })).toBeVisible();
     },
   );

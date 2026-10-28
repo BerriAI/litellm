@@ -168,6 +168,25 @@ def test_transform_includes_tools():
     assert tools[0]["toolSpec"]["inputSchema"]["json"]["type"] == "object"
 
 
+def test_transform_maps_chat_function_tools():
+    parameters = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+    request = {
+        "model": "amazon.nova-pro-v1:0",
+        "messages": [{"role": "user", "content": "Weather in Paris?"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "description": "Look up the weather", "parameters": parameters},
+            }
+        ],
+    }
+
+    result = BedrockCountTokensConfig().transform_anthropic_to_bedrock_count_tokens(request)
+
+    assert result["input"]["converse"]["toolConfig"]["tools"] == [
+        {"toolSpec": {"name": "get_weather", "description": "Look up the weather", "inputSchema": {"json": parameters}}}
+    ]
+
 def test_transform_includes_system_and_tools_together():
     """Test that both system and tools are included together."""
     config = BedrockCountTokensConfig()

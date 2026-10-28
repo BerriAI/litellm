@@ -454,8 +454,8 @@ def test_every_pre_call_customlogger_is_deliberately_classified():
         "_PROXY_SensitiveDataRoutingHandler",
         "ResponsesIDSecurity",
         "SkillsInjectionHook",
-        "PROXY_LiteLLMManagedFiles",
-        "PROXY_LiteLLMManagedVectorStores",
+        "_PROXY_LiteLLMManagedFiles",
+        "_PROXY_LiteLLMManagedVectorStores",
     }
 
     from litellm.proxy.hooks import PROXY_HOOKS
@@ -464,8 +464,8 @@ def test_every_pre_call_customlogger_is_deliberately_classified():
     for name, cls in (
         ("banned_keywords", _load("enterprise.enterprise_hooks.banned_keywords", "ENTERPRISE_BannedKeywords")),
         ("blocked_user_check", _load("enterprise.enterprise_hooks.blocked_user_list", "ENTERPRISE_BlockedUserList")),
-        ("detect_prompt_injection", _load("litellm.proxy.hooks.prompt_injection_detection", "_OPTIONAL_PromptInjectionDetection")),
-        ("azure_content_safety", _load("litellm.proxy.hooks.azure_content_safety", "_PROXY_AzureContentSafety")),
+        ("detect_prompt_injection", _load("litellm.proxy.hooks.prompt_injection_detection", "OPTIONAL_PromptInjectionDetection")),
+        ("azure_content_safety", _load("litellm.proxy.hooks.azure_content_safety", "PROXY_AzureContentSafety")),
     ):
         if cls is not None:
             registered[name] = cls

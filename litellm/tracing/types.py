@@ -1,6 +1,57 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 
+from pydantic import ConfigDict, Field
 from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
+
+
+class TraceAgent(LiteLLMBaseModel):
+    """One agent seen in the caller's traces, for picking which agent's runs to look at."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    runs: int = Field(ge=0)
+    failed_runs: int = Field(ge=0)
+    last_seen: datetime
+    frameworks: tuple[str, ...] = ()
+
+
+class TraceAgentList(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    agents: tuple[TraceAgent, ...]
+
+
+class SpendLogPayload(TypedDict, total=False):
+    id: ReadOnly[str | None]
+    litellm_call_id: ReadOnly[str | None]
+    call_type: ReadOnly[str | None]
+    metadata: ReadOnly[Mapping[str, object] | None]
+    hidden_params: ReadOnly[Mapping[str, object] | None]
+    end_user: ReadOnly[str | None]
+    model: ReadOnly[str | None]
+    model_group: ReadOnly[str | None]
+    model_id: ReadOnly[str | None]
+    custom_llm_provider: ReadOnly[str | None]
+    api_base: ReadOnly[str | None]
+    response_cost: ReadOnly[float | None]
+    prompt_tokens: ReadOnly[int | None]
+    completion_tokens: ReadOnly[int | None]
+    total_tokens: ReadOnly[int | None]
+    startTime: ReadOnly[float | None]
+    endTime: ReadOnly[float | None]
+    completionStartTime: ReadOnly[float | None]
+    status: ReadOnly[str | None]
+    error_str: ReadOnly[str | None]
+    cache_hit: ReadOnly[bool | None]
+    session_id: ReadOnly[str | None]
+    trace_id: ReadOnly[str | None]
+    request_tags: ReadOnly[Sequence[object] | None]
+    messages: ReadOnly[object]
+    response: ReadOnly[object]
 
 
 class SpendLogRecord(TypedDict):
