@@ -160,7 +160,7 @@ async def test_image_generation_rejects_non_integer_retries_before_sending(is_as
             base_url="https://image.test/v1",
             http_client=httpx.AsyncClient(transport=transport),
         ) as client:
-            with pytest.raises(litellm.UnprocessableEntityError) as raised:
+            with pytest.raises(litellm.BadRequestError) as raised:
                 await litellm.aimage_generation(
                     model="openai/gpt-image-1-mini",
                     prompt="a red circle",
@@ -175,7 +175,7 @@ async def test_image_generation_rejects_non_integer_retries_before_sending(is_as
             base_url="https://image.test/v1",
             http_client=httpx.Client(transport=transport),
         ) as client:
-            with pytest.raises(litellm.UnprocessableEntityError) as raised:
+            with pytest.raises(litellm.BadRequestError) as raised:
                 litellm.image_generation(
                     model="openai/gpt-image-1-mini",
                     prompt="a red circle",
@@ -184,7 +184,8 @@ async def test_image_generation_rejects_non_integer_retries_before_sending(is_as
                     client=client,
                     max_retries="invalid",
                 )
-    assert raised.value.status_code == 422
+    assert raised.value.status_code == 400
+    assert "max retries must be an int" in raised.value.message
     assert requests.qsize() == 0
 
 
