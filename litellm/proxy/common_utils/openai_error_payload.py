@@ -2,6 +2,7 @@
 ``type`` is a required string and ``param`` is nullable, neither of which the literal
 string ``"None"`` satisfies."""
 
+import sys
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
@@ -10,7 +11,8 @@ from fastapi import HTTPException, status
 
 from litellm.constants import STRINGIFIED_NONE
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, exception_chain
 
 LITELLM_CALL_ID_HEADER: Final = "x-litellm-call-id"
 
@@ -68,20 +70,38 @@ def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyExcept
     match exc:
         case ProxyException():
             return exc
-        case HTTPException(status_code=status_code, detail=detail):
-            return _openai_shaped_proxy_exception(exc, str(detail), status_code)
         case _ if _is_database_outage(exc):
             return ProxyException(
-                message=str(exc),
+                message=PrismaDBExceptionHandler.database_unavailable_message(exc),
                 type=ProxyErrorTypes.no_db_connection.value,
                 param=None,
                 code=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
+        case HTTPException(status_code=status_code, detail=detail):
+            return _openai_shaped_proxy_exception(exc, str(detail), status_code)
         case _:
             return _openai_shaped_proxy_exception(exc, str(exc), default_status_code)
 
 
 def _is_database_outage(exc: Exception) -> bool:
+    return any(map(_is_database_outage_link, exception_chain(exc)))
+
+
+def _is_database_outage_link(exc: BaseException) -> bool:
+    match exc:
+        case DBLookupDeadlineExceeded():
+            return True
+        case Exception() if _prisma_is_loaded():
+            return _is_prisma_outage(exc)
+        case _:
+            return False
+
+
+def _prisma_is_loaded() -> bool:
+    return sys.modules.get("prisma") is not None
+
+
+def _is_prisma_outage(exc: Exception) -> bool:
     if PrismaDBExceptionHandler.is_prisma_engine_internal_error(exc):
         return True
     raised_by_prisma: Final = type(exc).__module__.partition(".")[0] == "prisma"
@@ -98,9 +118,10 @@ def _openai_shaped_proxy_exception(exc: Exception, message: str, status_code: in
 
 
 def _catch_all_error_type(exc: Exception, status_code: int) -> str:
-    if error_status_code(exc, status_code) in _AUTH_FAILURE_STATUS_CODES:
+    failure_status: Final = error_status_code(exc, status_code)
+    if failure_status in _AUTH_FAILURE_STATUS_CODES:
         return ProxyErrorTypes.auth_error.value
-    return openai_error_type(exc, status_code)
+    return openai_error_type(exc, failure_status)
 
 
 def litellm_call_id_headers(litellm_call_id: str | None) -> dict[str, str] | None:  # mutable-ok: ProxyException.headers

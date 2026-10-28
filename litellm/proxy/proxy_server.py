@@ -20900,7 +20900,7 @@ async def get_config(
         }
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.get_config(): Exception occured - %s", e)
-        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
+        raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
 @router.get(

@@ -3838,7 +3838,7 @@ async def test_update_config_reports_an_unsupported_router_setting_as_a_request_
 
 
 @pytest.mark.asyncio
-async def test_get_config_callbacks_reports_an_unreadable_config_as_a_request_error_not_an_auth_error(monkeypatch):
+async def test_get_config_callbacks_reports_an_unreadable_config_as_a_server_error_not_an_auth_error(monkeypatch):
     from litellm.proxy import proxy_server
     from litellm.proxy._types import ProxyException
     from litellm.proxy.proxy_server import get_config
@@ -3850,7 +3850,7 @@ async def test_get_config_callbacks_reports_an_unreadable_config_as_a_request_er
     with pytest.raises(ProxyException) as exc_info:
         await get_config(user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN))
 
-    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert (exc_info.value.code, exc_info.value.type) == ("500", "internal_server_error")
     assert exc_info.value.message == "config row is not valid YAML"
 
 
@@ -3896,3 +3896,49 @@ async def test_model_list_return_wildcard_routes_defaults_to_general_setting(
 
     assert "gpt-6.1-sol" in listed, listed
     assert ("openai/*" in listed) is wildcard_listed, listed
+
+
+@pytest.mark.asyncio
+async def test_queue_request_labels_an_upstream_outage_a_server_error_not_an_auth_error(monkeypatch):
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import async_queue_request
+
+    body = json.dumps({"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "hi"}]}).encode()
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/queue/chat/completions",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "root_path": "",
+        },
+        receive,
+    )
+    router = MagicMock()
+    router.split_request_priority.return_value = (None, {})
+    router.schedule_acompletion = AsyncMock(
+        side_effect=litellm.ServiceUnavailableError(
+            message="upstream overloaded", llm_provider="openai", model="gpt-5.4-mini"
+        )
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await async_queue_request(
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "internal_server_error")

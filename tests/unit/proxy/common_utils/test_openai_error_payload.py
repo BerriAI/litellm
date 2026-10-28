@@ -1,4 +1,5 @@
 import json
+import sys
 
 import httpx
 import prisma.errors
@@ -9,6 +10,7 @@ from prisma.engine.utils import handle_response_errors
 
 import litellm
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     litellm_call_id_headers,
@@ -314,3 +316,87 @@ def test_a_network_failure_outside_the_database_is_not_reported_as_a_database_ou
     wrapped = proxy_exception_for(callback_unreachable, default_status_code=500)
 
     assert (wrapped.code, wrapped.type) == ("500", "internal_server_error")
+
+
+def _add_member_failing_with(db_error: Exception) -> None:
+    try:
+        raise db_error
+    except Exception as e:
+        raise ValueError(f"Error adding member to organization: {e}")
+
+
+@pytest.mark.parametrize(
+    "underlying_error, expected",
+    [
+        (prisma.errors.PrismaError("Can't reach database server at `db:5432`"), ("503", "no_db_connection")),
+        (httpx.ConnectError("[Errno 111] Connection refused"), ("500", "internal_server_error")),
+    ],
+)
+def test_a_route_that_rewraps_its_error_keeps_the_database_outage_it_wrapped(
+    underlying_error: Exception, expected: tuple[str, str]
+):
+    with pytest.raises(ValueError, match="Error adding member") as raised:
+        _add_member_failing_with(underlying_error)
+
+    wrapped = proxy_exception_for(raised.value, default_status_code=500)
+
+    assert (wrapped.code, wrapped.type) == expected
+
+
+def test_a_proxy_without_prisma_installed_still_answers_with_an_error_object(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setitem(sys.modules, "prisma", None)
+
+    wrapped = proxy_exception_for(httpx.ConnectError("[Errno 111] Connection refused"), default_status_code=500)
+
+    assert (wrapped.code, wrapped.type) == ("500", "internal_server_error")
+
+
+def _look_up_team_failing_with(lookup_error: Exception) -> None:
+    try:
+        raise lookup_error
+    except Exception:
+        raise HTTPException(status_code=404, detail="Team doesn't exist in db")
+
+
+@pytest.mark.parametrize(
+    "lookup_error, expected",
+    [
+        (DBLookupDeadlineExceeded("team", 10.0), ("503", "no_db_connection")),
+        (prisma.errors.PrismaError("Can't reach database server at `db:5432`"), ("503", "no_db_connection")),
+        (KeyError("team_id"), ("404", "invalid_request_error")),
+    ],
+)
+def test_a_not_found_answer_raised_while_the_database_was_down_reports_the_outage(
+    lookup_error: Exception, expected: tuple[str, str]
+):
+    with pytest.raises(HTTPException) as raised:
+        _look_up_team_failing_with(lookup_error)
+
+    wrapped = proxy_exception_for(raised.value, default_status_code=400)
+
+    assert (wrapped.code, wrapped.type) == expected
+
+
+def test_a_lookup_that_missed_its_deadline_answers_503():
+    wrapped = proxy_exception_for(DBLookupDeadlineExceeded("team", 10.0), default_status_code=400)
+
+    assert (wrapped.code, wrapped.type) == ("503", "no_db_connection")
+
+
+def test_a_database_outage_answer_does_not_reveal_where_the_database_lives():
+    wrapped = proxy_exception_for(
+        prisma.errors.PrismaError("Can't reach database server at `prod-db.internal:5432`"), default_status_code=400
+    )
+
+    assert wrapped.code == "503"
+    assert "prod-db.internal" not in wrapped.message
+
+
+def test_an_upstream_failure_is_labelled_by_its_own_status_not_the_routes_default():
+    upstream_overloaded = litellm.ServiceUnavailableError(
+        message="upstream overloaded", llm_provider="openai", model="gpt-5.4-mini"
+    )
+
+    wrapped = proxy_exception_for(upstream_overloaded, default_status_code=400)
+
+    assert (wrapped.code, wrapped.type) == ("400", "internal_server_error")

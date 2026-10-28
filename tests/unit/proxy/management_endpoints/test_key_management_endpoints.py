@@ -23393,3 +23393,27 @@ async def test_update_key_reports_a_bad_budget_duration_as_a_request_error_not_a
 
     assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
     assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_answers_503_when_the_database_is_unreachable(monkeypatch):
+    import prisma.errors
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import key_aliases
+
+    unreachable_db = MagicMock()
+    unreachable_db.db.query_raw = AsyncMock(
+        side_effect=prisma.errors.PrismaError("Can't reach database server at `db:5432`")
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", unreachable_db)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await key_aliases(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+            page=1,
+            size=50,
+            search=None,
+            team_id=None,
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")

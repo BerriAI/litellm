@@ -308,7 +308,7 @@ async def test_model_creation_fails_closed_when_authoritative_policy_is_unavaila
             Deployment(model_name="cannot-create", litellm_params={"model": "openai/test-model"}),
             UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER),
         )
-    assert error.value.code == "503"
+    assert (error.value.code, error.value.type) == ("503", "internal_server_error")
     prisma.db.litellm_proxymodeltable.create.assert_not_called()
     prisma.db.litellm_teamtable.find_unique.assert_not_called()
 
