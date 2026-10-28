@@ -2579,7 +2579,7 @@ class BaseLLMHTTPHandler:
         request_body: Final = anthropic_messages_provider_config.transform_anthropic_messages_request(
             model=model,
             messages=messages,
-            anthropic_messages_optional_request_params=request_params,
+            anthropic_messages_optional_request_params=dict(request_params),
             litellm_params=litellm_params,
             headers=headers,
         )
