@@ -1310,7 +1310,7 @@ async def handle_bedrock_count_tokens(
             litellm_call_id=litellm_call_id,
             request_model=model,
             model_id=deployment_model_id(deployment),
-            model_used=handler.count_tokens_model_id(resolved_model),
+            model_used=partial(handler.count_tokens_model_id, resolved_model),
         )
 
     except BedrockError as e:

@@ -7390,6 +7390,49 @@ async def test_bedrock_native_count_tokens_without_a_model_logs_the_400_it_answe
     )
 
 
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_with_a_region_only_model_answers_the_validation_error_and_logs_it(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/bedrock/model/us/count-tokens",
+            "headers": [(b"x-litellm-call-id", b"bedrock-native-region-only")],
+        }
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await handle_bedrock_count_tokens(
+            endpoint="model/us/count-tokens",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(),
+            request_body={"model": "us"},
+        )
+
+    assert exc_info.value.detail == {
+        "error": "CountTokens processing error: Request must contain content to count tokens"
+    }
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "bedrock-native-region-only",
+            "request_model": "us",
+            "model_id": None,
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": exc_info.value.status_code,
+        },
+    )
+
 class _AzureGroupRouter:
     def __init__(self, captured: list[dict]) -> None:
         self.captured = captured

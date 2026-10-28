@@ -116,12 +116,16 @@ async def logged_token_count(
 
 
 async def logged_provider_token_count(
-    count: Awaitable[_ProviderCount], litellm_call_id: str, request_model: str, model_id: str | None, model_used: str
+    count: Awaitable[_ProviderCount],
+    litellm_call_id: str,
+    request_model: str,
+    model_id: str | None,
+    model_used: Callable[[], str],
 ) -> _ProviderCount:
     def provider_fields(counted: _ProviderCount) -> _CountFields:
         input_tokens: Final = counted.get("input_tokens")
         return _CountFields(
-            model_used=model_used,
+            model_used=model_used(),
             input_tokens=input_tokens if isinstance(input_tokens, int) and not isinstance(input_tokens, bool) else None,
             count_source="provider",
         )
