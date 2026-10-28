@@ -51,7 +51,6 @@ from ..workload_identity import get_workload_identity_bearer_token, resolve_open
 
 OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS: Final = 16
 _RAW_RESPONSE_JSON: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
-_OPENAI_RESPONSE_REQUEST_PARAMS: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -500,12 +499,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
-        final_request_params: Final = _OPENAI_RESPONSE_REQUEST_PARAMS.validate_python(
+        final_request_params: Final = cast(  # cast-ok: typed dict spread is inferred as Unknown by basedpyright
+            dict[str, object],
             {
                 "model": model,
                 "input": replay_safe_input,
                 **response_api_optional_request_params,
-            }
+            },
         )
 
         return final_request_params
@@ -1214,12 +1214,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
-        data: Final = _OPENAI_RESPONSE_REQUEST_PARAMS.validate_python(
+        data: Final = cast(  # cast-ok: typed dict spread is inferred as Unknown by basedpyright
+            dict[str, object],
             {
                 "model": model,
                 "input": replay_safe_input,
                 **response_api_optional_request_params,
-            }
+            },
         )
 
         return url, data
