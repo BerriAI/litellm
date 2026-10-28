@@ -12,6 +12,7 @@ from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeAlias, TypeVar
+from urllib.parse import urlsplit
 
 import click
 import requests
@@ -503,6 +504,7 @@ class _DeploymentParams(LiteLLMBaseModel):
 
     model: str
     custom_llm_provider: str | None = None
+    api_base: str | None = None
 
 
 class _DeploymentInfo(LiteLLMBaseModel):
@@ -538,8 +540,15 @@ def _is_paused(deployment: _Deployment) -> bool:
     return deployment.model_info is not None and deployment.model_info.blocked is True
 
 
+def _is_openai_host(api_base: str | None) -> bool:
+    if api_base is None:
+        return True
+    host: Final = urlsplit(api_base).hostname or ""
+    return host == "api.openai.com" or host.endswith(".api.openai.com")
+
+
 def _openai_model(params: _DeploymentParams) -> str | None:
-    if params.custom_llm_provider not in (None, "openai"):
+    if params.custom_llm_provider not in (None, "openai") or not _is_openai_host(params.api_base):
         return None
     provider, slash, name = params.model.partition("/")
     if not slash:

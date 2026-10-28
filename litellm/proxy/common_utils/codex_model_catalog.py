@@ -128,6 +128,7 @@ class CodexStockModel(LiteLLMBaseModel):
     upgrade: CodexStockUpgrade | None = None
     service_tiers: tuple[CodexServiceTier, ...] = ()
     default_service_tier: str | None = None
+    context_window: int | None = None
 
 
 class CodexStockCatalog(LiteLLMBaseModel):
@@ -254,6 +255,12 @@ def _stock_for(row: CodexCatalogRow, stock: Mapping[str, CodexStockModel]) -> Co
     return upstream if upstream is not None else stock.get(row.upstream_model.partition("/")[2])
 
 
+def _alias_context_window(row: CodexCatalogRow, stock_model: CodexStockModel) -> Mapping[str, int]:
+    if row.id == stock_model.slug or row.max_input_tokens is None or stock_model.context_window is None:
+        return MappingProxyType({})
+    return MappingProxyType({"context_window": min(stock_model.context_window, row.max_input_tokens)})
+
+
 def _entry(
     index: int,
     row: CodexCatalogRow,
@@ -286,6 +293,7 @@ def _entry(
         "visibility": "list",
         "supported_in_api": True,
         "upgrade": upgrade,
+        **_alias_context_window(row, stock_model),
     }
     if configured is None:
         return stock_model.model_copy(update=listing)

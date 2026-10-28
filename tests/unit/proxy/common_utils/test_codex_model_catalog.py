@@ -135,6 +135,16 @@ def test_alias_of_a_known_upstream_model_takes_stock_metadata_under_its_own_name
     assert (entry["slug"], entry["display_name"]) == ("team-55", "team-55")
 
 
+@pytest.mark.parametrize(("max_input_tokens", "expected"), [(100000, 100000), (922000, 272000), (None, 272000)])
+def test_alias_takes_codexs_context_window_capped_at_its_listed_max_input_tokens(max_input_tokens, expected):
+    stock = MappingProxyType({"gpt-5.5": _stock("gpt-5.5").model_copy(update={"context_window": 272000})})
+    alias = _row("team-55", upstream_model="openai/gpt-5.5", max_input_tokens=max_input_tokens)
+
+    (entry,) = json.loads(codex_models_response_json((alias,), stock=stock, instructions=_PROMPT).json)["models"]
+
+    assert entry["context_window"] == expected
+
+
 @pytest.mark.parametrize(
     ("row", "expected"),
     [

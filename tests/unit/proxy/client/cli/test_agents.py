@@ -757,7 +757,7 @@ class TestCodexModelSync:
             },
             {
                 "model_name": "model_name_team-1_d1",
-                "litellm_params": {"model": "openai/gpt-5.6-terra", "api_base": "https://example.invalid"},
+                "litellm_params": {"model": "openai/gpt-5.6-terra", "api_base": "https://api.openai.com/v1"},
                 "model_info": {"id": "d1", "team_public_model_name": "api-terra"},
             },
         ],
@@ -793,8 +793,19 @@ class TestCodexModelSync:
                 },
                 {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.6-terra"}},
             ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "openai/gpt-5.6-terra", "api_base": "https://eu.api.openai.com/v1"},
+                }
+            ],
         ],
-        ids=["same_model_with_and_without_prefix", "openai_custom_llm_provider", "paused_deployment_ignored"],
+        ids=[
+            "same_model_with_and_without_prefix",
+            "openai_custom_llm_provider",
+            "paused_deployment_ignored",
+            "openai_regional_host",
+        ],
     )
     def test_alias_whose_deployments_all_route_to_one_openai_model_gets_its_entry(self, tmp_path, deployments):
         self._sync(self._listing(self._row("api-terra")), tmp_path, model_info=_FakeResponse(200, {"data": deployments}))
@@ -818,8 +829,27 @@ class TestCodexModelSync:
             ],
             [{"model_name": "api-terra", "litellm_params": {"model": "azure/gpt-5.6-terra"}}],
             [{"model_name": "api-terra", "litellm_params": {"model": "gpt-5.6-terra", "custom_llm_provider": "azure"}}],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "openai/gpt-5.6-terra", "api_base": "http://vllm.example.invalid/v1"},
+                }
+            ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "gpt-5.6-terra", "api_base": "https://api.openai.com.example.invalid"},
+                }
+            ],
         ],
-        ids=["team_row_and_global_row_differ", "load_balanced_across_providers", "azure_prefix", "azure_provider"],
+        ids=[
+            "team_row_and_global_row_differ",
+            "load_balanced_across_providers",
+            "azure_prefix",
+            "azure_provider",
+            "openai_prefix_on_another_host",
+            "openai_lookalike_host",
+        ],
     )
     def test_alias_without_one_shared_openai_upstream_keeps_the_fallback_entry(self, tmp_path, deployments):
         listing = self._listing(self._row("api-terra"))
