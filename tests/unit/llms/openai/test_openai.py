@@ -1,4 +1,5 @@
 import asyncio
+import gzip
 import importlib
 import json
 import os
@@ -479,13 +480,15 @@ _CHUNKED_UPSTREAM_HEADERS: Final = {
 }
 
 
-def _chunked_upstream_client(status_code: int) -> httpx.AsyncClient:
+def _chunked_upstream_client(status_code: int, content_encoding: Literal["gzip"] | None) -> httpx.AsyncClient:
+    body: Final = _UPSTREAM_SERVER_ERROR_BODY.encode()
+    encoding_headers: Final = {"content-encoding": content_encoding} if content_encoding else {}
     return httpx.AsyncClient(
         transport=httpx.MockTransport(
             lambda _request: httpx.Response(
                 status_code,
-                headers=_CHUNKED_UPSTREAM_HEADERS,
-                stream=httpx.ByteStream(_UPSTREAM_SERVER_ERROR_BODY.encode()),
+                headers={**_CHUNKED_UPSTREAM_HEADERS, **encoding_headers},
+                stream=httpx.ByteStream(gzip.compress(body) if content_encoding else body),
             )
         )
     )
@@ -503,14 +506,19 @@ def _chunked_upstream_client(status_code: int) -> httpx.AsyncClient:
         (503, litellm.ServiceUnavailableError),
     ),
 )
-async def test_retryable_error_keeps_the_upstream_body_and_exactly_its_headers(
-    provider: str, stream: bool, status_code: int, mapped_error: type[Exception]
+@pytest.mark.parametrize("content_encoding", (None, "gzip"))
+async def test_retryable_error_keeps_the_decoded_upstream_body_and_its_headers(
+    provider: str,
+    stream: bool,
+    status_code: int,
+    mapped_error: type[Exception],
+    content_encoding: Literal["gzip"] | None,
 ) -> None:
     client: Final = AsyncOpenAI(
         api_key="transport-only",
         base_url=_UPSTREAM_BASE,
         max_retries=0,
-        http_client=_chunked_upstream_client(status_code),
+        http_client=_chunked_upstream_client(status_code, content_encoding),
     )
 
     with pytest.raises(mapped_error) as raised:

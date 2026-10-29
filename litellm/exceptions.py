@@ -124,10 +124,15 @@ def _upstream_body(response: object) -> bytes:
         return b""
 
 
+def _decoded_body_headers(response: object) -> httpx.Headers:
+    upstream_headers: Final = httpx.Headers(getattr(response, "headers", None))
+    return httpx.Headers([item for item in upstream_headers.multi_items() if item[0] != "content-encoding"])
+
+
 def _status_error_response(status_code: int, upstream: httpx.Response | None) -> httpx.Response:
     response: Final = httpx.Response(
         status_code=status_code,
-        headers=getattr(upstream, "headers", None) if upstream is not None else None,
+        headers=_decoded_body_headers(upstream),
         stream=httpx.ByteStream(_upstream_body(upstream)),
         request=httpx.Request(
             method="POST",
