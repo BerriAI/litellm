@@ -9,7 +9,8 @@ all three untouched skips them, since merging it keeps the base branch's copies 
 whatever state the branch was cut from. Pull requests from the cost map sync bot (branches named
 litellm_cost_map_sync_*) always get the file checks and additionally may only touch the two cost map files and may
 only add or update models, so a sync can never lower a pinned capability or edit the pins. Price sync pull requests
-(branches named litellm-providers/price-sync*) get the human checks and may not touch the pins file either.
+(branches named litellm-providers/price-sync*) and pull requests a bot account opened (COST_MAP_GUARD_AUTHOR_TYPE is
+Bot) get the human checks and may not touch the pins file either.
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ CHECKED_PATHS: Final = (*GUARDED_PATHS, PINS_PATH)
 BOT_BRANCH_PREFIX: Final = "litellm_cost_map_sync_"
 PRICE_SYNC_BRANCH_PREFIX: Final = "litellm-providers/price-sync"
 TARGET_ENV: Final = "COST_MAP_GUARD_TARGET"
+AUTHOR_TYPE_ENV: Final = "COST_MAP_GUARD_AUTHOR_TYPE"
+BOT_AUTHOR_TYPE: Final = "Bot"
 MERGE_CONFLICT_EXIT_CODE: Final = 1
 SPECIAL_ROOT_KEYS: Final = frozenset({"sample_spec", "fallback_generalizations"})
 EVALUATION_OUTPUT_PRICE_SOURCES: Final[Mapping[str, str]] = MappingProxyType({})
@@ -189,10 +192,14 @@ def _bot_failures(base: Snapshot, head_map: CostMap, changed_files: Sequence[str
     )
 
 
-def price_sync_failures(head_ref: str, changed_files: Sequence[str]) -> tuple[str, ...]:
-    if not head_ref.startswith(PRICE_SYNC_BRANCH_PREFIX) or PINS_PATH not in changed_files:
+def pin_author_failures(head_ref: str, author_type: str, changed_files: Sequence[str]) -> tuple[str, ...]:
+    if PINS_PATH not in changed_files:
         return ()
-    return (f"price sync PRs may not change {PINS_PATH}; a pin moves only in a human PR with new evidence",)
+    if head_ref.startswith(PRICE_SYNC_BRANCH_PREFIX):
+        return (f"price sync PRs may not change {PINS_PATH}; a pin moves only in a human PR with new evidence",)
+    if author_type == BOT_AUTHOR_TYPE:
+        return (f"PRs opened by a bot may not change {PINS_PATH}; a pin moves only in a human PR with new evidence",)
+    return ()
 
 
 def touches_cost_map(changed_files: Sequence[str]) -> bool:
@@ -286,6 +293,9 @@ def main(argv: Sequence[str]) -> int:
     if changed is None:
         print(f"cost map guard failed: git diff {args.base} {args.head} failed, so the changed files are unknown")
         return 1
+    if not bot and not touches_cost_map(changed):
+        print(f"cost map guard passed ({contract_for(bot, changed)})")
+        return 0
     merged: Final = merged_tree(args.base, args.target, args.head)
     if isinstance(merged, MergeFailed):
         print(f"cost map guard failed: git merge-tree into {args.target} failed: {merged.stderr}")
@@ -294,7 +304,7 @@ def main(argv: Sequence[str]) -> int:
         *guard_failures(
             snapshot(args.base), snapshot(args.head), None if merged is None else snapshot(merged), changed, bot
         ),
-        *price_sync_failures(args.head_ref, changed),
+        *pin_author_failures(args.head_ref, os.environ.get(AUTHOR_TYPE_ENV, ""), changed),
     )
     contract: Final = contract_for(bot, changed)
     if failures:

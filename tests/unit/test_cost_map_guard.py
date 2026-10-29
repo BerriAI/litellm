@@ -323,24 +323,29 @@ def test_bot_may_not_touch_the_pins_file() -> None:
     )
 
 
+PRICE_SYNC_PIN_FAILURE: Final = (
+    f"price sync PRs may not change {guard.PINS_PATH}; a pin moves only in a human PR with new evidence"
+)
+BOT_AUTHOR_PIN_FAILURE: Final = (
+    f"PRs opened by a bot may not change {guard.PINS_PATH}; a pin moves only in a human PR with new evidence"
+)
+
+
 @pytest.mark.parametrize(
-    ("head_ref", "changed", "expected"),
+    ("head_ref", "author_type", "changed", "expected"),
     [
-        (
-            "litellm-providers/price-sync-fireworks-ai",
-            (*MAP_FILES, guard.PINS_PATH),
-            (
-                f"price sync PRs may not change {guard.PINS_PATH}; a pin moves only in a human PR with new evidence",
-            ),
-        ),
-        ("litellm-providers/price-sync-fireworks-ai", MAP_FILES, ()),
-        ("fix-openrouter-price-sync", (*MAP_FILES, guard.PINS_PATH), ()),
+        ("litellm-providers/price-sync-fireworks-ai", "User", (*MAP_FILES, guard.PINS_PATH), (PRICE_SYNC_PIN_FAILURE,)),
+        ("litellm-providers/price-sync-fireworks-ai", "Bot", MAP_FILES, ()),
+        ("litellm_azure_ai_mai_image_2_5_pro", "Bot", (*MAP_FILES, guard.PINS_PATH), (BOT_AUTHOR_PIN_FAILURE,)),
+        ("litellm_azure_ai_mai_image_2_5_pro", "Bot", MAP_FILES, ()),
+        ("fix-openrouter-price-sync", "User", (*MAP_FILES, guard.PINS_PATH), ()),
+        ("fix-openrouter-price-sync", "", (*MAP_FILES, guard.PINS_PATH), ()),
     ],
 )
-def test_price_sync_prs_may_not_touch_the_pins_file(
-    head_ref: str, changed: tuple[str, ...], expected: tuple[str, ...]
+def test_only_human_opened_non_price_sync_prs_may_touch_the_pins_file(
+    head_ref: str, author_type: str, changed: tuple[str, ...], expected: tuple[str, ...]
 ) -> None:
-    assert guard.price_sync_failures(head_ref, changed) == expected
+    assert guard.pin_author_failures(head_ref, author_type, changed) == expected
 
 
 def test_checked_in_pins_hold_in_the_checked_in_cost_map() -> None:
@@ -381,9 +386,20 @@ def _git_commit(repo: Path, message: str) -> str:
 
 
 def _run_guard(
-    repo: Path, base: str, head: str, head_ref: str, *, target: str | None = None, target_env: str | None = None
+    repo: Path,
+    base: str,
+    head: str,
+    head_ref: str,
+    *,
+    target: str | None = None,
+    target_env: str | None = None,
+    author_type: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     target_args: Final = () if target_env is not None else ("--target", target or base)
+    env_overrides: Final = {
+        **({} if target_env is None else {guard.TARGET_ENV: target_env}),
+        **({} if author_type is None else {guard.AUTHOR_TYPE_ENV: author_type}),
+    }
     return subprocess.run(
         (
             sys.executable,
@@ -400,7 +416,7 @@ def _run_guard(
         capture_output=True,
         text=True,
         check=False,
-        env=None if target_env is None else {**os.environ, guard.TARGET_ENV: target_env},
+        env={**os.environ, **env_overrides},
     )
 
 
@@ -508,3 +524,23 @@ def test_main_tells_a_conflicting_pr_to_merge_the_base_branch_in(tmp_path: Path)
     conflict_line: Final = "- the pull request does not merge cleanly into its base branch; merge the base branch in first"
     assert conflict_line in result.stdout.splitlines()
 
+
+def test_main_skips_the_merge_for_a_pr_that_leaves_the_cost_map_alone(tmp_path: Path) -> None:
+    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
+    base: Final = _commit(tmp_path, BASE_MAP, "base")
+    head: Final = _commit_code_only(tmp_path, "code change")
+    result: Final = _run_guard(tmp_path, base, head, "litellm_fix_pricing", target="0" * 40)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == ["cost map guard passed (human PR, cost map untouched)"]
+
+
+@pytest.mark.parametrize(("author_type", "expected_code"), [("Bot", 1), ("User", 0)])
+def test_main_lets_only_a_human_opened_pr_change_the_pins(tmp_path: Path, author_type: str, expected_code: int) -> None:
+    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
+    base: Final = _commit(tmp_path, BASE_MAP, "base", pins=PINS)
+    head: Final = _commit(tmp_path, NO_VISION_MAP, "lower the flag and drop its pin", pins=NO_PINS)
+    result: Final = _run_guard(
+        tmp_path, base, head, "litellm_azure_ai_mai_image_2_5_pro", author_type=author_type
+    )
+    assert result.returncode == expected_code, result.stdout + result.stderr
+    assert (f"- {BOT_AUTHOR_PIN_FAILURE}" in result.stdout.splitlines()) == (author_type == "Bot")

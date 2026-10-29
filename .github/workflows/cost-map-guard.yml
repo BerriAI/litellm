@@ -41,6 +41,7 @@ jobs:
         env:
           MERGE_BASE: ${{ steps.revisions.outputs.merge_base }}
           COST_MAP_GUARD_TARGET: ${{ steps.revisions.outputs.target }}
+          COST_MAP_GUARD_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
