@@ -427,6 +427,7 @@ Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call th
 | [Watsonx Text (`watsonx_text`)](https://docs.litellm.ai/docs/providers/watsonx) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [xAI (`xai`)](https://docs.litellm.ai/docs/providers/xai) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Xinference (`xinference`)](https://docs.litellm.ai/docs/providers/xinference) |  |  |  | ✅ |  |  |  |  |  |  |
+| [ZeroGPU (`zerogpu`)](https://docs.litellm.ai/docs/providers/zerogpu) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 
 [**Read the Docs**](https://docs.litellm.ai/docs/)
 
@@ -659,6 +660,8 @@ This covers:
 # Contributing
 
 We welcome contributions to LiteLLM! Whether you're fixing bugs, adding features, or improving documentation, we appreciate your help.
+
+If you want to work closely with our team, check out [LiteLLM OSS Champions](https://www.litellm.ai/champions), our program for trusted OSS contributors with their own Slack channel and a voice in the roadmap
 
 ## Quick Start for Contributors
 

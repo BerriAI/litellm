@@ -100,7 +100,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError, offload_token_count
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     HUGGING_FACE_SOURCE,
     KimiK3Encodings,
@@ -168,12 +168,7 @@ from litellm.proxy.common_utils.token_count_settings import (
 )
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
 from litellm.proxy.management_helpers.model_group_custom_fields import model_group_custom_fields
-from litellm.router_utils.access_windows import access_windows_config_error
-from litellm.router_utils.add_retry_fallback_headers import (
-    get_fallback_errors_from_headers,
-    get_hidden_params_dict,
-)
-from litellm.router_utils.auto_router_model_naming import (
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
     GATED_AUTO_ROUTER_CAPABILITIES,
     STRATEGY_ROUTER_PARAM_FIELDS,
     capability_limit_violation,
@@ -181,11 +176,16 @@ from litellm.router_utils.auto_router_model_naming import (
     count_capability_routers,
     validate_complexity_router_config_placement,
 )
-from litellm.router_utils.auto_router_tuning_baseline import (
+from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     TUNING_BASELINE_PARAM_NAME,
     mutable_tuned_identities,
     snapshot_tuning_baselines,
     tuning_limit_violation,
+)
+from litellm.router_utils.access_windows import access_windows_config_error
+from litellm.router_utils.add_retry_fallback_headers import (
+    get_fallback_errors_from_headers,
+    get_hidden_params_dict,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.router_utils.routing_groups import parse_routing_groups
@@ -552,6 +552,11 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
     get_budget_reset_time,
 )
+from litellm.proxy.common_utils.token_count_log import (
+    deployment_model_id,
+    logged_token_count,
+    rejected_token_count,
+)
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     end_user_cache_key,
@@ -661,7 +666,11 @@ from litellm.proxy.list_api.common import (
     problem_response,
     request_validation_problem,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
+from litellm.proxy.litellm_pre_call_utils import (
+    SCHEDULER_PRIORITY_HEADER,
+    LiteLLMProxyRequestSetup,
+    add_litellm_data_to_request,
+)
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
 )
@@ -6597,7 +6606,7 @@ class ProxyConfig:
             reset_color_code: Final = "\033[0m"
             for key, value in litellm_settings.items():
                 if key == "cache" and value is True:
-                    print_startup_message(f"{blue_color_code}\nSetting Cache on Proxy")
+                    print_startup_message(f"{blue_color_code}\nSetting Cache on Proxy{reset_color_code}")
                     from litellm.caching.caching import Cache
 
                     cache_params = {}
@@ -9816,7 +9825,7 @@ async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKe
             request_data=request_data,
         )
         verbose_proxy_logger.debug(
-            "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+            "An error occurred: %s",
             e,
         )
         if isinstance(e, HTTPException):
@@ -10646,7 +10655,7 @@ async def async_data_generator(
         )
         client_error: Final[Exception] = e if replacement is None else replacement
         verbose_proxy_logger.debug(
-            "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+            "An error occurred: %s",
             e,
         )
 
@@ -12381,6 +12390,12 @@ async def model_list(
 
     hidden_names: Final = blocked_names | unhealthy_names
 
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import typesafe_allowlist_model_names
+
+    asks_for_allowlist_names: Final = (
+        include_model_access_groups is True and return_wildcard_routes is True and only_model_access_groups is not True
+    )
+
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
         # Get all proxy models as if user is a proxy admin
@@ -12401,7 +12416,10 @@ async def model_list(
         all_models = get_complete_model_list(
             key_models=[],
             team_models=[],
-            proxy_model_list=proxy_model_list,
+            proxy_model_list=[
+                *proxy_model_list,
+                *(typesafe_allowlist_model_names() if asks_for_allowlist_names else ()),
+            ],
             user_model=None,
             infer_model_from_keys=False,
             return_wildcard_routes=include_wildcard_routes,
@@ -12462,7 +12480,7 @@ async def model_list(
 
     # Otherwise, use the normal behavior (current implementation)
     # Get available models for the user
-    all_models = await get_available_models_for_user(
+    available_models: Final = await get_available_models_for_user(
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,
         general_settings=general_settings,
@@ -12475,6 +12493,11 @@ async def model_list(
         return_wildcard_routes=include_wildcard_routes,
         user_api_key_cache=user_api_key_cache,
     )
+    offers_typesafe_allowlist_names: Final = (
+        asks_for_allowlist_names and team_id is None and user_api_key_has_admin_view(user_api_key_dict)
+    )
+    typesafe_names_to_offer: Final = typesafe_allowlist_model_names() if offers_typesafe_allowlist_names else ()
+    all_models = [*available_models, *(name for name in typesafe_names_to_offer if name not in available_models)]
 
     undiscoverable_names: Final = undiscoverable_model_names(
         all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
@@ -14628,6 +14651,7 @@ async def run_thread(
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
+from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
@@ -14647,6 +14671,14 @@ from litellm.responses.litellm_completion_transformation.count_request import (
     chat_count_request,
     with_provider_file_ids,
 )
+
+
+def _with_client_oauth_token(
+    counter: BaseTokenCounter | None, client_oauth_token: str | None
+) -> BaseTokenCounter | None:
+    if client_oauth_token is None or not isinstance(counter, AnthropicTokenCounter):
+        return counter
+    return AnthropicTokenCounter(client_oauth_token=client_oauth_token)
 
 
 def _get_provider_token_counter(
@@ -14839,6 +14871,7 @@ async def _try_native_responses_count(
 async def _provider_token_count(
     count_with: Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]],
     model_to_use: str,
+    request_model: str,
     settings: TokenCountSettings,
     local_estimate_allowed: bool,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
@@ -14861,17 +14894,28 @@ async def _provider_token_count(
         if count_model is None:
             return counted.model_copy(update={"count_source": "provider"})
         return counted.model_copy(update={"count_source": "token_count_model", "model_used": count_model.model})
-    failure: Final = (
-        counted
-        if count_model is None or count_model.region is None
-        else counted.with_hint(
-            f"This model counts tokens with {count_model.model} in {count_model.region}. "
-            "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
-        )
+    pinned_count_model: Final = None if count_model is None or count_model.region is None else count_model
+    region_hint: Final = (
+        None
+        if pinned_count_model is None
+        else f"This model counts tokens with {pinned_count_model.model} in {pinned_count_model.region}. "
+        "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
     )
-    if count_model is None and failure.cannot_count_model and settings.framing is not None and local_estimate_allowed:
-        return failure
-    raise failure.to_proxy_exception()
+    failure: Final = counted if region_hint is None else counted.with_hint(region_hint)
+    framing_can_stand_in: Final = (count_model is None or not count_model.configured) and (
+        failure.cannot_count_model or (pinned_count_model is not None and failure.denied_in_region)
+    )
+    if not (framing_can_stand_in and settings.framing is not None and local_estimate_allowed):
+        raise failure.to_proxy_exception()
+    if pinned_count_model is not None:
+        verbose_proxy_logger.warning(
+            "Token count for %s answered %s from %s in %s, so it falls back to the framed local estimate",
+            request_model,
+            failure.status_code,
+            pinned_count_model.model,
+            pinned_count_model.region,
+        )
+    return failure
 
 
 @dataclass(frozen=True, slots=True)
@@ -15244,16 +15288,21 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountResponse,
 )
-async def token_counter(request: TokenCountRequest, call_endpoint: bool = False):
+async def token_counter(
+    request: TokenCountRequest,
+    call_endpoint: bool = False,
+    litellm_call_id: Annotated[str | None, Header(alias=LITELLM_CALL_ID_HEADER)] = None,
+):
     """
     Args:
         request: TokenCountRequest
         call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
+        litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
 
     Returns:
         TokenCountResponse
     """
-    return await count_request_tokens(request=request, call_endpoint=call_endpoint)
+    return await count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=litellm_call_id)
 
 
 async def count_request_tokens(
@@ -15264,6 +15313,69 @@ async def count_request_tokens(
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
     responses_request: Mapping[str, object] | None = None,
+    litellm_call_id: str | None = None,
+    client_oauth_token: str | None = None,
+) -> TokenCountResponse:
+    call_id: Final = resolve_litellm_call_id(litellm_call_id)
+    if request.prompt is None and request.messages is None and request.contents is None:
+        raise rejected_token_count(
+            HTTPException(status_code=400, detail="prompt or messages or contents must be provided"),
+            call_id,
+            request.model,
+        )
+    routed: Final = await _routed_count_deployment(request.model, responses_request)
+    count: Final = _count_request_tokens(
+        request=request,
+        routed=routed,
+        call_endpoint=call_endpoint,
+        messages_format=messages_format,
+        output_format=output_format,
+        context_management=context_management,
+        request_litellm_params=request_litellm_params,
+        responses_request=responses_request,
+        client_oauth_token=client_oauth_token,
+    )
+    return await logged_token_count(
+        _with_anthropic_content_errors(count) if messages_format == "anthropic" else count,
+        litellm_call_id=call_id,
+        request_model=request.model,
+        model_id=deployment_model_id(routed),
+    )
+
+
+async def _with_anthropic_content_errors(count: Awaitable[TokenCountResponse]) -> TokenCountResponse:
+    try:
+        return await count
+    except UnsupportedContentTypeError as e:
+        raise ProxyException(message=str(e), type="invalid_request_error", param="messages", code=400) from e
+
+
+async def _routed_count_deployment(
+    model: str, responses_request: Mapping[str, object] | None
+) -> Mapping[str, object] | None:
+    if llm_router is None:
+        return None
+    try:
+        return await llm_router.async_get_available_deployment(
+            model=model, request_kwargs=dict(_responses_routing_kwargs(responses_request))
+        )
+    except Exception:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
+        )
+        return None
+
+
+async def _count_request_tokens(
+    request: TokenCountRequest,
+    routed: Mapping[str, object] | None,
+    call_endpoint: bool,
+    messages_format: TokenCountMessagesFormat,
+    output_format: JsonValue,
+    context_management: JsonValue,
+    request_litellm_params: Mapping[str, JsonValue],
+    responses_request: Mapping[str, object] | None,
+    client_oauth_token: str | None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -15271,26 +15383,9 @@ async def count_request_tokens(
     tools: Final = request.tools
     system: Final = request.system
 
-    #########################################################
-    # Validate request
-    #########################################################
-    if prompt is None and messages is None and contents is None:
-        raise HTTPException(status_code=400, detail="prompt or messages or contents must be provided")
-
-    deployment: dict[str, Any] | None = None
+    deployment: dict[str, Any] | None = None if routed is None else dict(routed)
     litellm_model_name = None
     model_info: ModelMapInfo | None = None
-    if llm_router is not None:
-        # get 1 deployment corresponding to the model
-        try:
-            deployment = await llm_router.async_get_available_deployment(
-                model=request.model,
-                request_kwargs=dict(_responses_routing_kwargs(responses_request)),
-            )
-        except Exception:
-            verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
-            )
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
         model_info = deployment.get("model_info", {})
@@ -15321,7 +15416,8 @@ async def count_request_tokens(
     custom_llm_provider: str | None = None
     if call_endpoint is True and deployment is not None:
         # Auto-route to the correct provider based on model
-        provider_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
+        routed_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
+        provider_counter = _with_client_oauth_token(routed_counter, client_oauth_token)
         if _model is not None:
             model_to_use = _model
 
@@ -15389,6 +15485,7 @@ async def count_request_tokens(
                 chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
             ),
             model_to_use=model_to_use,
+            request_model=request.model,
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
         )
@@ -18354,7 +18451,6 @@ async def async_queue_request(
             "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
-        verbose_proxy_logger.debug("receiving data: %s", data)
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
@@ -18402,6 +18498,11 @@ async def async_queue_request(
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
         router: Final = llm_router
 
+        data.update(
+            router.priority_header_update(
+                model=data["model"], kwargs=data, header=request.headers.get(SCHEDULER_PRIORITY_HEADER)
+            )
+        )
         queued_priority, _ = router.split_request_priority(model=data["model"], kwargs=data)
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 
@@ -19888,12 +19989,14 @@ async def update_config_general_settings(
         )
 
     try:
-        ConfigGeneralSettings.model_validate({data.field_name: requested_value})
+        validated: Final = ConfigGeneralSettings.model_validate({data.field_name: requested_value})
     except Exception:
         raise HTTPException(
             status_code=400,
             detail={"error": f"Invalid type of field value={type(requested_value)} passed in."},
         )
+    parsed_value: Final[object] = _UNTYPED_VALUE.validate_python(getattr(validated, data.field_name))
+    stored_value: Final = parsed_value if isinstance(parsed_value, bool) else requested_value
 
     if data.field_name == "alerting_args":
         try:
@@ -19922,10 +20025,10 @@ async def update_config_general_settings(
 
     proxy_config.reject_config_owned_writes(
         section_name="general_settings",
-        changed_keys={data.field_name: cast(JsonValue, requested_value)},  # cast-ok: validated above
+        changed_keys={data.field_name: cast(JsonValue, stored_value)},  # cast-ok: validated above
     )
 
-    field_value = requested_value
+    field_value = stored_value
     if data.field_name == "plugins":
         field_value = _preserve_redacted_plugin_keys(field_value, general_settings.get("plugins"))
 
