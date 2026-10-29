@@ -80,7 +80,7 @@ Managing LLM calls across providers gets complicated fast — different SDKs, au
 ## Features
 
 <details open>
-<summary><h3>LLMs - Call 100+ LLMs (Python SDK + AI Gateway)</h3></summary>
+<summary><b>LLMs</b> - Call 100+ LLMs (Python SDK + AI Gateway)</summary>
 
 [**All Supported Endpoints**](https://docs.litellm.ai/docs/supported_endpoints) - `/chat/completions`, `/responses`, `/embeddings`, `/images`, `/audio`, `/batches`, `/rerank`, `/a2a`, `/messages` and more.
 
@@ -144,24 +144,69 @@ response = client.chat.completions.create(
 </details>
 
 <details>
-<summary><h3>Auto Routing - Choose a model for each prompt (Python SDK + AI Gateway)</h3></summary>
+<summary><b>Auto Routing</b> - Choose a model for each prompt (Python SDK + AI Gateway)</summary>
 
 ### Python SDK
 
-Define your models and routing rules in Python with `litellm.Router`.
+Route between two models using a local heuristic classifier. Install `litellm` with `uv add litellm` and set `OPENAI_API_KEY` to a key from the [OpenAI dashboard](https://platform.openai.com/api-keys) with access to both models. Provider calls incur charges.
 
-[**Get Started with the Autorouter SDK**](https://docs.litellm.ai/docs/autorouter_sdk) - Configure routing and see which model answers each request.
+Save as `autorouter.py`:
+
+```python
+import asyncio
+from litellm import Router
+
+router = Router(model_list=[
+    {"model_name": "fast", "litellm_params": {"model": "openai/gpt-6-luna"}},
+    {"model_name": "capable", "litellm_params": {"model": "openai/gpt-6.1-sol"}},
+    {
+        "model_name": "auto",
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "heuristic",
+                "tiers": {
+                    "SIMPLE": "fast", "MEDIUM": "fast",
+                    "COMPLEX": "capable", "REASONING": "capable",
+                },
+                "return_raw_model_name": True,
+            },
+            "complexity_router_default_model": "capable",
+        },
+    },
+])
+
+async def main():
+    response = await router.acompletion(
+        model="auto",
+        messages=[{"role": "user", "content": "What is 2+2?"}],
+    )
+    print(response.model, response.choices[0].message.content)
+
+asyncio.run(main())
+```
+
+Run `uv run python autorouter.py` to print the selected model and its answer. Change the prompt to try different requests. If classification fails, the router uses `capable`.
+
+[**Docs: Autorouter SDK**](https://docs.litellm.ai/docs/autorouter_sdk) - Choose classifiers and configure routing rules.
 
 ### AI Gateway (Proxy Server)
 
-Configure an Auto Router in your gateway, then use its model name in your requests.
+[**Create an Auto Router**](https://docs.litellm.ai/docs/auto_router/setup) in your gateway, then call its model name. For a local gateway with a router named `auto`, set `LITELLM_API_KEY` to your virtual key and run:
 
-[**Set Up Auto Routing**](https://docs.litellm.ai/docs/auto_router/setup) - Configure your models and tiers in the dashboard or YAML.
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"auto","messages":[{"role":"user","content":"What is 2+2?"}]}'
+```
+
+Replace the URL and `auto` with your gateway address and router name. The response contains the answer in `choices[0].message.content`.
 
 </details>
 
 <details>
-<summary><h3>A2A - Invoke A2A Agents (Python SDK + AI Gateway)</h3></summary>
+<summary><b>A2A</b> - Invoke A2A Agents (Python SDK + AI Gateway)</summary>
 
 [**Supported Providers**](https://docs.litellm.ai/docs/a2a#add-a2a-agents) - LangGraph, Vertex AI Agent Engine, Azure AI Foundry, Bedrock AgentCore, Pydantic AI
 
@@ -231,7 +276,7 @@ async with httpx.AsyncClient(headers=headers, timeout=60.0) as http_client:
 </details>
 
 <details>
-<summary><h3>MCP Tools - Connect MCP servers to any LLM (Python SDK + AI Gateway)</h3></summary>
+<summary><b>MCP Tools</b> - Connect MCP servers to any LLM (Python SDK + AI Gateway)</summary>
 
 ### Python SDK - MCP Bridge
 
@@ -302,7 +347,7 @@ For MCP OAuth, an upstream may advertise dynamic client registration but refuse 
 </details>
 
 <details>
-<summary><h3>Agents - Run Claude Code, Codex, OpenCode, pi or Deep Agents on any model (Python SDK)</h3></summary>
+<summary><b>Agents</b> - Run Claude Code, Codex, OpenCode, pi or Deep Agents on any model (Python SDK)</summary>
 
 ### Python SDK - Agents
 
