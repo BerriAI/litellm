@@ -29,7 +29,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         logging_obj: "LiteLLMLoggingObj",
         model_response: TranscriptionResponse,
         timeout: float,
-        max_retries: int,
+        max_retries: int | None,
         api_key: str | None = None,
         api_base: str | None = None,
         api_version: str | None = None,

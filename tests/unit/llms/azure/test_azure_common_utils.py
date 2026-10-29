@@ -12,7 +12,7 @@ from unittest.mock import ANY, MagicMock, patch
 import httpx
 import pytest
 import respx
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from openai import DEFAULT_TIMEOUT, AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 
 import litellm
 from litellm.llms.azure.common_utils import (
@@ -471,7 +471,7 @@ def test_default_max_retries_setting_reaches_azure_audio_clients(monkeypatch: py
     from litellm.caching.llm_caching_handler import LLMClientCache
 
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
-    monkeypatch.setattr(litellm, "DEFAULT_MAX_RETRIES", 0)
+    monkeypatch.setattr("litellm.llms.azure.common_utils.DEFAULT_MAX_RETRIES", 0)
     router: Final = respx.Router(assert_all_mocked=True)
     rate_limited: Final = router.route().respond(
         429, json={"error": {"message": "rate limited"}}, headers={"retry-after-ms": "1"}
@@ -497,6 +497,51 @@ def test_default_max_retries_setting_reaches_azure_audio_clients(monkeypatch: py
         sync_http.close()
 
     assert rate_limited.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("call_timeout", "configured_request_timeout", "expected_read_timeout"),
+    [
+        pytest.param(None, None, DEFAULT_TIMEOUT.read, id="nothing-set-keeps-sdk-default"),
+        pytest.param(None, 30.0, 30.0, id="configured-request-timeout"),
+        pytest.param(0.5, None, 0.5, id="caller-timeout"),
+    ],
+)
+def test_azure_speech_timeout_follows_caller_then_configured_setting_then_sdk_default(
+    monkeypatch: pytest.MonkeyPatch,
+    call_timeout: float | None,
+    configured_request_timeout: float | None,
+    expected_read_timeout: float | None,
+) -> None:
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setattr(litellm, "request_timeout_explicitly_set", False)
+    monkeypatch.setattr(
+        litellm,
+        "request_timeout",
+        DEFAULT_REQUEST_TIMEOUT_SECONDS if configured_request_timeout is None else configured_request_timeout,
+    )
+    router: Final = respx.Router(assert_all_mocked=True)
+    speech_route: Final = router.route().respond(200, content=b"audio")
+    sync_http: Final = httpx.Client(transport=httpx.MockTransport(router.handler))
+    monkeypatch.setattr(litellm, "client_session", sync_http)
+
+    try:
+        litellm.speech(
+            model="azure/tts",
+            input="hi",
+            voice="alloy",
+            api_key="test-key",
+            api_base="https://speech-timeout-test.openai.azure.com",
+            api_version="2024-02-01",
+            timeout=call_timeout,
+        )
+    finally:
+        sync_http.close()
+
+    assert speech_route.calls.last.request.extensions["timeout"]["read"] == expected_read_timeout
 
 
 @pytest.mark.parametrize(

@@ -8358,8 +8358,7 @@ def transcription(
     if litellm_logging_obj:
         litellm_logging_obj.model_call_details["client"] = str(client)
 
-    if max_retries is None:
-        max_retries = litellm.DEFAULT_MAX_RETRIES
+    max_retries_or_default: Final = openai.DEFAULT_MAX_RETRIES if max_retries is None else max_retries
 
     model_response: Final = litellm.utils.TranscriptionResponse()
 
@@ -8464,7 +8463,7 @@ def transcription(
             client=client,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
-            max_retries=max_retries,
+            max_retries=max_retries_or_default,
             api_base=api_base,
             api_key=static_api_key,
             provider_config=provider_config,
@@ -8507,7 +8506,7 @@ def transcription(
                 else None
             ),
             timeout=timeout,
-            max_retries=max_retries,
+            max_retries=max_retries_or_default,
             logging_obj=litellm_logging_obj,
             api_base=api_base,
             api_key=api_key,
@@ -8554,7 +8553,7 @@ def transcription(
                 else None
             ),
             timeout=timeout,
-            max_retries=max_retries,
+            max_retries=max_retries_or_default,
             logging_obj=litellm_logging_obj,
             api_base=api_base,
             api_key=api_key,
@@ -8677,8 +8676,9 @@ def speech(
         if isinstance(timeout_or_default, openai.Timeout)
         else timeout_or_default
     )
-    if max_retries is None:
-        max_retries = litellm.num_retries or litellm.DEFAULT_MAX_RETRIES
+    max_retries_or_default: Final = (
+        (litellm.num_retries or openai.DEFAULT_MAX_RETRIES) if max_retries is None else max_retries
+    )
     litellm_params_dict: Final = get_litellm_params(metadata=metadata, api_key=api_key or dynamic_api_key, **kwargs)
 
     # Get provider-specific text-to-speech config and map parameters
@@ -8780,7 +8780,7 @@ def speech(
             api_base=api_base,
             organization=organization,
             project=project,
-            max_retries=max_retries,
+            max_retries=max_retries_or_default,
             timeout=http_timeout,
             logging_obj=logging_obj,
             client=client,  # pass AsyncOpenAI, OpenAI client
@@ -8861,7 +8861,7 @@ def speech(
                 azure_ad_token_provider=azure_ad_token_provider,
                 organization=organization,
                 max_retries=max_retries,
-                timeout=http_timeout,
+                timeout=http_timeout if timeout is not None or get_configured_request_timeout() is not None else None,
                 logging_obj=logging_obj,
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 aspeech=aspeech,
