@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm
-from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -320,8 +319,8 @@ def _leave_a_task_pending_on_a_closed_loop() -> None:
     parker.join()
 
 
-def _limiter_error_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
-    return [record.getMessage() for record in caplog.records if record.name == verbose_router_logger.name]
+def _non_asyncio_log_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if record.name != "asyncio"]
 
 
 @pytest.mark.asyncio
@@ -350,7 +349,7 @@ async def test_sync_refused_by_the_open_circuit_breaker_is_quiet_and_leaks_no_ta
     finally:
         loop.set_exception_handler(None)
 
-    assert _limiter_error_lines(caplog) == []
+    assert _non_asyncio_log_lines(caplog) == []
     unretrieved.assert_not_called()
     assert limiter.redis_increment_operation_queue == [
         {"key": "provider_spend:openai:1d", "increment_value": 0.5, "ttl": 60}
@@ -411,7 +410,7 @@ async def test_push_task_failure_is_logged_once_and_not_leaked(disable_budget_sy
     finally:
         loop.set_exception_handler(None)
 
-    assert _limiter_error_lines(caplog) == [
+    assert _non_asyncio_log_lines(caplog) == [
         "Error syncing in-memory cache with Redis: Error 61 connecting to 127.0.0.1:6379"
     ]
     unretrieved.assert_not_called()
