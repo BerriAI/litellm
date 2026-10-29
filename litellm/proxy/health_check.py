@@ -410,7 +410,7 @@ def _resolved_deployment_ids(router: "Router", model_name: str) -> frozenset[str
     working tier broken. An alias whose target is gone resolves to nothing, which fails a
     request exactly like an unknown name.
     """
-    resolved: Final = router.get_model_list(model_name=model_name)
+    resolved: Final = router.registry().deployments(model_name)
     if not resolved:
         return None
     return frozenset(ident for entry in resolved if (ident := _deployment_id(entry)))
