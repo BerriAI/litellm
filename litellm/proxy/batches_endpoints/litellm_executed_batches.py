@@ -267,7 +267,7 @@ async def resolve_litellm_executed_provider(
     team_id: str | None,
     lacks_files_api: FilesApiProbe = upstream_lacks_files_api,
 ) -> str | None:
-    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model, team_id=team_id)
+    credentials: Final = llm_router.registry().credentials(model, form="with_provider", team_id=team_id)
     return None if credentials is None else await litellm_executed_provider_for(credentials, lacks_files_api)
 
 
@@ -456,7 +456,7 @@ class LiteLLMExecutedBatchRunner:
         if isinstance(parsed, InvalidBatchInput):
             raise batch_error(400, f"Invalid batch input file: {parsed.describe()}")
         llm_batch_id: Final = f"{LITELLM_EXECUTED_BATCH_ID_PREFIX}{uuid_module.uuid4().hex}"
-        model_id: Final = next(iter(self.llm_router.get_model_ids(model_name=model)), model)
+        model_id: Final = next(iter(self.llm_router.registry().names(model, kind="ids")), model)
         unified_batch_id: Final = self.managed_files.get_unified_batch_id(batch_id=llm_batch_id, model_id=model_id)
         now: Final = time.time()
         created_at: Final = int(now)
