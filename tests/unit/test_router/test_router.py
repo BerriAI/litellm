@@ -13438,6 +13438,53 @@ def test_get_configured_service_tiers_reads_only_the_deployments_a_request_can_r
 
 
 @pytest.mark.parametrize(
+    "litellm_params, model_info, expected",
+    [
+        ({"model": "anthropic/claude-fable-5-1"}, None, True),
+        ({"model": "bedrock/invoke/us.anthropic.claude-fable-5-1"}, None, True),
+        ({"model": "openai/gpt-6-astra"}, None, None),
+        ({"model": "gemini/gemini-3.8-flash"}, None, None),
+        ({"model": "sonar-pro", "api_base": "https://api.perplexity.ai"}, None, None),
+        ({"model": "gemini/gemini-3.8-flash"}, {"supports_search_tool": True}, True),
+        ({"model": "anthropic/claude-fable-5-1"}, {"supports_search_tool": False}, False),
+    ],
+    ids=[
+        "anthropic-defaults-on",
+        "bedrock-invoke-anthropic-defaults-on",
+        "openai-passthrough-unset",
+        "other-bridged-provider-unset",
+        "provider-inferred-from-api-base-unset",
+        "model-info-opt-in-wins",
+        "model-info-opt-out-wins",
+    ],
+)
+def test_get_search_tool_support_defaults_from_the_provider_and_lets_model_info_override(
+    litellm_params, model_info, expected
+):
+    deployment = {"model_name": "codex-model", "litellm_params": litellm_params}
+    router = litellm.Router(model_list=[{**deployment, "model_info": model_info} if model_info else deployment])
+
+    assert router.get_search_tool_support("codex-model") == (expected,)
+
+
+def test_get_search_tool_support_reports_each_routable_deployment_of_the_group():
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "mixed", "litellm_params": {"model": "anthropic/claude-fable-5-1"}},
+            {"model_name": "mixed", "litellm_params": {"model": "openai/gpt-6-astra"}},
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "anthropic/claude-fable-5-1", "api_base": "https://paused.example"},
+                "model_info": {"blocked": True, "supports_search_tool": False},
+            },
+        ]
+    )
+
+    assert router.get_search_tool_support("mixed") == (True, None)
+    assert router.get_search_tool_support("not-a-real-model") == ()
+
+
+@pytest.mark.parametrize(
     "alias_value, expected_group",
     [
         ("gpt-6-astra", "gpt-6-astra"),
