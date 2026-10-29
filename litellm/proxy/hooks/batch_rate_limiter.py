@@ -542,11 +542,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         and the upstream provider returns 404.
         """
         from litellm.proxy.openai_files_endpoints.common_utils import (
+            batch_deployment_id,
             decode_model_from_file_id,
             explicit_request_credentials,
             get_credentials_for_model,
             get_original_file_id,
             get_team_provider_credentials,
+            hinted_batch_deployment_id,
         )
         from litellm.proxy.proxy_server import llm_router
 
@@ -560,7 +562,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 try:
                     credentials = get_credentials_for_model(
                         llm_router=llm_router,
-                        model_id=model_from_file_id,
+                        model_id=hinted_batch_deployment_id(llm_router, model_from_file_id, file_id)
+                        or model_from_file_id,
                         operation_context="batch input file read (rate limiting)",
                     )
                     fetch_kwargs.update(extract_file_access_credentials(credentials))
@@ -578,7 +581,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 try:
                     credentials = get_credentials_for_model(
                         llm_router=llm_router,
-                        model_id=request_model,
+                        model_id=batch_deployment_id(llm_router, request_model) or request_model,
                         operation_context="batch input file read (rate limiting)",
                     )
                     fetch_kwargs.update(extract_file_access_credentials(credentials))

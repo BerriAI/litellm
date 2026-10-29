@@ -1353,6 +1353,84 @@ def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
     assert fetch_kwargs == {"custom_llm_provider": "openai"}
 
 
+
+def _mixed_azure_chat_and_batch_router():
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-mixed",
+                "litellm_params": {
+                    "model": "azure/gpt-chat",
+                    "api_base": "https://chat-resource.openai.azure.com",
+                    "api_key": "chat-key",
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "chat-id", "mode": "chat"},
+            },
+            {
+                "model_name": "gpt-mixed",
+                "litellm_params": {
+                    "model": "azure/gpt-batch",
+                    "api_base": "https://batch-resource.openai.azure.com",
+                    "api_key": "batch-key",
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "batch-id", "mode": "batch"},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("file_id", "data", "expected_api_base"),
+    [
+        pytest.param(
+            "file-hinted",
+            {},
+            "https://batch-resource.openai.azure.com",
+            id="hinted-file-id",
+        ),
+        pytest.param(
+            "file-legacy",
+            {},
+            "https://chat-resource.openai.azure.com",
+            id="group-only-file-id",
+        ),
+        pytest.param(
+            "file-raw-provider-id",
+            {"model": "gpt-mixed"},
+            "https://batch-resource.openai.azure.com",
+            id="request-model",
+        ),
+    ],
+)
+def test_resolve_fetch_params_reads_a_mixed_group_file_where_the_batch_runs(
+    file_id, data, expected_api_base
+):
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        encode_file_id_with_model,
+    )
+
+    proxy_file_id = {
+        "file-hinted": encode_file_id_with_model(
+            "file-orig", "gpt-mixed", deployment_id="batch-id"
+        ),
+        "file-legacy": encode_file_id_with_model("file-orig", "gpt-mixed"),
+    }.get(file_id, file_id)
+    rate_limiter = _make_rate_limiter()
+    with patch(
+        "litellm.proxy.proxy_server.llm_router", _mixed_azure_chat_and_batch_router()
+    ):
+        _, fetch_kwargs = rate_limiter._resolve_batch_input_file_fetch_params(
+            file_id=proxy_file_id,
+            custom_llm_provider="openai",
+            data=data,
+        )
+    assert fetch_kwargs["api_base"] == expected_api_base
+    assert fetch_kwargs["model"] == "gpt-mixed"
+
 @pytest.mark.asyncio
 async def test_check_and_increment_computes_descriptors_when_not_passed():
     from litellm.proxy.hooks.batch_rate_limiter import (

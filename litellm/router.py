@@ -12030,11 +12030,6 @@ class Router:
         return Deployment(**first_usable) if isinstance(first_usable, dict) else first_usable
 
     def get_batch_deployment_id(self, model_group_name: str, preferred_deployment_id: str | None = None) -> str | None:
-        """
-        The shared deployment of ``model_group_name`` that file and batch calls
-        should reach when the group mixes batch and non-batch deployments, or
-        None when the batch rule drops nothing and the group name resolves as before.
-        """
         group: Final = tuple(
             deployment
             for deployment in self.deployments_named(model_group_name) or ()
