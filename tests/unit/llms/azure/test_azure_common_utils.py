@@ -1,5 +1,7 @@
+import asyncio
 import json
 import os
+import sys
 import threading
 import traceback
 import uuid
@@ -10,6 +12,7 @@ from urllib.parse import parse_qs
 from unittest.mock import ANY, MagicMock, patch
 
 import httpx
+import openai
 import pytest
 
 import litellm
@@ -2492,3 +2495,153 @@ def test_an_azure_client_litellm_built_its_own_http_client_for_is_still_closed(m
     closer.reap()
 
     assert wrapper.is_closed() is True
+
+
+_ENTRA_APP_CLIENT_ID: Final = "0d08e61f-6184-4980-9cef-a2e9128f4cb2"
+_ENTRA_TRACE_ID: Final = "f0c149d3-ef20-4194-8b81-c81a5e002500"
+_ENTRA_REJECTIONS: Final = {
+    "wrong_secret": (
+        "AADSTS7000215",
+        "Authentication failed: AADSTS7000215: Invalid client secret provided. Ensure the secret being sent in the "
+        "request is the client secret value, not the client secret ID, for a secret added to app "
+        f"'{_ENTRA_APP_CLIENT_ID}'. Trace ID: {_ENTRA_TRACE_ID} Correlation ID: ecfd2c73-ec0a-474c-bba7-205be903159d "
+        "Timestamp: 2026-10-29 07:19:40Z",
+    ),
+    "expired_secret": (
+        "AADSTS7000222",
+        f"Authentication failed: AADSTS7000222: The provided client secret keys for app '{_ENTRA_APP_CLIENT_ID}' "
+        f"are expired. Visit the Azure portal to create new keys for your app. Trace ID: {_ENTRA_TRACE_ID} "
+        "Correlation ID: 354f9b57-5fed-47e4-a67d-89a7c56f6ddc Timestamp: 2026-10-29 07:19:50Z",
+    ),
+}
+
+
+def _raising_token_provider(error: Exception) -> Callable[[], str]:
+    def token_provider() -> str:
+        raise error
+
+    return token_provider
+
+
+def _azure_chat(token_provider: Callable[[], str]) -> object:
+    return litellm.completion(
+        model="azure/gpt-4.1",
+        api_base="https://litellm-qa.openai.azure.com",
+        api_version="2025-04-01-preview",
+        messages=[{"role": "user", "content": "hi"}],
+        azure_ad_token_provider=token_provider,
+    )
+
+
+def _azure_async_chat(token_provider: Callable[[], str]) -> object:
+    return asyncio.run(
+        litellm.acompletion(
+            model="azure/gpt-4.1",
+            api_base="https://litellm-qa.openai.azure.com",
+            api_version="2025-04-01-preview",
+            messages=[{"role": "user", "content": "hi"}],
+            azure_ad_token_provider=token_provider,
+        )
+    )
+
+
+def _azure_responses(token_provider: Callable[[], str]) -> object:
+    return litellm.responses(
+        model="azure/gpt-4.1",
+        api_base="https://litellm-qa.openai.azure.com",
+        api_version="2025-04-01-preview",
+        input="hi",
+        azure_ad_token_provider=token_provider,
+    )
+
+
+def _azure_ai_decisions(token_provider: Callable[[], str]) -> object:
+    return litellm.systemone(
+        model="azure_ai/decision-1-qa",
+        api_base="https://litellm-qa.services.ai.azure.com",
+        state={"ticket": "The login page returns a 500 error after deploy"},
+        questions={"is_bug": {"type": "noul", "instructions": "Is this a software bug report?"}},
+        azure_ad_token_provider=token_provider,
+    )
+
+
+_AZURE_CALLS: Final = {
+    "chat": _azure_chat,
+    "async_chat": _azure_async_chat,
+    "responses": _azure_responses,
+    "decisions": _azure_ai_decisions,
+}
+
+
+@pytest.fixture
+def no_azure_api_key(monkeypatch):
+    for env_var in (
+        "AZURE_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_AI_API_KEY",
+        "AZURE_AD_TOKEN",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_USERNAME",
+        "AZURE_PASSWORD",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "azure_key", None)
+
+
+@pytest.mark.parametrize("call", _AZURE_CALLS.values(), ids=_AZURE_CALLS.keys())
+@pytest.mark.parametrize(("aadsts_code", "entra_message"), _ENTRA_REJECTIONS.values(), ids=_ENTRA_REJECTIONS.keys())
+def test_entra_rejecting_the_credential_answers_401_with_only_the_aadsts_reason(
+    no_azure_api_key, call, aadsts_code, entra_message
+):
+    from azure.core.exceptions import ClientAuthenticationError
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        call(_raising_token_provider(ClientAuthenticationError(message=entra_message)))
+
+    assert excinfo.value.status_code == 401
+    assert aadsts_code in str(excinfo.value)
+    assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
+    assert _ENTRA_TRACE_ID not in str(excinfo.value)
+
+
+def test_entra_rejection_without_an_aadsts_code_keeps_only_its_first_sentence(no_azure_api_key):
+    from azure.identity import CredentialUnavailableError
+
+    unavailable: Final = CredentialUnavailableError(
+        message="DefaultAzureCredential failed to retrieve a token from the included credentials.\n"
+        "Attempted credentials:\n\tEnvironmentCredential: EnvironmentCredential authentication unavailable. "
+        f"Environment variables are not fully configured for client {_ENTRA_APP_CLIENT_ID}."
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        _azure_chat(_raising_token_provider(unavailable))
+
+    assert excinfo.value.status_code == 401
+    assert "DefaultAzureCredential failed to retrieve a token from the included credentials." in str(excinfo.value)
+    assert "Attempted credentials" not in str(excinfo.value)
+    assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("call", _AZURE_CALLS.values(), ids=_AZURE_CALLS.keys())
+def test_unreachable_entra_endpoint_stays_a_retryable_server_error(no_azure_api_key, call):
+    from azure.core.exceptions import ServiceRequestError
+
+    unreachable: Final = ServiceRequestError("Failed to establish a new connection: [Errno -2] Name or service not known")
+
+    with pytest.raises(openai.APIError) as excinfo:
+        call(_raising_token_provider(unreachable))
+
+    assert not isinstance(excinfo.value, litellm.AuthenticationError)
+    assert excinfo.value.status_code == 500
+
+
+def test_token_provider_error_without_azure_core_installed_keeps_the_generic_token_error(monkeypatch):
+    monkeypatch.setitem(sys.modules, "azure.core.exceptions", None)
+
+    with pytest.raises(RuntimeError, match="Failed to get Azure AD token: token service down"):
+        get_azure_ad_token(
+            GenericLiteLLMParams(azure_ad_token_provider=_raising_token_provider(ValueError("token service down")))
+        )

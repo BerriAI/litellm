@@ -6,7 +6,7 @@ import re
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import closing
 from types import MappingProxyType
-from typing import Final, Literal, NamedTuple, cast
+from typing import Final, Literal, NamedTuple, TypeVar, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -52,6 +52,7 @@ class _AsyncAzureClientParams(TypedDict, total=False, extra_items=object):
 
 
 _ASYNC_AZURE_CLIENT_PARAMS_ADAPTER: Final = TypeAdapter(_AsyncAzureClientParams)
+_AZURE_AD_TOKEN_PROVIDER_ADAPTER: Final = TypeAdapter[Callable[[], str] | None](Callable[[], str] | None)
 
 
 class _AzureGatewayClientParams(TypedDict, total=False, extra_items=object):
@@ -79,6 +80,43 @@ class AzureOpenAIError(BaseLLMException):
             headers=headers,
             body=body,
         )
+
+
+_GUID: Final = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
+_AADSTS_REASON: Final = re.compile(r"AADSTS\d+:.*?(?:\.(?=\s|$)|$)", re.MULTILINE)
+_FIRST_SENTENCE: Final = re.compile(r"^.*?(?:\.(?=\s|$)|$)", re.MULTILINE)
+_Token: Final = TypeVar("_Token")
+
+
+def _entra_rejection_reason(message: str) -> str:
+    reason: Final = _AADSTS_REASON.search(message) or _FIRST_SENTENCE.search(message)
+    return _GUID.sub("<redacted>", reason.group(0) if reason else message)
+
+
+def _entra_rejection_as_auth_error(error: Exception) -> AzureOpenAIError | None:
+    try:
+        from azure.core.exceptions import ClientAuthenticationError
+    except ImportError:
+        return None
+    if not isinstance(error, ClientAuthenticationError):
+        return None
+    return AzureOpenAIError(
+        status_code=401,
+        message=f"Failed to get Azure AD token: {_entra_rejection_reason(str(error))}",
+    )
+
+
+def _entra_rejections_as_auth_errors(provider: Callable[[], _Token]) -> Callable[[], _Token]:
+    def call_provider() -> _Token:
+        try:
+            return provider()
+        except Exception as error:
+            auth_error: Final = _entra_rejection_as_auth_error(error)
+            if auth_error is None:
+                raise
+            raise auth_error from error
+
+    return call_provider
 
 
 def process_azure_headers(headers: httpx.Headers | dict) -> dict:
@@ -483,6 +521,9 @@ def get_azure_ad_token(
             raise
         except Exception as e:
             verbose_logger.error("Error calling Azure AD token provider: %s", e)
+            auth_error: Final = _entra_rejection_as_auth_error(e)
+            if auth_error is not None:
+                raise auth_error from e
             raise RuntimeError(f"Failed to get Azure AD token: {e}") from e
 
     return azure_ad_token
@@ -696,7 +737,9 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_version: str | None,
         is_async: bool,
     ) -> dict:
-        azure_ad_token_provider = litellm_params.get("azure_ad_token_provider")
+        azure_ad_token_provider = _AZURE_AD_TOKEN_PROVIDER_ADAPTER.validate_python(
+            litellm_params.get("azure_ad_token_provider")
+        )
         # If we have api_key, then we have higher priority
         azure_ad_token = litellm_params.get("azure_ad_token")
 
@@ -775,7 +818,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             azure_client_params["timeout"] = timeout
 
         if azure_ad_token_provider is not None:
-            azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
+            azure_client_params["azure_ad_token_provider"] = _entra_rejections_as_auth_errors(azure_ad_token_provider)
         # this decides if we should set azure_endpoint or base_url on Azure OpenAI Client
         # required to support GPT-4 vision enhancements, since base_url needs to be set on Azure OpenAI Client
 
