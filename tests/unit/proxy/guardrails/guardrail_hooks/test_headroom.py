@@ -21,6 +21,7 @@ Tests cover:
   loop resolves the retrieve tool call, then fake-streamed back to the client
 """
 
+import datetime
 import json
 import time
 from typing import Final, Optional
@@ -33,6 +34,7 @@ from fastapi import HTTPException
 
 import litellm
 
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
     HeadroomGuardrail,
     has_headroom_retrieve_tool,
@@ -769,6 +771,72 @@ async def test_async_build_agentic_loop_plan_builds_responses_api_function_call_
     assert output_item is not None
     assert output_item["call_id"] == "call_abc123"
     assert output_item["output"] == original_content
+
+
+@pytest.mark.asyncio
+async def test_responses_retrieval_followup_reuses_the_model_the_caller_requested(
+    guardrail: HeadroomGuardrail,
+) -> None:
+    requested_model: Final = "bedrock/converse/us.anthropic.claude-sonnet-5-5"
+    retrieve_hash: Final = "b573993006976af767214fac"
+    logging_obj: Final = Logging(
+        model=requested_model,
+        messages=[],
+        stream=False,
+        call_type=CallTypes.responses.value,
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="call-1",
+        function_id="fn-headroom-followup",
+    )
+    litellm.responses(
+        model=requested_model,
+        input=f"What does it say? hash={retrieve_hash}",
+        mock_response="retrieving",
+        litellm_logging_obj=logging_obj,
+    )
+    response: Final = MagicMock()
+    response.choices = None
+    response.content = None
+    response.output = [
+        {
+            "type": "function_call",
+            "id": "fc_abc123",
+            "call_id": "call_abc123",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "arguments": json.dumps({"hash": retrieve_hash}),
+        }
+    ]
+    guardrail._issued_hashes_by_call_id["call-1"] = (frozenset({retrieve_hash}), time.monotonic() + 999)
+
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+        return_value=_make_retrieve_response("The full compressed content."),
+    ):
+        plan: Final = await guardrail.async_build_agentic_loop_plan(
+            tools={
+                "tool_calls": [
+                    {
+                        "id": "call_abc123",
+                        "type": "function",
+                        "name": HEADROOM_RETRIEVE_TOOL_NAME,
+                        "arguments": {"hash": retrieve_hash},
+                    }
+                ]
+            },
+            model="converse/us.anthropic.claude-sonnet-5-5",
+            messages=[{"role": "user", "content": f"What does it say? hash={retrieve_hash}"}],
+            response=response,
+            anthropic_messages_provider_config=None,
+            anthropic_messages_optional_request_params={},
+            logging_obj=logging_obj,
+            stream=False,
+            kwargs={"litellm_call_id": "call-1"},
+        )
+
+    assert plan.request_patch is not None
+    assert plan.request_patch.model == requested_model
 
 
 @pytest.mark.asyncio

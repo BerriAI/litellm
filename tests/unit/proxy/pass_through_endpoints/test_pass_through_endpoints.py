@@ -7568,7 +7568,7 @@ async def test_websocket_passthrough_does_not_relay_unsendable_upstream_close(rc
 @pytest.mark.asyncio
 async def test_websocket_passthrough_rewrites_alias_of_unrecognised_upstream_model():
     llm_router = MagicMock()
-    llm_router.get_model_list.return_value = [
+    llm_router.registry.return_value.deployments.return_value = [
         {"model_name": "gemini-live", "litellm_params": {"model": "self-hosted-live-endpoint"}}
     ]
 
@@ -9808,6 +9808,44 @@ async def test_chat_completion_pass_through_endpoint_failure_carries_the_callers
     assert call_id in record.getMessage()
 
 
+@pytest.mark.asyncio
+async def test_chat_completion_pass_through_endpoint_without_a_model_answers_model_not_found_with_a_router(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A body without a model is not a router name: the request falls through to the
+    model-not-found answer instead of failing on the registry lookup."""
+    proxy_logging: Final = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+    proxy_logging.post_call_failure_hook = AsyncMock()
+
+    async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
+        return kwargs["data"]
+
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "known-model", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-x"}}]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", fake_add_litellm_data_to_request)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    request: Final = MagicMock(spec=Request)
+    request.body = AsyncMock(return_value=json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode())
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    logged_exception: Final = proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"]
+    assert isinstance(logged_exception, ProxyModelNotFoundError)
+    assert raised.value.code == "400"
+
+
 def test_passthrough_attributes_a_cli_session_to_its_alias_not_the_login_token():
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_spend_logs_metadata
 
@@ -11315,6 +11353,42 @@ def test_init_kwargs_no_authenticated_identity_field_is_client_settable(mock_req
     metadata: Final = result["litellm_params"]["metadata"]
     survived: Final = {key: metadata.get(key) for key in expected if metadata.get(key) != expected[key]}
     assert survived == {}, f"client-supplied values survived for: {sorted(survived)}"
+
+
+def test_init_kwargs_client_metadata_cannot_mark_a_pass_through_call_as_a_silent_experiment(
+    mock_user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    started: Final = datetime(2026, 1, 15, 12, 0, 0)
+    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=Request({"type": "http", "method": "POST", "path": "/test", "headers": [], "query_string": b""}),
+        user_api_key_dict=mock_user_api_key_dict,
+        passthrough_logging_payload=PassthroughStandardLoggingPayload(url="https://test.com", request_body={}),
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=started,
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+        _parsed_body={
+            "litellm_metadata": {"is_silent_experiment": True, "client_key": "kept"},
+            "metadata": {"is_silent_experiment": True},
+        },
+    )
+
+    row: Final = get_logging_payload(
+        kwargs={"model": "test-model", "litellm_params": result["litellm_params"]},
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=started,
+        end_time=started,
+    )
+    assert "is_silent_experiment" not in json.loads(row["metadata"])
+    assert result["litellm_params"]["metadata"]["client_key"] == "kept"
 
 @pytest.mark.asyncio
 async def test_direct_passthrough_keeps_mapped_baggage_tags_outside_upstream_body():

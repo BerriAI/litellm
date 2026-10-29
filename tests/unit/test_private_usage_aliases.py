@@ -5242,10 +5242,11 @@ def test_public_aliases(
     resolved_owner: Final = _get_owner(module_path, owner_name)
     alias_owner: Final = _get_instance(resolved_owner, new_name) if use_instance else resolved_owner
     old_value, new_value = getattr(alias_owner, old_name), getattr(alias_owner, new_name)
+    # Router's private aliases wrap the public method so they skip a subclass override of it.
     if isinstance(old_value, MethodType) and isinstance(new_value, MethodType):
-        assert old_value.__func__ is new_value.__func__
+        assert old_value.__func__ is new_value.__func__ or inspect.unwrap(old_value.__func__) is new_value.__func__
     else:
-        assert old_value is new_value
+        assert old_value is new_value or inspect.unwrap(old_value) is new_value
 
 
 @pytest.mark.parametrize(
