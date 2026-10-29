@@ -270,6 +270,148 @@ def test_sync_transport_error_before_completed_event_raises():
             pass
 
 
+_UPSTREAM_TAILS_AFTER_COMPLETED: Final = [
+    pytest.param(None, id="eof"),
+    pytest.param(b": keep-alive\n\n", id="endless-heartbeats"),
+    *(pytest.param(error, id=type(error).__name__) for error in _TRAILING_ERRORS_AFTER_COMPLETED),
+]
+
+
+async def _async_upstream(trailing: Exception | bytes | None, release: asyncio.Event | None = None):
+    for event in _COMPLETE_STREAM_EVENTS:
+        yield event
+    if release is not None:
+        await release.wait()
+    if isinstance(trailing, Exception):
+        raise trailing
+    if isinstance(trailing, bytes):
+        for _ in range(1000):
+            yield trailing
+        raise AssertionError("the client stream read the upstream past its terminal event")
+
+
+def _sync_upstream(trailing: Exception | bytes | None, release: threading.Event | None = None):
+    yield from _COMPLETE_STREAM_EVENTS
+    if release is not None and not release.wait(timeout=5):
+        raise AssertionError("the client stream read the upstream past its terminal event")
+    if isinstance(trailing, Exception):
+        raise trailing
+    if isinstance(trailing, bytes):
+        for _ in range(1000):
+            yield trailing
+        raise AssertionError("the client stream read the upstream past its terminal event")
+
+
+def _async_stream_over(upstream) -> tuple[ResponsesAPIStreamingIterator, asyncio.Event]:
+    closed: Final = asyncio.Event()
+    mock_response: Final = Mock()
+    mock_response.headers = {}
+    mock_response.aiter_bytes = lambda: upstream
+    mock_response.aclose = AsyncMock(side_effect=closed.set)
+    iterator: Final = ResponsesAPIStreamingIterator(
+        response=mock_response,
+        model="gpt-4o-mini",
+        responses_api_provider_config=_mock_config(),
+        logging_obj=_logging_obj_stub(),
+        litellm_metadata={},
+        custom_llm_provider="openai",
+    )
+    return iterator, closed
+
+
+def _sync_stream_over(upstream) -> tuple[SyncResponsesAPIStreamingIterator, threading.Event]:
+    closed: Final = threading.Event()
+    mock_response: Final = Mock()
+    mock_response.headers = {}
+    mock_response.iter_bytes = lambda: upstream
+    mock_response.close = Mock(side_effect=closed.set)
+    iterator: Final = SyncResponsesAPIStreamingIterator(
+        response=mock_response,
+        model="gpt-4o-mini",
+        responses_api_provider_config=_mock_config(),
+        logging_obj=_logging_obj_stub(),
+        litellm_metadata={},
+        custom_llm_provider="openai",
+    )
+    return iterator, closed
+
+
+async def _event_types(iterator: ResponsesAPIStreamingIterator) -> list[str]:
+    return [event.type async for event in iterator]
+
+
+@pytest.mark.asyncio
+async def test_stream_ends_at_completed_event_while_upstream_holds_the_socket_open():
+    release: Final = asyncio.Event()
+    iterator, closed = _async_stream_over(_async_upstream(None, release))
+
+    seen: Final = await asyncio.wait_for(_event_types(iterator), timeout=5)
+    await iterator.aclose()
+
+    assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert not closed.is_set(), "closing before the upstream ends drops a connection the pool could reuse"
+    release.set()
+    await asyncio.wait_for(closed.wait(), timeout=5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trailing", _UPSTREAM_TAILS_AFTER_COMPLETED)
+async def test_upstream_is_closed_after_the_stream_ends_at_completed_event(trailing):
+    iterator, closed = _async_stream_over(_async_upstream(trailing))
+
+    seen: Final = await asyncio.wait_for(_event_types(iterator), timeout=5)
+
+    assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    await asyncio.wait_for(closed.wait(), timeout=5)
+
+
+def test_sync_stream_ends_at_completed_event_while_upstream_holds_the_socket_open():
+    release: Final = threading.Event()
+    iterator, closed = _sync_stream_over(_sync_upstream(None, release))
+
+    seen: Final = [event.type for event in iterator]
+    iterator.close()
+
+    assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert not closed.is_set(), "closing before the upstream ends drops a connection the pool could reuse"
+    release.set()
+    assert closed.wait(timeout=5)
+
+
+@pytest.mark.parametrize("trailing", _UPSTREAM_TAILS_AFTER_COMPLETED)
+def test_sync_upstream_is_closed_after_the_stream_ends_at_completed_event(trailing):
+    iterator, closed = _sync_stream_over(_sync_upstream(trailing))
+
+    seen: Final = [event.type for event in iterator]
+
+    assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert closed.wait(timeout=5)
+
+
+async def _async_events(events: list[bytes]):
+    for event in events:
+        yield event
+
+
+@pytest.mark.asyncio
+async def test_client_disconnect_before_completed_event_closes_the_upstream():
+    iterator, closed = _async_stream_over(_async_events(_COMPLETE_STREAM_EVENTS[:-1]))
+
+    await iterator.__anext__()
+    await iterator.aclose()
+
+    assert closed.is_set()
+
+
+def test_sync_client_disconnect_before_completed_event_closes_the_upstream():
+    iterator, closed = _sync_stream_over(iter(_COMPLETE_STREAM_EVENTS[:-1]))
+
+    next(iterator)
+    iterator.close()
+
+    assert closed.is_set()
+
+
 _DONE_MARKER: Final = b"data: [DONE]\n\n"
 _CREATED_EVENT: Final = _sse_event({"type": "response.created"})
 _IN_PROGRESS_EVENT: Final = _sse_event({"type": "response.in_progress"})

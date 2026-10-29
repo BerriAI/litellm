@@ -4,10 +4,21 @@ import asyncio
 import contextlib
 import copy
 import json
+import threading
 import time
 import traceback
 import uuid
-from collections.abc import AsyncIterable, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import (
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
@@ -228,6 +239,62 @@ async def drain_logging_tasks(timeout: float = 5.0) -> None:
     _, pending = await asyncio.wait(tuple(_PENDING_LOGGING_TASKS), timeout=timeout)
     if pending:
         verbose_logger.warning("Timed out draining %d logging tasks on shutdown, dropping them", len(pending))
+
+
+_MAX_CHUNKS_READ_AFTER_TERMINAL_EVENT: Final = 8
+_UPSTREAM_RELEASE_TASKS: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: strong refs to upstream release tasks
+
+
+async def _release_upstream_after_terminal_event(
+    upstream_bytes: AsyncIterator[bytes], response: httpx.Response
+) -> None:
+    try:
+        for _ in range(_MAX_CHUNKS_READ_AFTER_TERMINAL_EVENT):
+            await upstream_bytes.__anext__()
+    except StopAsyncIteration:
+        pass
+    except (httpx.HTTPError, httpx.StreamError) as e:
+        verbose_logger.debug("Upstream Responses stream failed after its terminal event: %s", e)
+    else:
+        verbose_logger.debug("Upstream Responses stream kept sending after its terminal event, closing it")
+    finally:
+        with contextlib.suppress(httpx.HTTPError, httpx.StreamError):
+            await response.aclose()
+
+
+def _release_upstream_after_terminal_event_sync(upstream_bytes: Iterator[bytes], response: httpx.Response) -> None:
+    try:
+        for _ in range(_MAX_CHUNKS_READ_AFTER_TERMINAL_EVENT):
+            next(upstream_bytes)
+    except StopIteration:
+        pass
+    except (httpx.HTTPError, httpx.StreamError) as e:
+        verbose_logger.debug("Upstream Responses stream failed after its terminal event: %s", e)
+    else:
+        verbose_logger.debug("Upstream Responses stream kept sending after its terminal event, closing it")
+    finally:
+        with contextlib.suppress(httpx.HTTPError, httpx.StreamError):
+            response.close()
+
+
+def _spawn_upstream_release(upstream_bytes: AsyncIterator[bytes], response: httpx.Response) -> None:
+    task: Final = asyncio.get_running_loop().create_task(
+        _release_upstream_after_terminal_event(upstream_bytes, response)
+    )
+    _UPSTREAM_RELEASE_TASKS.add(task)
+    task.add_done_callback(_UPSTREAM_RELEASE_TASKS.discard)
+    task.add_done_callback(
+        lambda done: _log_background_task_failure(done, task_name="Upstream Responses stream release")
+    )
+
+
+def _start_upstream_release_sync(upstream_bytes: Iterator[bytes], response: httpx.Response) -> None:
+    threading.Thread(
+        target=_release_upstream_after_terminal_event_sync,
+        args=(upstream_bytes, response),
+        name="litellm-responses-upstream-release",
+        daemon=True,
+    ).start()
 
 
 _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
@@ -1203,6 +1270,8 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     Async iterator for processing streaming responses from the Responses API.
     """
 
+    _releasing_upstream: bool = False
+
     def __init__(
         self,
         response: httpx.Response,
@@ -1226,7 +1295,8 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             call_type,
         )
         self._replays_stored_stream = replays_stored_stream
-        self.stream_iterator = SSEDecoder().aiter_bytes(response.aiter_bytes())
+        self._upstream_bytes: Final = response.aiter_bytes()
+        self.stream_iterator = SSEDecoder().aiter_bytes(self._upstream_bytes)
 
     def __aiter__(self):
         return self
@@ -1239,9 +1309,13 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             raise
 
     async def aclose(self) -> None:
-        await self.response.aclose()
+        if not self._releasing_upstream:
+            await self.response.aclose()
 
     async def _next_event(self) -> ResponsesAPIStreamingResponse:
+        if self._releasing_upstream:
+            self.finished = True
+            raise StopAsyncIteration
         try:
             self._check_max_streaming_duration()
             while True:
@@ -1255,6 +1329,9 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
                 self._check_max_streaming_duration()
                 result = self._process_chunk(sse.data)
+                if self.completed_response is not None:
+                    self._releasing_upstream = True
+                    _spawn_upstream_release(self._upstream_bytes, self.response)
 
                 if self.finished:
                     self._raise_if_ended_without_terminal_event()
@@ -1303,6 +1380,8 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     Synchronous iterator for processing streaming responses from the Responses API.
     """
 
+    _releasing_upstream: bool = False
+
     def __init__(
         self,
         response: httpx.Response,
@@ -1326,15 +1405,20 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             call_type,
         )
         self._replays_stored_stream = replays_stored_stream
-        self.stream_iterator = SSEDecoder().iter_bytes(response.iter_bytes())
+        self._upstream_bytes: Final = response.iter_bytes()
+        self.stream_iterator = SSEDecoder().iter_bytes(self._upstream_bytes)
 
     def __iter__(self):
         return self
 
     def close(self) -> None:
-        self.response.close()
+        if not self._releasing_upstream:
+            self.response.close()
 
     def __next__(self):
+        if self._releasing_upstream:
+            self.finished = True
+            raise StopIteration
         try:
             self._check_max_streaming_duration()
             while True:
@@ -1348,6 +1432,9 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
                 self._check_max_streaming_duration()
                 result = self._process_chunk(sse.data)
+                if self.completed_response is not None:
+                    self._releasing_upstream = True
+                    _start_upstream_release_sync(self._upstream_bytes, self.response)
 
                 if self.finished:
                     self._raise_if_ended_without_terminal_event()
