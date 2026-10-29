@@ -12,6 +12,7 @@ inflating TTFT and turning a steady provider stream into gap-then-burst delivery
 import binascii
 import json
 import struct
+from collections.abc import Mapping
 from typing import AsyncIterator, Final, Iterator
 from unittest.mock import MagicMock
 
@@ -20,6 +21,7 @@ import litellm
 import pytest
 import respx
 
+from litellm.exceptions import MidStreamFallbackError
 from litellm.llms.sagemaker.common_utils import SagemakerError
 from litellm.llms.sagemaker.completion.handler import SagemakerLLM
 
@@ -618,3 +620,45 @@ async def test_completion_sagemaker_streaming_bad_request(
     assert route.called
     assert exc_info.value.status_code == 400
     assert exc_info.value.llm_provider == "sagemaker"
+
+
+async def _drain_stream(request: Mapping[str, object], sync_mode: bool) -> None:
+    if sync_mode:
+        _ = tuple(litellm.completion(**request))
+        return
+    _ = [chunk async for chunk in await litellm.acompletion(**request)]
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_sagemaker_stream_with_an_empty_200_body_raises_bad_gateway(
+    respx_mock: respx.MockRouter,
+    sync_mode: bool,
+) -> None:
+    respx_mock.post(
+        "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/my-endpoint/invocations-response-stream"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            content=b"",
+            headers={"content-type": "application/vnd.amazon.eventstream", "x-amzn-RequestId": "req-sagemaker-1"},
+        )
+    )
+    request: Final = {
+        "model": "sagemaker/my-endpoint",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        "aws_region_name": "us-east-1",
+        "num_retries": 0,
+    }
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        await _drain_stream(request, sync_mode)
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.is_pre_first_chunk is True
+    assert isinstance(exc_info.value.original_exception, litellm.BadGatewayError)
+    assert "decoded to no events" in str(exc_info.value)
+    assert "req-sagemaker-1" in str(exc_info.value)

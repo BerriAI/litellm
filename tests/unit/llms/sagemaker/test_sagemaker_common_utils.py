@@ -4,7 +4,7 @@ import struct
 import zlib
 from collections.abc import AsyncIterator, Mapping
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -162,37 +162,14 @@ async def test_aiter_bytes_unicode_decode_error():
 
     Relevant issue: https://github.com/BerriAI/litellm/issues/9165
     """
-    # Create an instance of AWSEventStreamDecoder
     decoder = AWSEventStreamDecoder(model="test-model")
 
-    # Create a mock event that will trigger a UnicodeDecodeError
-    mock_event = MagicMock()
-    mock_event.to_response_dict.return_value = {
-        "status_code": 200,
-        "headers": {},
-        "body": b"\xff\xfe",  # Invalid UTF-8 bytes
-    }
+    async def mock_iterator():
+        yield _payload_part(b"\xff\xfe")
 
-    # Create a mock EventStreamBuffer that yields our mock event
-    mock_buffer = MagicMock()
-    mock_buffer.__iter__.return_value = [mock_event]
+    chunks = [chunk async for chunk in decoder.aiter_bytes(mock_iterator()) if chunk is not None]
 
-    # Mock the EventStreamBuffer class
-    with patch("botocore.eventstream.EventStreamBuffer", return_value=mock_buffer):
-        # Create an async generator that yields some test bytes
-        async def mock_iterator():
-            yield b""
-
-        # Process the stream
-        chunks = []
-        async for chunk in decoder.aiter_bytes(mock_iterator()):
-            if chunk is not None:
-                print("chunk=", chunk)
-                chunks.append(chunk)
-
-        # Verify that processing continued despite the error
-        # The chunks list should be empty since we only sent invalid data
-        assert len(chunks) == 0
+    assert len(chunks) == 0
 
 
 @pytest.mark.asyncio
@@ -205,38 +182,14 @@ async def test_aiter_bytes_valid_chunk_followed_by_unicode_error():
     """
     decoder = AWSEventStreamDecoder(model="test-model")
 
-    # Create two mock events - first valid, then invalid
-    mock_valid_event = MagicMock()
-    mock_valid_event.to_response_dict.return_value = {
-        "status_code": 200,
-        "headers": {},
-        "body": json.dumps({"token": {"text": "hello"}}).encode(),  # Valid data first
-    }
+    async def mock_iterator():
+        yield _payload_part(json.dumps({"token": {"text": "hello"}}))
+        yield _payload_part(b"\xff\xfe")
 
-    mock_invalid_event = MagicMock()
-    mock_invalid_event.to_response_dict.return_value = {
-        "status_code": 200,
-        "headers": {},
-        "body": b"\xff\xfe",  # Invalid UTF-8 bytes second
-    }
+    chunks = [chunk async for chunk in decoder.aiter_bytes(mock_iterator()) if chunk is not None]
 
-    # Create a mock EventStreamBuffer that yields valid event first, then invalid
-    mock_buffer = MagicMock()
-    mock_buffer.__iter__.return_value = [mock_valid_event, mock_invalid_event]
-
-    with patch("botocore.eventstream.EventStreamBuffer", return_value=mock_buffer):
-
-        async def mock_iterator():
-            yield b"test_bytes"
-
-        chunks = []
-        async for chunk in decoder.aiter_bytes(mock_iterator()):
-            if chunk is not None:
-                chunks.append(chunk)
-
-        # Verify we got our valid chunk despite the subsequent error
-        assert len(chunks) == 1
-        assert chunks[0]["text"] == "hello"  # Verify the content of the valid chunk
+    assert len(chunks) == 1
+    assert chunks[0]["text"] == "hello"
 
 
 def _event_header(name: str, value: str) -> bytes:
@@ -302,11 +255,14 @@ _LMI_STREAM: Final = "".join(
 
 
 async def _stream_frames(
-    frames: tuple[bytes, ...], is_messages_api: bool, mode: str
+    frames: tuple[bytes, ...],
+    is_messages_api: bool,
+    mode: str,
+    response_headers: Mapping[str, str] | None = None,
 ) -> AsyncIterator[GChunk | StreamingChatCompletionChunk | None]:
     decoder: Final = AWSEventStreamDecoder(model="m", is_messages_api=is_messages_api)
     if mode == "sync":
-        for chunk in decoder.iter_bytes(iter(frames)):
+        for chunk in decoder.iter_bytes(iter(frames), response_headers=response_headers):
             yield chunk
         return
 
@@ -314,7 +270,7 @@ async def _stream_frames(
         for frame in frames:
             yield frame
 
-    async for chunk in decoder.aiter_bytes(stream()):
+    async for chunk in decoder.aiter_bytes(stream(), response_headers=response_headers):
         yield chunk
 
 
@@ -404,6 +360,54 @@ async def test_stream_that_ends_inside_a_record_raises_after_the_complete_ones(m
     with pytest.raises(SagemakerError, match="ended inside a record") as exc_info:
         await anext(stream)
     assert exc_info.value.status_code == 500
+
+
+_EVENT_STREAM_RESPONSE_HEADERS: Final = httpx.Headers(
+    {"content-type": "application/vnd.amazon.eventstream", "x-amzn-RequestId": "req-sagemaker-1"}
+)
+_UNDECODABLE_SAGEMAKER_BODIES: Final = (
+    pytest.param(b"", id="empty"),
+    pytest.param(b"\x00\x00\x00\x05", id="shorter-than-a-prelude"),
+    pytest.param(_payload_part(_VLLM_EVENTS[1])[:-8], id="truncated-first-message"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("is_messages_api", [True, False])
+@pytest.mark.parametrize("body", _UNDECODABLE_SAGEMAKER_BODIES)
+async def test_200_body_that_decodes_to_no_events_raises_bad_gateway_naming_the_request(
+    body: bytes, is_messages_api: bool, mode: str
+):
+    stream: Final = _stream_frames((body,), is_messages_api, mode, _EVENT_STREAM_RESPONSE_HEADERS)
+
+    with pytest.raises(SagemakerError) as exc_info:
+        await anext(stream)
+
+    assert exc_info.value.status_code == 502
+    assert "HTTP 200" in exc_info.value.message
+    assert "decoded to no events" in exc_info.value.message
+    assert f"{len(body)} bytes received" in exc_info.value.message
+    assert "application/vnd.amazon.eventstream" in exc_info.value.message
+    assert "req-sagemaker-1" in exc_info.value.message
+    assert f"first bytes={body[:200]!r}" in exc_info.value.message
+    assert exc_info.value.headers["x-amzn-requestid"] == "req-sagemaker-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_stream_cut_inside_a_message_raises_bad_gateway_after_the_complete_chunks(mode: str):
+    cut_message: Final = _payload_part(_VLLM_EVENTS[2])[:-8]
+    stream: Final = _stream_frames(
+        (_payload_part(_VLLM_EVENTS[1]), cut_message), True, mode, _EVENT_STREAM_RESPONSE_HEADERS
+    )
+
+    assert _text(await anext(stream), True) == "Hél"
+    with pytest.raises(SagemakerError) as exc_info:
+        await anext(stream)
+    assert exc_info.value.status_code == 502
+    assert f"{len(cut_message)} undecoded bytes after 1 events" in exc_info.value.message
+    assert "req-sagemaker-1" in exc_info.value.message
 
 
 @pytest.mark.asyncio

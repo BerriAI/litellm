@@ -19,8 +19,10 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+import respx
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.sagemaker.chat.transformation import SagemakerChatConfig
 
@@ -430,3 +432,53 @@ def test_sagemaker_explicit_region_overrides_the_default() -> None:
     )
 
     assert url == "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/my-endpoint/invocations"
+
+
+@pytest.fixture
+def _httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+async def _drain_stream(request: Mapping[str, object], sync_mode: bool) -> None:
+    if sync_mode:
+        _ = tuple(litellm.completion(**request))
+        return
+    _ = [chunk async for chunk in await litellm.acompletion(**request)]
+
+
+@pytest.mark.usefixtures("_httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_with_an_empty_200_body_raises_bad_gateway_instead_of_an_empty_turn(
+    respx_mock: respx.MockRouter,
+    sync_mode: bool,
+) -> None:
+    respx_mock.post(
+        "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/my-endpoint/invocations-response-stream"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            content=b"",
+            headers={"content-type": "application/vnd.amazon.eventstream", "x-amzn-RequestId": "req-sagemaker-1"},
+        )
+    )
+    request: Final = {
+        "model": "sagemaker_chat/my-endpoint",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        "aws_region_name": "us-east-1",
+        "num_retries": 0,
+    }
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        await _drain_stream(request, sync_mode)
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.is_pre_first_chunk is True
+    assert isinstance(exc_info.value.original_exception, litellm.BadGatewayError)
+    assert "decoded to no events" in str(exc_info.value)
+    assert "req-sagemaker-1" in str(exc_info.value)

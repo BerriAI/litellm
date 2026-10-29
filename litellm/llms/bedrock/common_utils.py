@@ -2038,9 +2038,9 @@ def get_bedrock_chat_config(model: str):
 _BOTOCORE_SERVICE_DESCRIPTION: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
-def _load_bedrock_response_stream_shape():
+def _load_bedrock_response_stream_shape(service_name: str = "bedrock-runtime"):
     """
-    Load the ResponseStream shape from botocore's bundled bedrock-runtime schema.
+    Load the ResponseStream shape from botocore's bundled schema for ``service_name``.
 
     Returns ``None`` if botocore is unavailable or the service model cannot be
     loaded.
@@ -2051,13 +2051,14 @@ def _load_bedrock_response_stream_shape():
 
         loader: Final = Loader()
         service_dict: Final = _BOTOCORE_SERVICE_DESCRIPTION.validate_python(
-            loader.load_service_model("bedrock-runtime", "service-2")
+            loader.load_service_model(service_name, "service-2")
         )
         return ServiceModel(service_dict).shape_for("ResponseStream")
     except Exception as e:
         verbose_logger.warning(
-            "litellm: could not load bedrock-runtime response stream shape "
-            "— Bedrock event-stream decoding will be unavailable. Error: %s",
+            "litellm: could not load %s response stream shape, "
+            "so its event-stream decoding will be unavailable. Error: %s",
+            service_name,
             e,
         )
         return None
@@ -2072,6 +2073,11 @@ def get_bedrock_response_stream_shape():
     decoding is actually needed.
     """
     return _load_bedrock_response_stream_shape()
+
+
+@functools.lru_cache(maxsize=1)
+def get_bedrock_agent_response_stream_shape() -> Shape | None:
+    return _load_bedrock_response_stream_shape("bedrock-agent-runtime")
 
 
 _BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")
@@ -2156,6 +2162,15 @@ def build_bedrock_stream_event_error(
     )
 
 
+def _unmodeled_stream_error_message(response_dict: BedrockEventStreamResponseDict) -> str:
+    parts: Final = (
+        bedrock_event_stream_header(response_dict["headers"], ":error-code"),
+        bedrock_event_stream_header(response_dict["headers"], ":error-message"),
+        response_dict["body"].decode(errors="replace"),
+    )
+    return " ".join(part for part in parts if part)
+
+
 def build_bedrock_stream_error(
     response_dict: BedrockEventStreamResponseDict,
     response_stream_shape: Shape | None,
@@ -2170,7 +2185,9 @@ def build_bedrock_stream_error(
     exception_type: Final = bedrock_event_stream_header(response_dict["headers"], ":exception-type")
     if exception_type is None:
         return BedrockError(
-            status_code=response_dict["status_code"], message=response_dict["body"].decode(), headers=headers
+            status_code=response_dict["status_code"],
+            message=_unmodeled_stream_error_message(response_dict),
+            headers=headers,
         )
 
     member: Final = _structure_members(response_stream_shape).get(exception_type)

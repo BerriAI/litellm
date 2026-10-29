@@ -11,6 +11,7 @@ from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.aws_event_stream import EventStreamTally
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
@@ -67,7 +68,6 @@ if TYPE_CHECKING:
     from botocore.model import Shape
 
 converse_config: Final = AmazonConverseConfig()
-_STREAM_HEAD_BYTES: Final = 200
 NOVA_INVOKE_STREAM_EVENT_TYPES: Final = (
     "messageStart",
     "contentBlockStart",
@@ -407,77 +407,6 @@ def make_sync_call(
         raise BedrockError(status_code=408, message="Timeout error occurred.")
     except Exception as e:
         raise BedrockError(status_code=500, message=str(e))
-
-
-def _response_header(response_headers: Mapping[str, str] | None, name: str) -> str | None:
-    return None if response_headers is None else response_headers.get(name)
-
-
-class _EventStreamTally:
-    def __init__(self, event_statuses: Mapping[str, int | None] | None) -> None:
-        self.event_statuses = event_statuses
-        self.bytes_received = 0
-        self.bytes_decoded = 0
-        self.events = 0
-        self.recognized_events = 0
-        self.unrecognized_event_types: frozenset[str] = frozenset()
-        self.unrecognized_head = b""
-        self.head = b""
-
-    def add_chunk(self, chunk: bytes) -> None:
-        self.bytes_received += len(chunk)
-        if len(self.head) < _STREAM_HEAD_BYTES:
-            self.head = (self.head + chunk)[:_STREAM_HEAD_BYTES]
-
-    def add_event(self, event: "EventStreamMessage", headers: Mapping[str, object]) -> None:
-        self.events += 1
-        self.bytes_decoded += event.prelude.total_length
-        event_type: Final = bedrock_event_stream_header(headers, ":event-type")
-        if (
-            self.event_statuses is None
-            or bedrock_event_stream_header(headers, ":message-type") != "event"
-            or (event_type is not None and event_type in self.event_statuses)
-        ):
-            self.recognized_events += 1
-            return
-        self.unrecognized_event_types = self.unrecognized_event_types | {event_type or "<missing>"}
-        if not self.unrecognized_head:
-            self.unrecognized_head = event.payload[:_STREAM_HEAD_BYTES]
-
-    def undecoded_stream_error(self, response_headers: Mapping[str, str] | None) -> BedrockError | None:
-        undecoded: Final = self.bytes_received - self.bytes_decoded
-        if self.recognized_events and not undecoded:
-            return None
-        detail: Final = (
-            f"content-type={_response_header(response_headers, 'content-type')!r}, "
-            f"x-amzn-requestid={_response_header(response_headers, 'x-amzn-requestid')!r}, "
-            f"{self.bytes_received} bytes received"
-        )
-        request_id_headers: Final = provider_request_id_headers(response_headers)
-        if not self.events:
-            return BedrockError(
-                status_code=502,
-                message=(
-                    "Bedrock answered the stream with HTTP 200 but its body decoded to no events "
-                    f"({detail}, first bytes={self.head!r})"
-                ),
-                headers=request_id_headers,
-            )
-        if not self.recognized_events:
-            return BedrockError(
-                status_code=502,
-                message=(
-                    f"Bedrock answered the stream with HTTP 200 but none of its {self.events} events carried a known "
-                    f"event type (event types={sorted(self.unrecognized_event_types)}, {detail}, "
-                    f"first payload={self.unrecognized_head!r})"
-                ),
-                headers=request_id_headers,
-            )
-        return BedrockError(
-            status_code=502,
-            message=f"Bedrock stream ended with {undecoded} undecoded bytes after {self.events} events ({detail})",
-            headers=request_id_headers,
-        )
 
 
 class AWSEventStreamDecoder:
@@ -845,7 +774,7 @@ class AWSEventStreamDecoder:
         from botocore.eventstream import EventStreamBuffer
 
         event_stream_buffer: Final = EventStreamBuffer()
-        tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
+        tally: Final = EventStreamTally("Bedrock", get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
         for chunk in iterator:
             event_stream_buffer.add_data(chunk)
@@ -856,9 +785,9 @@ class AWSEventStreamDecoder:
                     # sse_event = ServerSentEvent(data=message, event="completion")
                     _data = json.loads(message)
                     yield self.chunk_parser(chunk_data=_data)
-        undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
-        if undecoded_stream_error is not None:
-            raise undecoded_stream_error
+        undecoded: Final = tally.undecoded_stream(response_headers)
+        if undecoded is not None:
+            raise BedrockError(status_code=undecoded.status_code, message=undecoded.message, headers=undecoded.headers)
         stream_end_chunk: Final = self._stream_end_chunk()
         if stream_end_chunk is not None:
             yield stream_end_chunk
@@ -870,7 +799,7 @@ class AWSEventStreamDecoder:
         from botocore.eventstream import EventStreamBuffer
 
         event_stream_buffer: Final = EventStreamBuffer()
-        tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
+        tally: Final = EventStreamTally("Bedrock", get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
         async for chunk in iterator:
             event_stream_buffer.add_data(chunk)
@@ -880,9 +809,9 @@ class AWSEventStreamDecoder:
                 if message:
                     _data = json.loads(message)
                     yield self.chunk_parser(chunk_data=_data)
-        undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
-        if undecoded_stream_error is not None:
-            raise undecoded_stream_error
+        undecoded: Final = tally.undecoded_stream(response_headers)
+        if undecoded is not None:
+            raise BedrockError(status_code=undecoded.status_code, message=undecoded.message, headers=undecoded.headers)
         stream_end_chunk: Final = self._stream_end_chunk()
         if stream_end_chunk is not None:
             yield stream_end_chunk
@@ -903,7 +832,7 @@ class AWSEventStreamDecoder:
         return response_stream_shape
 
     def _decode_event(
-        self, event: "EventStreamMessage", tally: _EventStreamTally, request_id_headers: httpx.Headers | None
+        self, event: "EventStreamMessage", tally: EventStreamTally, request_id_headers: httpx.Headers | None
     ) -> str | None:
         response_stream_shape: Final = self._response_stream_shape()
         response_dict: Final = bedrock_event_stream_response(event)

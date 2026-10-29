@@ -1181,6 +1181,23 @@ def test_build_bedrock_stream_error_resolves_status_from_the_exception_type(
     assert error.message == expected_message
 
 
+def test_build_bedrock_stream_error_names_the_code_and_message_of_an_error_frame():
+    pytest.importorskip("botocore")
+    from litellm.llms.bedrock.common_utils import build_bedrock_stream_error, get_bedrock_response_stream_shape
+
+    error = build_bedrock_stream_error(
+        {
+            "status_code": 400,
+            "headers": {":message-type": "error", ":error-code": "InternalFailure", ":error-message": "boom"},
+            "body": b"\xff",
+        },
+        get_bedrock_response_stream_shape(),
+    )
+
+    assert error.status_code == 400
+    assert error.message == "InternalFailure boom \ufffd"
+
+
 @pytest.mark.parametrize(
     ("header_value", "expected"),
     [
