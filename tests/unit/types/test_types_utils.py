@@ -1187,3 +1187,19 @@ def test_batch_dump_forwards_every_provider_usage_detail_field() -> None:
     assert python_usage == json_usage
     assert python_usage["input_tokens_details"] == {"cached_tokens": 5, "audio_tokens": 3}
     assert python_usage["output_tokens_details"] == {"reasoning_tokens": 448, "audio_tokens": 2}
+
+
+def test_batch_dump_applies_exclude_none_to_provider_usage_detail_fields() -> None:
+    batch: Final = LiteLLMBatch.model_validate(
+        {
+            **_BATCH_FIELDS,
+            "usage": {**_PROVIDER_BATCH_USAGE, "input_tokens_details": {"cached_tokens": 5, "audio_tokens": None}},
+        }
+    )
+
+    python_usage: Final = batch.model_dump(exclude_none=True)["usage"]
+    json_usage: Final = json.loads(batch.model_dump_json(exclude_none=True, warnings=False))["usage"]
+
+    assert python_usage == json_usage
+    assert python_usage["input_tokens_details"] == {"cached_tokens": 5}
+    assert (python_usage["prompt_tokens"], python_usage["input_tokens"]) == (21, 21)

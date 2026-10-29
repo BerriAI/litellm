@@ -1591,6 +1591,41 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         assert batch.usage is not None
         assert batch.usage.total_tokens == 35
 
+    @pytest.mark.parametrize(("batch_ignore_default_logging", "expected_events"), [(True, 0), (False, 1)])
+    def test_sync_logger_skips_the_cost_poller_retrieve(self, batch_ignore_default_logging, expected_events) -> None:
+        sync_events: list[object] = []
+
+        class SyncOnlyLogger(CustomLogger):
+            def log_success_event(self, kwargs, response_obj, start_time, end_time):
+                sync_events.append(kwargs["response_cost"])
+
+        logging_obj = LitellmLogging(
+            model="gpt-5.6-luna",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="batch-call-3",
+            function_id="f",
+            dynamic_success_callbacks=[SyncOnlyLogger()],
+        )
+        logging_obj.update_environment_variables(
+            model="gpt-5.6-luna",
+            user=None,
+            optional_params={},
+            litellm_params={"litellm_metadata": {"batch_ignore_default_logging": batch_ignore_default_logging}},
+            custom_llm_provider="openai",
+        )
+
+        logging_obj.success_handler(
+            result=self._batch("completed", "file-out"),
+            start_time=dt_object.now(),
+            end_time=dt_object.now(),
+            for_async_request=True,
+        )
+
+        assert len(sync_events) == expected_events
+
 
 class TestAnthropicPassthroughCustomPricing:
     """Verify the Anthropic pass-through handler forwards custom pricing."""

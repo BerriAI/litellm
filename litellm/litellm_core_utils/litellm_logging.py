@@ -3264,6 +3264,10 @@ class Logging(LiteLLMLoggingBaseClass):
         finally:
             self._restore_correlation_context()
 
+    def _is_batch_poll_without_logging(self, result: object) -> bool:
+        litellm_metadata: Final = (self.litellm_params or {}).get("litellm_metadata") or {}
+        return isinstance(result, LiteLLMBatch) and litellm_metadata.get("batch_ignore_default_logging", False) is True
+
     def _success_handler_body(
         self,
         result: object = None,
@@ -3274,6 +3278,8 @@ class Logging(LiteLLMLoggingBaseClass):
         **kwargs: Any,  # kwargs-ok: forwarded from success_handler
     ) -> None:
         verbose_logger.debug("Logging Details LiteLLM-Success Call: Cache_hit=%s", cache_hit)
+        if self._is_batch_poll_without_logging(result):
+            return
         if not self.should_run_logging(event_type="sync_success"):  # prevent double logging
             return
         start_time, end_time, result, request_logging_payload = self._prepare_success_logging(
@@ -3778,11 +3784,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         ## CALCULATE COST FOR BATCH JOBS
         if self.call_type == CallTypes.aretrieve_batch.value and isinstance(result, LiteLLMBatch):
-            litellm_params = self.litellm_params or {}
-            litellm_metadata: Final = litellm_params.get("litellm_metadata") or {}
-            if (
-                litellm_metadata.get("batch_ignore_default_logging", False) is True
-            ):  # polling job will query these frequently, don't spam db logs
+            if self._is_batch_poll_without_logging(result):
                 return
 
             batch_cost: Final = kwargs.get("batch_cost", None)

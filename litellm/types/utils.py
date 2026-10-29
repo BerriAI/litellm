@@ -4904,6 +4904,7 @@ class LiteLLMBatch(Batch):
                 exclude=info.exclude,
                 exclude_unset=info.exclude_unset,
                 exclude_defaults=info.exclude_defaults,
+                exclude_none=info.exclude_none,
             ),
         }
 
