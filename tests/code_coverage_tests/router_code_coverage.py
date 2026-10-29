@@ -183,7 +183,17 @@ ignored_function_names = [
     "_aresponses_background_stream_can_release",  # Tested through the background Responses stream tests in test_router.py
     "_raise_released_stream_error",  # Tested through the background Responses stream content-policy tests in test_router.py
     "_mid_stream_error_before_output",  # Tested through the Responses mid-stream fallback and background stream tests
+    "_kubernetes_pod_for_call",  # Run by the success and failure callbacks, tested through the pod 429 and 500 tests in test_kubernetes_pod_discovery.py
+    "_count_deployment_success",  # Run by both success callbacks, tested through the pod 500 tests in test_kubernetes_pod_discovery.py
 ]
+
+
+def public_name(function_name):
+    """
+    The deprecated public name a ``_core_<name>`` router member is reached through. Tests that call the
+    old name run the core member, since ``DeprecatedRouterMembers`` forwards it there.
+    """
+    return function_name.removeprefix("_core_")
 
 
 def main():
@@ -205,12 +215,16 @@ def main():
         router_functions.extend(get_functions_from_router(file))
     print("router_functions: ", router_functions)
     called_functions_in_tests = get_all_functions_called_in_tests(tests_dir)
-    untested_functions = [fn for fn in router_functions if fn not in called_functions_in_tests]
+    untested_functions = [
+        fn
+        for fn in router_functions
+        if fn not in called_functions_in_tests and public_name(fn) not in called_functions_in_tests
+    ]
 
     if untested_functions:
         all_untested_functions = []
         for func in untested_functions:
-            if func not in ignored_function_names:
+            if func not in ignored_function_names and public_name(func) not in ignored_function_names:
                 all_untested_functions.append(func)
         untested_perc = (len(all_untested_functions)) / len(router_functions)
         print("untested_perc: ", untested_perc)
