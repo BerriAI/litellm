@@ -1098,6 +1098,24 @@ def _matches_routing_override(token_claims: dict, override: "JWTRoutingOverride"
     )
 
 
+def oauth2_introspection_applies(
+    api_key: str, route: str, *, enable_oauth2_auth: bool, enable_jwt_auth: bool, jwt_handler: JWTHandler
+) -> bool:
+    """Whether LiteLLM validates ``api_key`` on ``route`` by OAuth2 token introspection, on LLM API, info and
+    lens routes only: a non-JWT token when OAuth2 auth is on globally, or a JWT matched by a routing override."""
+    is_jwt: Final = enable_jwt_auth and jwt_handler.is_jwt(token=api_key)
+    # Routing uses unverified JWT claims only to choose auth path.
+    # Final authentication is enforced by the selected validator.
+    route_jwt_to_oauth2: Final = is_jwt and _should_route_jwt_to_oauth2_override(token=api_key, jwt_handler=jwt_handler)
+    covered_route: Final = (
+        RouteChecks.is_llm_api_route(route=route)
+        or RouteChecks.is_info_route(route=route)
+        or route == "/lens"
+        or route.startswith("/lens/")
+    )
+    return covered_route and ((enable_oauth2_auth and not is_jwt) or route_jwt_to_oauth2)
+
+
 def _should_route_jwt_to_oauth2_override(token: str, jwt_handler: JWTHandler) -> bool:
     routing_overrides: Final = jwt_handler.litellm_jwtauth.routing_overrides
     if not routing_overrides:
@@ -2194,23 +2212,13 @@ async def user_api_key_auth_builder(
 
         enable_oauth2_auth: Final = general_settings.get("enable_oauth2_auth", False) is True
         enable_jwt_auth: Final = general_settings.get("enable_jwt_auth", False) is True
-        is_jwt = jwt_handler.is_jwt(token=api_key) if enable_jwt_auth else False
-
-        # Routing uses unverified JWT claims only to choose auth path.
-        # Final authentication is enforced by the selected validator.
-        route_jwt_to_oauth2 = is_jwt and _should_route_jwt_to_oauth2_override(token=api_key, jwt_handler=jwt_handler)
-
-        # OAuth2 applies for:
-        # 1) when global OAuth2 auth is enabled on LLM + info routes
-        # 2) JWT tokens that explicitly match routing_overrides on LLM + info routes
-        route_is_lens: Final = route == "/lens" or route.startswith("/lens/")
-        should_apply_override_oauth2: Final = route_jwt_to_oauth2 and (
-            RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(route=route) or route_is_lens
-        )
-        should_apply_global_oauth2: Final = enable_oauth2_auth and (
-            RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(route=route) or route_is_lens
-        )
-        if (should_apply_global_oauth2 and not is_jwt) or should_apply_override_oauth2:
+        if oauth2_introspection_applies(
+            api_key,
+            route,
+            enable_oauth2_auth=enable_oauth2_auth,
+            enable_jwt_auth=enable_jwt_auth,
+            jwt_handler=jwt_handler,
+        ):
             from litellm.proxy.proxy_server import premium_user
 
             if premium_user is not True:
