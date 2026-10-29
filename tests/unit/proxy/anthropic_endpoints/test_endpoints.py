@@ -208,10 +208,9 @@ class TestProxyExceptionAnthropicEnvelope:
         import litellm.proxy.anthropic_endpoints.endpoints as ep
         from litellm.proxy._types import ProxyException
 
-        request = MagicMock()
-        request.headers = {}
+        request: Final = MagicMock(headers={})
 
-        response = ep._anthropic_error_json_response(
+        response: Final = ep._anthropic_error_json_response(
             ProxyException(message="scripted", type="budget_exceeded", param=None, code=status_code), request
         )
 
