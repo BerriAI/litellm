@@ -2847,9 +2847,11 @@ class TestRunServerDbSetup:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
+        from litellm.proxy.proxy_server import ProxyConfig
+
         mock_proxy_module: Final = MagicMock(
             app=MagicMock(),
-            ProxyConfig=MagicMock(),
+            ProxyConfig=ProxyConfig,
             KeyManagementSettings=MagicMock(),
             save_worker_config=MagicMock(),
         )
