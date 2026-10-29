@@ -77,6 +77,15 @@ pub trait BaseMessagesConfig: Sync {
         headers
     }
 
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        _headers: &Headers,
+        _drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        Ok(request)
+    }
+
     /// The JSON that goes on the wire, for a host whose body differs from the typed request:
     /// Python's configs `pop("model")` when the model is addressed by the URL.
     fn wire_body(&self, body: Value) -> Value {

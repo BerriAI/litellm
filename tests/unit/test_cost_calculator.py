@@ -6810,6 +6810,73 @@ def test_completion_cost_bills_base_when_gemini_serves_on_demand(
     assert cost == pytest.approx(100 * 0.001 + 50 * 0.002)
 
 
+def test_an_unpriced_provider_slug_does_not_bill_the_turn_at_zero(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response_model: Final = "anthropic/claude-test-42161-response"
+    reported_model: Final = "claude-test-42161-unmapped"
+    monkeypatch.delitem(litellm.model_cost, reported_model, raising=False)
+    monkeypatch.delitem(litellm.model_cost, f"anthropic/{reported_model}", raising=False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        response_model,
+        {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+        },
+    )
+    response: Final = ModelResponse(
+        model=response_model,
+        choices=[],
+        usage=Usage(prompt_tokens=38, completion_tokens=24, total_tokens=62),
+    )
+    response._hidden_params["provider_response_model"] = reported_model
+
+    cost: Final = completion_cost(completion_response=response, custom_llm_provider="anthropic")
+
+    assert cost == pytest.approx(38 * 0.001 + 24 * 0.002)
+
+
+@pytest.mark.parametrize("reported_rate", (0.0, 0.01))
+def test_a_priced_provider_slug_still_decides_the_rate(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, reported_rate: float
+) -> None:
+    response_model: Final = "anthropic/claude-test-42161-response"
+    reported_model: Final = "claude-test-42161-reported"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        response_model,
+        {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"anthropic/{reported_model}",
+        {
+            "input_cost_per_token": reported_rate,
+            "output_cost_per_token": reported_rate * 2,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+        },
+    )
+    response: Final = ModelResponse(
+        model=response_model,
+        choices=[],
+        usage=Usage(prompt_tokens=38, completion_tokens=24, total_tokens=62),
+    )
+    response._hidden_params["provider_response_model"] = reported_model
+
+    cost: Final = completion_cost(completion_response=response, custom_llm_provider="anthropic")
+
+    assert cost == pytest.approx(38 * reported_rate + 24 * reported_rate * 2)
+
+
 def test_custom_pricing_as_completion_cost_param():
     from litellm import Choices, Message, ModelResponse
     from litellm.utils import Usage
