@@ -1,8 +1,13 @@
-name: integration-trial
+name: integration
 
 on:
   push:
     branches: [litellm_test_de828f]
+  pull_request:
+    types: [labeled]
+  schedule:
+    - cron: "5 8-20/3 * * 1-6"
+      timezone: America/Los_Angeles
   workflow_dispatch:
     inputs:
       suite:
@@ -32,12 +37,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.suite }}-${{ inputs.workers }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.label.name }}-${{ inputs.suite }}-${{ inputs.workers }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   integration:
-    name: integration-trial ${{ matrix.suite }}
+    name: integration ${{ matrix.suite }}
+    if: github.event_name != 'pull_request' || github.event.label.name == 'run-ci'
     runs-on: ${{ fromJSON('{"providers":"ubuntu-latest-64-cores","extensions":"ubuntu-latest-64-cores","accounting":"ubuntu-latest-32-cores","management":"ubuntu-latest-32-cores","management-replica":"ubuntu-latest-32-cores"}')[matrix.suite] || 'ubuntu-latest-16-cores' }}
     timeout-minutes: 60
     strategy:
@@ -164,11 +170,31 @@ jobs:
           cp "$record" "$RUNNER_TEMP/shards/0/execution.json"
           .venv/bin/python -m tests.integration._support.sharding "$RUNNER_TEMP/shards" --shards 1
 
-      - name: Upload results
+      - name: Report MCP coverage
+        if: ${{ !cancelled() && matrix.suite == 'mcp' }}
+        timeout-minutes: 5
+        run: |
+          coverage_dir=test-results/integration-mcp/coverage
+          test -f "$coverage_dir/coverage.txt" && exit 0
+          export COVERAGE_FILE="$PWD/$coverage_dir/data"
+          .venv/bin/python -m coverage combine --rcfile=tests/integration/mcp_coverage.toml
+          .venv/bin/python -m coverage report --rcfile=tests/integration/mcp_coverage.toml > "$coverage_dir/coverage.txt"
+          .venv/bin/python -m coverage html --rcfile=tests/integration/mcp_coverage.toml -d "$coverage_dir/html"
+          tail -n 1 "$coverage_dir/coverage.txt"
+
+      - name: Check results for the license
+        id: secret-scan
         if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          SCANNED_SECRET: ${{ secrets.LITELLM_LICENSE }}
+        run: python .github/scripts/assert_secret_absent.py test-results
+
+      - name: Upload results
+        if: ${{ !cancelled() && steps.secret-scan.outcome == 'success' }}
         timeout-minutes: 10
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
-          name: integration-trial-${{ matrix.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: integration-${{ matrix.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/
           retention-days: 14
