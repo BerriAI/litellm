@@ -3278,20 +3278,21 @@ class ProxyBaseLLMRequestProcessing:
         except (Exception, asyncio.CancelledError) as exc:
             _exception_raised = True
             if logging_obj.prepared_cost is not None:
-                await finalize_proxy_response_cost(
-                    logging_obj,
-                    response,
-                    guardrail_information_cost(
-                        _guardrail_entries_for_headers(get_or_create_metadata_bucket(self.data)[1], logging_obj)
-                    ),
-                )
-                if isinstance(exc, asyncio.CancelledError):
-                    await proxy_logging_obj.post_call_failure_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        original_exception=HTTPException(status_code=499, detail=_CLIENT_DISCONNECT_DETAIL),
-                        request_data=self.data,
-                        dispatched_call_type=self.route_type,
+                with anyio.CancelScope(shield=True):
+                    await finalize_proxy_response_cost(
+                        logging_obj,
+                        response,
+                        guardrail_information_cost(
+                            _guardrail_entries_for_headers(get_or_create_metadata_bucket(self.data)[1], logging_obj)
+                        ),
                     )
+                    if isinstance(exc, asyncio.CancelledError):
+                        await proxy_logging_obj.post_call_failure_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            original_exception=HTTPException(status_code=499, detail=_CLIENT_DISCONNECT_DETAIL),
+                            request_data=self.data,
+                            dispatched_call_type=self.route_type,
+                        )
             raise
         finally:
             ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(

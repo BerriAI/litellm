@@ -2485,9 +2485,17 @@ class Logging(LiteLLMLoggingBaseClass):
         if payload is None or not isinstance(raw_cost, (int, float)):
             return None
         recorded_usage: Final[object] = self.model_call_details.get("combined_usage_object")
+        response_usage: Final[object] = getattr(prepared[2], "usage", None)
+        normalized_usage: Final = (
+            recorded_usage
+            if isinstance(recorded_usage, Usage)
+            else response_usage
+            if isinstance(response_usage, Usage)
+            else None
+        )
         usage: Final = StandardLoggingPayloadSetup.get_usage_from_response_obj(
             _extract_response_obj_and_hidden_params(prepared[2], None)[0],
-            combined_usage_object=recorded_usage if isinstance(recorded_usage, Usage) else None,
+            combined_usage_object=normalized_usage,
         ).model_copy(deep=True)
         self.prepared_cost = PreparedCost(
             raw_cost,
@@ -3017,7 +3025,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
             self.model_call_details["log_event_type"] = "successful_api_call"
             self.model_call_details["end_time"] = end_time
-            self.model_call_details["cache_hit"] = cache_hit
+            self.model_call_details["cache_hit"] = (
+                self.prepared_cost.payload["cache_hit"]
+                if cache_hit is None and self.prepared_cost is not None
+                else cache_hit
+            )
 
             if self.call_type == CallTypes.anthropic_messages.value:
                 result = self._anthropic_messages_logged_response(result=result)

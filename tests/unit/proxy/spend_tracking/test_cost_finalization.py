@@ -399,22 +399,29 @@ async def test_deferred_cache_hit_finalizes_zero_for_results_without_hidden_para
     finalized: Final = await finalize_response_cost(logging_obj, cached_result, counter, NOW)
     assert finalized is not None and finalized.amount == 0.0
     assert counter.calls == 0
+    logging_obj._success_handler_helper_fn(cached_result, NOW, NOW)
+    payload: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert payload["cache_hit"] is True
+    assert payload["saved_cache_cost"] > 0
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [RuntimeError("post-call failed"), asyncio.CancelledError()])
+@pytest.mark.parametrize("failure", [RuntimeError("post-call failed"), asyncio.CancelledError(), "cancel_scope"])
 @pytest.mark.parametrize("guardrail_cost", [0.0, 0.2])
 @pytest.mark.parametrize("mutate_usage", [False, True])
 @pytest.mark.parametrize("disable_error_logs", [False, True])
+@pytest.mark.parametrize("reserved_cost", [0.0, 0.4])
 async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     logging_obj: Logging,
     monkeypatch: pytest.MonkeyPatch,
-    failure: BaseException,
+    failure: BaseException | str,
     guardrail_cost: float,
     mutate_usage: bool,
     disable_error_logs: bool,
+    reserved_cost: float,
 ) -> None:
     from unittest.mock import create_autospec
+    import anyio
 
     from fastapi import Request, Response
 
@@ -428,12 +435,18 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     from litellm.proxy import proxy_server
     from litellm.proxy.utils import ProxyLogging
 
+    scope: Final = anyio.CancelScope()
+
     class RejectCompletedCall(CustomLogger):
         async def async_post_call_success_hook(
             self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
         ) -> object:
             if mutate_usage and isinstance(response, ModelResponse):
                 response.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+            if failure == "cancel_scope":
+                scope.cancel()
+                await anyio.sleep(0)
+            assert isinstance(failure, BaseException)
             raise failure
 
     monkeypatch.setattr(proxy_server, "general_settings", {"disable_error_logs": disable_error_logs})
@@ -455,9 +468,29 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     }
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
-    auth: Final = UserAPIKeyAuth(request_route="/v1/chat/completions")
+    counters: Final = DualCache()
+    for key in ("spend:key:completed-key", "spend:team:completed-team"):
+        counters.set_cache(key=key, value=1.5 + reserved_cost)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", counters)
+    reservation: Final = (
+        {
+            "reserved_cost": reserved_cost,
+            "entries": [
+                {"counter_key": key, "entity_type": "Key", "entity_id": key, "reserved_cost": reserved_cost}
+                for key in ("spend:key:completed-key", "spend:team:completed-team")
+            ],
+        }
+        if reserved_cost
+        else None
+    )
+    auth: Final = UserAPIKeyAuth(
+        request_route="/v1/chat/completions",
+        api_key="completed-key",
+        team_id="completed-team",
+        budget_reservation=reservation,
+    )
     request: Final = Request({"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []})
-    with pytest.raises(type(failure)):
+    with scope, pytest.raises(asyncio.CancelledError if failure == "cancel_scope" else type(failure)):
         await processor._process_llm_request(
             request=request,
             fastapi_response=Response(),
@@ -482,6 +515,10 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     assert payload["completion_tokens"] == 5
     assert payload["response_cost"] == pytest.approx(recorded["response_cost"])
     assert not logging_obj.async_success_log_enqueued
+    if auth.budget_reservation is not None:
+        assert auth.budget_reservation["finalized"] is True
+    assert await counters.async_get_cache(key="spend:key:completed-key") == pytest.approx(2.0 + guardrail_cost)
+    assert await counters.async_get_cache(key="spend:team:completed-team") == pytest.approx(2.0 + guardrail_cost)
 
 
 @pytest.mark.asyncio

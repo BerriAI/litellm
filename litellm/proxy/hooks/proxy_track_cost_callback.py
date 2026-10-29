@@ -386,8 +386,12 @@ class _ProxyDBLogger(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
     ) -> None:
+        completed_cost: Final = (
+            _str_keyed_fields(request_data.get("standard_logging_object")).get("cost_finalized") is True
+        )
         try:
-            await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
+            if not completed_cost:
+                await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
         except Exception:
             verbose_proxy_logger.exception("Failed to release budget reservation during failure handling")
             try:
@@ -400,9 +404,6 @@ class _ProxyDBLogger(CustomLogger):
                 )
 
         request_route: Final = user_api_key_dict.request_route
-        completed_cost: Final = (
-            _str_keyed_fields(request_data.get("standard_logging_object")).get("cost_finalized") is True
-        )
         if (
             ProxyDBLogger._should_track_errors_in_db() is False
             and not completed_cost
@@ -536,6 +537,8 @@ class _ProxyDBLogger(CustomLogger):
         )
 
         await self._write_failure_spend_rows(
+            completed_cost=completed_cost,
+            request_tags=_get_request_tags_for_cost_tracking(None, existing_metadata),
             user_api_key_dict=user_api_key_dict,
             original_exception=original_exception,
             start_time=actual_start_time,
@@ -553,9 +556,43 @@ class _ProxyDBLogger(CustomLogger):
         original_exception: Exception,
         start_time: datetime,
         spend_rows: Sequence[tuple[float, Mapping[str, object]]],
+        completed_cost: bool = False,
+        request_tags: list[str] | None = None,
     ) -> None:
         """One spend row (and one key/team/user spend deduction) per ``(response_cost, kwargs)`` pair."""
         for row_cost, row_kwargs in spend_rows:
+            if completed_cost:
+                from litellm.proxy.proxy_server import increment_spend_counters, proxy_logging_obj
+
+                await _update_database_and_spend_counters(
+                    proxy_logging_obj=proxy_logging_obj,
+                    spend_writer=self._spend_writer(),
+                    increment_spend_counters=increment_spend_counters,
+                    user_api_key=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
+                    response_cost=row_cost,
+                    user_id=user_api_key_dict.user_id,
+                    end_user_id=None if litellm.disable_end_user_cost_tracking else user_api_key_dict.end_user_id,
+                    team_id=user_api_key_dict.team_id,
+                    org_id=user_api_key_dict.org_id,
+                    project_id=user_api_key_dict.project_id,
+                    kwargs=dict(row_kwargs),
+                    completion_response=original_exception,
+                    start_time=start_time,
+                    end_time=datetime.now(timezone.utc),
+                    budget_reservation=user_api_key_dict.budget_reservation,
+                    request_tags=request_tags,
+                    model_access_groups=debitable_model_access_groups(
+                        attributed=get_request_model_access_groups(row_kwargs),
+                        served_model_id=model_id
+                        if isinstance(
+                            model_id := _str_keyed_fields(row_kwargs.get("standard_logging_object")).get("model_id"),
+                            str,
+                        )
+                        else None,
+                        router=get_llm_router(),
+                    ),
+                )
+                continue
             await self._spend_writer().update_database(
                 token=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
                 response_cost=row_cost,
@@ -1047,6 +1084,7 @@ async def _update_database_and_spend_counters(
     request_tags: list[str] | None = None,
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
+    spend_writer: DBSpendUpdateWriter | None = None,
 ) -> bool:
     """The reservation is reconciled before the spend is persisted, from its own read. One spend counter batch then
     spans the database write and the counter update, so the post-call counters are read with a single MGET after the
@@ -1073,6 +1111,7 @@ async def _update_database_and_spend_counters(
     with spend_counter_batch_scope(spend_counter_cache.redis_cache, counter_keys=counter_keys):
         return await _update_database_and_spend_counters_in_batch(
             proxy_logging_obj=proxy_logging_obj,
+            spend_writer=spend_writer,
             increment_spend_counters=increment_spend_counters,
             user_api_key=user_api_key,
             user_id=user_id,
@@ -1108,9 +1147,10 @@ async def _update_database_and_spend_counters_in_batch(
     request_tags: list[str] | None,
     model_access_groups: Sequence[str] | None,
     project_id: str | None,
+    spend_writer: DBSpendUpdateWriter | None = None,
 ) -> bool:
     try:
-        writer: Final = proxy_logging_obj.db_spend_update_writer
+        writer: Final = spend_writer if spend_writer is not None else proxy_logging_obj.db_spend_update_writer
         accounting: Final = (
             _batch_accounting_for(_BATCH_CALLBACK_FIELDS.validate_python(kwargs).get("litellm_call_id"))
             if _BATCH_ACCOUNTING.get() is not None
