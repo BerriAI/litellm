@@ -159,6 +159,30 @@ def test_a_team_request_counts_with_the_deployment_its_team_is_served_by():
     assert models_counted_for("reports", router, "team-b") == ("reports",)
 
 
+@pytest.mark.parametrize("requested", ["reports", "latest-reports"], ids=["routing-group", "alias-of-routing-group"])
+def test_a_team_request_to_a_routing_group_counts_with_the_member_deployment_its_team_is_served_by(requested: str):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "drafts",
+                "litellm_params": {"model": "azure/gpt-5.6-sol", "api_key": "x", "api_base": "https://x"},
+            },
+            {
+                "model_name": "drafts-team-a",
+                "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "x"},
+                "model_info": {"team_id": "team-a", "team_public_model_name": "drafts"},
+            },
+        ],
+        routing_groups=[{"group_name": "reports", "models": ["drafts"], "routing_strategy": "simple-shuffle"}],
+        model_group_alias={"latest-reports": "reports"},
+    )
+
+    assert models_counted_for(requested, router, "team-a") == models_counted_for(
+        requested, _router((requested, "anthropic/claude-haiku-5-5")), None
+    )
+    assert models_counted_for(requested, router, "team-b") == ("azure/gpt-5.6-sol",)
+
+
 def test_a_team_with_its_own_wildcard_counts_with_it_and_never_with_a_proxy_wide_wildcard():
     router: Final = Router(
         model_list=[

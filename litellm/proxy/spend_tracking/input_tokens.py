@@ -146,7 +146,8 @@ def _count_input_tokens_for_models(
 
 def models_counted_for(model: str, llm_router: Router | None, team_id: str | None) -> tuple[str, ...]:
     """The names to count a request for `model` from `team_id` with, keeping the largest count, one per deployment
-    routing would serve it from: the ones named `model`, else those of the one wildcard route that serves it.
+    routing would serve it from: the team's or else the shared ones named `model`, its alias target, or its routing
+    group's members, else those of the one wildcard route that serves it.
 
     An OpenAI deployment counts as its OpenAI model, so it gets that model's tokenizer and PDF page pricing, prefixed
     `openai/` when OpenAI itself serves it, so `openai_chat_pdf_file_tokens` can add what its chat completions bills. A
@@ -160,12 +161,13 @@ def models_counted_for(model: str, llm_router: Router | None, team_id: str | Non
 
 def _routed_deployments(model: str, llm_router: Router, team_id: str | None) -> Sequence[object]:
     registry: Final = llm_router.registry()
-    named: Final = (
-        *registry.deployments(model, source="all", team_id=team_id),
-        *registry.deployments(model, source="alias"),
-        *registry.deployments(model, source="routing_groups"),
+    resolved: Final = registry.resolve(model, kind="alias") or model
+    routing_group: Final = llm_router.get_routing_group(resolved)
+    members: Final = routing_group.models if routing_group is not None else (resolved,)
+    named: Final = tuple(
+        chain.from_iterable(registry.deployments(member, source="all", team_id=team_id) for member in members)
     )
-    return named or registry.deployments(model, source="wildcard", team_id=team_id)
+    return named or registry.deployments(resolved, source="wildcard", team_id=team_id)
 
 
 def openai_chat_pdf_file_tokens(counted_model: str, pdf_files: int) -> int:
