@@ -192,10 +192,7 @@ def test_responses_call_folds_developer_items_into_instructions() -> None:
 
 
 @respx.mock
-def test_responses_call_keeps_developer_items_in_place_for_a_model_that_accepts_later_system_items(
-    declare_mid_conversation_system: Callable[[str, bool], None],
-) -> None:
-    declare_mid_conversation_system("fireworks_ai/accounts/fireworks/models/accepts-later-system", True)
+def test_responses_call_keeps_developer_items_in_place_for_a_deployment_that_accepts_later_system_items() -> None:
     route: Final = _fireworks_responses_route("accounts/fireworks/models/accepts-later-system")
     litellm.responses(
         model="fireworks_ai/accounts/fireworks/models/accepts-later-system",
@@ -205,6 +202,7 @@ def test_responses_call_keeps_developer_items_in_place_for_a_model_that_accepts_
             {"role": "developer", "content": "Answer with exactly one word."},
             {"role": "user", "content": "What is the capital of France?"},
         ],
+        model_info={"id": "deployment-1", "supports_mid_conversation_system": True},
         api_key="fw-test-key",
     )
     body: Final = _routed_body(route)
@@ -732,3 +730,40 @@ def test_responses_call_forwards_litellm_user_id_as_user(
     _, _, body = _sent_request(client)
     assert body.get("user") == expected_user
     assert "fireworks_forward_user_id" not in body
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("model_info", "expected_instructions", "expected_input"),
+    [
+        (None, "Answer in one word.", ({"role": "user", "content": "What is the capital of France?"},)),
+        (
+            {"id": "deployment-1", "supports_mid_conversation_system": True},
+            None,
+            (
+                {"role": "user", "content": "What is the capital of France?"},
+                {"role": "system", "content": "Answer in one word.", "type": "message"},
+            ),
+        ),
+    ],
+)
+def test_responses_call_forwards_developer_items_in_place_only_when_the_deployment_itself_declares_true(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+    model_info: Mapping[str, object] | None,
+    expected_instructions: str | None,
+    expected_input: tuple[Mapping[str, object], ...],
+) -> None:
+    declare_mid_conversation_system("fireworks_ai/accounts/fireworks/models/shared-backend", True)
+    route: Final = _fireworks_responses_route("accounts/fireworks/models/shared-backend")
+    litellm.responses(
+        model="fireworks_ai/accounts/fireworks/models/shared-backend",
+        input=[
+            {"role": "user", "content": "What is the capital of France?"},
+            {"role": "developer", "content": "Answer in one word."},
+        ],
+        model_info=model_info,
+        api_key="fw-test-key",
+    )
+    body: Final = _routed_body(route)
+    assert body.get("instructions") == expected_instructions
+    assert tuple(body["input"]) == expected_input

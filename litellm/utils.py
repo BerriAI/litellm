@@ -3395,7 +3395,7 @@ def deployment_model_info(litellm_params: object) -> Mapping[str, object] | None
     return _DeploymentModelInfo.model_validate(litellm_params).model_info
 
 
-def _deployment_declared_mid_conversation_system_support(model_info: object) -> bool | None:
+def deployment_declared_mid_conversation_system_support(model_info: object) -> bool | None:
     match model_info:
         case {"supports_mid_conversation_system": bool(declared)}:
             return declared
@@ -3410,7 +3410,7 @@ def declared_mid_conversation_system_support(
     The `supports_mid_conversation_system` the deployment's own model_info declares, else the one the
     cost map declares for the model, else None when neither sets it.
     """
-    deployment_declared: Final = _deployment_declared_mid_conversation_system_support(model_info)
+    deployment_declared: Final = deployment_declared_mid_conversation_system_support(model_info)
     if deployment_declared is not None:
         return deployment_declared
     if is_explicitly_disabled_factory(model, custom_llm_provider, "supports_mid_conversation_system"):

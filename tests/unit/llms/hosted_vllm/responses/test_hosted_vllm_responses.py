@@ -259,3 +259,20 @@ def test_hosted_vllm_responses_forwards_a_later_developer_item_in_place_for_an_u
     body: Final = _sent_body(route)
     assert body["instructions"] == "You are a terse assistant."
     assert tuple(body["input"]) == _LATER_DEVELOPER_INPUT
+
+
+@respx.mock
+def test_hosted_vllm_responses_forwards_a_developer_item_without_content_on_a_deployment_declared_system_first() -> None:
+    route: Final = _vllm_responses_route("Paris")
+    input_items: Final = (
+        {"role": "user", "content": "What is the capital of France?"},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Paris."}]},
+        {"type": "message", "role": "developer"},
+    )
+    litellm.responses(
+        model="hosted_vllm/Qwen/Qwen3-8B",
+        input=list(input_items),
+        model_info={"id": "deployment-1", "supports_mid_conversation_system": False},
+        api_base="https://test-vllm.example.com/v1",
+    )
+    assert tuple(_sent_body(route)["input"]) == input_items

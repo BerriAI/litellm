@@ -520,8 +520,14 @@ def _with_message_cache_control(
 def _as_system_message(message: AllMessageValues) -> AllMessageValues:
     if message["role"] != "developer":
         return message
-    translated: Final[ChatCompletionSystemMessage] = {**message, "role": "system"}
-    return translated
+    content_only: Final[ChatCompletionSystemMessage] = {"role": "system", "content": message["content"]}
+    named: Final[ChatCompletionSystemMessage] = (
+        content_only if "name" not in message else {**content_only, "name": message["name"]}
+    )
+    if "cache_control" not in message:
+        return named
+    cached: Final[ChatCompletionSystemMessage] = {**named, "cache_control": message["cache_control"]}
+    return cached
 
 
 def _text_blocks(
@@ -645,8 +651,16 @@ def closing_instruction_indices(roles: Sequence[str | None]) -> frozenset[int]:
     return frozenset(range(closing_start, len(roles)))
 
 
+def _role_name(role: object) -> str | None:
+    return role if isinstance(role, str) else None
+
+
+def _message_roles(messages: Sequence[AllMessageValues]) -> tuple[str | None, ...]:
+    return tuple(_role_name(message["role"]) for message in messages)
+
+
 def _hoisted_message_order(messages: Sequence[AllMessageValues]) -> tuple[int, ...]:
-    hoisted: Final = hoisted_instruction_indices(tuple(message["role"] for message in messages))
+    hoisted: Final = hoisted_instruction_indices(_message_roles(messages))
     hoisted_set: Final = frozenset(hoisted)
     return (*hoisted, *(index for index in range(len(messages)) if index not in hoisted_set))
 
@@ -654,13 +668,14 @@ def _hoisted_message_order(messages: Sequence[AllMessageValues]) -> tuple[int, .
 def _developer_message_as_user(message: AllMessageValues) -> AllMessageValues:
     if message["role"] != "developer":
         return message
-    if "cache_control" not in message:
-        as_user: Final[ChatCompletionUserMessage] = {"role": "user", "content": message["content"]}
+    copied: Final = copy.deepcopy(message)
+    if "cache_control" not in copied:
+        as_user: Final[ChatCompletionUserMessage] = {"role": "user", "content": copied["content"]}
         return as_user
     cached_as_user: Final[ChatCompletionUserMessage] = {
         "role": "user",
-        "content": message["content"],
-        "cache_control": message["cache_control"],
+        "content": copied["content"],
+        "cache_control": copied["cache_control"],
     }
     return cached_as_user
 
@@ -685,7 +700,7 @@ def hoist_developer_messages_into_leading_system_message(
     assistant's turn, and each run of consecutive system messages folds into one.
     """
     order: Final = _hoisted_message_order(messages)
-    closing: Final = closing_instruction_indices(tuple(message["role"] for message in messages))
+    closing: Final = closing_instruction_indices(_message_roles(messages))
     placed: Final = tuple(
         _developer_message_as_user(messages[index]) if index in closing else messages[index] for index in order
     )

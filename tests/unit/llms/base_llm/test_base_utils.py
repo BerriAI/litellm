@@ -259,6 +259,18 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "User turn 2"},
         ]
 
+    def test_hoisted_developer_message_keeps_only_the_fields_a_system_message_has(self) -> None:
+        messages: Final = [
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word.", "name": "codex", "extra_key": "x"},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
+            {"role": "system", "content": "Answer with exactly one word.", "name": "codex"},
+            {"role": "user", "content": "Hi there"},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+
     def test_developer_message_in_second_position_without_a_leading_system_message_is_hoisted(self) -> None:
         messages: Final = [
             {"role": "user", "content": "Hi there"},

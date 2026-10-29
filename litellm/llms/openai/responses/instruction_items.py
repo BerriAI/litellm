@@ -21,7 +21,7 @@ def _role(item: ResponseInputItemParam) -> str | None:
 
 
 def _developer_item_as(item: ResponseInputItemParam, role: UnfoldedDeveloperRole) -> ResponseInputItemParam:
-    if "role" not in item or item["role"] != "developer":
+    if "role" not in item or item["role"] != "developer" or "content" not in item:
         return item
     return EasyInputMessageParam(role=role, content=item["content"], type="message")
 

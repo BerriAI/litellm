@@ -21,7 +21,11 @@ from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
-from litellm.utils import declared_mid_conversation_system_support, deployment_model_info
+from litellm.utils import (
+    declared_mid_conversation_system_support,
+    deployment_declared_mid_conversation_system_support,
+    deployment_model_info,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -80,12 +84,11 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         headers: dict[str, str],  # mutable-ok: overrides the base class signature
     ) -> dict[str, object]:  # mutable-ok: overrides the base class signature
         validated_input: Final = self._validate_input_param(input)
-        declared: Final = declared_mid_conversation_system_support(
-            model, self.custom_llm_provider.value, deployment_model_info(litellm_params)
-        )
+        model_info: Final = deployment_model_info(litellm_params)
+        declared: Final = declared_mid_conversation_system_support(model, self.custom_llm_provider.value, model_info)
         folded: Final = (
             None
-            if declared is True
+            if deployment_declared_mid_conversation_system_support(model_info) is True
             else instruction_items_folded(
                 validated_input, response_api_optional_request_params, "user" if declared is False else "system"
             )
