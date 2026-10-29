@@ -1,3 +1,4 @@
+import weakref
 from collections.abc import AsyncIterator, Callable
 from typing import Final
 
@@ -63,7 +64,7 @@ class _Lanes:
 class _AsyncReleasingStream(httpx.AsyncByteStream):
     def __init__(self, stream: httpx.AsyncByteStream, release: Callable[[], None]) -> None:
         self._stream: Final = stream
-        self._release: Final = release
+        self._release: Final = weakref.finalize(self, release)
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         async for chunk in self._stream:

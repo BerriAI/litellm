@@ -89,8 +89,8 @@ def http2_enabled() -> bool:
 _HTTP2_OFF_VALUES: Final = frozenset({"false", "0", "no", "off"})
 
 
-def _is_http2_off(value: bool | str | None) -> bool:
-    return value is False or (isinstance(value, str) and value.strip().lower() in _HTTP2_OFF_VALUES)
+def _is_http2_off(value: bool | int | str | None) -> bool:
+    return str(value).strip().lower() in _HTTP2_OFF_VALUES
 
 
 def http2_disabled() -> bool:

@@ -1,4 +1,5 @@
 import asyncio
+import gc
 from collections.abc import Callable
 from typing import Final
 
@@ -184,3 +185,23 @@ async def test_async_spread_frees_the_stream_when_the_request_fails():
             with pytest.raises(httpx.ConnectError):
                 await client.get(URL)
     assert connections.opened == 1
+
+
+async def _open_streams_without_closing(client: httpx.AsyncClient, count: int) -> int:
+    responses: Final = tuple([await client.send(client.build_request("GET", URL), stream=True) for _ in range(count)])
+    return sum(not response.is_closed for response in responses)
+
+
+@pytest.mark.asyncio
+async def test_async_spread_frees_the_streams_of_responses_dropped_without_closing():
+    gate: Final = asyncio.Event()
+    gate.set()
+    connections: Final = _AsyncConnections(gate)
+    spread: Final = AsyncHTTP2ConnectionSpread(connections, UNCAPPED)
+    async with httpx.AsyncClient(transport=spread) as client:
+        assert await _open_streams_without_closing(client, HTTP2_STREAMS_PER_CONNECTION) == HTTP2_STREAMS_PER_CONNECTION
+        gc.collect()
+
+        assert spread.has_request_in_flight() is False
+        assert (await client.get(URL)).text == "ok"
+        assert len(connections.opened) == 1

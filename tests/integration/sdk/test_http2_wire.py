@@ -405,9 +405,9 @@ def test_explicit_http2_off_keeps_vertex_search_on_http1(
     assert asyncio.run(_avertex_search_file_ids(http2_tls_peer)) == ["http/1.1"]
 
 
-@pytest.mark.parametrize("off", [False, "false"])
+@pytest.mark.parametrize("off", [False, "false", 0])
 def test_http2_setting_off_keeps_vertex_search_on_http1(
-    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer, off: bool | str
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer, off: bool | int | str
 ) -> None:
     import litellm
 
