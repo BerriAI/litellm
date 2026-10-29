@@ -13,6 +13,7 @@ from typing_extensions import TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.audio_output_refusal import forward_without_audio_output
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.anthropic.messages.adapters.transformation import (
@@ -114,6 +115,16 @@ def _extract_proxy_litellm_metadata(
         return None, None
     user_api_key_auth: Final[UserAPIKeyAuth | None] = litellm_metadata.get("user_api_key_auth")
     return litellm_metadata, user_api_key_auth
+
+
+def _kwargs_without_audio_output(model: str, request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    provider: Final = request_kwargs.get("custom_llm_provider")
+    return forward_without_audio_output(
+        request_kwargs,
+        endpoint="/v1/messages",
+        model=model,
+        custom_llm_provider=provider if isinstance(provider, str) else None,
+    )
 
 
 def _requested_router(kwargs: Mapping[str, object]) -> "Router | None":
@@ -744,6 +755,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
         request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
         reject_malformed_tool_result_text(messages, model, request_kwargs)
+        forwarded_kwargs: Final = _kwargs_without_audio_output(model, request_kwargs)
         drop_invalid_edits: Final = drops_unsupported_params(request_kwargs.get("drop_params"))
         sub_call_logging_kwargs: Final = proxy_sub_call_logging_kwargs(request_kwargs)
         sub_call_trace_id: Final = proxy_sub_call_trace_id(request_kwargs)
@@ -793,7 +805,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             top_k=top_k,
             top_p=top_p,
             output_format=output_format,
-            extra_kwargs=kwargs,
+            extra_kwargs=forwarded_kwargs,
         )
 
         completion_response: Final = await litellm.acompletion(**completion_kwargs)
@@ -891,6 +903,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # loop. The async ``async_anthropic_messages_handler`` path is
         # unaffected because it ``await``s within the original event loop.
         litellm_router: Final[Router | None] = kwargs.pop("litellm_router", None)
+        forwarded_kwargs: Final = _kwargs_without_audio_output(model, _REQUEST_KWARGS.validate_python(kwargs))
 
         # Skip the async bridge entirely when there is nothing for either the
         # polyfill or the client-history slice-only fallback to do. The vast
@@ -940,7 +953,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             top_k=top_k,
             top_p=top_p,
             output_format=output_format,
-            extra_kwargs=kwargs,
+            extra_kwargs=forwarded_kwargs,
         )
 
         completion_response: Final = litellm.completion(**completion_kwargs)

@@ -9323,6 +9323,72 @@ async def test_text_completion_stream_include_usage_returns_usage_on_final_chunk
     assert (final_usage.prompt_tokens, final_usage.completion_tokens, final_usage.total_tokens) == (3, 2, 5)
 
 
+_ANY_GEMINI_URL: Final = r"https://generativelanguage\.googleapis\.com/.*"
+_GEMINI_VOICE: Final = {"voice": "Kore", "format": "pcm16"}
+_GEMINI_TEXT_REPLY: Final = {
+    "candidates": [{"content": {"role": "model", "parts": [{"text": "hi"}]}, "finishReason": "STOP", "index": 0}],
+    "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 3},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("model", "request_options"),
+    [
+        ("gemini/gemini-3.8-flash-tts", {}),
+        ("gemini/gemini-3.8-flash-tts", {"drop_params": True}),
+        ("gemini/gemini-3.8-flash", {"audio": _GEMINI_VOICE}),
+        ("gemini/gemini-3.8-flash", {"modalities": ["text", "audio"]}),
+    ],
+    ids=["tts", "tts-under-drop-params", "audio-param", "audio-modality"],
+)
+async def test_text_completion_refuses_an_audio_output_request_before_gemini_is_called(
+    sync_mode: bool, model: str, request_options: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = {"model": model, "prompt": "Say hi", "api_key": "test-key", **request_options}
+    with respx.mock(assert_all_called=False) as mock_router:
+        route: Final = mock_router.post(url__regex=_ANY_GEMINI_URL).mock(
+            return_value=httpx.Response(200, json=_GEMINI_TEXT_REPLY)
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as error:
+            litellm.text_completion(**request) if sync_mode else await litellm.atext_completion(**request)
+
+    assert error.value.status_code == 400
+    assert "/v1/completions" in error.value.message
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_text_completion_drop_params_sends_a_text_gemini_model_no_audio_output_ask(
+    sync_mode: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    request: Final = {
+        "model": "gemini/gemini-3.8-flash",
+        "prompt": "Say hi",
+        "api_key": "test-key",
+        "audio": _GEMINI_VOICE,
+        "modalities": ["text", "audio"],
+        "drop_params": True,
+    }
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(url__regex=_ANY_GEMINI_URL).mock(
+            return_value=httpx.Response(200, json=_GEMINI_TEXT_REPLY)
+        )
+        response: Final = (
+            litellm.text_completion(**request) if sync_mode else await litellm.atext_completion(**request)
+        )
+
+    assert response.choices[0].text == "hi"
+    generation_config: Final = json.loads(route.calls.last.request.content)["generationConfig"]
+    assert "speechConfig" not in generation_config
+    assert generation_config["responseModalities"] == ["TEXT"]
+
+
 def test_model_alias_map_resolves_the_outbound_model(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:

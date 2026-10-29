@@ -1,6 +1,7 @@
 import json
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Mapping
 from typing import Final
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -258,3 +259,63 @@ async def test_gemini_streaming_function_call_preserves_thought_signature() -> N
     assert function_calls[0].name == "get_weather"
     assert function_calls[0].provider_specific_fields == {"thought_signature": signature}
     assert len(requests) == 1
+
+
+_ANY_GEMINI_URL: Final = r"https://generativelanguage\.googleapis\.com/.*"
+_VOICE: Final = {"voice": "Kore", "format": "pcm16"}
+_TEXT_REPLY: Final = {
+    "candidates": [{"content": {"role": "model", "parts": [{"text": "hi"}]}, "finishReason": "STOP", "index": 0}],
+    "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 3},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    ("model", "request_options"),
+    [
+        ("gemini/gemini-3.8-flash-tts", {}),
+        ("gemini/gemini-3.8-flash-tts", {"drop_params": True}),
+        ("gemini/gemini-3.8-flash", {"audio": _VOICE}),
+        ("gemini/gemini-3.8-flash", {"modalities": ["text", "audio"]}),
+    ],
+    ids=["tts", "tts-under-drop-params", "audio-param", "audio-modality"],
+)
+async def test_an_audio_output_request_is_refused_before_gemini_is_called(
+    stream: bool, model: str, request_options: Mapping[str, object]
+) -> None:
+    with patch.object(litellm, "drop_params", False), respx.mock(assert_all_called=False) as mock_router:
+        route: Final = mock_router.post(url__regex=_ANY_GEMINI_URL).mock(
+            return_value=httpx.Response(status_code=200, json=_TEXT_REPLY)
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as error:
+            await litellm.aresponses(model=model, api_key="test-key", input="Say hi", stream=stream, **request_options)
+
+    assert error.value.status_code == 400
+    assert "/v1/responses" in error.value.message
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_drop_params_sends_a_text_gemini_model_no_audio_output_ask() -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(url__regex=_ANY_GEMINI_URL).mock(
+            return_value=httpx.Response(status_code=200, json=_TEXT_REPLY)
+        )
+        response: Final = await litellm.aresponses(
+            model="gemini/gemini-3.8-flash",
+            api_key="test-key",
+            input="Say hi",
+            audio=_VOICE,
+            modalities=["text", "audio"],
+            drop_params=True,
+        )
+        requests: Final = tuple(route.calls)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.output_text == "hi"
+    assert len(requests) == 1
+    generation_config: Final = _JSON_OBJECT.validate_json(requests[0].request.content)["generationConfig"]
+    assert isinstance(generation_config, dict)
+    assert "speechConfig" not in generation_config
+    assert generation_config["responseModalities"] == ["TEXT"]

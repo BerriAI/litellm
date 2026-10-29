@@ -70,6 +70,7 @@ from litellm.constants import (
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
+from litellm.litellm_core_utils.audio_output_refusal import forward_without_audio_output
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
@@ -8038,11 +8039,17 @@ def text_completion(
     if model is None:
         raise ValueError("model is not set. Set either via 'model' or 'engine' param.")
     kwargs["text_completion"] = True
+    audio_free_kwargs: Final = forward_without_audio_output(
+        _REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+        endpoint="/v1/completions",
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+    )
     response = completion(
         model=model,
         messages=messages,
         *args,
-        **kwargs,
+        **audio_free_kwargs,
         **optional_params,
     )
     if kwargs.get("acompletion", False) is True:

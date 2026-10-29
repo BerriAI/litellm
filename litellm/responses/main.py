@@ -29,6 +29,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     configured_injection_points,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.audio_output_refusal import forward_without_audio_output
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
@@ -1754,6 +1755,9 @@ def responses(
             bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
             if isinstance(bridge_kwargs, _UntranslatableResponsesFields):
                 _raise_untranslatable_responses_fields(bridge_kwargs, model, custom_llm_provider)
+            audio_free_kwargs: Final = forward_without_audio_output(
+                bridge_kwargs, endpoint="/v1/responses", model=model, custom_llm_provider=custom_llm_provider
+            )
             return litellm_completion_transformation_handler.response_api_handler(
                 previous_response_client_ids(previous_response_id, kwargs),
                 model=model,
@@ -1766,7 +1770,7 @@ def responses(
                 extra_body=extra_body,
                 timeout=timeout if timeout is not None else request_timeout,
                 allowed_openai_params=allowed_openai_params,
-                **bridge_kwargs,
+                **audio_free_kwargs,
             )
 
         # Get optional parameters for the responses API
