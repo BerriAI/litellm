@@ -1,16 +1,17 @@
 import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from itertools import chain
+from itertools import chain, groupby
 from types import MappingProxyType, TracebackType
 from typing import Final
 from urllib.parse import urlparse, urlunparse
 
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
-from typing_extensions import Self
+from typing_extensions import NotRequired, ReadOnly, Required, Self, TypedDict
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transcription_protocol import (
     SESSION_UPDATE_EVENT_TYPES,
@@ -29,8 +30,15 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     uses_server_vad,
 )
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
-from litellm.llms.soniox.common_utils import get_soniox_api_key
-from litellm.types.llms.openai import OpenAIRealtimeEvents, OpenAIRealtimeTranscriptionSessionCreated
+from litellm.llms.custom_httpx.http_handler import realtime_ssl_for_url
+from litellm.llms.soniox.common_utils import SonioxException, get_soniox_api_key
+from litellm.types.llms.openai import (
+    OpenAIRealtimeErrorEvent,
+    OpenAIRealtimeEvents,
+    OpenAIRealtimeInputAudioTranscriptionCompleted,
+    OpenAIRealtimeInputAudioTranscriptionDelta,
+    OpenAIRealtimeTranscriptionSessionCreated,
+)
 from litellm.types.realtime import (
     RealtimeInputAudioTranscriptionUsage,
     RealtimeResponseTransformInput,
@@ -81,12 +89,35 @@ class SonioxStartRequest(SonioxRealtimeOptions):
     enable_endpoint_detection: bool
 
 
+class SonioxSpeechLabels(TypedDict, total=False):
+    speaker: ReadOnly[str]
+    language: ReadOnly[str]
+
+
+class SonioxTranscriptSegment(SonioxSpeechLabels):
+    text: Required[ReadOnly[str]]
+
+
+class SonioxTranscriptionDelta(OpenAIRealtimeInputAudioTranscriptionDelta, SonioxSpeechLabels):
+    pass
+
+
+class SonioxTranscriptionCompleted(OpenAIRealtimeInputAudioTranscriptionCompleted):
+    segments: NotRequired[ReadOnly[tuple[SonioxTranscriptSegment, ...]]]
+
+
 class _SonioxToken(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     text: str
     is_final: bool = False
     translation_status: str | None = None
+    speaker: str | None = None
+    language: str | None = None
+
+    @property
+    def labelled(self) -> bool:
+        return self.speaker is not None or self.language is not None
 
 
 class _SonioxResponse(BaseModel):
@@ -178,22 +209,65 @@ def build_soniox_realtime_url(api_base: str | None) -> str:
     return urlunparse(parsed._replace(scheme=scheme))
 
 
+def _labels(token: _SonioxToken) -> SonioxSpeechLabels:
+    speaker: Final[SonioxSpeechLabels] = {} if token.speaker is None else {"speaker": token.speaker}
+    language: Final[SonioxSpeechLabels] = {} if token.language is None else {"language": token.language}
+    return {**speaker, **language}
+
+
+def _delta(item_id: str, token: _SonioxToken) -> SonioxTranscriptionDelta:
+    return {**delta_event(item_id, token.text), **_labels(token)}
+
+
+def _segment(run: tuple[_SonioxToken, ...]) -> SonioxTranscriptSegment:
+    return {**_labels(run[0]), "text": "".join(token.text for token in run).strip()}
+
+
+def _segments(tokens: tuple[_SonioxToken, ...]) -> tuple[SonioxTranscriptSegment, ...]:
+    return tuple(_segment(tuple(run)) for _, run in groupby(tokens, key=lambda token: (token.speaker, token.language)))
+
+
+def _completed(
+    item_id: str, tokens: tuple[_SonioxToken, ...], usage: RealtimeInputAudioTranscriptionUsage | None
+) -> OpenAIRealtimeInputAudioTranscriptionCompleted:
+    completed: Final = completed_event(item_id, "".join(token.text for token in tokens).strip(), usage)
+    if not any(token.labelled for token in tokens):
+        return completed
+    labelled: Final[SonioxTranscriptionCompleted] = {**completed, "segments": _segments(tokens)}
+    return labelled
+
+
+def _soniox_error(response: _SonioxResponse) -> SonioxException | None:
+    if response.error_code is None and response.error_message is None:
+        return None
+    return SonioxException(
+        status_code=response.error_code or 500,
+        message=f"Soniox realtime error {response.error_code}: {response.error_message}",
+    )
+
+
 class SonioxEventTransformer:
     def __init__(self, *, translated_only: bool) -> None:
         self._translated_only: Final = translated_only
         self._item_id: str | None = None
-        self._final_text: str = ""
+        self._final_tokens: tuple[_SonioxToken, ...] = ()
         self._processed_ms: int = 0
         self._billed_ms: int = 0
+        self._refusal: SonioxException | None = None
+
+    @property
+    def refusal(self) -> SonioxException | None:
+        return self._refusal
 
     def transform(self, payload: str) -> tuple[OpenAIRealtimeEvents, ...]:
         try:
             response: Final = _SonioxResponse.model_validate_json(payload)
         except ValidationError:
             raise SonioxProtocolError("Soniox returned an invalid realtime response") from None
-        if response.error_code is not None or response.error_message is not None:
-            return (error_event(f"Soniox realtime error {response.error_code}: {response.error_message}"),)
         self._bill(response.total_audio_proc_ms)
+        error: Final = _soniox_error(response)
+        if error is not None:
+            return (self._report(error),)
         return tuple(chain.from_iterable(self._token_events(token) for token in response.tokens))
 
     def take_unbilled_usage(self, stream_ms: int = 0) -> RealtimeInputAudioTranscriptionUsage | None:
@@ -204,6 +278,11 @@ class SonioxEventTransformer:
         self._billed_ms = billable_ms
         return duration_usage(unbilled_ms / 1000)
 
+    def _report(self, error: SonioxException) -> OpenAIRealtimeErrorEvent:
+        if self._processed_ms == 0:
+            self._refusal = error
+        return error_event(error.message)
+
     def _bill(self, total_audio_proc_ms: int | None) -> None:
         if total_audio_proc_ms is not None and total_audio_proc_ms > self._processed_ms:
             self._processed_ms = total_audio_proc_ms
@@ -211,13 +290,11 @@ class SonioxEventTransformer:
     def _token_events(self, token: _SonioxToken) -> tuple[OpenAIRealtimeEvents, ...]:
         if token.text in (_ENDPOINT_TOKEN, _FINALIZED_TOKEN):
             return self._complete(speech_stopped=token.text == _ENDPOINT_TOKEN)
-        if self._translated_only and token.translation_status != "translation":
-            return ()
         started: Final = self._start()
-        if not token.is_final:
+        if not token.is_final or (self._translated_only and token.translation_status != "translation"):
             return started
-        self._final_text += token.text
-        return (*started, delta_event(self._current_item_id(), token.text))
+        self._final_tokens = (*self._final_tokens, token)
+        return (*started, _delta(self._current_item_id(), token))
 
     def _start(self) -> tuple[OpenAIRealtimeEvents, ...]:
         if self._item_id is not None:
@@ -234,13 +311,13 @@ class SonioxEventTransformer:
         item_id: Final = self._item_id
         if item_id is None:
             return ()
-        transcript: Final = self._final_text.strip()
+        tokens: Final = self._final_tokens
         self._item_id = None
-        self._final_text = ""
+        self._final_tokens = ()
         stopped: Final[tuple[OpenAIRealtimeEvents, ...]] = (
             (speech_event("input_audio_buffer.speech_stopped", item_id),) if speech_stopped else ()
         )
-        return (*stopped, completed_event(item_id, transcript, self.take_unbilled_usage()))
+        return (*stopped, _completed(item_id, tokens, self.take_unbilled_usage()))
 
 
 class SonioxRealtimeBackend:
@@ -335,7 +412,7 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
         self._transformer: Final = SonioxEventTransformer(translated_only=self._options.translation is not None)
         self._start_request: SonioxStartRequest | None = None
         self._session_id: str = f"sess_{uuid.uuid4().hex}"
-        self._opened_at: float | None = None
+        self._started_at: float | None = None
 
     @classmethod
     def from_litellm_params(cls, litellm_params: Mapping[str, object], *, drop_params: bool = False) -> Self:
@@ -359,7 +436,6 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
         return build_soniox_realtime_url(api_base)
 
     def wrap_backend(self, backend: RealtimeBackend) -> RealtimeBackend:
-        self._opened_at = self._clock()
         return self._wrap(backend)
 
     def transform_session_created_event(
@@ -390,11 +466,16 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
             return ()
         return (*self._start(model, None), control_frame)
 
+    def session_refusal(self) -> Exception | None:
+        return self._transformer.refusal
+
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
-        opened_at: Final = self._opened_at
-        if opened_at is None or self._start_request is None:
+        started_at: Final = self._started_at
+        if self._transformer.refusal is not None:
+            return None
+        if started_at is None:
             return self._transformer.take_unbilled_usage()
-        return self._transformer.take_unbilled_usage(int((self._clock() - opened_at) * 1000))
+        return self._transformer.take_unbilled_usage(int((self._clock() - started_at) * 1000))
 
     def transform_realtime_response(
         self,
@@ -430,4 +511,26 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
             return ()
         start_request: Final = build_start_request(model, update, self._options, self._drop_params)
         self._start_request = start_request
+        self._started_at = self._clock()
         return (start_request.model_dump_json(exclude_none=True),)
+
+
+async def soniox_realtime_health_check(model: str, api_base: str | None, api_key: str | None) -> bool:
+    import websockets
+
+    config: Final = SonioxRealtimeConfig()
+    url: Final = config.get_complete_url(api_base, model)
+    headers: Final = config.validate_environment({}, model, api_key)
+    start_request: Final = build_start_request(model, None, SonioxRealtimeOptions())
+    async with websockets.connect(
+        url,
+        additional_headers=headers,
+        max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+        ssl=realtime_ssl_for_url(url),
+    ) as backend:
+        await backend.send(start_request.model_dump_json(exclude_none=True))
+        await backend.send(_END_STREAM)
+        async for frame in backend:
+            if (error := _soniox_error(_SonioxResponse.model_validate_json(frame))) is not None:
+                raise error
+    return True

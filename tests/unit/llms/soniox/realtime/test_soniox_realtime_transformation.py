@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from litellm.llms.soniox.common_utils import SonioxException
 from litellm.llms.soniox.realtime.transformation import (
     DEFAULT_SONIOX_REALTIME_URL,
     SESSION_STARTED_FRAME,
@@ -203,7 +204,9 @@ def test_endpoint_detection_emits_one_openai_turn_billed_by_processed_audio():
         "conversation.item.input_audio_transcription.completed",
     ]
     assert {event["item_id"] for event in (*finals, *endpoint)} == {item_id}
+    assert all("speaker" not in event and "language" not in event for event in finals)
     assert endpoint[1]["transcript"] == "Hello world"
+    assert "segments" not in endpoint[1]
     assert endpoint[1]["usage"] == {"type": "duration", "seconds": 2.0}
     assert transformer.take_unbilled_usage() is None
 
@@ -246,6 +249,43 @@ def test_translation_sessions_transcribe_only_the_translated_tokens():
 
     assert [event.get("delta") for event in events if "delta" in event] == ["Hello"]
     assert events[-1]["transcript"] == "Hello"
+
+
+def test_diarized_tokens_label_each_delta_and_split_the_completed_turn_into_speaker_segments():
+    transformer = SonioxEventTransformer(translated_only=False)
+
+    events = transformer.transform(
+        _response(
+            [
+                _token("Hi", speaker="1", language="en"),
+                _token(" doctor", speaker="1", language="en"),
+                _token(" Salam", speaker="2", language="fa"),
+                _token(" Hi", speaker="1", language="en"),
+                _token("<end>"),
+            ]
+        )
+    )
+
+    assert [(event["delta"], event["speaker"], event["language"]) for event in events if "delta" in event] == [
+        ("Hi", "1", "en"),
+        (" doctor", "1", "en"),
+        (" Salam", "2", "fa"),
+        (" Hi", "1", "en"),
+    ]
+    assert events[-1]["transcript"] == "Hi doctor Salam Hi"
+    assert events[-1]["segments"] == (
+        {"speaker": "1", "language": "en", "text": "Hi doctor"},
+        {"speaker": "2", "language": "fa", "text": "Salam"},
+        {"speaker": "1", "language": "en", "text": "Hi"},
+    )
+
+
+def test_translation_sessions_announce_speech_on_the_first_spoken_token_before_any_translation():
+    transformer = SonioxEventTransformer(translated_only=True)
+
+    events = transformer.transform(_response([_token("Hol", is_final=False, translation_status="original")]))
+
+    assert _types(events) == ["input_audio_buffer.speech_started"]
 
 
 def test_provider_errors_surface_as_openai_error_events():
@@ -291,18 +331,53 @@ def test_translation_option_switches_the_config_to_translated_transcripts():
     assert [event.get("delta") for event in result["response"] if "delta" in event] == ["Hello"]
 
 
-def test_stream_open_time_is_billed_on_close_because_soniox_charges_the_whole_stream():
+def test_stream_time_since_the_start_request_is_billed_on_close_because_soniox_charges_the_whole_stream():
     now = [100.0]
     config = SonioxRealtimeConfig(clock=lambda: now[0])
     config.wrap_backend(_RecordingBackend())
+    now[0] = 110.0
     config.transform_realtime_request(_append(), MODEL)
     config.transform_realtime_response(
         _response([_token("Hi"), _token("<end>")], total_audio_proc_ms=5000), MODEL, MagicMock(), EMPTY_TRANSFORM_INPUT
     )
     now[0] = 130.5
 
-    assert config.unbilled_usage_on_session_close(MODEL) == {"type": "duration", "seconds": 25.5}
+    assert config.unbilled_usage_on_session_close(MODEL) == {"type": "duration", "seconds": 15.5}
     assert config.unbilled_usage_on_session_close(MODEL) is None
+
+
+def _refusal_after(processed_ms: int) -> SonioxRealtimeConfig:
+    now = [100.0]
+    config = SonioxRealtimeConfig(clock=lambda: now[0])
+    config.transform_realtime_request(_append(), MODEL)
+    if processed_ms:
+        config.transform_realtime_response(
+            _response([_token("Hi")], total_audio_proc_ms=processed_ms), MODEL, MagicMock(), EMPTY_TRANSFORM_INPUT
+        )
+    config.transform_realtime_response(
+        json.dumps({"error_code": 401, "error_message": "Invalid API key.", "total_audio_proc_ms": processed_ms}),
+        MODEL,
+        MagicMock(),
+        EMPTY_TRANSFORM_INPUT,
+    )
+    now[0] = 103.0
+    return config
+
+
+def test_an_error_before_any_audio_is_processed_is_a_refused_session_that_bills_nothing():
+    config = _refusal_after(processed_ms=0)
+
+    refusal = config.session_refusal()
+    assert isinstance(refusal, SonioxException)
+    assert refusal.status_code == 401
+    assert config.unbilled_usage_on_session_close(MODEL) is None
+
+
+def test_an_error_after_audio_was_processed_keeps_the_session_a_billed_success():
+    config = _refusal_after(processed_ms=1500)
+
+    assert config.session_refusal() is None
+    assert config.unbilled_usage_on_session_close(MODEL) == {"type": "duration", "seconds": 3.0}
 
 
 def test_a_connection_that_never_started_a_stream_bills_nothing():
@@ -322,14 +397,21 @@ def test_a_session_update_matching_the_started_stream_is_a_no_op():
     config = SonioxRealtimeConfig()
     config.transform_realtime_request(_append(), MODEL)
 
-    assert config.transform_realtime_request(_session_update({"format": {"type": "audio/pcm", "rate": 24_000}}), MODEL) == ()
+    assert (
+        config.transform_realtime_request(_session_update({"format": {"type": "audio/pcm", "rate": 24_000}}), MODEL)
+        == ()
+    )
 
 
 def _stream_started_at_16khz_in_french_without_vad() -> SonioxRealtimeConfig:
     config = SonioxRealtimeConfig()
     config.transform_realtime_request(
         _session_update(
-            {"format": {"type": "audio/pcm", "rate": 16_000}, "transcription": {"language": "fr"}, "turn_detection": None}
+            {
+                "format": {"type": "audio/pcm", "rate": 16_000},
+                "transcription": {"language": "fr"},
+                "turn_detection": None,
+            }
         ),
         MODEL,
     )
@@ -432,7 +514,6 @@ def test_provider_config_manager_passes_only_soniox_options_from_deployment_para
         "context": {"terms": ["LiteLLM"]},
         "max_endpoint_delay_ms": 800,
     }
-
 
 
 SEMANTIC_VAD: Final = {"turn_detection": {"type": "semantic_vad", "eagerness": "high"}}
