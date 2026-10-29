@@ -131,17 +131,17 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         stream: bool | None = None,
     ) -> str:
         image_env_api_base: Final = self._image_api_base_env()
-        if not api_base and image_env_api_base:
-            return image_env_api_base
         configured_api_base: Final = api_base or self._configured_chat_api_base()
-        if configured_api_base and configured_api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH):
+        if not configured_api_base or configured_api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH):
             return image_env_api_base or self._default_image_api_base()
-        if configured_api_base and _is_native_endpoint_url(configured_api_base):
+        if _is_native_endpoint_url(configured_api_base):
             return configured_api_base
         endpoints: Final = resolve_dashscope_endpoints(configured_api_base)
-        if endpoints is not None:
-            return f"{endpoints.origin}{DASHSCOPE_IMAGE_PATH}"
-        return configured_api_base or self._default_image_api_base()
+        if endpoints is None:
+            return configured_api_base
+        if not api_base and image_env_api_base:
+            return image_env_api_base
+        return f"{endpoints.origin}{DASHSCOPE_IMAGE_PATH}"
 
     def validate_environment(
         self,

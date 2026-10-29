@@ -523,11 +523,17 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
             None,
             f"https://dashscope-us.aliyuncs.com{DASHSCOPE_IMAGE_PATH}",
             "https://images.example.com/generate",
-            "https://images.example.com/generate",
+            f"https://dashscope-us.aliyuncs.com{DASHSCOPE_IMAGE_PATH}",
         ),
         (
             None,
             "https://gateway.example.com/dashscope/images",
+            "https://images.example.com/generate",
+            "https://gateway.example.com/dashscope/images",
+        ),
+        (
+            None,
+            "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
             "https://images.example.com/generate",
             "https://images.example.com/generate",
         ),
