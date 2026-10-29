@@ -13615,6 +13615,11 @@ def test_is_injected_stream_usage_artifact():
     )
     assert _is_injected_stream_usage_artifact(null_token_ids_chunk) is True
 
+    unrelated_extra_chunk: Final = ModelResponseStream(
+        model="qwen3", choices=[StreamingChoices(delta=Delta(content=None), text="")]
+    )
+    assert _is_injected_stream_usage_artifact(unrelated_extra_chunk) is True
+
 
 async def _collect_async_data_generator_frames(request_data: dict) -> list:
     from litellm.proxy.proxy_server import async_data_generator

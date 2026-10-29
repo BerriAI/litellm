@@ -1,6 +1,6 @@
 from typing import Final
 
-from litellm.constants import STREAM_FINISH_CHOICE_FIELDS
+from litellm.constants import VLLM_CHOICE_FIELDS
 from litellm.types.utils import Choices, ModelResponse, TextChoices, TextCompletionResponse
 
 
@@ -41,7 +41,7 @@ class TextCompletionStreamWrapper:
                 text_choices["reasoning_content"] = delta.get("reasoning_content")
                 text_choices["index"] = chat_choice["index"]
                 text_choices["finish_reason"] = chat_choice["finish_reason"]
-                for field in STREAM_FINISH_CHOICE_FIELDS:
+                for field in VLLM_CHOICE_FIELDS:
                     if field in chat_choice:
                         text_choices[field] = chat_choice[field]
                 response["choices"] = [text_choices]

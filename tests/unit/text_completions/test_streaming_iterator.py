@@ -1,4 +1,5 @@
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Sequence
+from itertools import chain
 from typing import Final
 
 import pytest
@@ -8,7 +9,7 @@ from litellm.exceptions import APIConnectionError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
-from litellm.types.utils import Choices, Delta, ModelResponseStream, StreamingChoices, Usage
+from litellm.types.utils import Choices, Delta, ModelResponseStream, StreamingChoices, TextCompletionResponse, Usage
 
 
 def test_reasoning_content_preserved_in_text_completion_wrapper():
@@ -98,8 +99,7 @@ def _completion_chunk(text: str, finish_reason: str | None, **choice_extras: obj
     )
 
 
-@pytest.mark.parametrize("final_text", [", 5, 6", ""], ids=["text-then-finish", "finish-only"])
-def test_text_completion_stream_keeps_stop_reason_on_the_finish_chunk(final_text: str) -> None:
+def _text_completion_stream(upstream: Sequence[Completion]) -> list[TextCompletionResponse]:
     logging_obj: Final = Logging(
         model="m",
         messages=[{"role": "user", "content": "1, 2, 3, 4"}],
@@ -109,21 +109,42 @@ def test_text_completion_stream_keeps_stop_reason_on_the_finish_chunk(final_text
         litellm_call_id="call-1",
         function_id="function-1",
     )
-    upstream: Final = (_completion_chunk(", 5", None), _completion_chunk(final_text, "stop", stop_reason=", 7"))
     chat_stream: Final = CustomStreamWrapper(
         completion_stream=iter(upstream),
         model="m",
         custom_llm_provider="text-completion-openai",
         logging_obj=logging_obj,
     )
+    return list(TextCompletionStreamWrapper(completion_stream=chat_stream, model="m"))
 
-    responses: Final = list(TextCompletionStreamWrapper(completion_stream=chat_stream, model="m"))
+
+@pytest.mark.parametrize("final_text", [", 5, 6", ""], ids=["text-then-finish", "finish-only"])
+def test_text_completion_stream_keeps_stop_reason_on_the_finish_chunk(final_text: str) -> None:
+    responses: Final = _text_completion_stream(
+        (_completion_chunk(", 5", None), _completion_chunk(final_text, "stop", stop_reason=", 7"))
+    )
 
     assert responses[-1].choices[0].model_dump(exclude_none=True) == {
         "finish_reason": "stop",
         "index": 0,
         "stop_reason": ", 7",
     }
+
+
+@pytest.mark.parametrize("final_text", [", 6", ""], ids=["text-then-finish", "finish-only"])
+def test_text_completion_stream_keeps_held_back_token_ids_and_the_stop_reason(final_text: str) -> None:
+    responses: Final = _text_completion_stream(
+        (
+            _completion_chunk("", None, token_ids=[11]),
+            _completion_chunk("", None, token_ids=[220]),
+            _completion_chunk(", 5", None, token_ids=[20]),
+            _completion_chunk(final_text, "stop", stop_reason=", 7", token_ids=[11, 220, 21]),
+        )
+    )
+    choices: Final = [response.choices[0] for response in responses]
+
+    assert list(chain.from_iterable(choice.get("token_ids") or () for choice in choices)) == [11, 220, 20, 11, 220, 21]
+    assert [choice.get("stop_reason") for choice in choices if choice.finish_reason is not None] == [", 7"]
 
 
 def test_text_completion_conversion_rejects_non_streaming_choices() -> None:

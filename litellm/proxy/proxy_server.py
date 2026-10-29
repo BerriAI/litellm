@@ -87,6 +87,7 @@ from litellm.constants import (
     LITELLM_UI_SESSION_DURATION,
     OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
+    VLLM_CHOICE_FIELDS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.bug_report import (
@@ -10065,7 +10066,9 @@ def _restamp_nested_response_model_in_sse_line(line: bytes, target_model: str) -
     return _SSE_DATA_FIELD + b" " + serialized_event.encode() + line_ending
 
 
-_STANDARD_STREAM_CHOICE_FIELDS: Final = frozenset({"finish_reason", "index", "delta", "logprobs", "enhancements"})
+def _vllm_choice_fields(choice: BaseModel) -> Mapping[str, object]:
+    choice_extras: Final = choice.model_extra or {}
+    return MappingProxyType({field: choice_extras[field] for field in VLLM_CHOICE_FIELDS if field in choice_extras})
 
 
 def _fast_serialize_simple_model_response_stream(
@@ -10088,9 +10091,11 @@ def _fast_serialize_simple_model_response_stream(
         return None
 
     choice: Final = choices[0]
-    if getattr(choice, "logprobs", None) is not None or getattr(choice, "enhancements", None) is not None:
-        return None
-    if not isinstance(choice, BaseModel) or (choice.model_extra or {}).keys() - _STANDARD_STREAM_CHOICE_FIELDS:
+    if (
+        not isinstance(choice, BaseModel)
+        or getattr(choice, "logprobs", None) is not None
+        or getattr(choice, "enhancements", None) is not None
+    ):
         return None
 
     delta: Final[object] = getattr(choice, "delta", None)
@@ -10119,7 +10124,7 @@ def _fast_serialize_simple_model_response_stream(
     if content is not None:
         delta_dict["content"] = content
 
-    choice_dict: Final = {"index": getattr(choice, "index", 0), "delta": delta_dict}
+    choice_dict: Final = {"index": getattr(choice, "index", 0), "delta": delta_dict, **_vllm_choice_fields(choice)}
     finish_reason: Final = getattr(choice, "finish_reason", None)
     if finish_reason is not None:
         choice_dict["finish_reason"] = finish_reason
@@ -10170,10 +10175,7 @@ def _is_empty_streaming_choice(choice: StreamingChoices) -> bool:
         return False
     if getattr(choice, "logprobs", None) is not None:
         return False
-    provider_choice_values: Final = (
-        value for field, value in (choice.model_extra or {}).items() if field not in _STANDARD_STREAM_CHOICE_FIELDS
-    )
-    if not _all_values_none(provider_choice_values):
+    if not _all_values_none(_vllm_choice_fields(choice).values()):
         return False
     delta: Final = choice.delta if hasattr(choice, "delta") else None
     if delta is None:

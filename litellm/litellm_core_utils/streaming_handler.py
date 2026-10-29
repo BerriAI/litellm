@@ -115,6 +115,7 @@ def _prepend_upstream_choice_extras(
 
 
 _NO_UPSTREAM_CHOICE_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+_NO_FINISH_CHOICE_FIELDS: Final[Mapping[int, Mapping[str, object]]] = MappingProxyType({})
 
 
 def _upstream_first_choice(upstream_chunk: object) -> BaseModel | None:
@@ -139,8 +140,12 @@ def _upstream_choice_index(upstream_chunk: object) -> int:
 
 
 def _non_null_upstream_choice_fields(upstream_chunk: object, fields: Sequence[str]) -> Mapping[str, object]:
+    first_choice: Final = _upstream_first_choice(upstream_chunk)
+    upstream_extras: Final = first_choice.model_extra if first_choice is not None else None
+    if not upstream_extras:
+        return _NO_UPSTREAM_CHOICE_FIELDS
     return MappingProxyType(
-        {field: value for field, value in _upstream_choice_fields(upstream_chunk, fields).items() if value is not None}
+        {field: upstream_extras[field] for field in fields if upstream_extras.get(field) is not None}
     )
 
 
@@ -373,7 +378,7 @@ class CustomStreamWrapper:
         self.system_fingerprint: str | None = None
         self._provider_response_model: str | None = None
         self.received_finish_reason: str | None = None
-        self.received_finish_choice_fields: Mapping[str, object] = _NO_UPSTREAM_CHOICE_FIELDS
+        self.received_finish_choice_fields: Mapping[int, Mapping[str, object]] = _NO_FINISH_CHOICE_FIELDS
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.special_tokens = [
             "<|assistant|>",
@@ -818,6 +823,7 @@ class CustomStreamWrapper:
                 "logprobs": logprobs,
                 "original_chunk": str_line,
                 "usage": usage,
+                "chunk_choice_fields": _non_null_upstream_choice_fields(str_line, STREAM_CHUNK_CHOICE_FIELDS),
             }
         except Exception as e:
             raise e
@@ -842,7 +848,7 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_openai_text_completion_chunk(self, chunk):
+    def handle_openai_text_completion_chunk(self, chunk: object):
         try:
             text = ""
             is_finished = False
@@ -860,6 +866,7 @@ class CustomStreamWrapper:
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
                 "usage": usage,
+                "chunk_choice_fields": _non_null_upstream_choice_fields(chunk, STREAM_CHUNK_CHOICE_FIELDS),
             }
 
         except Exception as e:
@@ -1170,6 +1177,9 @@ class CustomStreamWrapper:
         )
 
         is_chunk_non_empty: Final = self.is_chunk_non_empty(completion_obj, model_response, response_obj)
+        chunk_choice_fields: Final[Mapping[str, object]] = response_obj.get(
+            "chunk_choice_fields", _NO_UPSTREAM_CHOICE_FIELDS
+        )
 
         if is_chunk_non_empty:  # cannot set content of an OpenAI Object to be an empty string
             self.raise_on_model_repetition()
@@ -1262,6 +1272,7 @@ class CustomStreamWrapper:
                     if _index is not None:
                         model_response.choices[0].index = _index
 
+                _apply_choice_fields(model_response.choices[0], chunk_choice_fields)
                 self._optional_combine_thinking_block_in_choices(model_response=model_response)
 
                 return model_response
@@ -1305,25 +1316,20 @@ class CustomStreamWrapper:
                 model_response.choices[0].finish_reason = map_finish_reason(
                     finish_reason=self.received_finish_reason
                 )  # ensure consistent output to openai
-                _apply_choice_fields(model_response.choices[0], self.received_finish_choice_fields)
+                self._apply_finish_choice_fields(model_response.choices[0])
                 if response_obj.get("is_finished"):
-                    _apply_choice_fields(
-                        model_response.choices[0],
-                        _non_null_upstream_choice_fields(_original_chunk, STREAM_CHUNK_CHOICE_FIELDS),
-                    )
+                    _apply_choice_fields(model_response.choices[0], chunk_choice_fields)
 
                 self.sent_last_chunk = True
 
             return model_response
         elif self._has_special_delta_content(model_response):
             return self._handle_special_delta_content(model_response)
-        elif upstream_chunk_fields := _non_null_upstream_choice_fields(
-            response_obj.get("original_chunk"), STREAM_CHUNK_CHOICE_FIELDS
-        ):
+        elif chunk_choice_fields:
             upstream_index: Final = _upstream_choice_index(response_obj.get("original_chunk"))
             model_response.choices[0].delta = Delta(content=None)  # rebind-ok: chunks are built in place here
             model_response.choices[0].index = upstream_index  # rebind-ok: chunks are built in place here
-            _apply_choice_fields(model_response.choices[0], upstream_chunk_fields)
+            _apply_choice_fields(model_response.choices[0], chunk_choice_fields)
             return model_response
         else:
             if hasattr(model_response, "usage"):
@@ -1543,7 +1549,7 @@ class CustomStreamWrapper:
             print_verbose(f"completion obj content: {completion_obj['content']}")
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
-                self.received_finish_choice_fields = _upstream_choice_fields(chunk, STREAM_FINISH_CHOICE_FIELDS)
+                self._record_finish_choice_fields(chunk)
             if response_obj["usage"] is not None:
                 _text_completion_usage: Final[Usage] = response_obj["usage"]
                 setattr(
@@ -1606,6 +1612,7 @@ class CustomStreamWrapper:
                 self.system_fingerprint = cached_chunk.system_fingerprint
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
+                self._record_finish_choice_fields(cached_chunk)
         else:  # openai / azure chat model
             if isinstance(chunk, ChatCompletionChunk):
                 self._openai_handler_receives_chat_chunks = True
@@ -1633,7 +1640,7 @@ class CustomStreamWrapper:
                         f"{self.custom_llm_provider} raised a streaming error - finish_reason: error, no content string given. Received Chunk={response_obj}"
                     )
                 self.received_finish_reason = response_obj["finish_reason"]
-                self.received_finish_choice_fields = _upstream_choice_fields(chunk, STREAM_FINISH_CHOICE_FIELDS)
+                self._record_finish_choice_fields(chunk)
             if response_obj.get("original_chunk", None) is not None:
                 if hasattr(response_obj["original_chunk"], "id"):
                     model_response = self.set_model_id(response_obj["original_chunk"].id, model_response)
@@ -1970,6 +1977,19 @@ class CustomStreamWrapper:
         if self.logging_obj.is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
+    def _record_finish_choice_fields(self, upstream_chunk: object) -> None:
+        self.received_finish_choice_fields = MappingProxyType(
+            {
+                **self.received_finish_choice_fields,
+                _upstream_choice_index(upstream_chunk): _upstream_choice_fields(
+                    upstream_chunk, STREAM_FINISH_CHOICE_FIELDS
+                ),
+            }
+        )
+
+    def _apply_finish_choice_fields(self, choice: StreamingChoices) -> None:
+        _apply_choice_fields(choice, self.received_finish_choice_fields.get(choice.index, _NO_UPSTREAM_CHOICE_FIELDS))
+
     def finish_reason_handler(self):
         model_response: Final = self.model_response_creator(
             hidden_params=None if self.received_model_id is None else {"received_model_id": self.received_model_id}
@@ -1979,7 +1999,7 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = _finish_reason
         else:
             model_response.choices[0].finish_reason = "stop"
-        _apply_choice_fields(model_response.choices[0], self.received_finish_choice_fields)
+        self._apply_finish_choice_fields(model_response.choices[0])
 
         ## if tool use
         if (

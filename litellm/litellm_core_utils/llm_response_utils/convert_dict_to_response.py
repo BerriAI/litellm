@@ -3,7 +3,8 @@ import json
 import re
 import time
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from types import MappingProxyType
 from typing import Final, Literal, cast
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
@@ -11,7 +12,12 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import (
+    RESPONSE_FORMAT_TOOL_NAME,
+    STREAM_CHUNK_CHOICE_FIELDS,
+    STREAM_FINISH_CHOICE_FIELDS,
+    VLLM_CHOICE_FIELDS,
+)
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_reasoning_content,
@@ -154,8 +160,17 @@ def _clear_later_replay_slice_metadata(choice: StreamingChoices) -> None:
     # later can't silently re-introduce the duplication.
     choice.delta = Delta(content=choice.delta.content)
     choice.logprobs = None
-    if hasattr(choice, "enhancements"):
-        del choice.enhancements
+    _drop_choice_fields(choice, ("enhancements", *STREAM_CHUNK_CHOICE_FIELDS))
+
+
+def _drop_choice_fields(choice: StreamingChoices, fields: Iterable[str]) -> None:
+    for field in fields:
+        if hasattr(choice, field):
+            delattr(choice, field)
+
+
+def _vllm_choice_fields(choice: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({field: choice[field] for field in VLLM_CHOICE_FIELDS if field in choice})
 
 
 def _first_replay_delta(
@@ -242,7 +257,9 @@ async def convert_to_streaming_response_async(
 
         logprobs = choice.get("logprobs", None)
 
-        choice = StreamingChoices(finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs)
+        choice = StreamingChoices(
+            finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs, **_vllm_choice_fields(choice)
+        )
         choice_list.append(choice)
 
     model_response_object.choices = choice_list
@@ -292,6 +309,8 @@ async def convert_to_streaming_response_async(
         if i > 0:
             _clear_later_replay_slice_metadata(slice_chunk.choices[0])
         slice_chunk.choices[0].finish_reason = original_finish_reason if i == last_idx else None
+        if i < last_idx:
+            _drop_choice_fields(slice_chunk.choices[0], STREAM_FINISH_CHOICE_FIELDS)
         if i == last_idx and original_usage is not None:
             setattr(slice_chunk, "usage", original_usage)
         yield slice_chunk
@@ -332,6 +351,7 @@ def convert_to_streaming_response(
             delta=delta,
             logprobs=logprobs,
             enhancements=enhancements,
+            **_vllm_choice_fields(choice),
         )
 
         choice_list.append(choice)
@@ -377,6 +397,8 @@ def convert_to_streaming_response(
         if i > 0:
             _clear_later_replay_slice_metadata(slice_chunk.choices[0])
         slice_chunk.choices[0].finish_reason = original_finish_reason if i == last_idx else None
+        if i < last_idx:
+            _drop_choice_fields(slice_chunk.choices[0], STREAM_FINISH_CHOICE_FIELDS)
         if i == last_idx and original_usage is not None:
             setattr(slice_chunk, "usage", original_usage)
         yield slice_chunk
@@ -834,6 +856,7 @@ def convert_to_model_response_object(
                     logprobs=logprobs,
                     enhancements=enhancements,
                     provider_specific_fields=provider_specific_fields,
+                    **_vllm_choice_fields(choice),
                 )
                 if provider_sent_logprobs and logprobs is None:
                     choice.logprobs = None

@@ -2968,3 +2968,39 @@ def test_convert_to_model_response_object_function_output():
     assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(reasoning_tokens=0)
 
     assert result._hidden_params is not None
+
+
+@pytest.mark.parametrize(
+    "vllm_choice_fields",
+    [{"stop_reason": ", 5", "token_ids": [16, 11, 220]}, {"stop_reason": 151645}, {"stop_reason": None, "token_ids": None}],
+    ids=["stop-string-with-token-ids", "stop-token", "natural-stop"],
+)
+def test_vllm_choice_fields_stay_on_the_choice_through_a_cache_round_trip(
+    vllm_choice_fields: dict[str, object],
+) -> None:
+    upstream: Final = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "Qwen/Qwen3-0.6B",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "1, 2, 3, 4"},
+                "finish_reason": "stop",
+                **vllm_choice_fields,
+            }
+        ],
+    }
+    response: Final = convert_to_model_response_object(response_object=upstream, model_response_object=ModelResponse())
+    assert isinstance(response, ModelResponse)
+    cache_hit: Final = convert_to_model_response_object(
+        response_object=json.loads(response.model_dump_json()), model_response_object=ModelResponse()
+    )
+    assert isinstance(cache_hit, ModelResponse)
+
+    dumped_choices: Final = [json.loads(rebuilt.model_dump_json())["choices"][0] for rebuilt in (response, cache_hit)]
+    assert [{field: choice.get(field, "missing") for field in vllm_choice_fields} for choice in dumped_choices] == [
+        vllm_choice_fields,
+        vllm_choice_fields,
+    ]

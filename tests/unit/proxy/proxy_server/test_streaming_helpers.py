@@ -576,13 +576,27 @@ def test_serialize_streaming_chunk_simple_uses_fast_path_bytes():
     }
 
 
-def test_serialize_streaming_chunk_keeps_provider_choice_fields():
+@pytest.mark.parametrize(
+    ("choice_extras", "serialized_extras"),
+    [
+        ({"stop_reason": ",5", "token_ids": [20]}, {"stop_reason": ",5", "token_ids": [20]}),
+        ({"text": "1,2,3,4"}, {}),
+        (
+            {"finish_reason": "stop", "stop_reason": None, "text": "1,2,3,4"},
+            {"finish_reason": "stop", "stop_reason": None},
+        ),
+    ],
+    ids=["vllm-fields", "unrelated-extra", "natural-stop"],
+)
+def test_serialize_streaming_chunk_keeps_only_the_vllm_choice_fields(
+    choice_extras: dict[str, object], serialized_extras: dict[str, object]
+):
     chunk: Final = _simple_chunk(content="1,2,3,4")
-    chunk.choices[0]["stop_reason"] = ",5"
-    chunk.choices[0]["token_ids"] = [20]
+    for field, value in choice_extras.items():
+        chunk.choices[0][field] = value
 
     assert json.loads(_serialize_streaming_chunk(chunk))["choices"] == [
-        {"index": 0, "delta": {"role": "assistant", "content": "1,2,3,4"}, "stop_reason": ",5", "token_ids": [20]}
+        {"index": 0, "delta": {"role": "assistant", "content": "1,2,3,4"}, **serialized_extras}
     ]
 
 

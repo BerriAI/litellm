@@ -68,6 +68,7 @@ from litellm.constants import (
     SPEND_LOG_QUEUE_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_ROWS,
+    VLLM_CHOICE_FIELDS,
 )
 from litellm.cost_calculator import BaseTokenUsageProcessor
 from litellm.litellm_core_utils.bug_report import (
@@ -9917,7 +9918,7 @@ _PRESERVED_NONE_FIELDS: Final[list[tuple[str, str]]] = [
     ("message", "refusal"),
     ("delta", "content"),  # null in streaming chunks
 ]
-_PRESERVED_NONE_CHOICE_FIELDS: Final = ("logprobs",)
+_PRESERVED_NONE_CHOICE_FIELDS: Final = ("logprobs", *VLLM_CHOICE_FIELDS)
 _PRESERVED_NONE_RESPONSE_FIELDS: Final = ("system_fingerprint",)
 
 
