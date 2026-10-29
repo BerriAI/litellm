@@ -146,6 +146,30 @@ async def test_a_request_outliving_the_ttl_cannot_cancel_a_newer_request_when_it
 
 
 @pytest.mark.asyncio
+async def test_finishing_one_of_several_calls_sharing_a_call_id_keeps_the_others_counted(
+    shared_redis: RedisCache,
+) -> None:
+    """Callers can pass their own litellm_call_id, so concurrent calls may share one. Tracking the
+    id itself merged them into one entry, and the first to finish hid the rest from other workers"""
+    worker: Final = _worker(shared_redis)
+    other_worker: Final = _worker(shared_redis)
+    picking_worker: Final = _worker(shared_redis)
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "shared"))
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "shared"))
+    other_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "shared"))
+    picking_worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-b", "b"))
+    await worker.async_log_success_event(_call_kwargs("dep-a", "shared"), None, None, None)
+
+    assert await picking_worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+    worker.log_success_event(_call_kwargs("dep-a", "shared"), None, None, None)
+    await other_worker.async_log_failure_event(_call_kwargs("dep-a", "shared"), None, None, None)
+
+    assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+@pytest.mark.asyncio
 async def test_a_request_nobody_finished_stops_counting_once_it_is_older_than_the_ttl(
     shared_redis: RedisCache,
 ) -> None:
