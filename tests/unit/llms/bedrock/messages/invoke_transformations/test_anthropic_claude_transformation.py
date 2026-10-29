@@ -16,7 +16,7 @@ import httpx
 import pytest
 import requests_mock as requests_mock_lib
 import respx
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm.constants import (
@@ -4198,3 +4198,202 @@ def test_bedrock_messages_without_guardrail_config_sends_no_guardrail_headers() 
         headers={}, model="anthropic.claude-sonnet-5-v1:0", messages=[], optional_params={}, litellm_params={}
     )
     assert not any(name.startswith("X-Amzn-Bedrock-Guardrail") for name in headers)
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+def test_bedrock_messages_keeps_mid_conversation_output_config_its_auto_added_beta_gates() -> None:
+    """Invoke learns its body betas after the shared transform, so the gated field it supports must survive."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Hi"}]},
+        {"role": "system", "content": "Answer briefly", "output_config": {"effort": "high"}},
+        {"role": "user", "content": [{"type": "text", "text": "Go on"}]},
+    ]
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-8-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 4096},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert "mid-conversation-output-config-2026-07-01" in result["anthropic_beta"]
+    assert {"role": "system", "content": "Answer briefly", "output_config": {"effort": "high"}} in result["messages"]
+
+
+class _SentMessage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    role: str
+    content: list[dict[str, object]]
+
+
+_SENT_MESSAGES: Final = TypeAdapter(list[_SentMessage])
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_bedrock_messages_drops_tool_changes_from_a_system_turn_an_older_model_gets_as_a_user_turn(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model without mid-conversation system support sends no tool-changes beta, so under drop_params the
+    converted turn must not carry the blocks that beta gates, and without it they go out as sent."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    from litellm.types.router import GenericLiteLLMParams
+
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Hi"}]},
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "A weather tool is now available"},
+                {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "get_weather"}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "Go on"}]},
+    ]
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="anthropic.claude-3-7-sonnet-20250219-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 4096},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    sent: Final = _SENT_MESSAGES.validate_python(result["messages"])
+    blocks: Final = [
+        block for message in sent for block in message.content
+    ]  # comprehension-ok: flattening the sent content blocks
+    assert "mid-conversation-tool-changes-2026-07-01" not in result.get("anthropic_beta", [])
+    assert any(block["type"] == "tool_addition" for block in blocks) is not drop_params
+    assert {"type": "text", "text": "A weather tool is now available"} in blocks
+    assert all(message.role != "system" for message in sent)
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("drop_params", (True, False))
+def test_bedrock_messages_sends_the_binding_beta_with_block_binding_whatever_drop_params(drop_params: bool) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 2048,
+            "thinking": {"type": "enabled", "budget_tokens": 1024, "block_binding": BLOCK_BINDING},
+        },
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    assert result["thinking"]["block_binding"] == BLOCK_BINDING
+    assert "thinking-binding-controls-2026-08-01" in result["anthropic_beta"]
+
+
+@dataclass(slots=True)
+class BedrockDownAnthropicUp:
+    anthropic_bodies: tuple[dict[str, object], ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.host != "api.anthropic.com":
+            return httpx.Response(500, json={"message": "Bedrock is unavailable"})
+        self.anthropic_bodies = (*self.anthropic_bodies, REASONING_BODY_ADAPTER.validate_json(request.content))
+        return httpx.Response(200, json=_ANTHROPIC_MESSAGE)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("unnamed_tool_extras", "sent_extras"),
+    [
+        ({}, {}),
+        ({"custom": {"eager_input_streaming": True}}, {}),
+        ({"custom": {"defer_loading": False}}, {"defer_loading": False}),
+    ],
+)
+async def test_bedrock_messages_fallback_to_anthropic_sends_the_tool_names_bedrock_filled_in(
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+    unnamed_tool_extras: dict[str, object],
+    sent_extras: dict[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = BedrockDownAnthropicUp()
+    respx_mock.post(url__regex=r"https://.*").mock(side_effect=upstream)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/invoke/us.anthropic.claude-opus-4-8",
+                    "aws_access_key_id": "test-access-key",
+                    "aws_secret_access_key": "test-secret-key",
+                    "aws_region_name": "us-east-1",
+                },
+            },
+            {"model_name": "anthropic-claude", "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "test"}},
+        ],
+        fallbacks=[{"bedrock-claude": ["anthropic-claude"]}],
+        num_retries=0,
+    )
+    schema: Final[Mapping[str, object]] = {"type": "object", "properties": {}}
+
+    await router.aanthropic_messages(
+        model="bedrock-claude",
+        messages=[{"role": "user", "content": "What is the weather?"}],
+        max_tokens=100,
+        tools=[{"input_schema": schema, **unnamed_tool_extras}, {"name": "get_weather", "input_schema": schema}],
+    )
+
+    (body,) = upstream.anthropic_bodies
+    assert body["tools"] == [
+        {"name": "litellm_unnamed_tool_0", "input_schema": schema, **sent_extras},
+        {"name": "get_weather", "input_schema": schema},
+    ]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("custom", "sent_extras"),
+    [({"eager_input_streaming": True}, {}), ({"defer_loading": False}, {"defer_loading": False})],
+)
+async def test_bedrock_chat_fallback_to_anthropic_sends_the_tool_bedrock_cleaned(
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+    custom: dict[str, object],
+    sent_extras: dict[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = BedrockDownAnthropicUp()
+    respx_mock.post(url__regex=r"https://.*").mock(side_effect=upstream)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/invoke/us.anthropic.claude-opus-4-8",
+                    "aws_access_key_id": "test-access-key",
+                    "aws_secret_access_key": "test-secret-key",
+                    "aws_region_name": "us-east-1",
+                },
+            },
+            {
+                "model_name": "anthropic-claude",
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "test", "drop_params": True},
+            },
+        ],
+        fallbacks=[{"bedrock-claude": ["anthropic-claude"]}],
+        num_retries=0,
+    )
+    schema: Final[Mapping[str, object]] = {"type": "object", "properties": {}}
+
+    await router.acompletion(
+        model="bedrock-claude",
+        messages=[{"role": "user", "content": "What is the weather?"}],
+        max_tokens=100,
+        tools=[{"name": "get_weather", "input_schema": schema, "custom": custom}],
+    )
+
+    (body,) = upstream.anthropic_bodies
+    assert body["tools"] == [{"name": "get_weather", "input_schema": schema, **sent_extras}]

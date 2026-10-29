@@ -2,17 +2,21 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Final
 
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.responses.additional_tools import hoist_additional_tools
+from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
+from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
+from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler, StoredTurns
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
+from litellm.responses.litellm_completion_transformation.tool_search import has_client_tool_search
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
     with_compaction_items_as_params,
@@ -26,6 +30,28 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+@dataclass(frozen=True, slots=True)
+class _BridgedRequest:
+    input: str | ResponseInputParam
+    responses_api_request: ResponsesAPIOptionalRequestParams
+
+
+def _bridged_request(
+    hoisted: HoistedAdditionalTools,
+    responses_api_request: ResponsesAPIOptionalRequestParams,
+    loaded_earlier: Sequence[Mapping[str, object]],
+) -> _BridgedRequest:
+    searched: Final = bridge_client_tool_search(hoisted.input, hoisted.tools, loaded_earlier)
+    return _BridgedRequest(
+        input=searched.input,
+        responses_api_request=(
+            {**responses_api_request, "tools": list(searched.tools)}
+            if hoisted.hoisted or searched.bridged
+            else responses_api_request
+        ),
+    )
 
 
 class LiteLLMCompletionTransformationHandler:
@@ -48,10 +74,22 @@ class LiteLLMCompletionTransformationHandler:
         | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
     ):
         hoisted: Final = hoist_additional_tools(input, responses_api_request.get("tools"))
-        bridged_input: Final = hoisted.input
-        bridged_request: Final[ResponsesAPIOptionalRequestParams] = (
-            {**responses_api_request, "tools": list(hoisted.tools)} if hoisted.hoisted else responses_api_request
-        )
+        previous_response_id: Final = responses_api_request.get("previous_response_id")
+        if _is_async and previous_response_id and has_client_tool_search(hoisted.tools):
+            return self._async_response_api_handler_after_earlier_searches(
+                previous_response_client_ids,
+                previous_response_id,
+                hoisted,
+                model=model,
+                responses_api_request=responses_api_request,
+                custom_llm_provider=custom_llm_provider,
+                stream=stream,
+                extra_headers=extra_headers,
+                request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+            )
+        bridged: Final = _bridged_request(hoisted, responses_api_request, ())
+        bridged_input: Final = bridged.input
+        bridged_request: Final = bridged.responses_api_request
         litellm_completion_request: Final[dict] = (
             LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                 model=model,
@@ -73,13 +111,8 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        completion_args: Final = {}
-        completion_args.update(kwargs)
-        completion_args.update(litellm_completion_request)
-        completion_args["_skip_responses_api_bridge"] = True
-
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
-            **completion_args,
+            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
@@ -104,9 +137,53 @@ class LiteLLMCompletionTransformationHandler:
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")
 
+    async def _async_response_api_handler_after_earlier_searches(
+        self,
+        previous_response_client_ids: tuple[str, ...],
+        previous_response_id: str,
+        hoisted: HoistedAdditionalTools,
+        /,
+        *,
+        model: str,
+        responses_api_request: ResponsesAPIOptionalRequestParams,
+        custom_llm_provider: str | None,
+        stream: bool | None,
+        extra_headers: Mapping[str, object] | None,
+        request_kwargs: Mapping[str, object],
+    ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
+        stored_turns: Final = await ResponsesSessionHandler.get_stored_turns_for_previous_response_id(
+            previous_response_id, previous_response_client_ids
+        )
+        bridged: Final = _bridged_request(
+            hoisted,
+            responses_api_request,
+            ResponsesSessionHandler.client_tool_search_tools_loaded_before(
+                stored_turns, previous_response_id, previous_response_client_ids
+            ),
+        )
+        return await self.async_response_api_handler(
+            previous_response_client_ids,
+            stored_turns,
+            litellm_completion_request=(
+                LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+                    model=model,
+                    input=bridged.input,
+                    responses_api_request=bridged.responses_api_request,
+                    custom_llm_provider=custom_llm_provider,
+                    stream=stream,
+                    extra_headers=extra_headers,
+                    **request_kwargs,
+                )
+            ),
+            request_input=bridged.input,
+            responses_api_request=bridged.responses_api_request,
+            **request_kwargs,
+        )
+
     async def async_response_api_handler(
         self,
         previous_response_client_ids: tuple[str, ...] = (),
+        stored_turns: StoredTurns | None = None,
         /,
         *,
         litellm_completion_request: dict,
@@ -122,16 +199,12 @@ class LiteLLMCompletionTransformationHandler:
                 instructions=responses_api_request.get("instructions"),
                 request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
                 previous_response_client_ids=previous_response_client_ids,
+                stored_turns=stored_turns,
                 input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(request_input)),
             )
 
-        acompletion_args: Final = {}
-        acompletion_args.update(kwargs)
-        acompletion_args.update(litellm_completion_request)
-        acompletion_args["_skip_responses_api_bridge"] = True
-
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
-            **acompletion_args,
+            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
         )
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (

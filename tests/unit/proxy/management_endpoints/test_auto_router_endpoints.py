@@ -197,7 +197,7 @@ async def test_preview_and_serving_share_default_model_resolution(
             model_info={"id": "default-parity"},
         )
     )
-    strategy: Final = serving.complexity_routers["default-parity"][0].strategy
+    strategy: Final = serving.registry().plugins("complexity")["default-parity"][0].strategy
     assert strategy.config.default_model == expected
     decision: Final = await strategy.async_pre_routing_hook(
         model="default-parity", messages=[{"role": "user", "content": "hello"}], request_kwargs={}
@@ -739,7 +739,9 @@ class TestAutoRouterBenchmarks:
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
 
         monkeypatch.setattr(proxy_server, "prisma_client", _benchmark_db(rows, recorded))
-        monkeypatch.setattr(proxy_server, "llm_router", type("R", (), {"model_list": model_list})())
+        monkeypatch.setattr(
+            proxy_server, "llm_router", SimpleNamespace(registry=lambda: SimpleNamespace(all=lambda: model_list))
+        )
         return await get_auto_router_benchmarks(
             user_api_key_dict=ADMIN,
             start_date="2026-07-01",
@@ -3894,7 +3896,13 @@ async def test_availability_counts_db_and_yaml_without_disclosing_router_names(m
         SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))),
     )
     monkeypatch.setattr(proxy_server.proxy_config, "auto_router_db_catalog", build_auto_router_catalog((row,)))
-    monkeypatch.setattr(proxy_server, "llm_router", SimpleNamespace(config_deployments=lambda: (yaml_row,)))
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        SimpleNamespace(
+            registry=lambda: SimpleNamespace(deployments=lambda *, source: (yaml_row,) if source == "config" else None)
+        ),
+    )
     monkeypatch.setattr(proxy_server, "_license_check", SimpleNamespace(auto_router_capability_limit=lambda: 1))
     monkeypatch.setattr(proxy_server, "heuristic_v1_tuning_baselines", {})
     result = await auto_router_endpoints.get_auto_router_availability(AutoRouterAvailabilityRequest(), ADMIN)
@@ -3938,7 +3946,13 @@ async def test_availability_denies_another_teams_edit_exemption(monkeypatch):
         SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))),
     )
     monkeypatch.setattr(proxy_server.proxy_config, "auto_router_db_catalog", build_auto_router_catalog((row,)))
-    monkeypatch.setattr(proxy_server, "llm_router", SimpleNamespace(config_deployments=lambda: ()))
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        SimpleNamespace(
+            registry=lambda: SimpleNamespace(deployments=lambda *, source: () if source == "config" else None)
+        ),
+    )
     monkeypatch.setattr(auto_router_endpoints, "_authorize_router_dry_run", AsyncMock(return_value=None))
     with pytest.raises(HTTPException) as error:
         await auto_router_endpoints.get_auto_router_availability(
@@ -3953,7 +3967,13 @@ async def test_availability_waits_for_the_first_complete_catalog(monkeypatch):
     from litellm.types.management_endpoints.auto_router_endpoints import AutoRouterAvailabilityRequest
 
     monkeypatch.setattr(proxy_server.proxy_config, "auto_router_db_catalog", None)
-    monkeypatch.setattr(proxy_server, "llm_router", SimpleNamespace(config_deployments=lambda: ()))
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        SimpleNamespace(
+            registry=lambda: SimpleNamespace(deployments=lambda *, source: () if source == "config" else None)
+        ),
+    )
     with pytest.raises(HTTPException) as error:
         await auto_router_endpoints.get_auto_router_availability(AutoRouterAvailabilityRequest(), ADMIN)
     assert error.value.status_code == 503
