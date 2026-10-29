@@ -15,9 +15,13 @@ from litellm._logging import verbose_logger
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError, anthropic_count_fields
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.bedrock.base_aws_llm import run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
-from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
+from litellm.llms.bedrock.count_tokens.mantle_handler import (
+    BedrockMantleCountTokensHandler,
+    deployment_mantle_endpoint,
+)
 from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import (
@@ -72,6 +76,10 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
         and outcome.status_code in _RUNTIME_FALLBACK_STATUSES
         and is_mantle_claude_model(resolved_model)
     )
+
+
+async def _has_mantle_endpoint(litellm_params: Mapping[str, object]) -> bool:
+    return await run_aws_signing(deployment_mantle_endpoint, litellm_params) is not None
 
 
 def _request_data(
@@ -150,8 +158,9 @@ class BedrockTokenCounter(BaseTokenCounter):
         use_mantle: Final = model_to_use.startswith("bedrock_mantle/")
         counted_model: Final = model_to_use.removeprefix("bedrock_mantle/")
         resolved_model: Final = get_bedrock_base_model(counted_model)
-        primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
+        counts_on_mantle: Final = use_mantle and await _has_mantle_endpoint(litellm_params)
+        primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if counts_on_mantle else RUNTIME_TOKENIZER_TYPE
         translated: Final = (
             await anthropic_count_fields(
                 counted_model,
@@ -178,7 +187,7 @@ class BedrockTokenCounter(BaseTokenCounter):
             await self._count_with(
                 self._mantle_handler, primary_tokenizer, mantle_request, litellm_params, resolved_model
             )
-            if use_mantle
+            if counts_on_mantle
             else await self._count_with(
                 self._runtime_handler, primary_tokenizer, runtime_request, litellm_params, resolved_model
             )
@@ -187,7 +196,9 @@ class BedrockTokenCounter(BaseTokenCounter):
             await self._count_with(
                 self._mantle_handler, MANTLE_TOKENIZER_TYPE, mantle_request, litellm_params, resolved_model
             )
-            if not use_mantle and _runtime_rejected_claude_model(primary, resolved_model)
+            if not use_mantle
+            and _runtime_rejected_claude_model(primary, resolved_model)
+            and await _has_mantle_endpoint(litellm_params)
             else primary
         )
         match outcome:

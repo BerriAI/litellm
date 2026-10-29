@@ -1323,7 +1323,7 @@ MANTLE_MESSAGES_PATH: Final = "/anthropic/v1/messages"
 _MANTLE_OPENAI_BASE_SUFFIXES: Final = ("/openai/v1", "/v1")
 
 
-def _mantle_api_base_from_env() -> str | None:
+def mantle_api_base_from_env() -> str | None:
     env_base: Final = get_secret_str("BEDROCK_MANTLE_API_BASE")
     if env_base is None:
         return None
@@ -1383,7 +1383,7 @@ def build_mantle_messages_url(
     shared with the OpenAI-surface ``bedrock_mantle/*`` routes, which need it to
     carry their ``/v1`` or ``/openai/v1`` base, so that suffix is dropped first.
     """
-    override: Final = api_base or aws_bedrock_runtime_endpoint or _mantle_api_base_from_env()
+    override: Final = api_base or aws_bedrock_runtime_endpoint or mantle_api_base_from_env()
     if override:
         return ensure_api_route(override, MANTLE_MESSAGES_PATH)
     return f"https://bedrock-mantle.{region}.api.aws{MANTLE_MESSAGES_PATH}"

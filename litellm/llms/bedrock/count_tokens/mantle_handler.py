@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Final
 
 import httpx
@@ -11,11 +12,16 @@ from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import tools_without_custom_field
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, AnthropicCountTokensConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
-from litellm.llms.bedrock.common_utils import BedrockError, build_mantle_messages_url
+from litellm.llms.bedrock.common_utils import BedrockError, build_mantle_messages_url, mantle_api_base_from_env
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.secret_managers.main import get_secret_str
 
 MANTLE_COUNT_TOKENS_SUFFIX: Final = "/count_tokens"
 MANTLE_ANTHROPIC_VERSION: Final = "2023-06-01"
+NO_MANTLE_ENDPOINT_MESSAGE: Final = (
+    "This deployment pins its own bedrock-runtime endpoint, so its prompt is not counted on the public "
+    "bedrock-mantle host. Set BEDROCK_MANTLE_API_BASE to the bedrock-mantle endpoint it may use."
+)
 
 
 class MantleCountTokensRequest(TypedDict):
@@ -30,6 +36,39 @@ _COUNT_OPTIONS: Final[TypeAdapter[Mapping[str, JsonValue]]] = TypeAdapter(Mappin
 _TOOLS: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
+@dataclass(frozen=True, slots=True)
+class MantleEndpointSettings:
+    api_base: str | None
+    aws_bedrock_runtime_endpoint: str | None
+
+
+_OPERATOR_MANTLE_ENDPOINT: Final = MantleEndpointSettings(api_base=None, aws_bedrock_runtime_endpoint=None)
+
+
+def _endpoint_setting(litellm_params: Mapping[str, object], name: str) -> str | None:
+    value: Final = litellm_params.get(name)
+    return value if isinstance(value, str) and value else None
+
+
+def _deploys_on_mantle(litellm_params: Mapping[str, object]) -> bool:
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    model: Final = litellm_params.get("model")
+    return isinstance(model, str) and BedrockModelInfo.get_bedrock_route(model) == "mantle"
+
+
+def deployment_mantle_endpoint(litellm_params: Mapping[str, object]) -> MantleEndpointSettings | None:
+    api_base: Final = _endpoint_setting(litellm_params, "api_base")
+    runtime_endpoint: Final = _endpoint_setting(litellm_params, "aws_bedrock_runtime_endpoint")
+    if _deploys_on_mantle(litellm_params):
+        return MantleEndpointSettings(api_base=api_base, aws_bedrock_runtime_endpoint=runtime_endpoint)
+    if mantle_api_base_from_env() or not (
+        api_base or runtime_endpoint or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
+    ):
+        return _OPERATOR_MANTLE_ENDPOINT
+    return None
+
+
 class BedrockMantleCountTokensHandler(BaseAWSLLM):
     """Counts tokens through Anthropic's count_tokens on the bedrock-mantle endpoint.
 
@@ -42,9 +81,16 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
         super().__init__()
         self._anthropic_config: Final = anthropic_config or AnthropicCountTokensConfig()
 
-    def get_mantle_count_tokens_endpoint(self, aws_region_name: str) -> str:
+    def get_mantle_count_tokens_endpoint(
+        self, litellm_params: Mapping[str, object], aws_region_name: str
+    ) -> str | None:
+        endpoint: Final = deployment_mantle_endpoint(litellm_params)
+        if endpoint is None:
+            return None
         messages_url: Final = build_mantle_messages_url(
-            api_base=None, aws_bedrock_runtime_endpoint=None, region=aws_region_name
+            api_base=endpoint.api_base,
+            aws_bedrock_runtime_endpoint=endpoint.aws_bedrock_runtime_endpoint,
+            region=aws_region_name,
         )
         return join_api_base(messages_url, MANTLE_COUNT_TOKENS_SUFFIX)
 
@@ -60,7 +106,11 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
             aws_region_name: Final = await run_aws_signing(
                 self.get_aws_region_name, optional_params=litellm_params, model=resolved_model, model_id=None
             )
-            endpoint_url: Final = await run_aws_signing(self.get_mantle_count_tokens_endpoint, aws_region_name)
+            endpoint_url: Final = await run_aws_signing(
+                self.get_mantle_count_tokens_endpoint, litellm_params, aws_region_name
+            )
+            if endpoint_url is None:
+                raise BedrockError(status_code=400, message=NO_MANTLE_ENDPOINT_MESSAGE)
             tools: Final = request.get("tools")
             body: Final = self._anthropic_config.transform_request_to_count_tokens(
                 model=resolved_model,

@@ -11,6 +11,8 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 MANTLE_COUNT_URL: Final = "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages/count_tokens"
+PRIVATE_MANTLE: Final = "https://vpce-0e1f2a3b.bedrock-mantle.us-east-1.vpce.api.aws"
+OPERATOR_MANTLE: Final = "https://vpce-9f8e7d6c.bedrock-mantle.us-east-1.vpce.api.aws"
 LITELLM_PARAMS: Final = {
     "aws_access_key_id": "AKIATESTACCESSKEY",
     "aws_secret_access_key": "test-secret",
@@ -47,6 +49,7 @@ def _client(endpoint: _MantleEndpoint) -> AsyncHTTPHandler:
 def _sigv4_only(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
 
 
 @pytest.mark.asyncio
@@ -141,7 +144,9 @@ async def test_non_200_answers_raise_bedrock_error_with_mantle_status() -> None:
 @pytest.mark.asyncio
 async def test_region_and_endpoint_lookups_leave_the_event_loop_free(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
-    vault: Final = host_in_loop_probing_vault(monkeypatch, "AWS_REGION_NAME", "BEDROCK_MANTLE_API_BASE")
+    vault: Final = host_in_loop_probing_vault(
+        monkeypatch, "AWS_REGION_NAME", "BEDROCK_MANTLE_API_BASE", "AWS_BEDROCK_RUNTIME_ENDPOINT"
+    )
     mantle: Final = _MantleEndpoint(200, {"input_tokens": 2177})
 
     result = await BedrockMantleCountTokensHandler().handle_count_tokens_request(
@@ -155,3 +160,52 @@ async def test_region_and_endpoint_lookups_leave_the_event_loop_free(monkeypatch
     assert not vault.read_on_loop.is_set()
     assert result == {"input_tokens": 2177}
     assert str(mantle.only_request().url) == MANTLE_COUNT_URL
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoint", "environment"),
+    (
+        ({"api_base": PRIVATE_MANTLE}, {}),
+        ({"api_base": f"{PRIVATE_MANTLE}/anthropic/v1/messages"}, {}),
+        ({"aws_bedrock_runtime_endpoint": PRIVATE_MANTLE}, {}),
+        ({"api_base": PRIVATE_MANTLE}, {"BEDROCK_MANTLE_API_BASE": OPERATOR_MANTLE}),
+    ),
+    ids=("api_base", "api_base_with_messages_path", "aws_bedrock_runtime_endpoint", "api_base_over_env"),
+)
+async def test_mantle_deployment_counts_on_the_endpoint_its_inference_uses(
+    monkeypatch: pytest.MonkeyPatch, endpoint: Mapping[str, str], environment: Mapping[str, str]
+) -> None:
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    mantle: Final = _MantleEndpoint(200, {"input_tokens": 3})
+
+    await BedrockMantleCountTokensHandler().handle_count_tokens_request(
+        request_data=dict(REQUEST),
+        litellm_params={**LITELLM_PARAMS, "model": "bedrock/mantle/anthropic.claude-opus-5-5", **endpoint},
+        resolved_model="anthropic.claude-opus-5-5",
+        client=_client(mantle),
+    )
+
+    assert str(mantle.only_request().url) == f"{PRIVATE_MANTLE}/anthropic/v1/messages/count_tokens"
+
+
+@pytest.mark.asyncio
+async def test_runtime_deployment_with_its_own_endpoint_is_never_counted_on_public_mantle() -> None:
+    mantle: Final = _MantleEndpoint(200, {"input_tokens": 3})
+
+    with pytest.raises(BedrockError) as raised:
+        await BedrockMantleCountTokensHandler().handle_count_tokens_request(
+            request_data=dict(REQUEST),
+            litellm_params={
+                **LITELLM_PARAMS,
+                "model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                "api_base": "https://vpce-0a1b2c3d.bedrock-runtime.us-east-1.vpce.amazonaws.com",
+            },
+            resolved_model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            client=_client(mantle),
+        )
+
+    assert raised.value.status_code == 400
+    assert "BEDROCK_MANTLE_API_BASE" in raised.value.message
+    assert mantle.requests == ()
