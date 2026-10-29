@@ -97,6 +97,7 @@ from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_age
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
+from litellm.proxy.guardrails.mcp_block_policy import validate_mcp_block_policy
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
     id_jag_assertion_capture_gap_at_startup,
 )
@@ -6254,6 +6255,7 @@ class MCPServerManager:
         # evaluations itself; the ``finally`` below covers native guardrails, which
         # never receive it. Same seeding the pass-through routes do.
         initial_data: Final = proxy_logging_obj.convert_mcp_to_llm_format(mcp_request_obj, pre_hook_kwargs)
+        validate_mcp_block_policy(litellm.callbacks, initial_data)
         checked_tool: Final = (
             await self._resolve_guarded_tool_for_call(
                 name=name,

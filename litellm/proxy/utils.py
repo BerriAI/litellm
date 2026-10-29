@@ -233,6 +233,7 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
     UnifiedLLMGuardrails,
     resolve_endpoint_translation,
 )
+from litellm.proxy.guardrails.mcp_block_policy import gather_mcp_guardrails, mcp_raise_callbacks, run_mcp_guardrail
 from litellm.proxy.hooks import PROXY_HOOKS, get_proxy_hook
 from litellm.proxy.hooks.cache_control_check import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_CacheControlCheck,
@@ -2387,11 +2388,21 @@ class ProxyLogging:
         target: Final = unified_guardrail if use_unified else callback
 
         if hook_type == "pre_call":
-            return await target.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                cache=self.call_details["user_api_key_cache"],
-                data=data,
-                call_type=call_type,
+            pre_call: Final = cast(  # cast-ok: legacy hook result is opaque here
+                Awaitable[object],
+                target.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=self.call_details["user_api_key_cache"],
+                    data=data,
+                    call_type=call_type,
+                ),
+            )
+            return await run_mcp_guardrail(
+                callback,
+                pre_call,
+                GuardrailEventHooks.pre_mcp_call
+                if call_type == CallTypes.call_mcp_tool.value
+                else GuardrailEventHooks.pre_call,
             )
         elif hook_type == "during_call":
             return await target.async_moderation_hook(
@@ -3554,8 +3565,11 @@ class ProxyLogging:
                     )
                 )
 
-        # Step 2: Run all guardrail tasks in parallel
-        if guardrail_tasks:
+        if call_type == CallTypes.call_mcp_tool.value and mcp_raise_callbacks(litellm.callbacks):
+            await gather_mcp_guardrails(
+                cast(Iterable[Awaitable[object]], guardrail_tasks)  # cast-ok: every collected item is a hook coroutine
+            )
+        elif guardrail_tasks:
             try:
                 await asyncio.gather(*guardrail_tasks)
             except Exception as e:
@@ -3581,10 +3595,16 @@ class ProxyLogging:
             data["guardrail_to_apply"] = callback
             await self._run_guardrail_with_metrics(
                 callback,
-                unified_guardrail.async_moderation_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    data=data,
-                    call_type=call_type,
+                run_mcp_guardrail(
+                    callback,
+                    unified_guardrail.async_moderation_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        call_type=call_type,
+                    ),
+                    GuardrailEventHooks.during_mcp_call
+                    if call_type == CallTypes.call_mcp_tool.value
+                    else GuardrailEventHooks.during_call,
                 ),
                 "during_call",
                 request_data=data,
@@ -3592,10 +3612,16 @@ class ProxyLogging:
             return
         await self._run_guardrail_with_metrics(
             callback,
-            callback.async_moderation_hook(
-                data=data,
-                user_api_key_dict=user_api_key_auth_dict,
-                call_type=call_type,
+            run_mcp_guardrail(
+                callback,
+                callback.async_moderation_hook(
+                    data=data,
+                    user_api_key_dict=user_api_key_auth_dict,
+                    call_type=call_type,
+                ),
+                GuardrailEventHooks.during_mcp_call
+                if call_type == CallTypes.call_mcp_tool.value
+                else GuardrailEventHooks.during_call,
             ),
             "during_call",
             request_data=data,

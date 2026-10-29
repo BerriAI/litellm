@@ -15714,6 +15714,16 @@
               "description": "How many more times to send a guardrail check whose connection timed out waiting for the answer or was dropped after the request went out. Each retry opens a fresh connection and gets the full timeout. Connect failures, HTTP error statuses and BLOCKED verdicts are not retried. Unset or 0 sends each check once, and the most allowed is 5. Implemented by guardrail='generic_guardrail_api', other guardrails ignore it.",
               "title": "Num Retries"
             },
+            "on_mcp_block": {
+              "default": "tool_error",
+              "description": "How a pre_mcp_call or during_mcp_call refusal affects a LiteLLM-managed tool loop. tool_error lets the model receive the tool error and continue (default). raise ends a non-streaming Chat Completions or Responses request with HTTP 400. Streaming and native MCP do not support raise. Direct MCP REST errors are unchanged.",
+              "enum": [
+                "raise",
+                "tool_error"
+              ],
+              "title": "On Mcp Block",
+              "type": "string"
+            },
             "on_sensitive_data": {
               "anyOf": [
                 {
@@ -18358,6 +18368,16 @@
               "default": "monitor",
               "description": "Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
               "title": "On Flagged Action"
+            },
+            "on_mcp_block": {
+              "default": "tool_error",
+              "description": "How a pre_mcp_call or during_mcp_call refusal affects a LiteLLM-managed tool loop. tool_error lets the model receive the tool error and continue (default). raise ends a non-streaming Chat Completions or Responses request with HTTP 400. Streaming and native MCP do not support raise. Direct MCP REST errors are unchanged.",
+              "enum": [
+                "raise",
+                "tool_error"
+              ],
+              "title": "On Mcp Block",
+              "type": "string"
             },
             "on_sensitive_data": {
               "anyOf": [

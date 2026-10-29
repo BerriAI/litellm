@@ -1,6 +1,7 @@
 import traceback
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypedDict, overload
 
 from openai.types.chat import ChatCompletionToolParam
@@ -11,6 +12,7 @@ from typing_extensions import Unpack
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy.guardrails.mcp_block_policy import MCPGuardrailBlock, mcp_execution_surface
 from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy.mcp_server.utils import (
     iter_known_server_prefixes,
@@ -699,7 +701,48 @@ class LiteLLM_Proxy_MCP_Handler:
         return result_text or "Tool executed successfully"
 
     @staticmethod
+    async def validate_streaming_block_policy(
+        tool_server_map: Mapping[str, str],
+        user_api_key_auth: "UserAPIKeyAuth | None",
+        guardrail_context: Mapping[str, object] | None,
+    ) -> None:
+        import litellm
+        from litellm.proxy.guardrails.mcp_block_policy import mcp_raise_callbacks, validate_mcp_block_policy
+        from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+        from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        if not mcp_raise_callbacks(litellm.callbacks):
+            return
+
+        async def validate_tool(tool_name: str, server_name: str) -> None:
+            server: Final = global_mcp_server_manager.get_mcp_server_by_name(server_name)
+            native_name: Final = strip_known_server_prefix(tool_name, server)
+            auth: Final = await MCPRequestHandler.guardrail_auth_for_call(
+                guardrail_auth=None,
+                user_api_key_auth=user_api_key_auth,
+                server=server,
+                tool_name=native_name,
+            )
+            hook_kwargs: Final[Mapping[str, object]] = MappingProxyType(
+                {
+                    "guardrail_context": guardrail_context,
+                    "name": native_name,
+                    "arguments": {},
+                    "server_name": server_name,
+                    "user_api_key_auth": auth,
+                }
+            )
+            request: Final = proxy_logging_obj.create_mcp_request_object_from_kwargs(dict(hook_kwargs))  # pyright: ignore[reportUnknownMemberType]  # legacy factory accepts an unparameterized dict
+            data: Final = proxy_logging_obj.convert_mcp_to_llm_format(request, hook_kwargs)
+            validate_mcp_block_policy(litellm.callbacks, data, surface="streaming")
+
+        for tool_name, server_name in tool_server_map.items():
+            await validate_tool(tool_name, server_name)
+
+    @staticmethod
     @catalog_operation(global_manager)
+    @mcp_execution_surface("managed")
     async def execute_tool_calls(
         tool_server_map: dict[str, str],
         tool_calls: Sequence[object],
@@ -930,6 +973,14 @@ class LiteLLM_Proxy_MCP_Handler:
                     }
                 )
 
+            except MCPGuardrailBlock as e:
+                await LiteLLM_Proxy_MCP_Handler._log_mcp_tool_failure(
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_api_key_auth=typed_user_api_key_auth,
+                    request_data=logging_request_data,
+                    error=e,
+                )
+                raise
             except BlockedPiiEntityError as e:
                 await LiteLLM_Proxy_MCP_Handler._log_mcp_tool_failure(
                     proxy_logging_obj=proxy_logging_obj,

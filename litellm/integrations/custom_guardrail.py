@@ -27,6 +27,7 @@ from litellm.types.guardrails import (
     GuardrailStreamScope,
     LitellmParams,
     LoggingOnlyScope,
+    MCPBlockAction,
     Mode,
     runtime_stream_scope,
 )
@@ -229,6 +230,8 @@ class CustomGuardrail(CustomLogger):
     logging_only_scope: LoggingOnlyScope | None
     logging_only_continue_on_input_failure: bool
 
+    on_mcp_block: MCPBlockAction = "tool_error"
+
     stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE
     stream_scope_by_hook: tuple[tuple[str, GuardrailStreamScope], ...] = ()
 
@@ -347,6 +350,9 @@ class CustomGuardrail(CustomLogger):
                 e,
             )
             return default
+
+    def apply_mcp_block_policy(self, action: MCPBlockAction) -> None:
+        self.on_mcp_block = action
 
     def raise_passthrough_exception(
         self,

@@ -390,6 +390,13 @@ async def aresponses_api_with_mcp(
 
     # Handle MCP streaming if requested
     if stream and mcp_tools_with_litellm_proxy:
+        if LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(mcp_tools_with_litellm_proxy):
+            streaming_context: Final = MCPRequestContext.resolve({**request_kwargs, "model": model}, tools)
+            await LiteLLM_Proxy_MCP_Handler.validate_streaming_block_policy(
+                tool_server_map=tool_server_map,
+                user_api_key_auth=streaming_context.user_api_key_auth,
+                guardrail_context=streaming_context.guardrail_context,
+            )
         # Generate MCP discovery events using the already processed tools
         from litellm._uuid import uuid
         from litellm.responses.mcp.mcp_streaming_iterator import (

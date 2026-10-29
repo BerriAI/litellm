@@ -32,6 +32,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.guardrails.mcp_block_policy import mcp_execution_surface
 from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy.mcp_server.exceptions import (
     MCPServerListError,
@@ -1317,6 +1318,7 @@ if MCP_AVAILABLE:
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
     @catalog_operation(global_manager)
+    @mcp_execution_surface("rest")
     async def call_tool_rest_api(
         request: Request,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),

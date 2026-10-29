@@ -195,6 +195,11 @@ async def acompletion_with_mcp(
     mock_tool_calls: Final = base_call_args.pop("mock_tool_calls", None)
 
     if stream:
+        await LiteLLM_Proxy_MCP_Handler.validate_streaming_block_policy(
+            tool_server_map=tool_server_map,
+            user_api_key_auth=user_api_key_auth,
+            guardrail_context=context.guardrail_context,
+        )
         # Streaming mode: make initial call with streaming, collect chunks, detect tool calls
         initial_call_args = dict(base_call_args)
         initial_call_args["stream"] = True

@@ -1039,7 +1039,19 @@ GuardrailNumRetries: TypeAlias = Annotated[
 ]
 
 
+MCPBlockAction: TypeAlias = Literal["raise", "tool_error"]
+
+
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
+    on_mcp_block: MCPBlockAction = Field(
+        default="tool_error",
+        description=(
+            "How a pre_mcp_call or during_mcp_call refusal affects a LiteLLM-managed tool loop. "
+            "tool_error lets the model receive the tool error and continue (default). "
+            "raise ends a non-streaming Chat Completions or Responses request with HTTP 400. "
+            "Streaming and native MCP do not support raise. Direct MCP REST errors are unchanged."
+        ),
+    )
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
     api_base: str | None = Field(default=None, description="Base URL for the guardrail service API")
 
@@ -1448,6 +1460,18 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
             and self.guardrail != SupportedGuardrailIntegrations.MCP_SECURITY.value
         ):
             raise ValueError(f"on_violation={self.on_violation!r} is only supported by guardrail='mcp_security'")
+        return self
+
+    @model_validator(mode="after")
+    def validate_mcp_block_mode(self) -> "LitellmParams":
+        if self.on_mcp_block != "raise":
+            return self
+        configured: Final = (
+            (*self.mode.tags.values(), self.mode.default) if isinstance(self.mode, Mode) else (self.mode,)
+        )
+        supported: Final = frozenset(("pre_mcp_call", "during_mcp_call"))
+        if not any(bool(supported.intersection(mode if isinstance(mode, list) else (mode,))) for mode in configured):
+            raise ValueError("on_mcp_block='raise' requires pre_mcp_call or during_mcp_call mode")
         return self
 
     @model_validator(mode="after")

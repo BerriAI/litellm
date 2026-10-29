@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.agentic_loop_settings import validated_max_agentic_loops
+from litellm.proxy.guardrails.mcp_block_policy import MCPGuardrailBlock
 from litellm.responses.litellm_completion_transformation.streaming_iterator import LiteLLMCompletionStreamingIterator
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.mcp.stream_round_billing import StreamedRoundBilling
@@ -972,6 +973,10 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             self.tool_results = tool_results
             self._tool_results_for_response = self.collected_response
 
+        except MCPGuardrailBlock as e:
+            self._stream_error = e
+            self.phase = "finished"
+            self.base_iterator = None
         except Exception as e:
             verbose_logger.error("Error in tool execution: %s", e)
             import traceback

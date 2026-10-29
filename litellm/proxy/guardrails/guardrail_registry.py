@@ -670,6 +670,7 @@ def _configure_callback_scoping(
         )
     if isinstance(custom_guardrail_callback, CustomGuardrail):  # pyright: ignore[reportUnnecessaryIsInstance]  # module-path classes may only subclass CustomLogger
         custom_guardrail_callback.apply_stream_scope(litellm_params.stream_scope)
+        custom_guardrail_callback.apply_mcp_block_policy(litellm_params.on_mcp_block)
     _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
 
 
@@ -913,7 +914,9 @@ class InMemoryGuardrailHandler:
         # Extract additional params from litellm_params to pass to custom guardrail
         # This matches the behavior of other guardrail initializers (e.g., initialize_lakera)
         # and aligns with the documented behavior for custom guardrails
-        excluded_extra_param_keys: Final = frozenset(("guardrail", "mode", "default_on", "stream_scope"))
+        excluded_extra_param_keys: Final = frozenset(
+            ("guardrail", "mode", "default_on", "stream_scope", "on_mcp_block")
+        )
         extra_params_items: Final = _extra_param_items(litellm_params)
         extra_params: Final = MappingProxyType(
             {key: value for key, value in extra_params_items if key not in excluded_extra_param_keys}

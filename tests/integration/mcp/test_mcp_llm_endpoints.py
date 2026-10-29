@@ -23,6 +23,8 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows
 from integration._support.mcp import (
+    EntryPoint,
+    McpCaller,
     McpPeer,
     ScriptedTool,
     mcp_peer,
@@ -40,7 +42,6 @@ from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from openai.types.responses.tool_param import Mcp
 from pydantic import JsonValue, TypeAdapter
-
 
 pytestmark: Final = [pytest.mark.xdist_group("mcp_llm_private_gateway"), pytest.mark.shares_worker_state]
 
@@ -159,8 +160,8 @@ EVEN_ROUNDS: Final = Billing()
 FOLLOW_UP_OUTAGE: Final = "scripted follow-up outage"
 
 
-def _fixed_turn(tool: str) -> Callable[[Mapping[str, JsonValue]], Turn]:
-    return lambda _: Turn(tool, json.dumps(ADD), ANSWER)
+def _fixed_turn(tool: str, arguments: Mapping[str, JsonValue] = ADD) -> Callable[[Mapping[str, JsonValue]], Turn]:
+    return lambda _: Turn(tool, json.dumps(arguments), ANSWER)
 
 
 def _slow_turn(tool: str, seconds: float) -> Callable[[Mapping[str, JsonValue]], Turn]:
@@ -540,7 +541,11 @@ def _upstream_model(surface: Surface) -> str:
     }[surface]
 
 
-PRICES: Final[Mapping[str, JsonValue]] = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "num_retries": 0}
+PRICES: Final[Mapping[str, JsonValue]] = {
+    "input_cost_per_token": 0.001,
+    "output_cost_per_token": 0.002,
+    "num_retries": 0,
+}
 
 
 @contextmanager
@@ -553,10 +558,13 @@ def _rig(
     prices: Mapping[str, JsonValue] | None = None,
     parallel: int = 1,
     slow_tool_seconds: float | None = None,
+    arguments: Mapping[str, JsonValue] = ADD,
 ) -> Iterator[Rig]:
     alias: Final = "llm" + uuid.uuid4().hex[:8]
     plan: Final = (
-        _fixed_turn(f"{alias}-add") if slow_tool_seconds is None else _slow_turn(f"{alias}-slow", slow_tool_seconds)
+        _fixed_turn(f"{alias}-add", arguments)
+        if slow_tool_seconds is None
+        else _slow_turn(f"{alias}-slow", slow_tool_seconds)
     )
     with (
         mcp_peer(rich=slow_tool_seconds is not None) as peer,
@@ -868,7 +876,9 @@ def test_an_open_server_in_another_gateway_cannot_widen_this_gateways_tools(gate
             register_mcp(scenario, local, "open" + uuid.uuid4().hex[:8], allow_all_keys=True)
             listed, called = official_client_outcomes(shared, key, "/mcp", f"{foreign_alias}-add", ADD)
             assert set(listed.tools) == {
-                f"{foreign_alias}-add", f"{foreign_alias}-multiply", f"{foreign_alias}-fail"
+                f"{foreign_alias}-add",
+                f"{foreign_alias}-multiply",
+                f"{foreign_alias}-fail",
             }, listed.tools
             assert called.ok and called.text == str(ADD["a"] + ADD["b"]), called
             assert [call["body"]["params"]["name"] for call in _peer_add_calls(foreign)] == ["add"]
@@ -1840,3 +1850,103 @@ def test_messages_bridge_hook_sees_the_definition_the_request_served(hooked: Hoo
         assert _echoed(JSON_VALUE.validate_json(blocked.content)) == _served(LOOKUP), blocked.text
         assert rig.peer_calls() == (("lookup", {"query": marker}),)
         assert rig.hook_messages(marker) == (f"Tool: lookup\nArguments: {dict(query=marker)}",)
+
+
+@contextmanager
+def _mcp_block_guardrail(gateway: Gateway, mode: str, action: str | None, *, default_on: bool = False) -> Iterator[str]:
+    name: Final = "block-policy-" + uuid.uuid4().hex[:8]
+    response: Final = gateway.client.post(
+        "/guardrails",
+        headers={"x-litellm-api-key": gateway.key},
+        json={
+            "guardrail": {
+                "guardrail_name": name,
+                "litellm_params": {
+                    "mode": mode,
+                    **(
+                        {
+                            "guardrail": "litellm_content_filter",
+                            "blocked_words": [{"keyword": "refused-tool-argument", "action": "BLOCK"}],
+                        }
+                        if mode == "pre_mcp_call"
+                        else {
+                            "guardrail": "custom_code",
+                            "custom_code": 'def apply_guardrail(inputs, request_data, input_type):\n    return block("policy refusal")',
+                        }
+                    ),
+                    **({"on_mcp_block": action} if action is not None else {}),
+                },
+            }
+        },
+    )
+    assert response.status_code == 200, response.text
+    identity: Final = response.json()["guardrail_id"]
+    try:
+        updated: Final = gateway.client.patch(
+            f"/guardrails/{identity}",
+            headers={"x-litellm-api-key": gateway.key},
+            json={"litellm_params": {"default_on": default_on}},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["litellm_params"]["on_mcp_block"] == (action or "tool_error")
+        yield name
+    finally:
+        deleted: Final = gateway.client.delete(f"/guardrails/{identity}", headers={"x-litellm-api-key": gateway.key})
+        assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.parametrize("surface", ("chat", "responses"))
+@pytest.mark.parametrize("mode", ("pre_mcp_call", "during_mcp_call"))
+@pytest.mark.parametrize("action", (None, "raise"))
+def test_mcp_block_policy_stops_http_request_or_returns_tool_error(
+    gateway: Gateway,
+    surface: Surface,
+    mode: str,
+    action: str | None,
+) -> None:
+    arguments: Final = {"a": 2, "b": "refused-tool-argument"} if mode == "pre_mcp_call" else ADD
+    with (
+        _mcp_block_guardrail(gateway, mode, action) as guardrail,
+        _rig(gateway, surface, arguments=arguments, parallel=2) as rig,
+    ):
+        response: Final = rig.send(_granted_key(rig), [AUTO], guardrails=[guardrail])
+        calls: Final = tool_calls(rig.peer.drain())
+        requests: Final = rig.wire.drain()
+        assert response.status_code == (400 if action == "raise" else 200), response.text
+        assert len(requests) == (1 if action == "raise" else 2), requests
+        if mode == "pre_mcp_call":
+            assert calls == (), calls
+        elif action == "raise":
+            assert len(calls) <= 1, calls
+        else:
+            assert len(calls) <= 2, calls
+        if action == "raise":
+            assert guardrail in response.text, response.text
+        else:
+            assert rig.final_text(response.json()) == ANSWER
+            assert "error" in requests[-1].body.decode().lower(), requests[-1]
+        assert all("on_mcp_block" not in request.body.decode() for request in requests)
+
+
+@pytest.mark.parametrize("surface", ("chat", "responses"))
+def test_streaming_raise_policy_rejects_before_model_or_tool_execution(gateway: Gateway, surface: Surface) -> None:
+    with _mcp_block_guardrail(gateway, "pre_mcp_call", "raise") as guardrail, _rig(gateway, surface) as rig:
+        response: Final = rig.send(_granted_key(rig), [AUTO], stream=True, guardrails=[guardrail])
+        assert response.status_code == 400, response.text
+        assert "unsupported_mcp_block_policy" in response.text, response.text
+        assert tool_calls(rig.peer.drain()) == ()
+        assert rig.wire.drain() == ()
+
+
+@pytest.mark.parametrize("entry", ("mcp", "rest"))
+def test_native_raise_is_rejected_and_rest_keeps_its_http_error_contract(gateway: Gateway, entry: EntryPoint) -> None:
+    with _mcp_block_guardrail(gateway, "pre_mcp_call", "raise", default_on=True), _rig(gateway, "chat") as rig:
+        key: Final = _granted_key(rig)
+        caller: Final = McpCaller(gateway, key, entry, rig.alias)
+        outcome: Final = caller.call(rig.tool, {"a": 2, "b": "refused-tool-argument"}, rig.server_id)
+        assert outcome.error is not None, outcome.raw
+        assert tool_calls(rig.peer.drain()) == ()
+        if entry == "mcp":
+            assert "unsupported_mcp_block_policy" in str(outcome.raw), outcome.raw
+        else:
+            assert outcome.status == 400, outcome.raw

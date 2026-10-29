@@ -3,7 +3,7 @@
 import importlib
 import os
 import time
-from typing import Any, List, Optional, Tuple
+from typing import Any, Final, List, Optional, Tuple
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -192,3 +192,40 @@ def test_num_retries_loads_the_dashboard_string_and_blank_means_unset(configured
 def test_num_retries_rejects_values_that_are_not_a_retry_count(configured: object) -> None:
     with pytest.raises(ValidationError, match="num_retries"):
         LitellmParams(guardrail="generic_guardrail_api", mode="pre_call", num_retries=configured)
+
+
+@pytest.mark.parametrize("action", ["raise", "tool_error"])
+def test_mcp_block_policy_survives_serialization_and_unrelated_patch(action: str) -> None:
+    from litellm.types.guardrails import PatchGuardrailRequest
+
+    original: Final = LitellmParams(guardrail="presidio", mode="pre_mcp_call", on_mcp_block=action)
+    patch_request: Final = PatchGuardrailRequest(litellm_params=BaseLitellmParams(default_on=False))
+    merged: Final = LitellmParams(
+        **{**original.model_dump(), **patch_request.litellm_params.model_dump(exclude_unset=True)}
+    )
+    assert merged.on_mcp_block == action
+    assert merged.default_on is False
+    assert BaseLitellmParams.model_validate(merged.model_dump()).on_mcp_block == action
+
+
+def test_missing_mcp_block_policy_defaults_to_tool_error() -> None:
+    assert LitellmParams(guardrail="presidio", mode="pre_mcp_call").on_mcp_block == "tool_error"
+
+
+@pytest.mark.parametrize("action", [None, "tool_result", "RAISE", "ignore"])
+def test_invalid_mcp_block_policy_is_rejected(action: object) -> None:
+    with pytest.raises(ValidationError, match="on_mcp_block"):
+        LitellmParams(guardrail="presidio", mode="pre_mcp_call", on_mcp_block=action)
+
+
+@pytest.mark.parametrize("mode", ["pre_call", "post_mcp_call", {"tags": {"a": "post_call"}}])
+def test_raise_requires_at_least_one_supported_mcp_hook(mode: object) -> None:
+    with pytest.raises(ValidationError, match="requires pre_mcp_call or during_mcp_call"):
+        LitellmParams(guardrail="presidio", mode=mode, on_mcp_block="raise")
+
+
+def test_raise_supports_tag_selected_mcp_modes() -> None:
+    params: Final = LitellmParams(
+        guardrail="presidio", mode={"tags": {"tools": ["pre_mcp_call", "post_call"]}}, on_mcp_block="raise"
+    )
+    assert params.on_mcp_block == "raise"

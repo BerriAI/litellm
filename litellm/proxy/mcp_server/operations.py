@@ -63,6 +63,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.guardrails.mcp_block_policy import UnsupportedMCPBlockPolicy
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     get_chain_id_from_headers,
@@ -3428,6 +3429,10 @@ async def _execute_mcp_server_tool_call(
             content=[TextContent(text=str(e), type="text")],
             is_error=True,
         )
+    except UnsupportedMCPBlockPolicy as e:
+        from mcp.types import INVALID_PARAMS
+
+        raise MCPError(code=INVALID_PARAMS, message=_http_detail_message(e.detail)) from e
     except BlockedPiiEntityError as e:
         verbose_logger.error("BlockedPiiEntityError in MCP tool call: %s", e)
         return CallToolResult(
