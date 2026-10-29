@@ -193,7 +193,8 @@ GEMINI_SYSTEM_PARTS: Final = ("Answer tersely", "Use British spelling")
     (
         ({"generationConfig": {"maxOutputTokens": 5}}, {"max_tokens": 5}),
         ({"generationConfig": {"maxOutputTokens": 5, "candidateCount": 3}}, {"max_tokens": 5, "n": 3}),
-        ({"generation_config": {"max_output_tokens": 5, "candidate_count": 3}}, {}),
+        ({"generation_config": {"max_output_tokens": 5, "candidate_count": 3}}, {"n": 3}),
+        ({"generationConfig": {"candidate_count": 3}}, {"n": 3}),
         ({}, {}),
     ),
 )
