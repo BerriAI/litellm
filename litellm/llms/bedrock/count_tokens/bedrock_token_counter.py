@@ -19,6 +19,7 @@ from litellm.llms.bedrock.base_aws_llm import run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.bedrock.count_tokens.mantle_handler import (
+    NO_MANTLE_ENDPOINT_MESSAGE,
     BedrockMantleCountTokensHandler,
     deployment_mantle_endpoint,
 )
@@ -80,6 +81,19 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
 
 async def _has_mantle_endpoint(litellm_params: Mapping[str, object]) -> bool:
     return await run_aws_signing(deployment_mantle_endpoint, litellm_params) is not None
+
+
+def _no_mantle_endpoint_refusal(request_model: str, model_used: str) -> TokenCountResponse:
+    return TokenCountResponse(
+        total_tokens=0,
+        request_model=request_model,
+        model_used=model_used,
+        tokenizer_type=MANTLE_TOKENIZER_TYPE,
+        error=True,
+        error_message=NO_MANTLE_ENDPOINT_MESSAGE,
+        status_code=400,
+        rejected_before_provider_call=True,
+    )
 
 
 def _request_data(
@@ -159,8 +173,9 @@ class BedrockTokenCounter(BaseTokenCounter):
         counted_model: Final = model_to_use.removeprefix("bedrock_mantle/")
         resolved_model: Final = get_bedrock_base_model(counted_model)
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
-        counts_on_mantle: Final = use_mantle and await _has_mantle_endpoint(litellm_params)
-        primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if counts_on_mantle else RUNTIME_TOKENIZER_TYPE
+        if use_mantle and not await _has_mantle_endpoint(litellm_params):
+            return _no_mantle_endpoint_refusal(request_model, model_to_use)
+        primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
         translated: Final = (
             await anthropic_count_fields(
                 counted_model,
@@ -187,7 +202,7 @@ class BedrockTokenCounter(BaseTokenCounter):
             await self._count_with(
                 self._mantle_handler, primary_tokenizer, mantle_request, litellm_params, resolved_model
             )
-            if counts_on_mantle
+            if use_mantle
             else await self._count_with(
                 self._runtime_handler, primary_tokenizer, runtime_request, litellm_params, resolved_model
             )

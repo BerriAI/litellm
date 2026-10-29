@@ -8,6 +8,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
+from litellm.llms.bedrock.count_tokens.mantle_handler import NO_MANTLE_ENDPOINT_MESSAGE
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
@@ -502,20 +503,23 @@ async def test_pinned_runtime_endpoint_retries_on_the_mantle_host_the_operator_n
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("runtime", "expected"),
+    ("endpoint", "environment"),
     (
-        ((200, {"inputTokens": 193}), (False, 193, None)),
-        ((400, UNSUPPORTED), (True, 0, 400)),
+        ({"api_base": PRIVATE_RUNTIME}, {}),
+        ({"aws_bedrock_runtime_endpoint": PRIVATE_RUNTIME}, {}),
+        ({}, {"AWS_BEDROCK_RUNTIME_ENDPOINT": PRIVATE_RUNTIME}),
     ),
-    ids=("runtime_counts", "runtime_rejects"),
+    ids=("api_base", "aws_bedrock_runtime_endpoint", "AWS_BEDROCK_RUNTIME_ENDPOINT"),
 )
-async def test_mantle_counting_model_on_a_pinned_runtime_deployment_counts_on_that_endpoint_only(
-    monkeypatch: pytest.MonkeyPatch,
-    runtime: tuple[int, Mapping[str, object]],
-    expected: tuple[bool, int, int | None],
+async def test_mantle_counting_model_on_a_pinned_runtime_deployment_is_refused_before_any_call(
+    monkeypatch: pytest.MonkeyPatch, endpoint: Mapping[str, str], environment: Mapping[str, str]
 ) -> None:
-    vault: Final = host_in_loop_probing_vault(monkeypatch, "BEDROCK_MANTLE_API_BASE", "AWS_BEDROCK_RUNTIME_ENDPOINT")
-    bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 271}), runtime_host=PRIVATE_RUNTIME_HOST)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    vault: Final = host_in_loop_probing_vault(monkeypatch, "BEDROCK_MANTLE_API_BASE")
+    bedrock: Final = _Bedrock(
+        runtime=(200, {"inputTokens": 193}), mantle=(200, {"input_tokens": 271}), runtime_host=PRIVATE_RUNTIME_HOST
+    )
 
     result: Final = await _counter(bedrock).count_tokens(
         model_to_use="bedrock_mantle/anthropic.claude-opus-5-5",
@@ -525,16 +529,22 @@ async def test_mantle_counting_model_on_a_pinned_runtime_deployment_counts_on_th
             "litellm_params": {
                 **DEPLOYMENT["litellm_params"],
                 "model": "bedrock/us.anthropic.claude-opus-5-5",
-                "api_base": PRIVATE_RUNTIME,
+                **endpoint,
             }
         },
         request_model="claude-opus-5-5",
     )
 
     assert result is not None
-    assert (result.error, result.total_tokens, result.status_code) == expected
-    assert result.tokenizer_type == "bedrock_api"
-    assert bedrock.posted_urls() == (f"{PRIVATE_RUNTIME}/model/anthropic.claude-opus-5-5/count-tokens",)
+    assert (result.error, result.status_code, result.total_tokens, result.tokenizer_type) == (
+        True,
+        400,
+        0,
+        "bedrock_mantle_api",
+    )
+    assert result.error_message == NO_MANTLE_ENDPOINT_MESSAGE
+    assert result.rejected_before_provider_call
+    assert bedrock.requests == ()
     assert vault.read.is_set()
     assert not vault.read_on_loop.is_set()
 

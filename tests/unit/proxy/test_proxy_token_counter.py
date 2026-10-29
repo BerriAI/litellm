@@ -1762,6 +1762,75 @@ async def test_token_count_model_provider_selects_the_endpoint_and_preserves_the
     )
 
 
+class _RejectingBedrockPeer:
+    def __init__(self) -> None:
+        self.requests: tuple[httpx.Request, ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests = (*self.requests, request)
+        return httpx.Response(400, json={"message": "The provided model identifier is invalid."})
+
+
+_MANTLE_COUNT_MODEL: Final = MappingProxyType(
+    {
+        "token_count_framing": 10,
+        "token_count_model": {
+            "model": "anthropic.claude-opus-5-5",
+            "litellm_provider": "bedrock_mantle",
+            "region": "us-east-1",
+        },
+    }
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "default"),
+    ((_MANTLE_COUNT_MODEL, {}), ({}, _MANTLE_COUNT_MODEL)),
+    ids=("configured_token_count_model", "cost_map_token_count_model"),
+)
+async def test_mantle_token_count_model_on_a_pinned_runtime_deployment_answers_a_400_naming_the_fix(
+    configured: Mapping[str, object], default: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_MANTLE_API_BASE", "AWS_BEDROCK_RUNTIME_ENDPOINT"):
+        monkeypatch.delenv(name, raising=False)
+    peer: Final = _RejectingBedrockPeer()
+    counter: Final = BedrockTokenCounter(client=AsyncHTTPHandler(transport=httpx.MockTransport(peer)))
+    with pytest.raises(ProxyException) as raised:
+        await _provider_token_count(
+            count_with=partial(
+                _try_provider_token_count,
+                counter,
+                "bedrock",
+                messages=_COUNT_REQUEST.messages,
+                contents=_COUNT_REQUEST.contents,
+                request_model=_COUNT_REQUEST.model,
+                deployment={
+                    "litellm_params": {
+                        "model": "bedrock/us.anthropic.claude-opus-5-5",
+                        "api_base": "https://vpce-0a1b2c3d.bedrock-runtime.us-east-1.vpce.amazonaws.com",
+                        "aws_access_key_id": "AKIATESTACCESSKEY",
+                        "aws_secret_access_key": "test-secret",
+                        "aws_region_name": "us-east-1",
+                    }
+                },
+                tools=_COUNT_REQUEST.tools,
+                system=_COUNT_REQUEST.system,
+            ),
+            model_to_use="us.anthropic.claude-opus-5-5",
+            request_model=_COUNT_REQUEST.model,
+            settings=resolve_token_count_settings(
+                configured=configured, default=default, deployment_region=lambda: "us-east-1"
+            ),
+            local_estimate_allowed=True,
+        )
+
+    assert raised.value.code == "400"
+    assert "BEDROCK_MANTLE_API_BASE" in raised.value.message
+    assert "If that region is not enabled" not in raised.value.message
+    assert peer.requests == ()
+
+
 @pytest.mark.parametrize(
     ("count_model", "region"),
     [

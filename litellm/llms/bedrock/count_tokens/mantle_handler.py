@@ -19,8 +19,9 @@ from litellm.secret_managers.main import get_secret_str
 MANTLE_COUNT_TOKENS_SUFFIX: Final = "/count_tokens"
 MANTLE_ANTHROPIC_VERSION: Final = "2023-06-01"
 NO_MANTLE_ENDPOINT_MESSAGE: Final = (
-    "This deployment pins its own bedrock-runtime endpoint, so its prompt is not counted on the public "
-    "bedrock-mantle host. Set BEDROCK_MANTLE_API_BASE to the bedrock-mantle endpoint it may use."
+    "This model counts tokens on bedrock-mantle, but the deployment pins its own bedrock-runtime endpoint "
+    "through api_base, aws_bedrock_runtime_endpoint, or AWS_BEDROCK_RUNTIME_ENDPOINT, so its prompt is not sent "
+    "to the public bedrock-mantle host. Set BEDROCK_MANTLE_API_BASE to the bedrock-mantle endpoint it may use."
 )
 
 
