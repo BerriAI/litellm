@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from types import MappingProxyType
 from typing import Final
 
@@ -46,21 +46,21 @@ class BedrockMantleAnthropicMessagesConfig(BedrockMantleAuthMixin, AmazonMantleM
         }
     )
 
-    def _ensure_thinking_for_clear_thinking_context_management(
+    def _drop_thinking(
         self,
-        anthropic_messages_request: dict[str, object],  # mutable-ok: edits the request in place like the base
+        optional_params: MutableMapping[str, object],  # mutable-ok: edits optional params in place
         model: str,
-        drop_params: bool,
-    ) -> bool:
-        injected_thinking: Final = super()._ensure_thinking_for_clear_thinking_context_management(
-            anthropic_messages_request, model, drop_params
-        )
-        match anthropic_messages_request.get("thinking"):
-            case {"type": "enabled" | "adaptive"}:
-                pass
-            case _:
-                drop_clear_thinking_edits_for_model(anthropic_messages_request, model, self._resolved_provider)
-        return injected_thinking
+        custom_llm_provider: str,
+    ) -> None:
+        super()._drop_thinking(optional_params, model, custom_llm_provider)
+        if not self._adds_thinking_back_for_clear_thinking(optional_params, model):
+            drop_clear_thinking_edits_for_model(optional_params, model, custom_llm_provider)
+
+    def _adds_thinking_back_for_clear_thinking(self, optional_params: Mapping[str, object], model: str) -> bool:
+        trial_request: Final = {
+            key: optional_params[key] for key in ("context_management", "max_tokens") if key in optional_params
+        }
+        return self._ensure_thinking_for_clear_thinking_context_management(trial_request, model, drop_params=False)
 
     def __init__(self, aws_signer: BaseAWSLLM | None = None) -> None:
         AmazonMantleMessagesConfig.__init__(self)

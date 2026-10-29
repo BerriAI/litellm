@@ -236,6 +236,13 @@ class TestRequestBody:
                 id="no-thinking-support-drops-edit",
             ),
             pytest.param(
+                "anthropic.claude-3-5-haiku-20241022-v1:0",
+                {},
+                None,
+                ["clear_thinking_20251015", "clear_tool_uses_20250919"],
+                id="caller-edit-without-thinking-forwarded",
+            ),
+            pytest.param(
                 "anthropic.claude-opus-4-5-20251101-v1:0",
                 {"thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}},
                 {"type": "enabled", "budget_tokens": BEDROCK_MIN_THINKING_BUDGET_TOKENS},
@@ -258,7 +265,7 @@ class TestRequestBody:
             ),
         ],
     )
-    def test_clear_thinking_edit_forwarded_only_with_thinking(
+    def test_clear_thinking_edit_dropped_only_with_dropped_thinking(
         self, model, thinking_params, expected_thinking, expected_edit_types
     ):
         body = BedrockMantleAnthropicMessagesConfig().transform_anthropic_messages_request(

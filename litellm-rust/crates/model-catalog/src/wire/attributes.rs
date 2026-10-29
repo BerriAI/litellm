@@ -104,6 +104,7 @@ attributes! {
     /// Cloud regions the model is available in ('global' or region ids).
     supported_regions: Vec<String>,
     thinking_always_on: bool,
+    thinking_on_by_default: bool,
     token_count_framing: u64 as Count,
     token_count_model: TokenCountModel,
     token_count_tokenizer: TokenCountTokenizer,

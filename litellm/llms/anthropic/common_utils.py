@@ -1819,8 +1819,12 @@ def drop_clear_thinking_edits_for_model(
     model: str,
     custom_llm_provider: str,
 ) -> None:
-    """Remove the clear_thinking edits unless the model always thinks anyway."""
-    if not AnthropicModelInfo.supports_model_capability(model, "thinking_always_on", custom_llm_provider):
+    """Remove the clear_thinking edits unless the model still thinks without a ``thinking`` param."""
+    thinks_without_thinking_param: Final = any(
+        AnthropicModelInfo.supports_model_capability(model, capability, custom_llm_provider)
+        for capability in ("thinking_always_on", "thinking_on_by_default")
+    )
+    if not thinks_without_thinking_param:
         drop_clear_thinking_edits(params)
 
 

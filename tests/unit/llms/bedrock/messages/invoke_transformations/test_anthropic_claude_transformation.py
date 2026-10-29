@@ -2203,8 +2203,6 @@ def test_bedrock_invoke_transform_emits_adaptive_thinking_for_opus_4_8():
     ],
 )
 def test_bedrock_invoke_keeps_thinking_for_clear_thinking_edit_when_base_drops_thinking(thinking_params):
-    """The base messages transform drops thinking for Opus 4.5 here. Bedrock keeps the
-    clear_thinking edit long enough to add the minimum enabled thinking back, then strips it"""
     from litellm.types.router import GenericLiteLLMParams
 
     result = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
