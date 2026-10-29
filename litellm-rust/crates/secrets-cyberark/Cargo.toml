@@ -14,6 +14,7 @@ moka.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+url.workspace = true
 veil.workspace = true
 litellm-tracing.workspace = true
 percent-encoding = "2.3"

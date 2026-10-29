@@ -254,8 +254,12 @@ mod tests {
             .err()
             .expect("invalid rank file");
         assert!(matches!(error, Error::Ranks(_)));
-        assert!(error.to_string().starts_with(&format!(
-            "failed to load tokenizer: tiktoken rank file: {detail}"
-        )));
+        assert!(
+            litellm_error::Report::new(&error)
+                .to_string()
+                .starts_with(&format!(
+                    "failed to load tokenizer from a tiktoken rank file: {detail}"
+                ))
+        );
     }
 }
