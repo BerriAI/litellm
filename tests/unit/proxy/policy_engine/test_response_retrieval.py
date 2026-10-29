@@ -3,11 +3,18 @@ from collections.abc import Iterator, Mapping
 
 import pytest
 
+from litellm.caching.dual_cache import DualCache
+from litellm.proxy.utils import InternalUsageCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
-from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
+from litellm.proxy.policy_engine.response_retrieval import (
+    SubmitPostCallPolicies,
+    attach_post_call_pipelines_to_retrieval,
+    remember_submit_post_call_policies,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 from litellm.types.router import Deployment, LiteLLM_Params
 
 GOVERNED_MODEL_GROUP = "gpt-5.4-mini"
@@ -46,9 +53,9 @@ def _router(model_group_alias: dict[str, object] | None = None) -> FakeRouter:
     )
 
 
-def _encoded_response_id(model_id: str) -> str:
+def _encoded_response_id(model_id: str, upstream_response_id: str = "resp_upstream") -> str:
     return ResponsesAPIRequestUtils._build_responses_api_response_id(
-        custom_llm_provider="openai", model_id=model_id, response_id="resp_upstream"
+        custom_llm_provider="openai", model_id=model_id, response_id=upstream_response_id
     )
 
 
@@ -97,10 +104,10 @@ def _attached_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, str], ..
     )
 
 
-def test_attaches_model_scoped_post_call_pipeline_to_retrieval(policy_engine: None) -> None:
+async def test_attaches_model_scoped_post_call_pipeline_to_retrieval(policy_engine: None) -> None:
     data = _retrieval_data(GOVERNED_MODEL_ID)
 
-    attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
+    await attach_post_call_pipelines_to_retrieval(submit_policies_cache=InternalUsageCache(DualCache()), data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
 
     assert _attached_pipelines(data) == (("response-governance", "output-word-filter"),)
     assert data["litellm_metadata"]["_pipeline_managed_guardrails"] == frozenset({"output-word-filter"})
@@ -111,50 +118,53 @@ def test_attaches_model_scoped_post_call_pipeline_to_retrieval(policy_engine: No
     assert "guardrails" not in data["litellm_metadata"]
 
 
-def test_key_and_team_context_also_governs_retrieval(policy_engine: None) -> None:
+async def test_key_and_team_context_also_governs_retrieval(policy_engine: None) -> None:
     data = _retrieval_data(UNGOVERNED_MODEL_ID)
 
-    attach_post_call_pipelines_to_retrieval(
-        data=data, user_api_key_dict=UserAPIKeyAuth(team_alias="governed-team"), llm_router=_router()
+    await attach_post_call_pipelines_to_retrieval(
+        data=data,
+        user_api_key_dict=UserAPIKeyAuth(team_alias="governed-team"),
+        llm_router=_router(),
+        submit_policies_cache=InternalUsageCache(DualCache()),
     )
 
     assert _attached_pipelines(data) == (("team-governance", "team-word-filter"),)
 
 
-def test_tag_attached_policy_is_not_re_matched_when_the_retrieval_carries_no_tag(policy_engine: None) -> None:
+async def test_tag_attached_policy_is_not_re_matched_when_the_retrieval_carries_no_tag(policy_engine: None) -> None:
     data = _retrieval_data(GOVERNED_MODEL_ID)
 
-    attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
+    await attach_post_call_pipelines_to_retrieval(submit_policies_cache=InternalUsageCache(DualCache()), data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
 
     assert _attached_pipelines(data) == (("response-governance", "output-word-filter"),)
 
 
-def test_tag_attached_policy_governs_a_retrieval_whose_metadata_carries_the_tag(policy_engine: None) -> None:
+async def test_tag_attached_policy_governs_a_retrieval_whose_metadata_carries_the_tag(policy_engine: None) -> None:
     data: dict[str, object] = {
         "response_id": _encoded_response_id(UNGOVERNED_MODEL_ID),
         "litellm_metadata": {"tags": ["governed"]},
     }
 
-    attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
+    await attach_post_call_pipelines_to_retrieval(submit_policies_cache=InternalUsageCache(DualCache()), data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
 
     assert _attached_pipelines(data) == (("tag-governance", "tag-word-filter"),)
     assert data["litellm_metadata"]["policy_sources"] == {"tag-governance": "tag:governed"}
 
 
-def test_retrieval_of_an_ungoverned_model_attaches_nothing(policy_engine: None) -> None:
+async def test_retrieval_of_an_ungoverned_model_attaches_nothing(policy_engine: None) -> None:
     data = _retrieval_data(UNGOVERNED_MODEL_ID)
 
-    attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
+    await attach_post_call_pipelines_to_retrieval(submit_policies_cache=InternalUsageCache(DualCache()), data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
 
     assert data == _retrieval_data(UNGOVERNED_MODEL_ID)
 
 
-def test_already_attached_policy_is_not_attached_twice(policy_engine: None) -> None:
+async def test_already_attached_policy_is_not_attached_twice(policy_engine: None) -> None:
     data = _retrieval_data(GOVERNED_MODEL_ID)
     router = _router()
-    attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=router)
+    await attach_post_call_pipelines_to_retrieval(submit_policies_cache=InternalUsageCache(DualCache()), data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=router)
 
-    attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=router)
+    await attach_post_call_pipelines_to_retrieval(submit_policies_cache=InternalUsageCache(DualCache()), data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=router)
 
     assert _attached_pipelines(data) == (("response-governance", "output-word-filter"),)
     assert data["litellm_metadata"]["applied_policies"] == ["response-governance"]
@@ -168,13 +178,13 @@ def _hidden_submit_model_warnings(caplog: pytest.LogCaptureFixture) -> list[str]
     ]
 
 
-def test_wildcard_deployment_attaches_nothing_for_the_submitted_model_and_warns(
+async def test_wildcard_deployment_attaches_nothing_for_the_submitted_model_and_warns(
     policy_engine: None, caplog: pytest.LogCaptureFixture
 ) -> None:
     data = _retrieval_data(WILDCARD_MODEL_ID)
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
+        await attach_post_call_pipelines_to_retrieval(submit_policies_cache=InternalUsageCache(DualCache()), data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
 
     assert data == _retrieval_data(WILDCARD_MODEL_ID)
     assert [
@@ -183,14 +193,14 @@ def test_wildcard_deployment_attaches_nothing_for_the_submitted_model_and_warns(
     ] == [True]
 
 
-def test_aliased_model_group_still_attaches_its_own_policies_and_warns(
+async def test_aliased_model_group_still_attaches_its_own_policies_and_warns(
     policy_engine: None, caplog: pytest.LogCaptureFixture
 ) -> None:
     data = _retrieval_data(GOVERNED_MODEL_ID)
     router = _router({"gpt-mini": GOVERNED_MODEL_GROUP, "gpt-hidden": {"model": GOVERNED_MODEL_GROUP, "hidden": True}})
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=router)
+        await attach_post_call_pipelines_to_retrieval(submit_policies_cache=InternalUsageCache(DualCache()), data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=router)
 
     assert _attached_pipelines(data) == (("response-governance", "output-word-filter"),)
     assert [
@@ -199,11 +209,12 @@ def test_aliased_model_group_still_attaches_its_own_policies_and_warns(
     ] == [True]
 
 
-def test_plain_model_group_retrieval_does_not_warn_about_the_submitted_model(
+async def test_plain_model_group_retrieval_does_not_warn_about_the_submitted_model(
     policy_engine: None, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        attach_post_call_pipelines_to_retrieval(
+        await attach_post_call_pipelines_to_retrieval(
+            submit_policies_cache=InternalUsageCache(DualCache()),
             data=_retrieval_data(GOVERNED_MODEL_ID),
             user_api_key_dict=UserAPIKeyAuth(),
             llm_router=_router({"other-alias": UNGOVERNED_MODEL_GROUP}),
@@ -229,34 +240,144 @@ def _ungoverned_retrieval_warnings(caplog: pytest.LogCaptureFixture) -> list[str
         (None, "response id names no deployment"),
     ],
 )
-def test_unresolvable_response_id_attaches_nothing_and_warns(
+async def test_unresolvable_response_id_attaches_nothing_and_warns(
     policy_engine: None, caplog: pytest.LogCaptureFixture, response_id: str, reason: str
 ) -> None:
     data = {"response_id": response_id, "litellm_metadata": {}}
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
+        await attach_post_call_pipelines_to_retrieval(submit_policies_cache=InternalUsageCache(DualCache()), data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
 
     assert data == {"response_id": response_id, "litellm_metadata": {}}
     assert [message.endswith(f"({reason})") for message in _ungoverned_retrieval_warnings(caplog)] == [True]
 
 
-def test_without_a_router_attaches_nothing_and_warns(policy_engine: None, caplog: pytest.LogCaptureFixture) -> None:
+async def test_without_a_router_attaches_nothing_and_warns(policy_engine: None, caplog: pytest.LogCaptureFixture) -> None:
     data = _retrieval_data(GOVERNED_MODEL_ID)
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=None)
+        await attach_post_call_pipelines_to_retrieval(submit_policies_cache=InternalUsageCache(DualCache()), data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=None)
 
     assert data == _retrieval_data(GOVERNED_MODEL_ID)
     assert [message.endswith("(no router)") for message in _ungoverned_retrieval_warnings(caplog)] == [True]
 
 
-def test_without_policy_engine_attaches_nothing_quietly(caplog: pytest.LogCaptureFixture) -> None:
+async def test_without_policy_engine_attaches_nothing_quietly(caplog: pytest.LogCaptureFixture) -> None:
     get_policy_registry().clear()
     data = _retrieval_data(GOVERNED_MODEL_ID)
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=None)
+        await attach_post_call_pipelines_to_retrieval(submit_policies_cache=InternalUsageCache(DualCache()), data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=None)
 
     assert data == _retrieval_data(GOVERNED_MODEL_ID)
     assert _ungoverned_retrieval_warnings(caplog) == []
+
+
+def _submitted(*policies: tuple[str, str], policy_sources: Mapping[str, str] | None = None) -> SubmitPostCallPolicies:
+    return SubmitPostCallPolicies(
+        pipelines=tuple(
+            (
+                policy_name,
+                GuardrailPipeline(
+                    mode="post_call", steps=[PipelineStep(guardrail=guardrail, on_pass="allow", on_fail="block")]
+                ),
+            )
+            for policy_name, guardrail in policies
+        ),
+        policy_sources=policy_sources or {},
+    )
+
+
+async def test_retrieval_runs_the_post_call_policies_the_submit_stored_alongside_its_own_match(
+    policy_engine: None,
+) -> None:
+    cache = InternalUsageCache(DualCache())
+    response_id = _encoded_response_id(GOVERNED_MODEL_ID)
+    await remember_submit_post_call_policies(
+        cache,
+        response_id,
+        _submitted(
+            ("tag-governance", "tag-word-filter"),
+            ("body-governance", "body-word-filter"),
+            ("response-governance", "output-word-filter"),
+            policy_sources={"tag-governance": "tag:governed", "response-governance": "model:gpt-5.4-mini"},
+        ),
+    )
+    data = _retrieval_data(GOVERNED_MODEL_ID)
+
+    await attach_post_call_pipelines_to_retrieval(
+        data=data,
+        user_api_key_dict=UserAPIKeyAuth(team_alias="governed-team"),
+        llm_router=_router(),
+        submit_policies_cache=cache,
+    )
+
+    assert _attached_pipelines(data) == (
+        ("tag-governance", "tag-word-filter"),
+        ("body-governance", "body-word-filter"),
+        ("response-governance", "output-word-filter"),
+        ("team-governance", "team-word-filter"),
+    )
+    assert data["litellm_metadata"]["applied_policies"] == [
+        "tag-governance",
+        "body-governance",
+        "response-governance",
+        "team-governance",
+    ]
+    assert data["litellm_metadata"]["policy_sources"] == {
+        "tag-governance": "tag:governed",
+        "response-governance": "model:gpt-5.4-mini",
+        "team-governance": "team:governed-team",
+    }
+
+
+async def test_submit_stored_policies_govern_a_retrieval_whose_deployment_left_the_router(
+    policy_engine: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    cache = InternalUsageCache(DualCache())
+    response_id = _encoded_response_id("deployment-missing-from-router")
+    await remember_submit_post_call_policies(
+        cache, response_id, _submitted(("wildcard-governance", "output-word-filter"))
+    )
+    data: dict[str, object] = {"response_id": response_id, "litellm_metadata": {}}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await attach_post_call_pipelines_to_retrieval(
+            data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router(), submit_policies_cache=cache
+        )
+
+    assert _attached_pipelines(data) == (("wildcard-governance", "output-word-filter"),)
+    assert "policy_sources" not in data["litellm_metadata"]
+    assert _ungoverned_retrieval_warnings(caplog) == []
+
+
+async def test_submit_stored_policies_belong_to_their_own_response_id(policy_engine: None) -> None:
+    cache = InternalUsageCache(DualCache())
+    await remember_submit_post_call_policies(
+        cache,
+        _encoded_response_id(GOVERNED_MODEL_ID, upstream_response_id="resp_other_upstream"),
+        _submitted(("tag-governance", "tag-word-filter")),
+    )
+    data = _retrieval_data(GOVERNED_MODEL_ID)
+
+    await attach_post_call_pipelines_to_retrieval(
+        data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router(), submit_policies_cache=cache
+    )
+
+    assert _attached_pipelines(data) == (("response-governance", "output-word-filter"),)
+
+
+async def test_submit_stored_policies_govern_a_poll_that_re_encodes_the_same_upstream_response(
+    policy_engine: None,
+) -> None:
+    cache = InternalUsageCache(DualCache())
+    await remember_submit_post_call_policies(
+        cache, _encoded_response_id(GOVERNED_MODEL_ID), _submitted(("tag-governance", "tag-word-filter"))
+    )
+    data = _retrieval_data(UNGOVERNED_MODEL_ID)
+
+    await attach_post_call_pipelines_to_retrieval(
+        data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router(), submit_policies_cache=cache
+    )
+
+    assert _attached_pipelines(data) == (("tag-governance", "tag-word-filter"),)

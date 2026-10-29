@@ -76,7 +76,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     model_budget_spend_cache_key,
     team_member_budget_entity_id,
 )
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging
 from litellm.router import Router
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.utils import ModelResponseListIterator
@@ -11816,7 +11816,12 @@ class TestBackgroundResponseRetrievalGovernance:
         )
         return router
 
-    async def _pre_call(self, route_type: str, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    async def _pre_call(
+        self,
+        route_type: str,
+        monkeypatch: pytest.MonkeyPatch,
+        internal_usage_cache: InternalUsageCache | None = None,
+    ) -> dict[str, object]:
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
         client_facing_response_id = "resp_opaque-client-facing-id"
@@ -11851,6 +11856,7 @@ class TestBackgroundResponseRetrievalGovernance:
         )
         proxy_logging_obj = MagicMock(spec=ProxyLogging)
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=decrypting_pre_call_hook)
+        proxy_logging_obj.internal_usage_cache = internal_usage_cache or InternalUsageCache(DualCache())
         proxy_config = MagicMock(spec=ProxyConfig)
         proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
         returned_data, _ = await processing_obj.common_processing_pre_call_logic(
@@ -11877,6 +11883,47 @@ class TestBackgroundResponseRetrievalGovernance:
         ]
         assert data["litellm_metadata"]["applied_policies"] == ["response-governance"]
         assert data["model"] is None
+
+    @pytest.mark.asyncio
+    async def test_retrieving_a_background_response_runs_the_post_call_policy_its_submit_matched(
+        self, policy_engine: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.policy_engine.response_retrieval import (
+            SubmitPostCallPolicies,
+            remember_submit_post_call_policies,
+        )
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+        from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+
+        cache = InternalUsageCache(DualCache())
+        submit_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id="deployment-submitted", response_id="resp_upstream"
+        )
+        await remember_submit_post_call_policies(
+            cache,
+            submit_response_id,
+            SubmitPostCallPolicies(
+                pipelines=(
+                    (
+                        "tag-governance",
+                        GuardrailPipeline(
+                            mode="post_call",
+                            steps=[PipelineStep(guardrail="pii-filter", on_pass="allow", on_fail="block")],
+                        ),
+                    ),
+                ),
+                policy_sources={"tag-governance": "tag:governed"},
+            ),
+        )
+
+        data = await self._pre_call("aget_responses", monkeypatch, internal_usage_cache=cache)
+
+        pipelines = data["litellm_metadata"]["_guardrail_pipelines"]
+        assert [(policy_name, [step.guardrail for step in pipeline.steps]) for policy_name, pipeline in pipelines] == [
+            ("tag-governance", ["pii-filter"]),
+            ("response-governance", ["output-word-filter"]),
+        ]
+        assert data["litellm_metadata"]["applied_policies"] == ["tag-governance", "response-governance"]
 
     @pytest.mark.asyncio
     async def test_submitting_a_response_does_not_attach_pipelines_from_its_response_id(

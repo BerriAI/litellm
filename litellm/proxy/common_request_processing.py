@@ -2571,10 +2571,11 @@ class ProxyBaseLLMRequestProcessing:
             proxy_logging_obj=proxy_logging_obj,
         )
         if route_type == "aget_responses":
-            attach_post_call_pipelines_to_retrieval(
+            await attach_post_call_pipelines_to_retrieval(
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 llm_router=llm_router,
+                submit_policies_cache=proxy_logging_obj.internal_usage_cache,
             )
 
         # Refresh AFTER pre_call_hook: guardrails (e.g. Presidio PII masking) may

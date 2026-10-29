@@ -259,6 +259,10 @@ from litellm.proxy.policy_engine.pipeline_executor import (
 )
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+from litellm.proxy.policy_engine.response_retrieval import (
+    SubmitPostCallPolicies,
+    remember_submit_post_call_policies,
+)
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import (
@@ -776,9 +780,13 @@ def _post_call_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "Guardr
 
 _PENDING_BACKGROUND_RESPONSE_STATUSES: Final = frozenset(("queued", "in_progress"))
 
+_POLICY_SOURCES_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 
-def _is_pending_background_response(response: LLMResponseTypes) -> bool:
-    return isinstance(response, ResponsesAPIResponse) and response.status in _PENDING_BACKGROUND_RESPONSE_STATUSES
+
+def _pending_background_response(response: LLMResponseTypes) -> ResponsesAPIResponse | None:
+    if isinstance(response, ResponsesAPIResponse) and response.status in _PENDING_BACKGROUND_RESPONSE_STATUSES:
+        return response
+    return None
 
 
 def _guardrails_outside_pipeline(policy_name: str, pipeline: "GuardrailPipeline") -> frozenset[str]:
@@ -841,56 +849,25 @@ def _withdraw_deferred_claims(
 def _defer_post_call_pipelines(
     data: dict[str, object],  # mutable-ok: same request-payload shape as post_call_success_hook's data
     response: ResponsesAPIResponse,
-) -> None:
+) -> SubmitPostCallPolicies | None:
     deferred: Final = _post_call_pipelines(data)
     if not deferred:
-        return
+        return None
     verbose_proxy_logger.debug(
         "Post_call guardrail pipelines wait for background response %s (status=%s) to be retrieved complete: %s",
         response.id,
         response.status,
         ", ".join(policy_name for policy_name, _pipeline in deferred),
     )
-    tag_matched: Final = _tag_matched_deferrals(data, deferred)
-    if tag_matched:
-        verbose_proxy_logger.warning(
-            "Policy engine: background response %s matched post_call policies through a request tag at submit; "
-            "retrieval re-matches only the key, team, and model scopes, so a tag carried in the request body "
-            "does not govern the completed response: %s",
-            response.id,
-            ", ".join(tag_matched),
-        )
-    body_selected: Final = _body_selected_deferrals(data, deferred)
-    if body_selected:
-        verbose_proxy_logger.warning(
-            "Policy engine: background response %s matched post_call policies through the request body's policies "
-            "list at submit; retrieval carries no request body, so those policies do not govern the completed "
-            "response: %s",
-            response.id,
-            ", ".join(body_selected),
-        )
-    _withdraw_deferred_claims(data, deferred)
-
-
-def _tag_matched_deferrals(
-    data: Mapping[str, object], deferred: Sequence[tuple[str, "GuardrailPipeline"]]
-) -> tuple[str, ...]:
-    sources: Final = _policy_state_metadata(data).get("policy_sources")
-    if not isinstance(sources, dict):
-        return ()
-    return tuple(
-        policy_name
-        for policy_name, _pipeline in deferred
-        if policy_name in sources and "tag:" in str(sources[policy_name])
+    sources: Final = _POLICY_SOURCES_ADAPTER.validate_python(_policy_state_metadata(data).get("policy_sources") or {})
+    submitted: Final = SubmitPostCallPolicies(
+        pipelines=deferred,
+        policy_sources={
+            policy_name: sources[policy_name] for policy_name, _pipeline in deferred if policy_name in sources
+        },
     )
-
-
-def _body_selected_deferrals(
-    data: Mapping[str, object], deferred: Sequence[tuple[str, "GuardrailPipeline"]]
-) -> tuple[str, ...]:
-    sources: Final = _policy_state_metadata(data).get("policy_sources")
-    attributed: Final = frozenset(sources) if isinstance(sources, dict) else frozenset()
-    return tuple(policy_name for policy_name, _pipeline in deferred if policy_name not in attributed)
+    _withdraw_deferred_claims(data, deferred)
+    return submitted
 
 
 def _pipeline_unsupported_streaming_guardrails(
@@ -4096,8 +4073,11 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ) -> LLMResponseTypes | None:
-        if _is_pending_background_response(response):
-            _defer_post_call_pipelines(data, response)
+        pending: Final = _pending_background_response(response)
+        if pending is not None:
+            submitted: Final = _defer_post_call_pipelines(data, pending)
+            if submitted is not None:
+                await remember_submit_post_call_policies(self.internal_usage_cache, pending.id, submitted)
             return None
         _, pipeline_response = await self._maybe_execute_pipelines(
             data=data,
