@@ -1658,9 +1658,9 @@ def test_get_azure_ad_token_fallback_to_default_azure_credential(
 )
 def test_is_azure_v1_api_version(api_version, expected):
     """
-    Test that _is_azure_v1_api_version correctly identifies v1 API versions.
+    Test that is_azure_v1_api_version correctly identifies v1 API versions.
     """
-    result = BaseAzureLLM._is_azure_v1_api_version(api_version=api_version)
+    result = BaseAzureLLM.is_azure_v1_api_version(api_version=api_version)
     assert result == expected
 
 

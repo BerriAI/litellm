@@ -5,14 +5,18 @@ import copy
 import contextlib
 import contextvars
 import io
+import itertools
 import json
 import logging
 import os
 import queue
 import threading
+import time
+import uuid
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from pathlib import Path, PurePath
 from typing import Final, SupportsIndex, cast
 from unittest import mock
@@ -79,8 +83,10 @@ from litellm.types.utils import (
     all_litellm_params,
     bedrock_batch_litellm_params,
 )
+from litellm.secret_managers.main import oidc_cache
 from litellm.types.videos.main import VideoObject
 from litellm.utils import (
+    acredential_updates,
     _invalidate_model_cost_lowercase_map,
     add_custom_logger_callback_to_specific_event,
     check_valid_key,
@@ -7320,7 +7326,6 @@ def test_unresolvable_oidc_api_key_fails_closed_naming_the_reason_without_its_ta
     ("reference", "kind"),
     [
         ("oidc/env_path/MISTRAL_SA_TOKEN_PATH", "oidc/env_path"),
-        ("oidc/google/https://api.mistral.ai", "oidc/google"),
         ("oidc/github/mistral", "oidc/github"),
         ("oidc/env_MISTRAL_SA_TOKEN_PATH", "oidc/<unknown kind>"),
         ("oidc/LIT-UNKNOWN-KIND/MISTRAL_SA_TOKEN_PATH", "oidc/<unknown kind>"),
@@ -7341,6 +7346,7 @@ def test_oidc_api_key_of_a_kind_api_key_cannot_resolve_fails_closed_as_an_authen
     assert not route.called
     assert excinfo.value.status_code == 401
     assert f"{kind} secret reference" in excinfo.value.message
+    assert "oidc/google/<audience>" in excinfo.value.message
     assert reference.removeprefix(kind).lstrip("/") not in excinfo.value.message
     assert "MISTRAL_SA_TOKEN_PATH" not in excinfo.value.message
 
@@ -7356,7 +7362,7 @@ async def test_router_fails_over_from_a_deployment_whose_oidc_api_key_kind_canno
                 "model_name": "devstral",
                 "litellm_params": {
                     "model": "mistral/devstral-latest",
-                    "api_key": "oidc/google/https://api.mistral.ai",
+                    "api_key": "oidc/github/mistral",
                     "order": 1,
                 },
             },
@@ -7391,6 +7397,372 @@ def test_an_oidc_api_key_sent_with_the_call_goes_upstream_as_written(
         upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
         litellm.completion(model="mistral/devstral-latest", messages=_PING, api_key=reference)
         sent: Final = upstream.calls.last.request.headers["Authorization"]
+
+    assert sent == f"Bearer {reference}"
+
+
+_GOOGLE_METADATA_IDENTITY: Final = (
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity"
+)
+_VLLM_BASE: Final = "https://vllm.example.test/v1"
+_VLLM_CHAT_URL: Final = f"{_VLLM_BASE}/chat/completions"
+_VLLM_MODEL: Final = "hosted_vllm/qwen3-0.6b"
+_VLLM_REPLY: Final = {**_MISTRAL_REPLY, "model": "qwen3-0.6b"}
+_CLOCK_START: Final = 1_900_000_000.0
+_GOOGLE_TOKEN_LIFETIME: Final = 3600
+
+
+def _jwt_segment(claims: Mapping[str, object]) -> str:
+    return base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+
+
+def _google_id_token(audience: str, issued_at: float) -> str:
+    claims: Final = {"aud": audience, "iat": int(issued_at), "exp": int(issued_at) + _GOOGLE_TOKEN_LIFETIME}
+    return f"{_jwt_segment({'alg': 'RS256', 'typ': 'JWT'})}.{_jwt_segment(claims)}.signature"
+
+
+def _google_reference() -> tuple[str, str]:
+    audience: Final = f"https://vllm.example.test/{uuid.uuid4().hex}"
+    return audience, f"oidc/google/{audience}"
+
+
+def _metadata_identity(fetched_on: queue.SimpleQueue[int], request: httpx.Request) -> httpx.Response:
+    fetched_on.put(threading.get_ident())
+    if request.headers.get("Metadata-Flavor") != "Google":
+        return httpx.Response(403)
+    return httpx.Response(200, text=_google_id_token(request.url.params["audience"], time.time()))
+
+
+def _vllm_credential(api_key: str) -> CredentialItem:
+    return CredentialItem(
+        credential_name="vllm-sa", credential_values={"api_key": api_key, "api_base": _VLLM_BASE}, credential_info={}
+    )
+
+
+async def _ping_vllm_through(call_path: str, credential_name: str) -> None:
+    if call_path == "async":
+        await litellm.acompletion(model=_VLLM_MODEL, messages=_PING, litellm_credential_name=credential_name)
+        return
+    litellm.completion(model=_VLLM_MODEL, messages=_PING, litellm_credential_name=credential_name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_path", ["sync", "async"])
+async def test_named_credential_oidc_google_api_key_sends_the_metadata_token_and_refreshes_it_before_it_expires(
+    monkeypatch: pytest.MonkeyPatch, call_path: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(time, "time", lambda: _CLOCK_START)
+    audience, reference = _google_reference()
+    monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
+    refreshed_at: Final = _CLOCK_START + _GOOGLE_TOKEN_LIFETIME - 59
+
+    with respx.mock(assert_all_called=True) as upstream:
+        metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).mock(
+            side_effect=partial(_metadata_identity, queue.SimpleQueue())
+        )
+        chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
+        await _ping_vllm_through(call_path, "vllm-sa")
+        await _ping_vllm_through(call_path, "vllm-sa")
+        fetches_within_lifetime: Final = metadata.call_count
+        monkeypatch.setattr(time, "time", lambda: refreshed_at)
+        await _ping_vllm_through(call_path, "vllm-sa")
+        sent: Final = [call.request.headers["Authorization"] for call in chat.calls]
+        audiences: Final = [call.request.url.params["audience"] for call in metadata.calls]
+
+    first_token: Final = f"Bearer {_google_id_token(audience, _CLOCK_START)}"
+    assert sent == [first_token, first_token, f"Bearer {_google_id_token(audience, refreshed_at)}"]
+    assert (fetches_within_lifetime, audiences) == (1, [audience, audience])
+    assert litellm.credential_list[0].credential_values["api_key"] == reference
+
+
+@pytest.mark.asyncio
+async def test_router_fetches_an_oidc_google_api_key_token_off_the_event_loop_and_keeps_the_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(time, "time", lambda: _CLOCK_START)
+    audience, reference = _google_reference()
+    fetched_on: Final[queue.SimpleQueue[int]] = queue.SimpleQueue()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vllm",
+                "litellm_params": {"model": _VLLM_MODEL, "api_base": _VLLM_BASE, "api_key": reference},
+            }
+        ]
+    )
+
+    try:
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=partial(_metadata_identity, fetched_on))
+            chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
+            await router.acompletion(model="vllm", messages=_PING)
+            sent: Final = chat.calls.last.request.headers["Authorization"]
+    finally:
+        router.discard()
+
+    assert sent == f"Bearer {_google_id_token(audience, _CLOCK_START)}"
+    assert fetched_on.qsize() == 1
+    assert fetched_on.get_nowait() != threading.get_ident()
+    assert router.get_model_list(model_name="vllm")[0]["litellm_params"]["api_key"] == reference
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_path", ["sync", "async"])
+@pytest.mark.parametrize(
+    ("metadata_failure", "status_code"),
+    [
+        (lambda: httpx.Response(500, text="metadata server unavailable"), 503),
+        (lambda: httpx.Response(403, text="Missing Metadata-Flavor:Google header"), 401),
+        (lambda: httpx.Response(200, text=""), 401),
+        (lambda: httpx.ConnectError("[Errno -2] Name or service not known"), 503),
+        (lambda: httpx.ReadTimeout("timed out"), 503),
+        (lambda: httpx.RemoteProtocolError("Server disconnected without sending a response."), 503),
+    ],
+    ids=["server error", "refused", "empty token", "not on GCP", "timeout", "disconnected"],
+)
+async def test_oidc_google_api_key_fails_closed_when_the_metadata_server_fails_and_recovers_on_the_next_call(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    call_path: str,
+    metadata_failure: Callable[[], httpx.Response | httpx.HTTPError],
+    status_code: int,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(time, "time", lambda: _CLOCK_START)
+    audience, reference = _google_reference()
+    monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
+    recovered_token: Final = _google_id_token(audience, _CLOCK_START)
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.get(_GOOGLE_METADATA_IDENTITY).mock(
+            side_effect=[metadata_failure(), httpx.Response(200, text=recovered_token)]
+        )
+        chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"), pytest.raises(
+            (litellm.AuthenticationError, litellm.ServiceUnavailableError)
+        ) as excinfo:
+            await _ping_vllm_through(call_path, "vllm-sa")
+        sent_while_failing: Final = chat.call_count
+        await _ping_vllm_through(call_path, "vllm-sa")
+        sent_after_recovery: Final = [call.request.headers["Authorization"] for call in chat.calls]
+
+    assert excinfo.value.status_code == status_code
+    assert "api_key oidc/google secret reference could not be resolved" in excinfo.value.message
+    assert audience.removeprefix("https://") not in excinfo.value.message
+    assert reference in caplog.text
+    assert sent_while_failing == 0
+    assert sent_after_recovery == [f"Bearer {recovered_token}"]
+
+
+@pytest.mark.asyncio
+async def test_an_oidc_google_api_key_token_cached_when_the_call_starts_is_sent_though_it_expires_mid_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: _CLOCK_START)
+    audience, reference = _google_reference()
+    cached_token: Final = _google_id_token(audience, _CLOCK_START)
+    oidc_cache.set_cache(key=reference, value=cached_token, ttl=60)
+    clock: Final = itertools.chain([_CLOCK_START + 60], itertools.repeat(_CLOCK_START + 61))
+    monkeypatch.setattr(time, "time", lambda: next(clock))
+    monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
+    fetched_on: Final[queue.SimpleQueue[int]] = queue.SimpleQueue()
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=partial(_metadata_identity, fetched_on))
+        updates: Final = await acredential_updates({"model": _VLLM_MODEL, "litellm_credential_name": "vllm-sa"})
+
+    assert updates["api_key"] == cached_token
+    assert fetched_on.empty()
+
+
+@pytest.mark.asyncio
+async def test_a_pending_oidc_google_metadata_fetch_leaves_the_default_executor_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _, reference = _google_reference()
+    monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
+    loop: Final = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    fetch_started: Final[queue.SimpleQueue[int]] = queue.SimpleQueue()
+    release: Final = threading.Event()
+
+    def pending_metadata(_request: httpx.Request) -> httpx.Response:
+        fetch_started.put(threading.get_ident())
+        release.wait(timeout=30)
+        return httpx.Response(500, text="metadata server unavailable")
+
+    with ThreadPoolExecutor(max_workers=1) as observer, respx.mock(assert_all_called=False) as upstream:
+        upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=pending_metadata)
+        chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
+        call: Final = asyncio.ensure_future(_ping_vllm_through("async", "vllm-sa"))
+        try:
+            await asyncio.wait_for(loop.run_in_executor(observer, fetch_started.get), timeout=30)
+            other_work: Final = await asyncio.wait_for(loop.run_in_executor(None, lambda: "done"), timeout=30)
+        finally:
+            release.set()
+        with pytest.raises(litellm.ServiceUnavailableError) as excinfo:
+            await call
+
+    assert other_work == "done"
+    assert excinfo.value.status_code == 503
+    assert chat.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "metadata_answer",
+    [lambda token: httpx.Response(200, text=token), lambda _token: httpx.Response(500, text="metadata server down")],
+    ids=["token", "outage"],
+)
+async def test_concurrent_calls_that_miss_the_oidc_google_token_cache_share_one_metadata_fetch(
+    monkeypatch: pytest.MonkeyPatch, metadata_answer: Callable[[str], httpx.Response]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(time, "time", lambda: _CLOCK_START)
+    audience, reference = _google_reference()
+    monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
+    token: Final = _google_id_token(audience, _CLOCK_START)
+    fetch_started: Final[queue.SimpleQueue[int]] = queue.SimpleQueue()
+    release: Final = threading.Event()
+
+    def held_metadata(_request: httpx.Request) -> httpx.Response:
+        fetch_started.put(threading.get_ident())
+        release.wait(timeout=30)
+        return metadata_answer(token)
+
+    with ThreadPoolExecutor(max_workers=1) as observer, respx.mock(assert_all_called=False) as upstream:
+        metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=held_metadata)
+        chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
+        calls: Final = [asyncio.ensure_future(_ping_vllm_through("async", "vllm-sa")) for _ in range(24)]
+        loop: Final = asyncio.get_running_loop()
+        try:
+            await asyncio.wait_for(loop.run_in_executor(observer, fetch_started.get), timeout=30)
+            fetch_started_while_held: Final = await loop.run_in_executor(
+                observer, partial(_next_fetch_within, fetch_started, 0.5)
+            )
+        finally:
+            release.set()
+        outcomes: Final = await asyncio.gather(*calls, return_exceptions=True)
+        sent: Final = [call.request.headers["Authorization"] for call in chat.calls]
+
+    assert fetch_started_while_held is None
+    if metadata.calls[0].response.status_code == 200:
+        assert metadata.call_count == 1
+        assert outcomes == [None] * 24
+        assert sent == [f"Bearer {token}"] * 24
+    else:
+        assert [getattr(outcome, "status_code", None) for outcome in outcomes] == [503] * 24
+        assert sent == []
+
+
+def _next_fetch_within(fetches: queue.SimpleQueue[int], seconds: float) -> int | None:
+    try:
+        return fetches.get(timeout=seconds)
+    except queue.Empty:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_a_call_an_oidc_google_api_key_may_not_go_to_is_refused_without_a_metadata_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, reference = _google_reference()
+    monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
+
+    with respx.mock(assert_all_called=False) as upstream:
+        metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).respond(500)
+        with pytest.raises(litellm.AuthenticationError) as excinfo:
+            await acredential_updates(
+                {
+                    "model": _VLLM_MODEL,
+                    "litellm_credential_name": "vllm-sa",
+                    "api_base": "https://elsewhere.example.test/v1",
+                }
+            )
+
+    assert "only to that credential's own api_base" in excinfo.value.message
+    assert metadata.call_count == 0
+
+
+async def _pass_through_chat_call(call_path: str, reference: str) -> None:
+    pass_through: Final = {"method": "POST", "endpoint": "v1/chat/completions", "json": {"messages": _PING}}
+    if call_path == "sync":
+        litellm.llm_passthrough_route(model=_VLLM_MODEL, litellm_credential_name="vllm-sa", **pass_through)
+        return
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vllm-model",
+                "litellm_params": {"model": _VLLM_MODEL, "api_base": _VLLM_BASE, "api_key": reference},
+            }
+        ],
+        num_retries=0,
+    )
+    await router.allm_passthrough_route(model="vllm-model", **pass_through)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_path", ["sync", "async router"])
+async def test_a_pass_through_call_with_an_oidc_google_api_key_is_refused_without_a_metadata_fetch(
+    monkeypatch: pytest.MonkeyPatch, call_path: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(time, "time", lambda: _CLOCK_START)
+    audience, reference = _google_reference()
+    monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
+
+    with respx.mock(assert_all_called=False) as upstream:
+        metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).respond(
+            200, text=_google_id_token(audience, _CLOCK_START)
+        )
+        vllm: Final = upstream.route(host="vllm.example.test").respond(200, json=_VLLM_REPLY)
+        with pytest.raises(litellm.AuthenticationError) as excinfo:
+            await _pass_through_chat_call(call_path, reference)
+
+    assert "pass-through routes do not fetch Google ID tokens" in excinfo.value.message
+    assert metadata.call_count == 0
+    assert vllm.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("configured", "bound"),
+    [(None, 3.0), ("1.5", 1.5), ("three seconds", 3.0), ("0", 3.0), ("-2", 3.0)],
+    ids=["unset", "configured", "malformed", "zero", "negative"],
+)
+def test_oidc_google_api_key_metadata_fetch_waits_at_most_gce_metadata_timeout_seconds(
+    monkeypatch: pytest.MonkeyPatch, configured: str | None, bound: float
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    if configured is None:
+        monkeypatch.delenv("GCE_METADATA_TIMEOUT", raising=False)
+    else:
+        monkeypatch.setenv("GCE_METADATA_TIMEOUT", configured)
+    monkeypatch.setattr(time, "time", lambda: _CLOCK_START)
+    audience, reference = _google_reference()
+    monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
+    token: Final = _google_id_token(audience, _CLOCK_START)
+
+    with respx.mock(assert_all_called=True) as upstream:
+        metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).respond(200, text=token)
+        chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
+        litellm.completion(model=_VLLM_MODEL, messages=_PING, litellm_credential_name="vllm-sa")
+        sent: Final = chat.calls.last.request.headers["Authorization"]
+        waits: Final = metadata.calls.last.request.extensions["timeout"]
+
+    assert sent == f"Bearer {token}"
+    assert waits == {"connect": bound, "read": bound, "write": bound, "pool": bound}
+
+
+def test_an_oidc_google_api_key_sent_with_the_call_goes_upstream_as_written_without_a_metadata_fetch() -> None:
+    _, reference = _google_reference()
+
+    with respx.mock(assert_all_called=True) as upstream:
+        chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
+        litellm.completion(model=_VLLM_MODEL, api_base=_VLLM_BASE, messages=_PING, api_key=reference)
+        sent: Final = chat.calls.last.request.headers["Authorization"]
 
     assert sent == f"Bearer {reference}"
 
@@ -10869,6 +11241,44 @@ def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_e
     assert "cache_control_injection_points" not in optional_params
 
 
+@pytest.mark.parametrize(
+    ("cost_map_declared", "deployment_declared", "expected"),
+    [
+        (None, None, None),
+        (False, None, False),
+        (True, None, True),
+        (True, False, False),
+        (False, True, True),
+        (None, False, False),
+    ],
+)
+def test_declared_mid_conversation_system_support_prefers_the_deployment_over_the_cost_map(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+    cost_map_declared: bool | None,
+    deployment_declared: bool | None,
+    expected: bool | None,
+) -> None:
+    if cost_map_declared is not None:
+        declare_mid_conversation_system("hosted_vllm/mid-conversation-probe", cost_map_declared)
+    deployment_model_info: Final = (
+        {"id": "deployment-1"}
+        if deployment_declared is None
+        else {"id": "deployment-1", "supports_mid_conversation_system": deployment_declared}
+    )
+    assert (
+        litellm.utils.declared_mid_conversation_system_support(
+            "mid-conversation-probe", "hosted_vllm", deployment_model_info
+        )
+        is expected
+    )
+
+
+def test_declared_mid_conversation_system_support_is_none_when_the_model_lookup_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(litellm.model_cost, "hosted_vllm/unreadable-probe", "not a model info entry")
+    litellm.get_model_info.cache_clear()
+    assert litellm.utils.declared_mid_conversation_system_support("unreadable-probe", "hosted_vllm", None) is None
+
+
 def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_litellm_proxy():
     """A litellm_proxy deployment calls the downstream proxy through the OpenAI SDK, and that proxy
     applies cache_control_injection_points itself, so the point must ride along in extra_body."""
@@ -10882,3 +11292,55 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     )
 
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
+
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected_warnings"),
+    (("streamlake", 1), ("veniceai", 1), ("my-own-llm", 0)),
+)
+def test_custom_provider_named_like_a_built_in_warns_once(
+    provider: str, expected_warnings: int, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": provider, "custom_handler": litellm.CustomLLM()}])
+    monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
+    monkeypatch.setattr(litellm, "_custom_providers", [])
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        litellm.utils.custom_llm_setup()
+        litellm.utils.custom_llm_setup()
+
+    warnings: Final = [r for r in caplog.records if f"provider '{provider}'" in r.getMessage()]
+    assert len(warnings) == expected_warnings
+    assert provider in litellm._custom_providers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deferred", (False, True))
+async def test_success_enqueue_is_tracked_without_starting_callbacks_synchronously(deferred: bool) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.responses.streaming_iterator import drain_logging_tasks
+    from litellm.utils import _schedule_async_success_logging
+
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    logging_obj: Final = Logging(
+        model="gpt-4o-mini",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=now,
+        litellm_call_id="shutdown-enqueue",
+        function_id="shutdown-enqueue",
+    )
+    logging_obj.defer_async_logging = deferred
+    _schedule_async_success_logging(logging_obj, ModelResponse(), now, now, False)
+    if deferred:
+        assert not logging_obj.async_success_log_enqueued
+        assert logging_obj.enqueue_deferred_logging is not None
+        logging_obj.enqueue_deferred_logging()
+    assert "has_logged_async_success" not in logging_obj.model_call_details
+    await drain_logging_tasks()
+    assert GLOBAL_LOGGING_WORKER.pending_count > 0, "Tracked enqueue must finish before worker draining starts"
+    await GLOBAL_LOGGING_WORKER.flush()
+    assert logging_obj.model_call_details["has_logged_async_success"] is True
