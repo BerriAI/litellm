@@ -2481,6 +2481,24 @@ class TestResponsesSurfaceSharesTheEffortRule:
         )
         assert mapped["reasoning"] == {"summary": "auto"}
 
+    @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+    def test_a_row_that_lists_its_effort_levels_forwards_only_those(self, local_model_cost_map: None, level: str):
+        forwarded: Final = level in litellm.model_cost["chat-latest"]["reasoning_effort_levels"]
+        dropped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": level, "summary": "auto"}},
+            model="chat-latest",
+            drop_params=True,
+        )
+        assert dropped["reasoning"] == ({"effort": level, "summary": "auto"} if forwarded else {"summary": "auto"})
+        if forwarded:
+            return
+        with pytest.raises(litellm.UnsupportedParamsError):
+            OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": level}},
+                model="chat-latest",
+                drop_params=False,
+            )
+
     @pytest.mark.parametrize(
         ("declared_reasoning_efforts", "suggests_declared_levels"),
         [((), True), (None, False)],

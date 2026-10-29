@@ -262,21 +262,34 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return cls.is_reasoning_effort_level_explicitly_disabled(model, level)
 
     @classmethod
+    def _row_declared_reasoning_efforts(cls, model: str) -> tuple[str, ...] | None:
+        from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts_for_map_key
+
+        return declared_reasoning_efforts_for_map_key(cls._model_map_lookup_name(model))
+
+    @classmethod
     def refuses_reasoning_effort_level(cls, model: str, level: str) -> bool:
         """The chat gate for any requested effort level, read off the model's map row alone.
 
-        An opt-in level (xhigh here; Azure adds none) is refused unless the row says true, since
-        the providers rejected it on most of the family when it arrived. Every other level is
+        A row that lists its levels in reasoning_effort_levels answers whole, max included, since
+        that list is how the map describes a model whose set the per-level flags cannot express
+        (chat-latest takes medium alone, and no flag can turn high off).
+
+        Otherwise an opt-in level (xhigh here; Azure adds none) is refused unless the row says true,
+        since the providers rejected it on most of the family when it arrived. Every other level is
         refused only when the row says false: a model the map never heard of, or a row without the
         flag, keeps forwarding what it was sent, and a level with no flag at all (medium, high) is
         never refused. So a new model in the family needs its map row and no code change, the
-        row's supports_<level>_reasoning_effort flags being the whole contract.
+        row being the whole contract.
 
-        A route-specific level (max) is never refused by either gate: the same model honors it
-        on Responses and refuses it on Chat Completions, so one row flag cannot gate it on
-        either route. Chat forwards it for the Responses bridge and a plain chat call gets the
+        A route-specific level (max) is never refused by the flags on either gate: the same model
+        honors it on Responses and refuses it on Chat Completions, so one row flag cannot gate it
+        on either route. Chat forwards it for the Responses bridge and a plain chat call gets the
         provider's own 400, exactly as before the gate read every level.
         """
+        declared: Final = cls._row_declared_reasoning_efforts(model)
+        if declared is not None:
+            return level not in declared
         if level in cls.ROUTE_SPECIFIC_REASONING_EFFORTS:
             return False
         if level in cls.OPT_IN_REASONING_EFFORTS:
@@ -285,7 +298,11 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def row_disables_reasoning_effort_level(cls, model: str, level: str) -> bool:
-        """The Responses gate: opt-out for every level except the route-specific ones."""
+        """The Responses gate: the row's declared levels when it lists them, else opt-out for
+        every level except the route-specific ones."""
+        declared: Final = cls._row_declared_reasoning_efforts(model)
+        if declared is not None:
+            return level not in declared
         if level in cls.ROUTE_SPECIFIC_REASONING_EFFORTS:
             return False
         return cls.is_reasoning_effort_level_explicitly_disabled(model, level)

@@ -109,10 +109,17 @@ def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -
     it does not know: a provider config runs on the request path for every model it serves, most of
     which the map never named, and a lookup miss there must not fail the call.
     """
-    entry: Final = litellm.model_cost.get(f"{custom_llm_provider}/{model}") or litellm.model_cost.get(model)
-    if not isinstance(entry, dict):
-        return None
-    return declared_reasoning_efforts(entry)
+    entry: Final = _map_entry(f"{custom_llm_provider}/{model}") or _map_entry(model)
+    return declared_reasoning_efforts(entry) if entry is not None else None
+
+
+def declared_reasoning_efforts_for_map_key(key: str) -> tuple[str, ...] | None:
+    entry: Final = _map_entry(key)
+    return declared_reasoning_efforts(entry) if entry is not None else None
+
+
+def _map_entry(key: str) -> Mapping[str, object] | None:
+    return as_str_mapping(litellm.model_cost.get(key))
 
 
 REASONING_EFFORT_STRENGTH_ORDER: Final = ("minimal", "low", "medium", "high", "xhigh", "max")
