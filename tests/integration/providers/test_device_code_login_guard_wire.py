@@ -595,6 +595,27 @@ def test_copilot_api_key_is_minted_once_from_the_stored_access_token(scene: _Sce
     assert json.loads((scene.rig.copilot_dir / "api-key.json").read_text())["token"] == dl.COPILOT_MINTED_KEY
 
 
+def test_copilot_api_key_that_cannot_be_saved_is_minted_at_most_once_per_worker(scene: _Scene) -> None:
+    dl.write_copilot_access(scene.rig.copilot_dir, dl.COPILOT_UNSAVED_KEY_ACCESS)
+    unwritable_key_file: Final = scene.rig.copilot_dir / "api-key.json"
+    unwritable_key_file.mkdir()
+    first: Final = scene.call(_Cell("copilot", "chat", False, "httpx"))
+    first_served: Final = _serve(first)
+    assert first_served.status == 200, first_served.text
+    (minted,) = scene.rig.peers.auth.drain()
+    assert minted.headers.get("authorization") == f"token {dl.COPILOT_UNSAVED_KEY_ACCESS}"
+    later: Final = tuple(scene.call(_Cell("copilot", "chat", False, "httpx")) for _ in range(3))
+    later_served: Final = tuple(_serve(call) for call in later)
+    assert [served.status for served in later_served] == [200, 200, 200], [served.text for served in later_served]
+    assert len(scene.rig.peers.auth.drain()) <= 1
+    received: Final = scene.rig.peers.api.drain()
+    forwarded: Final = tuple(_carrying(received, call.marker) for call in (first, *later))
+    assert [tuple(dl.bearer(request) for request in requests) for requests in forwarded] == [
+        (dl.COPILOT_MINTED_KEY,)
+    ] * 4, _describe(received)
+    assert unwritable_key_file.is_dir()
+
+
 def test_copilot_access_token_github_rejects_fails_the_request_without_a_device_login(scene: _Scene) -> None:
     dl.write_copilot_access(scene.rig.copilot_dir, dl.COPILOT_REJECTED_ACCESS)
     served: Final = _serve(scene.call(_Cell("copilot", "chat", False, "httpx")))
@@ -655,44 +676,39 @@ def test_chatgpt_token_with_a_text_expiry_falls_back_to_the_expiry_inside_the_to
     assert scene.rig.peers.auth_connections() == ()
 
 
-_PROVIDER_RESOLUTION_ERROR: Final = "GetLLMProvider Exception"
-
-
-@dataclass(frozen=True, slots=True)
-class _UnusableCopilotFiles:
-    files: Mapping[str, str]
-    answer: str
-
-
-_UNUSABLE_COPILOT_FILES: Final[Mapping[str, _UnusableCopilotFiles]] = MappingProxyType(
+_UNUSABLE_COPILOT_FILES: Final[Mapping[str, Mapping[str, bytes]]] = MappingProxyType(
     {
-        "empty-access-token": _UnusableCopilotFiles(MappingProxyType({"access-token": ""}), dl.COPILOT_REFUSAL),
-        "blank-access-token": _UnusableCopilotFiles(MappingProxyType({"access-token": "  \n"}), dl.COPILOT_REFUSAL),
-        "invalid-api-key-json": _UnusableCopilotFiles(
-            MappingProxyType({"api-key.json": "{not json"}), dl.COPILOT_REFUSAL
+        "empty-access-token": MappingProxyType({"access-token": b""}),
+        "blank-access-token": MappingProxyType({"access-token": b"  \n"}),
+        "access-token-truncated-utf-16": MappingProxyType({"access-token": b"\xff\xfe\x00\xd8"}),
+        "invalid-api-key-json": MappingProxyType({"api-key.json": b"{not json"}),
+        "api-key-list": MappingProxyType({"api-key.json": b"[]"}),
+        "api-key-expiry-text": MappingProxyType(
+            {"api-key.json": json.dumps({"token": "copilot-text-expiry", "expires_at": "soon"}).encode()}
         ),
-        "api-key-list": _UnusableCopilotFiles(MappingProxyType({"api-key.json": "[]"}), _PROVIDER_RESOLUTION_ERROR),
-        "api-key-expiry-text": _UnusableCopilotFiles(
-            MappingProxyType({"api-key.json": json.dumps({"token": "copilot-text-expiry", "expires_at": "soon"})}),
-            _PROVIDER_RESOLUTION_ERROR,
+        "api-key-expired-utf-16": MappingProxyType(
+            {"api-key.json": json.dumps({"token": "copilot-utf-16", "expires_at": 1}).encode("utf-16")}
         ),
+        "api-key-truncated-utf-16": MappingProxyType({"api-key.json": b"\xff\xfe\x00\xd8"}),
     }
 )
 
 
 @pytest.mark.parametrize("name", tuple(_UNUSABLE_COPILOT_FILES))
 def test_unusable_copilot_token_files_are_refused_like_missing_ones_each_time(scene: _Scene, name: str) -> None:
-    variant: Final = _UNUSABLE_COPILOT_FILES[name]
-    for file_name, content in variant.files.items():
-        (scene.rig.copilot_dir / file_name).write_text(content)
+    files: Final = _UNUSABLE_COPILOT_FILES[name]
+    for file_name, content in files.items():
+        (scene.rig.copilot_dir / file_name).write_bytes(content)
     first: Final = _serve(scene.call(_Cell("copilot", "chat", False, "httpx")))
     second: Final = _serve(scene.call(_Cell("copilot", "chat", False, "httpx")))
     for served in (first, second):
         assert served.status == 400, served.text
-        assert variant.answer in _error_message(served.text), served.text
+        assert dl.COPILOT_REFUSAL in _error_message(served.text), served.text
         assert dl.COPILOT_USER_CODE not in served.text
     assert scene.rig.peers.auth_connections() == ()
     assert _describe(scene.rig.peers.api.drain()) == ()
+    for file_name, content in files.items():
+        assert (scene.rig.copilot_dir / file_name).read_bytes() == content
 
 
 @pytest.mark.parametrize("provider", _PROVIDERS)
