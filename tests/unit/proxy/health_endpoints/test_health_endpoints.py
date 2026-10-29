@@ -2473,6 +2473,7 @@ def _proxy_health_globals(
     llm_router: object,
     use_background_health_checks: bool = False,
     health_check_results: Mapping[str, object] | None = None,
+    prisma_client: object = None,
 ) -> Iterator[None]:
     with (
         patch(  # test-quality-ok: proxy module global, no injection seam
@@ -2482,7 +2483,7 @@ def _proxy_health_globals(
             "litellm.proxy.proxy_server.llm_router", llm_router
         ),
         patch(  # test-quality-ok: proxy module global, no injection seam
-            "litellm.proxy.proxy_server.prisma_client", None
+            "litellm.proxy.proxy_server.prisma_client", prisma_client
         ),
         patch(  # test-quality-ok: proxy module global, no injection seam
             "litellm.proxy.proxy_server.use_background_health_checks", use_background_health_checks
@@ -3817,6 +3818,7 @@ async def _live_probed_model_ids(
     user_api_key_dict: UserAPIKeyAuth,
     model: str | None = None,
     llm_router: Router | None = None,
+    prisma_client: object = None,
 ) -> set[str]:
     from fastapi import Response
 
@@ -3829,7 +3831,7 @@ async def _live_probed_model_ids(
         return {"healthy_endpoints": [], "unhealthy_endpoints": [], "healthy_count": 0, "unhealthy_count": 0}
 
     with (
-        _proxy_health_globals(model_list, llm_router or _router_for(model_list)),
+        _proxy_health_globals(model_list, llm_router or _router_for(model_list), prisma_client=prisma_client),
         patch(  # test-quality-ok: the model list handed to the probe is the assertion; no injection seam
             "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
             side_effect=fake_perform,
@@ -4487,6 +4489,37 @@ async def test_health_endpoint_targets_the_deployment_an_alias_name_sends_the_ke
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("caller", "model_group_alias"), _ALIAS_SHADOW_CASES)
+async def test_health_endpoint_records_an_alias_check_under_the_name_the_caller_asked_for(
+    caller: UserAPIKeyAuth, model_group_alias: Mapping[str, str]
+):
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    async def fake_probe(model_list, details=True, max_concurrency=None, instrumentation_context=None):
+        return [{"model": m["litellm_params"]["model"], "model_id": m["model_info"]["id"]} for m in model_list], [], {}
+
+    with (
+        _proxy_health_globals(
+            _PROVIDER_PREFIXED_MODEL_LIST, _router_with_aliases(model_group_alias), prisma_client=MagicMock()
+        ),
+        patch(  # test-quality-ok: the probe is the provider edge; the endpoint has no injection seam for it
+            "litellm.proxy.health_check._perform_health_check", side_effect=fake_probe
+        ),
+        patch(  # test-quality-ok: the history row is the assertion; the endpoint has no injection seam for its writer
+            "litellm.proxy.health_endpoints._health_endpoints._save_health_check_to_db", new_callable=AsyncMock
+        ) as save,
+    ):
+        result: Final = await health_endpoint(
+            response=Response(), user_api_key_dict=caller, model="claude-haiku-5-5", model_id=None
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-mini"]
+    assert save.call_args.args[1] == "claude-haiku-5-5"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("caller", "model_group_alias"), _ALIAS_SHADOW_CASES)
 async def test_health_endpoint_targets_the_deployment_an_alias_name_sends_the_key_to_on_background_cache_path(
     caller: UserAPIKeyAuth, model_group_alias: Mapping[str, str]
 ):
@@ -4715,23 +4748,20 @@ async def test_health_endpoint_keeps_the_wildcard_serving_a_name_the_keys_user_o
 
 
 @pytest.mark.asyncio
-async def test_health_endpoint_fails_when_an_auth_check_errors_for_a_reason_other_than_model_access():
-    lookup_failure: Final = ProxyException(
-        message="user lookup failed", type=ProxyErrorTypes.internal_server_error, param=None, code=500
+async def test_health_endpoint_answers_an_agent_key_acting_for_an_unknown_user_the_way_chat_does():
+    from litellm.types.agents import AgentCaller
+
+    users_table: Final = MagicMock()
+    users_table.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    agent_key: Final = UserAPIKeyAuth(api_key="hashed-test-key", models=["gpt-5.4-mini"]).model_copy(
+        update={"agent_caller": AgentCaller(user_id="user-deleted-before-this-request")}
     )
 
-    with (
-        patch(  # test-quality-ok: no real lookup raises ProxyException today; the endpoint has no seam for its checks
-            "litellm.proxy.health_endpoints._health_endpoints.can_user_call_model",
-            AsyncMock(side_effect=lookup_failure),
-        ),
-        pytest.raises(ProxyException) as failed,
-    ):
-        await _live_probed_model_ids(
-            _PROVIDER_PREFIXED_MODEL_LIST, UserAPIKeyAuth(api_key="hashed-test-key", models=["gpt-5.4-mini"])
-        )
+    with pytest.raises(ProxyException) as failed:
+        await _live_probed_model_ids(_PROVIDER_PREFIXED_MODEL_LIST, agent_key, prisma_client=users_table)
 
-    assert failed.value.type == ProxyErrorTypes.internal_server_error
+    assert (failed.value.code, failed.value.type) == ("401", ProxyErrorTypes.auth_error)
+    assert "user-deleted-before-this-request" in failed.value.message
 
 
 @pytest.mark.asyncio

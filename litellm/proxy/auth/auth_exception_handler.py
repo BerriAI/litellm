@@ -47,7 +47,7 @@ else:
     Span = Any
 
 
-def _as_proxy_exception(e: Exception) -> ProxyException:
+def auth_failure_as_proxy_exception(e: Exception) -> ProxyException:
     """Convert an authentication failure into the ProxyException the client receives."""
     if isinstance(e, litellm.BudgetExceededError):
         return ProxyException(
@@ -262,7 +262,9 @@ class UserAPIKeyAuthExceptionHandler:
             if transformed_exception is not None:
                 e = transformed_exception
 
-            final_exception: Final = mark_invalid_virtual_key_error(_as_proxy_exception(e), is_invalid_virtual_key)
+            final_exception: Final = mark_invalid_virtual_key_error(
+                auth_failure_as_proxy_exception(e), is_invalid_virtual_key
+            )
             # If a quiet-logged malformed-key transform yields non-401, escalate to ERROR
             if is_quiet_log and str(final_exception.code) != str(status.HTTP_401_UNAUTHORIZED):
                 verbose_proxy_logger.error(

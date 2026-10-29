@@ -51,6 +51,7 @@ from litellm.proxy.auth.auth_checks import (
     key_model_aliases_for_auth_check,
     team_model_aliases_for_auth_check,
 )
+from litellm.proxy.auth.auth_exception_handler import auth_failure_as_proxy_exception
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
 )
@@ -1131,10 +1132,12 @@ async def _key_may_call_model(
         )
     except ModelAccessDeniedProxyException:
         return False
-    except HTTPException as denial:
-        if denial.status_code != status.HTTP_403_FORBIDDEN:
-            raise
-        return False
+    except ProxyException:
+        raise
+    except Exception as failure:
+        if isinstance(failure, HTTPException) and failure.status_code == status.HTTP_403_FORBIDDEN:
+            return False
+        raise auth_failure_as_proxy_exception(failure) from failure
     return True
 
 
@@ -1398,6 +1401,7 @@ def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: 
 async def _perform_health_check_and_save(
     model_list,
     target_model,
+    recorded_model_name: str | None,
     cli_model,
     details,
     prisma_client,
@@ -1420,8 +1424,7 @@ async def _perform_health_check_and_save(
 
     # Optionally save health check result to database (non-blocking)
     if prisma_client is not None:
-        # For CLI model, use cli_model name; for router models, use target_model
-        model_name_for_db: Final = cli_model if cli_model is not None else target_model
+        model_name_for_db: Final = cli_model if cli_model is not None else recorded_model_name
         if model_name_for_db is not None:
             asyncio.create_task(
                 _save_health_check_to_db(
@@ -1551,6 +1554,7 @@ async def health_endpoint(
                 cli_result: Final = await _perform_health_check_and_save(
                     model_list=[],
                     target_model=None,
+                    recorded_model_name=None,
                     cli_model=user_model,
                     details=health_check_details,
                     prisma_client=prisma_client,
@@ -1656,6 +1660,7 @@ async def health_endpoint(
             router_result: Final = await _perform_health_check_and_save(
                 model_list=_llm_model_list,
                 target_model=target_model if model_id else requested_model,
+                recorded_model_name=target_model,
                 cli_model=None,
                 details=health_check_details,
                 prisma_client=prisma_client,

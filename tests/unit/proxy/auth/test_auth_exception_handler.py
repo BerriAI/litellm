@@ -38,7 +38,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler, _as_proxy_exception
+from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler, auth_failure_as_proxy_exception
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 
 
@@ -849,7 +849,7 @@ async def test_auth_error_preserves_classification_with_non_object_context(
         "database": httpx.ConnectError("Database unavailable"),
     }
     error: Final = errors[error_kind]
-    expected: Final = _as_proxy_exception(error)
+    expected: Final = auth_failure_as_proxy_exception(error)
     recorder: Final = _AuthFailureRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     monkeypatch.setattr(proxy_server, "general_settings", {"allow_requests_on_db_unavailable": False})
@@ -1292,9 +1292,9 @@ def test_as_proxy_exception_keeps_jwt_scope_denial_message_shape():
         status_code=status.HTTP_403_FORBIDDEN,
         detail=detail,
     )
-    plain = _as_proxy_exception(HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail))
+    plain = auth_failure_as_proxy_exception(HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail))
 
-    converted = _as_proxy_exception(denial)
+    converted = auth_failure_as_proxy_exception(denial)
 
     assert converted.to_dict() == plain.to_dict()
     assert converted.internal_message == denial.internal_message

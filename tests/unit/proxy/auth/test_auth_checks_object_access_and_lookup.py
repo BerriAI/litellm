@@ -1093,7 +1093,7 @@ def _user_read_raising(error: Exception) -> tuple[MagicMock, MagicMock]:
     ids=["connect_error", "read_timeout", "p1001_as_data_error"],
 )
 async def test_get_user_object_surfaces_a_db_outage_as_503_not_as_a_missing_user(outage):
-    from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
+    from litellm.proxy.auth.auth_exception_handler import auth_failure_as_proxy_exception
 
     prisma_client, cache = _user_read_raising(outage)
 
@@ -1109,7 +1109,7 @@ async def test_get_user_object_surfaces_a_db_outage_as_503_not_as_a_missing_user
 
     assert raised.value is outage
     assert PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(raised.value) is outage
-    surfaced = _as_proxy_exception(raised.value)
+    surfaced = auth_failure_as_proxy_exception(raised.value)
     assert (surfaced.code, surfaced.type) == ("503", ProxyErrorTypes.no_db_connection)
 
 
@@ -1123,7 +1123,7 @@ async def test_get_user_object_surfaces_a_db_outage_as_503_not_as_a_missing_user
     ids=["query_level_data_error", "runtime_error"],
 )
 async def test_get_user_object_still_reports_a_non_outage_read_failure_as_a_missing_user(failure):
-    from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
+    from litellm.proxy.auth.auth_exception_handler import auth_failure_as_proxy_exception
 
     prisma_client, cache = _user_read_raising(failure)
 
@@ -1138,7 +1138,7 @@ async def test_get_user_object_still_reports_a_non_outage_read_failure_as_a_miss
             )
 
     assert raised.value.__context__ is failure
-    surfaced = _as_proxy_exception(raised.value)
+    surfaced = auth_failure_as_proxy_exception(raised.value)
     assert (surfaced.code, surfaced.type) == ("401", ProxyErrorTypes.auth_error)
 
 
@@ -9354,14 +9354,14 @@ def _restricted_member_check_deps() -> dict[str, object]:
 @pytest.mark.asyncio
 async def test_check_team_member_model_access_fails_closed_when_the_membership_read_hits_a_db_outage():
     from litellm.proxy.auth.auth_checks import check_team_member_model_access
-    from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
+    from litellm.proxy.auth.auth_exception_handler import auth_failure_as_proxy_exception
 
     with pytest.raises(httpx.ConnectError) as raised:
         await check_team_member_model_access(
             model="claude-sonnet-5", llm_router=None, **_restricted_member_check_deps()
         )
 
-    surfaced = _as_proxy_exception(raised.value)
+    surfaced = auth_failure_as_proxy_exception(raised.value)
     assert (surfaced.code, surfaced.type) == ("503", ProxyErrorTypes.no_db_connection)
 
 
