@@ -1,10 +1,12 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .base import GuardrailConfigModel
 
 
 class NeedlepathGuardrailOptionalParams(BaseModel):
     """Optional tuning knobs for the Needlepath guardrail."""
+
+    model_config = ConfigDict(frozen=True)
 
     select_tool_outputs: bool | None = Field(
         default=None,
@@ -29,7 +31,7 @@ class NeedlepathGuardrailOptionalParams(BaseModel):
     operating_point: str | None = Field(
         default=None,
         description=(
-            "Immutable engine label sent with every request. Defaults to 'np-2026-08-r4'. "
+            "Immutable engine label sent with every request. Defaults to 'np-2026-10-r8'. "
             "Pinned rather than inherited from the service default, so what this guardrail "
             "sends does not change underneath a deployment."
         ),

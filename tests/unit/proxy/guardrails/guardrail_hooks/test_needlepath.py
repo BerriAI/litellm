@@ -8,9 +8,12 @@ Tests cover:
   threshold, the query message itself is never rewritten
 - the fail-open contract, one test per decline: empty selection
   (records_selected 0, tokens_after 0, blank or missing rendered_context), a
-  gate stand-down, HTTP 402/403/429 and other non-2xx, timeouts and transport
-  errors, malformed JSON, and an unexpected response schema. Every one asserts
-  the messages come back byte-identical.
+  gate stand-down, a ``blocked`` security outcome, HTTP 402/403/429 and other
+  non-2xx, timeouts and transport errors, malformed JSON, and an unexpected
+  response schema. Every one asserts the messages come back byte-identical.
+- security screening: a ``sanitized_fallback``, or an engaged block that
+  screening quarantined, is applied even where an ordinary selection would be
+  declined, because declining would forward the flagged spans.
 """
 
 import asyncio
@@ -75,20 +78,26 @@ def _select_response(
     gate: object = None,
     status: int = 200,
     omit_rendered_context: bool = False,
+    outcome: object = "engaged",
+    format_metrics: object = None,
 ) -> MagicMock:
     body = {
         "request_id": "req-1",
+        "outcome": outcome,
+        "fallback_used": False,
         "records_selected": records_selected,
         "records_submitted": 1,
         "records_available": 1,
         "tokens_before": 900,
         "tokens_after": tokens_after,
         "tokens_saved": 780,
-        "policy_version": "np-2026-08-r4",
+        "policy_version": "np-2026-10-r8",
         "gate": {"engaged": True, "reason": "engage:needle"} if gate is None else gate,
     }
     if not omit_rendered_context:
         body["rendered_context"] = rendered_context
+    if format_metrics is not None:
+        body["format_metrics"] = format_metrics
     mock = MagicMock()
     mock.status_code = status
     mock.json.return_value = body
@@ -138,7 +147,47 @@ def test_init_defaults():
     assert g.min_chars_to_select == DEFAULT_MIN_CHARS_TO_SELECT == 500
     assert g.max_context_tokens == DEFAULT_MAX_CONTEXT_TOKENS == 4000
     # Pinned, not inherited from the service default.
-    assert g.operating_point == DEFAULT_OPERATING_POINT == "np-2026-08-r4"
+    assert g.operating_point == DEFAULT_OPERATING_POINT == "np-2026-10-r8"
+
+
+def test_initialize_guardrail_reads_nested_then_flat_knobs():
+    from litellm.proxy.guardrails.guardrail_hooks.needlepath import (
+        guardrail_class_registry,
+        guardrail_initializer_registry,
+        initialize_guardrail,
+    )
+    from litellm.types.guardrails import LitellmParams, SupportedGuardrailIntegrations
+
+    litellm_params = LitellmParams(
+        guardrail="needlepath",
+        mode="pre_call",
+        api_key=FAKE_API_KEY,
+        api_base=FAKE_API_BASE,
+        optional_params={
+            "select_history": True,
+            "min_chars_to_select": 1200,
+            "operating_point": "np-2026-10-r6",
+        },
+        max_context_tokens=2000,
+    )
+    callback = initialize_guardrail(litellm_params, {"guardrail_name": "needlepath-selection"})
+    assert isinstance(callback, NeedlepathGuardrail)
+    assert callback.select_history is True
+    assert callback.select_tool_outputs is True
+    assert callback.min_chars_to_select == 1200
+    assert callback.max_context_tokens == 2000
+    assert callback.operating_point == "np-2026-10-r6"
+    assert guardrail_initializer_registry[SupportedGuardrailIntegrations.NEEDLEPATH.value] is initialize_guardrail
+    assert guardrail_class_registry[SupportedGuardrailIntegrations.NEEDLEPATH.value] is NeedlepathGuardrail
+
+
+def test_initialize_guardrail_defaults_to_r8():
+    from litellm.proxy.guardrails.guardrail_hooks.needlepath import initialize_guardrail
+    from litellm.types.guardrails import LitellmParams
+
+    litellm_params = LitellmParams(guardrail="needlepath", mode="pre_call", api_key=FAKE_API_KEY)
+    callback = initialize_guardrail(litellm_params, {"guardrail_name": "needlepath-selection"})
+    assert callback.operating_point == "np-2026-10-r8"
 
 
 def test_init_rejects_non_http_api_base():
@@ -176,8 +225,10 @@ async def test_apply_guardrail_replaces_tool_output_with_rendered_context(
     assert payload["task"]["prompt"] == 'edgar_search: {"cik": "0000320193"}'
     assert payload["budget"] == {
         "max_context_tokens": 4000,
-        "operating_point": "np-2026-08-r4",
+        "operating_point": "np-2026-10-r8",
     }
+    # The label travels in budget.operating_point; a top-level one is ignored.
+    assert "operating_point" not in payload
     assert payload["render"] is True
     assert payload["render_format"] == "plain"
 
@@ -377,6 +428,123 @@ async def test_fail_open_unexpected_schema(guardrail: NeedlepathGuardrail):
 async def test_fail_open_selection_not_smaller(guardrail: NeedlepathGuardrail):
     """A block that is not shorter than the original could only add tokens."""
     post = AsyncMock(return_value=_select_response(rendered_context=TOOL_OUTPUT + " and more"))
+    result = await _run(guardrail, post)
+    _assert_byte_identical(result)
+
+
+# ── security screening outcomes ───────────────────────────────────────
+# Shapes follow the documented r8 responses: a sanitized_fallback carries no
+# selected records, a stand-down gate reason, and the full context with each
+# flagged span replaced by a marker.
+
+QUARANTINE_MARKER = "[QUARANTINED: instruction-like candidate text removed]"
+SANITIZED_PACKET = TOOL_OUTPUT[:-60] + QUARANTINE_MARKER
+QUARANTINE_METRICS = {
+    "security_mode": "enforce",
+    "security_action": "quarantine",
+    "security_findings_count": 1,
+}
+
+
+def _sanitized_fallback_response(rendered_context: object = SANITIZED_PACKET) -> MagicMock:
+    return _select_response(
+        rendered_context=rendered_context,
+        records_selected=0,
+        tokens_after=210,
+        gate={"engaged": False, "reason": "standdown:source_support_missing"},
+        outcome="sanitized_fallback",
+        format_metrics={**QUARANTINE_METRICS, "security_delivery_outcome": "sanitized_fallback"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_sanitized_fallback_is_applied(guardrail: NeedlepathGuardrail):
+    """Declining would forward the original, flagged span included."""
+    post = AsyncMock(return_value=_sanitized_fallback_response())
+    result = await _run(guardrail, post)
+    out = result["structured_messages"]
+    assert out[TOOL_INDEX]["content"] == SANITIZED_PACKET
+    assert out[TOOL_INDEX]["tool_call_id"] == "call_1"
+    assert out[:TOOL_INDEX] == AGENT_MESSAGES[:TOOL_INDEX]
+
+
+@pytest.mark.asyncio
+async def test_sanitized_fallback_is_applied_when_not_shorter(guardrail: NeedlepathGuardrail):
+    """The marker can make the packet longer than the span it replaced."""
+    longer = TOOL_OUTPUT + QUARANTINE_MARKER
+    post = AsyncMock(return_value=_sanitized_fallback_response(rendered_context=longer))
+    result = await _run(guardrail, post)
+    assert result["structured_messages"][TOOL_INDEX]["content"] == longer
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rendered", ["", "   ", None])
+async def test_sanitized_fallback_without_a_packet_fails_open(guardrail: NeedlepathGuardrail, rendered):
+    post = AsyncMock(return_value=_sanitized_fallback_response(rendered_context=rendered))
+    inputs = _apply_inputs(AGENT_MESSAGES)
+    with patch.object(guardrail.async_handler, "post", post):
+        result = await guardrail.apply_guardrail(inputs=inputs, request_data={"model": "gpt-4o"}, input_type="request")
+    assert result is inputs
+    _assert_byte_identical(result)
+
+
+@pytest.mark.asyncio
+async def test_engaged_quarantined_block_is_applied_despite_standdown_and_size(
+    guardrail: NeedlepathGuardrail,
+):
+    """An engaged selection with a span quarantined is the safe delivery."""
+    longer = TOOL_OUTPUT + QUARANTINE_MARKER
+    post = AsyncMock(
+        return_value=_select_response(
+            rendered_context=longer,
+            gate={"engaged": False, "reason": "standdown:source_support_missing"},
+            format_metrics=QUARANTINE_METRICS,
+        )
+    )
+    result = await _run(guardrail, post)
+    assert result["structured_messages"][TOOL_INDEX]["content"] == longer
+
+
+@pytest.mark.asyncio
+async def test_screening_keep_does_not_bypass_declines(guardrail: NeedlepathGuardrail):
+    """Screening that flagged nothing leaves the ordinary declines in force."""
+    post = AsyncMock(
+        return_value=_select_response(
+            gate={"engaged": False, "reason": "standdown:source_support_missing"},
+            format_metrics={"security_mode": "enforce", "security_action": "keep", "security_findings_count": 0},
+        )
+    )
+    inputs = _apply_inputs(AGENT_MESSAGES)
+    with patch.object(guardrail.async_handler, "post", post):
+        result = await guardrail.apply_guardrail(inputs=inputs, request_data={"model": "gpt-4o"}, input_type="request")
+    assert result is inputs
+    _assert_byte_identical(result)
+
+
+@pytest.mark.asyncio
+async def test_fail_open_blocked(guardrail: NeedlepathGuardrail):
+    """blocked delivers none of the caller's content: a decline, as in the
+    published clients. The placeholder line is never written into a message."""
+    post = AsyncMock(
+        return_value=_select_response(
+            rendered_context="Relevant State: none selected.",
+            records_selected=0,
+            tokens_after=6,
+            outcome="blocked",
+            format_metrics={"security_mode": "enforce", "security_action": "block", "security_findings_count": 3},
+        )
+    )
+    inputs = _apply_inputs(AGENT_MESSAGES)
+    with patch.object(guardrail.async_handler, "post", post):
+        result = await guardrail.apply_guardrail(inputs=inputs, request_data={"model": "gpt-4o"}, input_type="request")
+    assert result is inputs
+    _assert_byte_identical(result)
+
+
+@pytest.mark.asyncio
+async def test_fail_open_blocked_even_with_selected_records(guardrail: NeedlepathGuardrail):
+    """The outcome decides, not the counters next to it."""
+    post = AsyncMock(return_value=_select_response(outcome="blocked"))
     result = await _run(guardrail, post)
     _assert_byte_identical(result)
 
