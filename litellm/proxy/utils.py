@@ -135,7 +135,7 @@ from litellm import (
     Router,
 )
 from litellm._internal_context import service_target
-from litellm._logging import redact_string, verbose_proxy_logger
+from litellm._logging import redact_internal_details_from_client_message, redact_string, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
@@ -9179,6 +9179,11 @@ def _recreate_writer_on_read_only_transaction(prisma_client: "PrismaClient | Non
     asyncio.create_task(prisma_client.recreate_read_only_writer(reason="postgres_read_only_transaction"))
 
 
+def _redact_when_status_is_none(e: Exception, message: str) -> str:
+    status_is_none: Final = hasattr(e, "status_code") and attribute_of(e, "status_code") is None
+    return redact_internal_details_from_client_message(message) if status_is_none else message
+
+
 def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) -> ProxyException:
     """
     Returns an Exception as ProxyException, this ensures all exceptions are OpenAI API compatible
@@ -9207,7 +9212,7 @@ def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) 
     if should_report_bug(e):
         verbose_proxy_logger.error(bug_report_notice(build_proxy_bug_report(e)))
     return ProxyException(
-        message=message,
+        message=_redact_when_status_is_none(e, message),
         type=openai_error_type(e, _status_code),
         param=openai_error_param(e),
         headers=headers,
