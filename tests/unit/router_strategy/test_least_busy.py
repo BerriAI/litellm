@@ -236,9 +236,7 @@ class OpenBreakerRedis(SharedRedisCounters):
 
 
 @pytest.mark.asyncio
-async def test_an_open_circuit_breaker_falls_back_without_a_warning_per_request(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+async def test_an_open_circuit_breaker_falls_back_without_a_warning_per_request(caplog: pytest.LogCaptureFixture) -> None:
     worker: Final = _worker(OpenBreakerRedis())
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
@@ -410,7 +408,9 @@ async def test_router_picks_least_busy_deployment_and_completion_restores_counts
         if use_async
         else router.get_available_deployment(model=ROUTER_GROUP, messages=None)
     )
-    response: Final = await router.acompletion(model=ROUTER_GROUP, messages=[{"role": "user", "content": "hi"}])
+    response: Final = await router.acompletion(
+        model=ROUTER_GROUP, messages=[{"role": "user", "content": "hi"}]
+    )
     for _ in range(10):
         await asyncio.sleep(0)
         await GLOBAL_LOGGING_WORKER.flush()
