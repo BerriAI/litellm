@@ -146,6 +146,7 @@ from litellm.exceptions import (
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
+    merged_guardrail_entries,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
@@ -9086,8 +9087,7 @@ def _merge_guardrails_with_existing(data: dict, model_level_guardrails: object) 
     if not isinstance(model_level_guardrails, list):
         model_level_guardrails = [model_level_guardrails] if model_level_guardrails else []
 
-    # Combine existing and model-level guardrails
-    metadata["guardrails"] = list(set(existing_guardrails + model_level_guardrails))
+    metadata["guardrails"] = merged_guardrail_entries(existing_guardrails, model_level_guardrails)
     return modified_data
 
 

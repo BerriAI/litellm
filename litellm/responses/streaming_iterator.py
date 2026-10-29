@@ -2172,6 +2172,29 @@ class GuardedResponsesWsFrame:
 ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
 
 
+class ResponsesWsFrameRejection(ValueError):
+    def __init__(self, message: str, provider_specific_fields: Mapping[str, object] | None = None) -> None:
+        super().__init__(message)
+        self.provider_specific_fields: Final = provider_specific_fields
+
+
+def _frame_rejection_event(rejection: Exception) -> str:
+    provider_fields: Final = (
+        rejection.provider_specific_fields if isinstance(rejection, ResponsesWsFrameRejection) else None
+    )
+    return json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": str(rejection),
+                **({"provider_specific_fields": dict(provider_fields)} if provider_fields else {}),
+            },
+        },
+        default=str,
+    )
+
+
 async def _reject_guarded_turn(
     websocket: ResponsesClientWebSocket, guarded: GuardedResponsesWsFrame, rejection: Exception
 ) -> None:
@@ -2437,7 +2460,8 @@ class ResponsesWebSocketStreaming:
             return await self.frame_guard(message)
         except Exception as e:  # noqa: BLE001  # any guardrail rejection maps to one client-facing error event
             verbose_logger.info("Responses WebSocket: pre_call guardrail rejected a response.create frame: %s", e)
-            await self._send_error_event("invalid_request_error", str(e))
+            with contextlib.suppress(Exception):
+                await self.websocket.send_text(_frame_rejection_event(e))
             return None
 
     async def _forward_guarded_frame(
@@ -2865,14 +2889,6 @@ class ResponsesWebSocketStreaming:
         except Exception:  # noqa: BLE001, S110  # client may already be gone
             pass
 
-    async def _send_error_event(self, error_type: str, message: str) -> None:
-        try:
-            await self.websocket.send_text(
-                json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
-            )
-        except Exception:  # noqa: BLE001, S110  # client may already be gone
-            pass
-
     async def client_to_backend(self) -> None:
         """Forward response.create events from client to backend."""
         try:
@@ -3286,7 +3302,7 @@ class ManagedResponsesWebSocketHandler:
             return await self.frame_guard(raw_message)
         except Exception as e:  # noqa: BLE001  # any guardrail rejection maps to one client-facing error event
             verbose_logger.info("ManagedResponsesWS: pre_call guardrail rejected a response.create frame: %s", e)
-            await self._send_error(str(e), error_type="invalid_request_error")
+            await self._send_frame(_frame_rejection_event(e))
             return None
 
     @staticmethod

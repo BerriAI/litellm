@@ -5328,6 +5328,52 @@ async def test_add_guardrails_from_policy_engine_keeps_configured_guardrails_and
     assert data["metadata"]["guardrails"] == [configured, "audit", "hipaa_audit"]
 
 
+def test_add_guardrails_from_auth_metadata_lists_each_key_and_team_guardrail_once_keeping_the_key_s_settings():
+    from litellm.proxy.litellm_pre_call_utils import add_guardrails_from_auth_metadata
+
+    configured = {"pii_blocker": {"extra_body": {"threshold": 0.9}}}
+    data = {"model": "gpt-4", "metadata": {}}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={"guardrails": [configured, "audit"]},
+        team_metadata={"guardrails": ["audit", "pii_blocker", "toxic"]},
+    )
+
+    with patch("litellm.proxy.utils.premium_user_check"):
+        add_guardrails_from_auth_metadata(
+            user_api_key_dict=user_api_key_dict, data=data, metadata_variable_name="metadata"
+        )
+
+    assert data["metadata"]["guardrails"] == [configured, "audit", "toxic"]
+
+
+def test_add_guardrails_from_auth_metadata_keeps_a_selected_guardrail_s_settings_when_a_key_policy_adds_it():
+    from litellm.proxy.litellm_pre_call_utils import add_guardrails_from_auth_metadata
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyGuardrails
+
+    configured = {"pii_blocker": {"extra_body": {"threshold": 0.9}}}
+    data = {"model": "gpt-4", "metadata": {"guardrails": [configured, "audit"]}}
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {
+        "baseline": Policy(guardrails=PolicyGuardrails(add=["pii_blocker", "audit", "hipaa_audit"])),
+    }
+    policy_registry._initialized = True
+
+    try:
+        with patch("litellm.proxy.utils.premium_user_check"):
+            add_guardrails_from_auth_metadata(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", metadata={"policies": ["baseline"]}),
+                data=data,
+                metadata_variable_name="metadata",
+            )
+    finally:
+        policy_registry._policies = {}
+        policy_registry._initialized = False
+
+    assert data["metadata"]["guardrails"] == [configured, "audit", "hipaa_audit"]
+
+
 @pytest.mark.asyncio
 async def test_add_guardrails_from_policy_engine_applies_inherited_parent_guardrail_when_child_condition_misses():
     from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry

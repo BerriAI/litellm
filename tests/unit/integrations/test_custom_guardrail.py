@@ -3786,3 +3786,13 @@ def test_default_on_guardrail() -> None:
         )
         is True
     )
+
+
+def test_merged_guardrail_entries_keeps_the_first_entry_per_guardrail_and_any_entry_that_names_a_new_one():
+    from litellm.integrations.custom_guardrail import merged_guardrail_entries
+
+    assert merged_guardrail_entries(["a"], [{"a": {}, "b": {}}, {"a": {"x": 1}}], ["b", "c", "c"]) == [
+        "a",
+        {"a": {}, "b": {}},
+        "c",
+    ]

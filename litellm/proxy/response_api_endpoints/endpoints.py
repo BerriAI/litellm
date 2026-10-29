@@ -36,7 +36,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
-from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.integrations.custom_guardrail import ModifyResponseException, guardrail_request_data_with_streaming
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -89,7 +89,12 @@ from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.proxy.utils import count_request_input_tokens, handle_exception_on_proxy
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.responses.litellm_completion_transformation.count_request import MODEL_FILE_ID_MAPPING_FIELD
-from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
+from litellm.responses.streaming_iterator import (
+    GuardedResponsesWsFrame,
+    ResponsesWsFrameGuard,
+    ResponsesWsFrameRejection,
+    spawn_logging_task,
+)
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -2057,8 +2062,8 @@ _CLIENT_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
 _CLIENT_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config", "policies")
 _METADATA_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config")
 _PROXY_ONLY_FRAME_FIELDS: Final = (*_CLIENT_GUARDRAIL_SELECTORS, "include_guardrail_response")
-_NESTED_BODY_ONLY_FIELDS: Final = (*_GUARDED_FRAME_FIELDS, *_PROXY_ONLY_FRAME_FIELDS)
-_UNFORWARDED_FRAME_FIELDS: Final = (*_NESTED_BODY_ONLY_FIELDS, "litellm_metadata")
+_NESTED_BODY_ONLY_FIELDS: Final = (*_GUARDED_FRAME_FIELDS, "guardrails", "policies")
+_UNFORWARDED_FRAME_FIELDS: Final = (*_GUARDED_FRAME_FIELDS, *_PROXY_ONLY_FRAME_FIELDS, "litellm_metadata")
 _OBJECTS: Final = TypeAdapter(list[object])
 _TURN_COPIED_CONTAINERS: Final = (list, dict)
 
@@ -2108,26 +2113,27 @@ def _responses_ws_frame_guard(
     async def guard(frame: str) -> GuardedResponsesWsFrame:
         frame_obj: Final = _WS_FRAME.validate_json(frame)
         nested: Final = frame_obj.get("response")
-        stray: Final = (
-            next((key for key in _NESTED_BODY_ONLY_FIELDS if key in frame_obj), None)
-            if isinstance(nested, dict)
-            else None
-        )
+        stray: Final = _field_beside_nested_response(frame_obj) if isinstance(nested, dict) else None
         if stray is not None:
             raise ValueError(
                 f"response.create sends {stray} at the top level next to response; send it inside response"
             )
         body: Final = _WS_FRAME.validate_python(nested) if isinstance(nested, dict) else frame_obj
-        frame_data: Final = {
-            **{
-                key: _without_untrusted_metadata(key, value)
-                for key, value in body.items()
-                if key != "type" and key not in _PROXY_ONLY_FRAME_FIELDS
+        frame_data: Final = guardrail_request_data_with_streaming(
+            {
+                **{
+                    key: _without_untrusted_metadata(key, value)
+                    for key, value in body.items()
+                    if key != "type" and key not in _PROXY_ONLY_FRAME_FIELDS
+                },
+                "model": model,
+                "litellm_call_id": str(uuid.uuid4()),
+                metadata_key: await _metadata_with_frame_guardrails(
+                    bucket, body, model, metadata_key, user_api_key_dict
+                ),
             },
-            "model": model,
-            "litellm_call_id": str(uuid.uuid4()),
-            metadata_key: await _metadata_with_frame_guardrails(bucket, body, model, metadata_key, user_api_key_dict),
-        }
+            is_streaming=True,
+        )
         try:
             guarded_data: Final = await proxy_logging_obj.pre_call_hook(
                 user_api_key_dict=user_api_key_dict, data=frame_data, call_type="aresponses", guardrails_only=True
@@ -2137,7 +2143,8 @@ def _responses_ws_frame_guard(
             )
         except Exception as e:
             await _bill_rejected_frame(rejected_frame_auth, e, frame_data)
-            raise ValueError(proxy_exception_from_route_error(e).message) from e
+            proxy_exception: Final = proxy_exception_from_route_error(e)
+            raise ResponsesWsFrameRejection(proxy_exception.message, proxy_exception.provider_specific_fields) from e
         if guarded_data.get("model") != model:
             rerouted: Final = ValueError(
                 f"a guardrail rerouted this turn to {guarded_data.get('model')!r}; an open Responses WebSocket"
@@ -2153,7 +2160,10 @@ def _responses_ws_frame_guard(
             if key not in _UNFORWARDED_FRAME_FIELDS
         }
         rewritten: Final = (
-            {**frame_obj, "response": {**kept, **guarded_fields}}
+            {
+                **{key: value for key, value in frame_obj.items() if key not in _PROXY_ONLY_FRAME_FIELDS},
+                "response": {**kept, **guarded_fields},
+            }
             if isinstance(nested, dict)
             else {**kept, **guarded_fields}
         )
@@ -2166,6 +2176,15 @@ def _responses_ws_frame_guard(
         )
 
     return guard
+
+
+def _field_beside_nested_response(frame: Mapping[str, object]) -> str | None:
+    metadata_picks: Final = (
+        f"{key}.guardrails"
+        for key, value in frame.items()
+        if key in _CLIENT_METADATA_KEYS and isinstance(value, dict) and "guardrails" in value
+    )
+    return next(chain((key for key in _NESTED_BODY_ONLY_FIELDS if key in frame), metadata_picks), None)
 
 
 class _FrameGuardrailSelection(TypedDict, total=False):

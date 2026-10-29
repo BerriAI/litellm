@@ -3,12 +3,14 @@ import copy
 import hashlib
 import os
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, cast, get_args
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
@@ -205,6 +207,29 @@ def guardrail_request_data_with_streaming(
         **data_without_server_classification,
         SERVER_STREAMING_CLASSIFICATION_KEY: SERVER_STREAMING_CLASSIFICATION_MARKER,
     }
+
+
+_GUARDRAIL_ENTRY_WITH_SETTINGS: Final = TypeAdapter(Mapping[str, object])
+
+
+def merged_guardrail_entries(*entry_lists: Iterable[object]) -> list[object]:
+    """Merges guardrail lists in order, dropping an entry whose guardrails an earlier one already names, so the
+    first entry for a guardrail, plain or ``{name: settings}``, is the one that stays"""
+    entries: Final = tuple(chain.from_iterable(entry_lists))
+    names: Final = tuple(_guardrail_entry_names(entry) for entry in entries)
+    return [entry for index, entry in enumerate(entries) if not _named_earlier(names, index)]
+
+
+def _guardrail_entry_names(entry: object) -> frozenset[str]:
+    if isinstance(entry, str):
+        return frozenset((entry,))
+    if isinstance(entry, dict):
+        return frozenset(_GUARDRAIL_ENTRY_WITH_SETTINGS.validate_python(entry))
+    return frozenset()
+
+
+def _named_earlier(names: tuple[frozenset[str], ...], index: int) -> bool:
+    return bool(names[index]) and names[index] <= frozenset[str]().union(*names[:index])
 
 
 def _request_is_streaming(data: object, event_type: GuardrailEventHooks | None = None) -> bool:

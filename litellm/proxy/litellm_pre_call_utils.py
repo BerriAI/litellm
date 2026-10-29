@@ -48,7 +48,7 @@ from litellm.constants import (
     VECTOR_STORE_CALLER_METADATA_KWARG,
     X_LITELLM_DISABLE_CALLBACKS,
 )
-from litellm.integrations.custom_guardrail import without_server_streaming_classification
+from litellm.integrations.custom_guardrail import merged_guardrail_entries, without_server_streaming_classification
 from litellm.litellm_core_utils.core_helpers import is_codex_user_agent
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -3895,30 +3895,14 @@ def add_guardrails_from_key_or_team_metadata(
     """
     from litellm.proxy.utils import premium_user_check
 
-    # Initialize guardrails set (avoiding duplicates)
-    combined_guardrails: Final = set()
-
-    # Add key-level guardrails first
-    if key_metadata and "guardrails" in key_metadata:
-        if isinstance(key_metadata["guardrails"], list) and len(key_metadata["guardrails"]) > 0:
-            premium_user_check()
-            combined_guardrails.update(key_metadata["guardrails"])
-
-    # Add team-level guardrails (set automatically handles duplicates)
-    if team_metadata and "guardrails" in team_metadata:
-        if isinstance(team_metadata["guardrails"], list) and len(team_metadata["guardrails"]) > 0:
-            premium_user_check()
-            combined_guardrails.update(team_metadata["guardrails"])
-
-    # Add project-level guardrails (set automatically handles duplicates)
-    if project_metadata and "guardrails" in project_metadata:
-        if isinstance(project_metadata["guardrails"], list) and len(project_metadata["guardrails"]) > 0:
-            premium_user_check()
-            combined_guardrails.update(project_metadata["guardrails"])
-
-    # Set combined guardrails in metadata as list
-    if combined_guardrails:
-        data[metadata_variable_name]["guardrails"] = list(combined_guardrails)
+    configured_guardrails: Final = tuple(
+        metadata["guardrails"]
+        for metadata in (key_metadata, team_metadata, project_metadata)
+        if metadata and isinstance(metadata.get("guardrails"), list) and len(metadata["guardrails"]) > 0
+    )
+    if configured_guardrails:
+        premium_user_check()
+        data[metadata_variable_name]["guardrails"] = merged_guardrail_entries(*configured_guardrails)
 
 
 _add_guardrails_from_key_or_team_metadata: Final = add_guardrails_from_key_or_team_metadata
@@ -4013,14 +3997,10 @@ def _add_guardrails_from_policies_in_metadata(
     if metadata_variable_name not in data:
         data[metadata_variable_name] = {}
 
-    existing_guardrails = data[metadata_variable_name].get("guardrails", [])
-    if not isinstance(existing_guardrails, list):
-        existing_guardrails = []
-
-    # Combine existing guardrails with policy-resolved guardrails (no duplicates)
-    combined: Final = set(existing_guardrails)
-    combined.update(resolved_guardrails)
-    data[metadata_variable_name]["guardrails"] = list(combined)
+    existing_guardrails: Final = data[metadata_variable_name].get("guardrails", [])
+    data[metadata_variable_name]["guardrails"] = merged_guardrail_entries(
+        existing_guardrails if isinstance(existing_guardrails, list) else (), resolved_guardrails
+    )
 
     # Store applied policies in metadata for tracking
     if "applied_policies" not in data[metadata_variable_name]:
@@ -4259,16 +4239,7 @@ def _apply_resolved_guardrails_to_metadata(
         _REQUEST_ENTRIES.validate_python(existing_guardrails) if isinstance(existing_guardrails, list) else ()
     )
 
-    selected_names: Final = frozenset(
-        itertools.chain.from_iterable(
-            _REQUEST_FIELDS.validate_python(entry).keys() if isinstance(entry, dict) else (entry,)
-            for entry in existing_guardrails_list
-        )
-    )
-    combined: Final = [
-        *existing_guardrails_list,
-        *(name for name in dict.fromkeys(resolved_guardrails) if name not in selected_names),
-    ]
+    combined: Final = merged_guardrail_entries(existing_guardrails_list, resolved_guardrails)
     data[metadata_variable_name]["guardrails"] = combined
 
     verbose_proxy_logger.debug("Policy engine: added guardrails to request metadata: %s", combined)
@@ -4328,12 +4299,13 @@ async def add_guardrails_from_policy_engine(
     all_tags: Final = _policy_match_tags(data, metadata_variable_name)
     _team_alias: Final = user_api_key_dict.team_alias
     _key_alias: Final = user_api_key_dict.key_alias
-    _model: Final = data.get("model")
-    context: Final = PolicyMatchContext(
-        team_alias=_team_alias if isinstance(_team_alias, str) else None,
-        key_alias=_key_alias if isinstance(_key_alias, str) else None,
-        model=_model if isinstance(_model, str) else None,
-        tags=all_tags,
+    context: Final = PolicyMatchContext.model_validate(
+        {
+            "team_alias": _team_alias if isinstance(_team_alias, str) else None,
+            "key_alias": _key_alias if isinstance(_key_alias, str) else None,
+            "model": data.get("model"),
+            "tags": all_tags,
+        }
     )
 
     verbose_proxy_logger.debug(

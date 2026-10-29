@@ -2002,7 +2002,10 @@ class _FrameGuardrail(CustomGuardrail):
         self.inputs.append(data["input"])
         self.configs.append(cast(dict[str, object], data["litellm_metadata"]).get("guardrail_config"))
         if self.blocks:
-            raise HTTPException(status_code=400, detail={"error": f"Content blocked by {self.guardrail_name}"})
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Content blocked by {self.guardrail_name}", "guardrail_name": self.guardrail_name},
+            )
         return {**data, "input": f"{data['input']} [{self.guardrail_name}]"} if self.rewrites else data
 
 
@@ -2351,6 +2354,33 @@ class TestResponsesWSFirstFrameModelAuth:
         assert json.loads(guarded.frame) == {"type": "response.create", "input": "hi", "metadata": {}}
 
     @pytest.mark.asyncio
+    async def test_frame_guard_runs_streaming_scoped_guardrails_and_skips_non_streaming_ones_on_a_socket_turn(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        streaming_only = _FrameGuardrail("streaming-only")
+        streaming_only.apply_stream_scope("streaming")
+        streaming_during_call = _FrameGuardrail("streaming-during-call", event_hook=GuardrailEventHooks.during_call)
+        streaming_during_call.apply_stream_scope("streaming")
+        non_streaming_only = _FrameGuardrail("non-streaming-only")
+        non_streaming_only.apply_stream_scope("non_streaming")
+        frame = {
+            "type": "response.create",
+            "input": "hi",
+            "guardrails": ["streaming-only", "streaming-during-call", "non-streaming-only"],
+        }
+
+        with _guardrails_on(streaming_only, streaming_during_call, non_streaming_only) as proxy_logging_obj:
+            guard = _responses_ws_frame_guard(
+                {"model": "gpt-4o-mini", "litellm_metadata": {}}, _key(), proxy_logging_obj, MagicMock()
+            )
+            guarded = await guard(json.dumps(frame))
+
+        assert streaming_only.inputs == ["hi"]
+        assert streaming_during_call.inputs == ["hi"]
+        assert non_streaming_only.inputs == []
+        assert json.loads(guarded.frame) == {"type": "response.create", "input": "hi"}
+
+    @pytest.mark.asyncio
     async def test_frame_guard_blocks_a_turn_with_the_message_a_selected_during_call_guardrail_raises(self):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 
@@ -2588,7 +2618,9 @@ class TestResponsesWSFirstFrameModelAuth:
         [
             ({"input": "forbidden"}, "input"),
             ({"guardrails": ["frame-pick"]}, "guardrails"),
-            ({"include_guardrail_response": True}, "include_guardrail_response"),
+            ({"policies": ["frame-policy"]}, "policies"),
+            ({"metadata": {"guardrails": ["frame-pick"]}}, "metadata.guardrails"),
+            ({"litellm_metadata": {"guardrails": ["frame-pick"]}}, "litellm_metadata.guardrails"),
         ],
     )
     async def test_frame_guard_rejects_a_frame_that_carries_input_at_both_levels(self, top_level, field):
@@ -2605,6 +2637,78 @@ class TestResponsesWSFirstFrameModelAuth:
             await guard(json.dumps({"type": "response.create", **top_level, "response": {}}))
 
         proxy_logging_obj.pre_call_hook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_frame_guard_forwards_a_nested_turn_without_top_level_fields_that_pick_no_guardrail(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
+        )
+
+        with patch.object(litellm, "callbacks", []):
+            guarded = await guard(
+                json.dumps(
+                    {
+                        "type": "response.create",
+                        "include_guardrail_response": True,
+                        "guardrail_config": {"frame-pick": {"threshold": 1}},
+                        "metadata": {"trace": "t1"},
+                        "response": {"input": "hi"},
+                    }
+                )
+            )
+
+        assert json.loads(guarded.frame) == {
+            "type": "response.create",
+            "metadata": {"trace": "t1"},
+            "response": {"input": "hi"},
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_blocked_socket_turn_answers_with_the_guardrail_fields_http_returns(self):
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        frame_pick = _FrameGuardrail("frame-pick", blocks=True)
+        websocket = MagicMock(send_text=AsyncMock())
+
+        with _guardrails_on(frame_pick) as proxy_logging_obj:
+            handler = ManagedResponsesWebSocketHandler(
+                websocket=websocket,
+                model="anthropic/claude-haiku-5-5",
+                logging_obj=Logging(
+                    model="anthropic/claude-haiku-5-5",
+                    messages=[],
+                    stream=True,
+                    call_type="aresponses",
+                    start_time=0,
+                    litellm_call_id="test-id",
+                    function_id="test-func",
+                ),
+                frame_guard=_responses_ws_frame_guard(
+                    {"model": "claude-managed", "litellm_metadata": {}}, _key(), proxy_logging_obj, MagicMock()
+                ),
+            )
+            await handler._process_response_create(
+                json.dumps({"type": "response.create", "input": "hi", "guardrails": ["frame-pick"]})
+            )
+
+        assert json.loads(websocket.send_text.await_args.args[0]) == {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "Content blocked by frame-pick",
+                "provider_specific_fields": {
+                    "error": "Content blocked by frame-pick",
+                    "guardrail_name": "frame-pick",
+                    "guardrail_mode": "pre_call",
+                },
+            },
+        }
 
     @pytest.mark.asyncio
     async def test_frame_guard_keeps_the_guardrail_error_when_billing_the_rejected_frame_fails(self):
