@@ -13,7 +13,7 @@ from typing_extensions import ReadOnly, Required
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import (
-    USAGE_COST_BILLED_PROVIDERS,
+    OWN_REPORTED_COST_READER_PROVIDERS,
     chunk_usage,
     provider_reported_usage_cost,
 )
@@ -1356,18 +1356,11 @@ def stream_chunk_builder_text_completion(
     return TextCompletionResponse(**response)
 
 
-_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value}) | USAGE_COST_BILLED_PROVIDERS
-
-
 def _logged_provider(logging_obj: Optional["Logging"]) -> object:
     if logging_obj is None:
         return None
     provider: Final[object] = logging_obj.model_call_details.get("custom_llm_provider")
     return provider
-
-
-def _reported_cost_is_priced_by_calculator(logging_obj: Optional["Logging"]) -> bool:
-    return _logged_provider(logging_obj) in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS
 
 
 def _stream_builder_response_cost(
@@ -1380,9 +1373,6 @@ def _stream_builder_response_cost(
             for chunk in reversed(chunks)
         )
         return next((cost for cost in reported if cost is not None), None)
-    usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
-    if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(logging_obj):
-        return float(usage_cost)
     if logging_obj is not None:
         return None
     provider_hint: Final = response._hidden_params.get(  # pyright: ignore[reportPrivateUsage]  # no public accessor
@@ -1429,7 +1419,9 @@ def _set_stream_builder_response_cost(
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     if logging_obj is None:
         return
-    if isinstance(getattr(usage, "cost", None), (int, float)):
+    if _logged_provider(logging_obj) in OWN_REPORTED_COST_READER_PROVIDERS and isinstance(
+        getattr(usage, "cost", None), (int, float)
+    ):
         return
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
     if not isinstance(computed_cost, (int, float)) or computed_cost <= 0:

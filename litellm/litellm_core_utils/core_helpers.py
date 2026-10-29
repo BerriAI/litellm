@@ -1017,11 +1017,20 @@ def chunk_usage(chunk: object) -> object:
     return getattr(chunk, "usage", None)
 
 
-USAGE_COST_BILLED_PROVIDERS: Final = frozenset({"kyma"})
+OWN_REPORTED_COST_READER_PROVIDERS: Final = frozenset({"xai", "perplexity", "opencode_go"})
+
+
+def _carries_litellm_bill(response: object) -> bool:
+    """A response the stream builder already priced carries litellm's own bill in ``usage.cost`` too."""
+    hidden: Final[object] = getattr(response, "_hidden_params", None)
+    stamped: Final = hidden.get("response_cost") if isinstance(hidden, Mapping) else None
+    return isinstance(stamped, (int, float)) and not isinstance(stamped, bool)
 
 
 def billed_usage_cost(response: object, custom_llm_provider: str | None) -> float | None:
-    if custom_llm_provider not in USAGE_COST_BILLED_PROVIDERS:
+    """The charge an OpenAI-compatible upstream reports in ``usage.cost``, billed unless the provider has its own
+    reader or the number is litellm's own bill written back onto the usage."""
+    if custom_llm_provider in OWN_REPORTED_COST_READER_PROVIDERS or _carries_litellm_bill(response):
         return None
     cost: Final = provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
     return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None
