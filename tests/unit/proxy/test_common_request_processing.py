@@ -56,6 +56,7 @@ from litellm.proxy.common_request_processing import (
     ttft_keepalive_interval,
     _override_openai_response_model,
     _parse_event_data_for_error,
+    raw_name_router_groups,
     _resolve_per_request_model_group_alias,
     should_return_raw_model_name,
     _sse_error_frames,
@@ -3297,6 +3298,62 @@ class TestOverrideOpenAIResponseModel:
         )
 
         assert stamped.model == "gpt-mini"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("return_raw_model_name", [False, True])
+    async def test_non_streamed_fallback_into_raw_name_router_keeps_the_served_model(self, return_raw_model_name):
+        router: Final = litellm.Router(
+            model_list=[
+                {"model_name": "broken-primary", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-fake"}},
+                {"model_name": "gpt-mini", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-fake"}},
+                {
+                    "model_name": "auto-raw",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "tiers": {"SIMPLE": "gpt-mini", "MEDIUM": "gpt-mini", "COMPLEX": "gpt-mini"},
+                            "return_raw_model_name": return_raw_model_name,
+                        },
+                        "complexity_router_default_model": "gpt-mini",
+                    },
+                },
+            ],
+            fallbacks=[{"broken-primary": ["auto-raw"]}],
+        )
+        response: Final = await router.acompletion(
+            model="broken-primary",
+            mock_testing_fallbacks=True,
+            mock_response="ok",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        served_model: Final = response.model
+
+        stamped: Final = _override_openai_response_model(
+            response_obj=response,
+            requested_model="broken-primary",
+            log_context="test_context",
+            raw_name_groups=raw_name_router_groups(router),
+        )
+
+        assert served_model not in ("auto-raw", "broken-primary")
+        assert stamped.model == (served_model if return_raw_model_name else "auto-raw")
+
+    def test_non_streamed_fallback_into_azure_model_router_keeps_the_served_model(self):
+        from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
+
+        served_model: Final = "azure_ai/gpt-5-nano-2025-08-07"
+        response_obj = MagicMock()
+        response_obj.model = served_model
+        response_obj._hidden_params = {
+            "additional_headers": {"x-litellm-attempted-fallbacks": 1, "x-litellm-model-group": "smart-pick"},
+            AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: served_model,
+        }
+
+        _override_openai_response_model(
+            response_obj=response_obj, requested_model="broken-primary", log_context="test_context"
+        )
+
+        assert response_obj.model == served_model
 
     @pytest.mark.parametrize("requested_model", ["gpt-4", "azure_ai/model_router"])
     def test_override_model_reports_fallback_group_when_fallback_occurred_object(self, requested_model):

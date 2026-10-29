@@ -636,7 +636,7 @@ def test_health_routing_fallbacks_preserve_error_specific_targets_and_request_co
                         "id": "response-" + expected_model,
                         "object": "chat.completion",
                         "created": 1,
-                        "model": expected_model,
+                        "model": "primary" if expected_model == "primary-tier2-up" else expected_model.removesuffix("-up"),
                         "choices": [
                             {
                                 "index": 0,

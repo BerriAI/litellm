@@ -175,7 +175,7 @@ def test_retrieve_routes_to_the_deployment_that_created_the_response(
             "object": "response",
             "created_at": 1.0,
             "status": "completed",
-            "model": _MODEL,
+            "model": model,
             "output": [],
         }, retrieved.model_dump_json()
         requests: Final = drain_contract_requests(wire_b)
@@ -279,7 +279,7 @@ def test_streamed_response_ids_are_stable_and_retrievable_on_each_alias(
             "object": "response",
             "created_at": 1.0,
             "status": "completed",
-            "model": _MODEL,
+            "model": model,
             "output": [],
         }, retrieved.model_dump_json()
         requests: Final = drain_contract_requests(wire)
@@ -532,7 +532,7 @@ def test_cancel_forwards_provider_id_and_returns_cancelled_response(
             "object": "response",
             "created_at": 1.0,
             "status": "cancelled",
-            "model": _MODEL,
+            "model": model,
             "output": [],
         }, cancelled.model_dump_json()
         requests: Final = drain_contract_requests(wire)

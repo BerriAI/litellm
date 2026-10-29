@@ -170,7 +170,7 @@ def test_client_fallbacks_reach_an_allowed_model_and_name_a_denied_one(gateway: 
         body: Final[dict[str, JsonValue]] = {"model": primary, "fallbacks": [fallback.name]}
         served: Final = _chat(gateway, body, key=scenario.key(models=[primary, fallback.name]))
         assert served.status_code == 200, served.text
-        assert _body(served)["model"] == fallback.upstream
+        assert _body(served)["model"] == fallback.name
         assert served.headers["x-litellm-model-id"] == fallback.deployment_id
         assert _content(served)
         denied: Final = _chat(gateway, body, key=scenario.key(models=[primary]))
@@ -213,7 +213,7 @@ def test_request_fallbacks_reroute_after_a_connection_failure(gateway: Gateway) 
         fallback: Final = _unique_model(scenario)
         response: Final = _chat(gateway, {"model": primary, "fallbacks": [fallback.name]})
         assert response.status_code == 200, response.text
-        assert _body(response)["model"] == fallback.upstream
+        assert _body(response)["model"] == fallback.name
         assert response.headers["x-litellm-model-id"] == fallback.deployment_id
         assert response.headers["x-litellm-attempted-fallbacks"] == "1"
 
