@@ -129,7 +129,7 @@ class TestCostCalculatorReadsDurationFromHiddenParams:
     @patch(  # test-quality-ok: isolates duration selection from the model pricing table
         "litellm.cost_calculator.openai_cost_per_second"
     )
-    def test_completion_cost_prefers_provider_usage_duration(self, mock_cost_fn):
+    def test_completion_cost_prefers_measured_duration_over_provider_usage_duration(self, mock_cost_fn):
         mock_cost_fn.return_value = (0.001, 0.0)
         response = TranscriptionResponse(
             text="test",
@@ -148,7 +148,7 @@ class TestCostCalculatorReadsDurationFromHiddenParams:
 
         mock_cost_fn.assert_called_once()
         _, kwargs = mock_cost_fn.call_args
-        assert kwargs["duration"] == 60.0
+        assert kwargs["duration"] == 17.5
 
     @pytest.mark.parametrize(
         ("model", "provider"),

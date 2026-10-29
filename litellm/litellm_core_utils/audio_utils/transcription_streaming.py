@@ -13,6 +13,7 @@ from openai.types.audio import (
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
 )
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type, with_deployment_api_base
@@ -21,8 +22,18 @@ from litellm.types.utils import TranscriptionResponse
 TRANSCRIPTION_RAN_UNSTREAMED: Final = "transcription_ran_unstreamed"
 
 
+_STREAM_FLAG: Final = TypeAdapter(bool)
+
+
+def transcription_stream_flag(value: object) -> bool | None:
+    try:
+        return _STREAM_FLAG.validate_python(value)
+    except ValidationError:
+        return None
+
+
 def transcription_stream_requested(value: object) -> bool:
-    return str(value).lower() in ("1", "true")
+    return transcription_stream_flag(value) is True
 
 
 TRANSCRIPTION_STREAM_DONE_FRAME: Final = "data: [DONE]\n\n"

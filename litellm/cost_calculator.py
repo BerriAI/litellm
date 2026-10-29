@@ -378,6 +378,12 @@ def _bills_transcription_usage_duration(pricing_model: str | None, custom_llm_pr
 def _transcription_duration_for_cost(
     completion_response: object, pricing_model: str | None, model: str | None, custom_llm_provider: str | None
 ) -> float:
+    hidden_params: Final = as_str_mapping(attribute_or_none(completion_response, "_hidden_params")) or {}
+    measured_duration: Final = normalized_audio_duration_seconds(
+        hidden_params.get("audio_transcription_duration", attribute_or_none(completion_response, "duration"))
+    )
+    if measured_duration is not None and measured_duration > 0:
+        return measured_duration
     provider_duration: Final = _get_transcription_usage_duration(completion_response)
     if (
         provider_duration is not None
@@ -385,12 +391,6 @@ def _transcription_duration_for_cost(
         and any(_bills_transcription_usage_duration(name, custom_llm_provider) for name in (pricing_model, model))
     ):
         return provider_duration
-    hidden_params: Final = as_str_mapping(attribute_or_none(completion_response, "_hidden_params")) or {}
-    measured_duration: Final = normalized_audio_duration_seconds(
-        hidden_params.get("audio_transcription_duration", attribute_or_none(completion_response, "duration"))
-    )
-    if measured_duration is not None and measured_duration > 0:
-        return measured_duration
     if model is None or custom_llm_provider != LlmProviders.OPENAI.value:
         return 0.0
     transcription_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(

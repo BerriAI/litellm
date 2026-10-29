@@ -578,9 +578,7 @@ def test_transcription_sessions_requires_auth(proxy_app):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("body", [
     {"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
-    {"model": "gpt-4o-realtime-preview", "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
-    {"input_audio_transcription": {"model": "gpt-4o-realtime-preview"}, "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
-    {"model": "gpt-4o-realtime-preview", "input_audio_transcription": {"model": "gpt-realtime-whisper"}},
+    {"audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
 ])
 async def test_transcription_sessions_rejects_disallowed_resolved_model(
     proxy_app, body,
@@ -986,6 +984,51 @@ async def test_transcription_sessions_encrypts_client_secret(
         assert captured_route_type["session"]["audio"]["input"]["transcription"] == {
             "model": "gpt-realtime-whisper", "language": "en",
         }
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [
+    {"model": "gpt-4o-realtime-preview", "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
+    {"input_audio_transcription": {"model": "gpt-4o-realtime-preview"}, "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
+    {"model": "gpt-4o-realtime-preview", "input_audio_transcription": {"model": "gpt-realtime-whisper"}},
+])
+async def test_transcription_sessions_route_the_allowed_model_over_a_nested_model_the_key_cannot_call(
+    proxy_app,
+    mock_route_request_transcription_sessions,
+    mock_add_litellm_data,
+    mock_pre_call_hook,
+    body,
+):
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user", models=["gpt-4o-realtime-preview"]
+    )
+    route: Final = AsyncMock(side_effect=mock_route_request_transcription_sessions)
+
+    try:
+        client = TestClient(proxy_app)
+        with (
+            patch("litellm.proxy.proxy_server.route_request", route),
+            patch("litellm.proxy.proxy_server.add_litellm_data_to_request", side_effect=mock_add_litellm_data),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+            mock_logging.post_call_failure_hook = AsyncMock()
+
+            response = client.post(
+                "/v1/realtime/transcription_sessions",
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json=body,
+            )
+
+        assert response.status_code == 200, response.text
+        route.assert_awaited_once()
+        routed_session: Final = route.await_args.kwargs["data"]["transcription_session"]
+        assert {
+            routed_session.get("input_audio_transcription", {}).get("model"),
+            routed_session.get("audio", {}).get("input", {}).get("transcription", {}).get("model"),
+        } - {None} == {"gpt-4o-realtime-preview"}
     finally:
         proxy_app.dependency_overrides.pop(user_api_key_auth, None)
 

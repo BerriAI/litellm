@@ -573,7 +573,7 @@ def test_whisper_stream_request_answered_with_json_keeps_the_unstreamed_response
     assert json.loads(ignored_stream.model_dump_json()) == json.loads(unstreamed.model_dump_json())
 
 
-@pytest.mark.parametrize("requested_stream", ("true", "True", "1"))
+@pytest.mark.parametrize("requested_stream", ("true", "True", "1", "yes", "on"))
 def test_transcription_stream_requested_as_a_form_string_streams_like_a_bool(
     local_model_cost_map: None, requested_stream: str
 ) -> None:
@@ -591,6 +591,41 @@ def test_transcription_stream_requested_as_a_form_string_streams_like_a_bool(
 
     assert events == ["transcript.text.delta", "transcript.text.done"]
     assert len(sent_bodies) == 1
+
+
+def test_transcription_stream_that_is_not_a_boolean_answers_400_without_calling_the_upstream(
+    local_model_cost_map: None,
+) -> None:
+    sent_bodies: Final[list[bytes]] = []  # mutable-ok: collects what the mock upstream received
+
+    def send_response(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(request.read())
+        return _duration_priced_transcript(streamed=False)
+
+    with _openai_transcription_client(httpx.MockTransport(send_response)) as client:
+        with pytest.raises(litellm.BadRequestError) as raised:
+            litellm.transcription(model="openai/gpt-transcribe", file=_one_second_wav(), stream="maybe", client=client)
+
+    assert raised.value.status_code == 400
+    assert sent_bodies == []
+
+
+def test_transcription_stream_that_is_not_a_boolean_is_dropped_under_drop_params(local_model_cost_map: None) -> None:
+    sent_bodies: Final[list[bytes]] = []  # mutable-ok: collects what the mock upstream received
+
+    def send_response(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(request.read())
+        return _duration_priced_transcript(streamed=False)
+
+    with _openai_transcription_client(httpx.MockTransport(send_response)) as client:
+        response: Final = litellm.transcription(
+            model="openai/gpt-transcribe", file=_one_second_wav(), stream="maybe", drop_params=True, client=client
+        )
+
+    assert isinstance(response, TranscriptionResponse)
+    assert response.text == "hello world"
+    assert len(sent_bodies) == 1
+    assert b'name="stream"' not in sent_bodies[0]
 
 
 def _asks_for_stream(request_body: bytes) -> bool:
@@ -747,7 +782,7 @@ async def _spend_for_one_second_wav(
 
 
 @pytest.mark.asyncio
-async def test_custom_named_gpt_transcribe_deployment_bills_the_provider_seconds(
+async def test_custom_named_gpt_transcribe_deployment_bills_the_measured_upload_over_reported_seconds(
     local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     router: Final = litellm.Router(
@@ -764,7 +799,7 @@ async def test_custom_named_gpt_transcribe_deployment_bills_the_provider_seconds
         monkeypatch, {"text": "hello", "usage": {"type": "duration", "seconds": 2}}, router
     )
 
-    assert spend.cost == pytest.approx(2 * _gpt_transcribe_cost_per_second())
+    assert spend.cost == pytest.approx(_gpt_transcribe_cost_per_second())
 
 
 @pytest.mark.asyncio

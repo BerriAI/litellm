@@ -4139,6 +4139,8 @@ def get_optional_params_transcription(
     custom_llm_provider = passed_params.pop("custom_llm_provider")
     drop_params = normalize_drop_params(passed_params.pop("drop_params"))
     special_params: Final[Mapping[str, object]] = passed_params.pop("kwargs")
+    from litellm.litellm_core_utils.audio_utils.transcription_streaming import transcription_stream_flag
+
     for k, v in special_params.items():
         passed_params[k] = v
 
@@ -4150,8 +4152,18 @@ def get_optional_params_transcription(
         else [param for param in OPENAI_TRANSCRIPTION_PARAMS if param not in _OPENAI_SDK_ONLY_TRANSCRIPTION_PARAMS]
     )
     default_params: Final = {param: None for param in (*transcription_params, "prompt", "temperature")}
+    malformed_stream: Final = stream is not None and transcription_stream_flag(stream) is None
+    if malformed_stream and not drops_unsupported_params:
+        raise UnsupportedParamsError(
+            status_code=400,
+            message="`stream` must be a boolean. To drop it from the call, set `litellm.drop_params = True`.",
+        )
 
-    non_default_params = {k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])}
+    non_default_params = {
+        k: v
+        for k, v in passed_params.items()
+        if k in default_params and v != default_params[k] and not (malformed_stream and k == "stream")
+    }
     optional_params = {}
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
