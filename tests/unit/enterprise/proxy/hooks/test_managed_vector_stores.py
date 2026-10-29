@@ -25,25 +25,34 @@ class _StoreRow:
         return {"created_by": self.created_by, "team_id": None}
 
 
-class _SingleStoreTable:
-    async def find_first(self, where: Mapping[str, object]) -> _StoreRow:
-        return _StoreRow(created_by=_OWNER)
+_OWNER_ROW: Final = _StoreRow(created_by=_OWNER)
 
 
+@dataclass(frozen=True, slots=True)
+class _StoreTable:
+    row: _StoreRow | None
+
+    async def find_first(self, where: Mapping[str, object]) -> _StoreRow | None:
+        return self.row
+
+
+@dataclass(frozen=True, slots=True)
 class _Database:
-    def __init__(self) -> None:
-        self.litellm_managedvectorstoretable: Final = _SingleStoreTable()
+    litellm_managedvectorstoretable: _StoreTable
 
 
+@dataclass(frozen=True, slots=True)
 class _PrismaClient:
-    def __init__(self) -> None:
-        self.db: Final = _Database()
+    db: _Database
 
 
 def _hook_and_unified_id(
     target_model_names: tuple[str, ...] = ("model-a",),
+    stored_row: _StoreRow | None = _OWNER_ROW,
 ) -> tuple[PROXY_LiteLLMManagedVectorStores, str]:
-    hook: Final = PROXY_LiteLLMManagedVectorStores(DualCache(), prisma_client=_PrismaClient())
+    hook: Final = PROXY_LiteLLMManagedVectorStores(
+        DualCache(), prisma_client=_PrismaClient(_Database(_StoreTable(stored_row)))
+    )
     created: Final = VectorStoreCreateResponse(
         id=_PROVIDER_ID,
         object="vector_store",
@@ -140,3 +149,19 @@ async def test_provider_store_id_passes_through_unchanged(call_type: str) -> Non
     )
 
     assert routed == {"vector_store_id": "vs_raw_store"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", _ROUTED_CALL_TYPES)
+async def test_deleted_managed_store_answers_not_found_instead_of_access_denied(call_type: str) -> None:
+    hook, unified_id = _hook_and_unified_id(stored_row=None)
+
+    with pytest.raises(HTTPException) as missing:
+        await hook.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(user_id=_OWNER),
+            cache=DualCache(),
+            data={"vector_store_id": unified_id},
+            call_type=call_type,
+        )
+
+    assert missing.value.status_code == 404

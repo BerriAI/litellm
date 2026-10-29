@@ -11,6 +11,7 @@ from litellm import Router, verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.managed_resources import BaseManagedResource
+from litellm.llms.base_llm.managed_resources.isolation import can_access_resource
 from litellm.llms.base_llm.managed_resources.utils import (
     extract_model_id_from_unified_id,
     extract_provider_resource_id_from_unified_id,
@@ -303,18 +304,21 @@ class _PROXY_LiteLLMManagedVectorStores(
             else False
         )
         
-        if is_unified_id and vector_store_id:
-            if await self.can_user_access_unified_resource_id(
-                vector_store_id, user_api_key_dict
-            ):
-                return True
-            else:
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"User {user_api_key_dict.user_id} does not have access to vector store {vector_store_id}",
-                )
-        
-        return False
+        if not (is_unified_id and vector_store_id):
+            return False
+        managed_store: Final = await self.get_unified_resource_id(vector_store_id, user_api_key_dict.parent_otel_span)
+        if managed_store is None:
+            raise HTTPException(status_code=404, detail=f"Vector store not found: {vector_store_id}")
+        if can_access_resource(
+            user_api_key_dict=user_api_key_dict,
+            created_by=managed_store.get("created_by"),
+            resource_team_id=managed_store.get("team_id"),
+        ):
+            return True
+        raise HTTPException(
+            status_code=403,
+            detail=f"User {user_api_key_dict.user_id} does not have access to vector store {vector_store_id}",
+        )
 
     # ============================================================================
     #                     PRE-CALL HOOK (For Router Integration)

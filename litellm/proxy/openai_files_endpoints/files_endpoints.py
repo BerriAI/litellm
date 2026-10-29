@@ -482,7 +482,7 @@ async def route_create_file(
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
         if managed_files_obj is None:
             raise ProxyException(
-                message="Managed files hook not found",
+                message=CommonProxyErrors.managed_files_unavailable.value,
                 type=ProxyErrorTypes.internal_server_error.value,
                 param=None,
                 code=500,
@@ -1027,7 +1027,7 @@ async def get_file_content(
             managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
             if managed_files_obj is None:
                 raise ProxyException(
-                    message="Managed files hook not found",
+                    message=CommonProxyErrors.managed_files_unavailable.value,
                     type=ProxyErrorTypes.internal_server_error.value,
                     param=None,
                     code=500,
@@ -1369,7 +1369,7 @@ async def get_file(
             managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
             if managed_files_obj is None:
                 raise ProxyException(
-                    message="Managed files hook not found",
+                    message=CommonProxyErrors.managed_files_unavailable.value,
                     type=ProxyErrorTypes.internal_server_error.value,
                     param=None,
                     code=500,
@@ -1579,7 +1579,7 @@ async def delete_file(
             managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
             if managed_files_obj is None:
                 raise ProxyException(
-                    message="Managed files hook not found",
+                    message=CommonProxyErrors.managed_files_unavailable.value,
                     type=ProxyErrorTypes.internal_server_error.value,
                     param=None,
                     code=500,

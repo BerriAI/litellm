@@ -1,5 +1,6 @@
 import base64
 import json
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -281,6 +282,7 @@ def test_managed_vector_store_id_retrieves_updates_and_deletes_the_provider_stor
     provider_id: Final = f"vs_provider_{uuid.uuid4().hex}"
     provider_key: Final = f"provider-{uuid.uuid4().hex}"
     store_path: Final = f"/v1/vector_stores/{provider_id}"
+    store_deleted: Final = threading.Event()
 
     def respond(request: Request) -> Reply:
         path: Final = urlsplit(request.target).path
@@ -291,12 +293,15 @@ def test_managed_vector_store_id_retrieves_updates_and_deletes_the_provider_stor
             _assert_create_request(request, store_name)
             return _create_reply(provider_id, store_name)
         assert path == store_path, request.target
+        if request.method == "GET" and store_deleted.is_set():
+            return Reply(status=404, body=json.dumps({"error": {"message": "No vector store found"}}).encode())
         if request.method == "GET":
             return _create_reply(provider_id, store_name)
         if request.method == "POST":
             assert JSON_OBJECT.validate_json(request.body)["name"] == "renamed"
             return _create_reply(provider_id, "renamed")
         assert request.method == "DELETE"
+        store_deleted.set()
         return Reply(body=json.dumps({"id": provider_id, "object": "vector_store.deleted", "deleted": True}).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -320,11 +325,14 @@ def test_managed_vector_store_id_retrieves_updates_and_deletes_the_provider_stor
             updated: Final = client.vector_stores.update(created.id, name="renamed")
             deleted: Final = client.vector_stores.delete(created.id)
 
-        assert (retrieved.id, retrieved.name) == (provider_id, store_name)
-        assert (updated.id, updated.name) == (provider_id, "renamed")
-        assert (deleted.id, deleted.deleted) == (provider_id, True)
+        assert (retrieved.id, retrieved.name) == (created.id, store_name)
+        assert (updated.id, updated.name) == (created.id, "renamed")
+        assert (deleted.id, deleted.deleted) == (created.id, True)
         assert [(request.method, urlsplit(request.target).path) for request in wire.drain()] == [
             ("GET", store_path),
             ("POST", store_path),
             ("DELETE", store_path),
         ]
+        assert read_rows(_MANAGED_STORE_ROW, (created.id,)) == []
+        retrieved_after_delete: Final = gateway.request("GET", f"/v1/vector_stores/{created.id}", key=key)
+        assert retrieved_after_delete.status_code == 404, retrieved_after_delete.text
