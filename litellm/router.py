@@ -1656,7 +1656,9 @@ class Router(DeprecatedRouterMembers):
         self._core_cache = DualCache(
             redis_cache=redis_cache, in_memory_cache=InMemoryCache()
         )  # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
-        self._core_least_busy_reservations: InMemoryCache = InMemoryCache(max_size_in_memory=SELECTION_RESERVATION_MAX_KEYS)
+        self._core_least_busy_reservations: InMemoryCache = InMemoryCache(
+            max_size_in_memory=SELECTION_RESERVATION_MAX_KEYS
+        )
         self._claude_code_session_router_cache: DualCache = DualCache(
             redis_cache=redis_cache,
             in_memory_cache=InMemoryCache(),
