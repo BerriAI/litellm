@@ -13,7 +13,7 @@ is logged the first time such a deployment is seen.
 
 import contextlib
 from collections.abc import Callable, Mapping
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
@@ -38,7 +38,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
 )
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.router import RouterErrors
+from litellm.types.router import RouterErrors, parse_daily_reset_time
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
 
@@ -58,14 +58,6 @@ class RoutingArgs:
 DAY_FORMAT: Final = "%Y-%m-%d"
 
 
-def parse_reset_time(value: str | None) -> timedelta:
-    """`reset_time` is "HH:MM" in UTC, the moment the rpd/tpd window starts over; unset means midnight UTC."""
-    if value is None:
-        return timedelta(0)
-    parsed: Final = time.fromisoformat(value)
-    return timedelta(hours=parsed.hour, minutes=parsed.minute)
-
-
 def daily_window_day(now: datetime, reset_offset: timedelta) -> str:
     return (now - reset_offset).strftime(DAY_FORMAT)
 
@@ -77,16 +69,16 @@ def seconds_until_daily_reset(now: datetime, reset_offset: timedelta = timedelta
 
 
 class _DailyLimitParams(BaseModel):
-    """rpd, tpd and reset_time live in litellm_params only."""
+    """rpd, tpd and daily_reset_time live in litellm_params only."""
 
     model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
     model: str | None = None
     tpd: int | None = None
     rpd: int | None = None
-    reset_time: str | None = None
+    daily_reset_time: str | None = None
 
     def reset_offset(self) -> timedelta:
-        return parse_reset_time(self.reset_time)
+        return parse_daily_reset_time(self.daily_reset_time)
 
 
 class _DailyLimitModelInfo(BaseModel):

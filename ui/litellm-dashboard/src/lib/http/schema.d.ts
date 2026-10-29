@@ -35646,7 +35646,7 @@ export interface components {
             /** Regional Processing Uplift Multiplier Us */
             regional_processing_uplift_multiplier_us?: number | null;
             /** Reset Time */
-            reset_time?: string | null;
+            daily_reset_time?: string | null;
             /** Responses Api Version */
             responses_api_version?: string | null;
             /** Rpd */
@@ -51044,7 +51044,7 @@ export interface components {
             /** Regional Processing Uplift Multiplier Us */
             regional_processing_uplift_multiplier_us?: number | null;
             /** Reset Time */
-            reset_time?: string | null;
+            daily_reset_time?: string | null;
             /** Responses Api Version */
             responses_api_version?: string | null;
             /** Rpd */
