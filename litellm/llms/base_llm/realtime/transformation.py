@@ -5,7 +5,6 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import httpx
-from typing_extensions import Self
 
 from litellm._uuid import uuid
 from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
@@ -46,7 +45,7 @@ class RealtimeSessionUpdateRejection:
 
 
 class RealtimeBackend(Protocol):
-    async def __aenter__(self) -> Self: ...
+    async def __aenter__(self) -> object: ...
 
     async def __aexit__(
         self,
@@ -127,8 +126,14 @@ class BaseRealtimeConfig(ABC):
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
         return None
 
+    def session_refusal(self) -> Exception | None:
+        return None
+
     async def open_backend(self, url: str, headers: Mapping[str, str]) -> RealtimeBackend | None:
         return None
+
+    def wrap_backend(self, backend: RealtimeBackend) -> RealtimeBackend:
+        return backend
 
     def transform_session_created_event(
         self,

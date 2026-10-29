@@ -13,6 +13,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
 from litellm.litellm_core_utils.credential_accessor import reject_api_key_secret_reference
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
@@ -22,7 +23,6 @@ from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     get_fallback_error_info,
 )
-from litellm.router_utils.batch_utils import get_router_metadata_variable_name
 from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper, used across router_utils
     cast_exception_status_to_int,

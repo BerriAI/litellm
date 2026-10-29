@@ -1,6 +1,6 @@
-import inspect
 import asyncio
 import contextlib
+import inspect
 import json
 import socket
 from collections.abc import Iterator, Mapping
@@ -311,7 +311,7 @@ async def test_model_creation_fails_closed_when_authoritative_policy_is_unavaila
             Deployment(model_name="cannot-create", litellm_params={"model": "openai/test-model"}),
             UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER),
         )
-    assert error.value.code == "503"
+    assert (error.value.code, error.value.type) == ("503", "internal_server_error")
     prisma.db.litellm_proxymodeltable.create.assert_not_called()
     prisma.db.litellm_teamtable.find_unique.assert_not_called()
 
@@ -1461,10 +1461,10 @@ class TestDeleteModelClearsRouterRegistry:
         add_deployment never restores, so an unguarded pop would make it permanently
         unroutable (the same cross-tenant DoS clear_cache was hardened against).
         """
+        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
-        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete
 
         model_id = "regular-del-1"
         admin_user = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -2739,11 +2739,11 @@ class TestAddAndDeleteModelLifecycle:
         - Delete same model again → raises (model not found)
         """
         from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
             add_new_model,
-            delete_model as delete_model_endpoint,
         )
         from litellm.proxy.management_endpoints.model_management_endpoints import (
-            ModelInfoDelete,
+            delete_model as delete_model_endpoint,
         )
 
         model_id = "lifecycle-test-model-123"
@@ -2833,6 +2833,8 @@ class TestDeleteTeamBYOKModelGhost:
     async def test_delete_strips_public_name_and_refreshes_cache(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -2916,6 +2918,8 @@ class TestDeleteTeamBYOKModelGhost:
         alias cleanup (delete_team_model_alias), preserving legacy behavior."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -2984,6 +2988,8 @@ class TestDeleteTeamBYOKModelGhost:
         team.models when one replica is deleted but a sibling still backs it."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -3065,6 +3071,8 @@ class TestDeleteTeamBYOKModelGhost:
         deployment still serves it."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -3145,6 +3153,8 @@ class TestDeleteTeamBYOKModelGhost:
         the alias would break routing that works."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -3252,6 +3262,8 @@ class TestDeleteModelTeamAuth:
     async def test_proxy_admin_can_delete_model_when_team_deleted(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -3287,6 +3299,8 @@ class TestDeleteModelTeamAuth:
         """A missing team must never let a non-admin delete the orphan (no fail-open)."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
         from litellm.proxy.proxy_server import ProxyException
@@ -3322,6 +3336,8 @@ class TestDeleteModelTeamAuth:
         """The auth check must not add a redundant team query on the live-team path."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
         from litellm.proxy.proxy_server import ProxyException
@@ -3599,6 +3615,33 @@ class TestDeleteTeamModels:
 
         assert deleted == ["a1"]
         assert any(e[0] == "delete_many" for e in prisma.events)
+
+
+@pytest.mark.parametrize(
+    ("model_info_patch", "expected_gate"),
+    [
+        pytest.param({"tpm": 5}, True, id="unrelated-field"),
+        pytest.param({"supported_endpoints": ["/v1/embeddings", "/v1/rerank"]}, True, id="endpoint-list-only"),
+        pytest.param({"enforce_supported_endpoints": False}, False, id="explicit-false"),
+    ],
+)
+def test_model_info_patch_changes_the_endpoint_gate_only_when_it_sends_the_flag(
+    model_info_patch: dict[str, object], expected_gate: bool
+):
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    result: Final = update_db_model(
+        db_model=Deployment(
+            model_name="embedding-only",
+            litellm_params=LiteLLM_Params(model="openai/text-embedding-3-small"),
+            model_info=ModelInfo(
+                id="embedding-only", enforce_supported_endpoints=True, supported_endpoints=["/v1/embeddings"]
+            ),
+        ),
+        updated_patch=updateDeployment.model_validate({"model_info": model_info_patch}),
+    )
+
+    assert json.loads(result["model_info"]).get("enforce_supported_endpoints") is expected_gate
 
 
 def _build_db_model_for_blocked_test():
@@ -4392,7 +4435,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_echoed_cost_map_metadata_is_not_persisted(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4418,7 +4460,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_an_edited_value_survives_the_echo_filter(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4483,7 +4524,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_metadata_without_a_cost_map_key_is_persisted(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
         from litellm.types.utils import echoed_cost_map_fields
@@ -4513,7 +4553,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_a_stored_mode_survives_an_echoed_save(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4536,7 +4575,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_resetting_an_override_to_the_cost_map_value_removes_it(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4560,7 +4598,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_reset_is_recognised_after_the_router_registered_the_override(self, monkeypatch: pytest.MonkeyPatch):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4586,7 +4623,6 @@ class TestModelInfoCostMapEchoFilter:
         from types import MappingProxyType
 
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4611,7 +4647,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_echo_is_compared_against_the_deployments_lookup_not_the_key(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4653,7 +4688,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_base_model_wins_over_litellm_params_model_for_the_lookup(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4681,7 +4715,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_encrypted_stored_model_is_decrypted_for_the_lookup(self, monkeypatch):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -6431,7 +6464,7 @@ class TestStrategyRouterWriteValidation:
             AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY,
             _auto_router_capability_slot,
         )
-        from litellm.router_utils.auto_router_model_naming import gated_capabilities_of
+        from litellm.router_strategy.auto_router.auto_router_model_naming import gated_capabilities_of
 
         capabilities: Final = gated_capabilities_of(effective_params)
 
@@ -6568,7 +6601,7 @@ class TestStrategyRouterWriteValidation:
         from fastapi import HTTPException
 
         from litellm.proxy.management_endpoints.model_management_endpoints import _auto_router_capability_slot
-        from litellm.router_utils.auto_router_tuning_baseline import snapshot_tuning_baselines
+        from litellm.router_strategy.auto_router.auto_router_tuning_baseline import snapshot_tuning_baselines
 
         configs = {
             "_TUNED_A": self._TUNED_A,
@@ -6624,7 +6657,7 @@ class TestStrategyRouterWriteValidation:
 
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.model_management_endpoints import _auto_router_capability_slot
-        from litellm.router_utils.auto_router_tuning_baseline import snapshot_tuning_baselines
+        from litellm.router_strategy.auto_router.auto_router_tuning_baseline import snapshot_tuning_baselines
 
         fake = self._FakeDb([])
         fake.tx_obj.litellm_proxymodeltable.find_many = AsyncMock(
@@ -6669,7 +6702,7 @@ class TestStrategyRouterWriteValidation:
         row id before the slot is entered, so a second tuned router is refused before its DB write."""
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
-        from litellm.router_utils.auto_router_tuning_baseline import snapshot_tuning_baselines
+        from litellm.router_strategy.auto_router.auto_router_tuning_baseline import snapshot_tuning_baselines
 
         admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
         baselines = snapshot_tuning_baselines([self._db_router_row("a", self._TUNED_A)])
@@ -8980,7 +9013,10 @@ class TestTeamMemberAutoRouterWrites:
         from fastapi import HTTPException
 
         from litellm.proxy.management_endpoints.model_management_endpoints import _auto_router_capability_slot
-        from litellm.proxy.management_helpers.auto_router_permissions import MemberAutoRouterWrite, validate_member_auto_router_config
+        from litellm.proxy.management_helpers.auto_router_permissions import (
+            MemberAutoRouterWrite,
+            validate_member_auto_router_config,
+        )
 
         row: Final = self._row()
         database: Final = self._database(self._team(), row)
@@ -10677,6 +10713,8 @@ class TestFederationGateScopesToWhatTheWriteTouches:
         and the team that owns the model must be able to take it off their page."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -10902,3 +10940,76 @@ class TestNonAdminCannotSetPerUserOauthOnModel:
                 user_api_key_dict=admin,
             )
             assert result is created_row
+
+
+@pytest.mark.asyncio
+async def test_delete_model_reports_an_unknown_model_id_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ModelInfoDelete
+    from litellm.proxy.management_endpoints.model_management_endpoints import delete_model
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await delete_model(
+            model_info=ModelInfoDelete(id="no-such-model"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_update_model_reports_an_unknown_model_id_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_model
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_model(
+            model_params=updateDeployment(model_info=ModelInfo(id="no-such-model")),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert exc_info.value.message == "model not found"
+
+
+@pytest.mark.asyncio
+async def test_add_new_model_reports_a_database_outage_during_the_insert_as_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import prisma.errors
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+    unreachable_db: Final = MagicMock()
+    unreachable_db.db.query_raw = AsyncMock(return_value=[])
+    unreachable_db.db.litellm_proxymodeltable.create = AsyncMock(
+        side_effect=prisma.errors.PrismaError("Can't reach database server at `db:5432`")
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", unreachable_db)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-outage-salt")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await add_new_model(
+            model_params=Deployment(
+                model_name="outage-model",
+                litellm_params=LiteLLM_Params(model="openai/gpt-5.4-mini", api_key="fake-key"),
+                model_info={"id": "outage-model-1"},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")
