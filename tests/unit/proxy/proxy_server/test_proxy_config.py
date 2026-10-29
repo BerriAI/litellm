@@ -2660,7 +2660,9 @@ async def test_load_config_logs_disabled_budget_reservation_once(tmp_path, monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("setting", ["vector_store_deny_by_default", "search_tool_deny_by_default"])
+@pytest.mark.parametrize(
+    "setting", ["vector_store_deny_by_default", "search_tool_deny_by_default", "claude_code_marketplace_auth_required"]
+)
 @pytest.mark.parametrize(("yaml_value", "expected"), [("true", True), ("false", False)])
 async def test_load_config_yaml_deny_by_default_is_boolean(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str, yaml_value: str, expected: bool
@@ -2678,7 +2680,9 @@ async def test_load_config_yaml_deny_by_default_is_boolean(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("setting", ["vector_store_deny_by_default", "search_tool_deny_by_default"])
+@pytest.mark.parametrize(
+    "setting", ["vector_store_deny_by_default", "search_tool_deny_by_default", "claude_code_marketplace_auth_required"]
+)
 @pytest.mark.parametrize("yaml_value", ["", "enabled"], ids=["null", "string"])
 async def test_load_config_rejects_non_boolean_deny_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str, yaml_value: str
