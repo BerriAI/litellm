@@ -4,7 +4,7 @@ Anthropic CountTokens API handler.
 Uses httpx for HTTP requests instead of the Anthropic SDK.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
@@ -39,6 +39,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
         tools: list[dict[str, JsonValue]] | None = None,
         system: JsonValue = None,
         optional_params: Mapping[str, JsonValue] | None = None,
+        betas: Sequence[str] = (),
     ) -> dict[str, JsonValue]:
         """
         Handle a CountTokens request using httpx.
@@ -79,7 +80,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             verbose_logger.debug("Making request to: %s", endpoint_url)
 
             # Get required headers
-            headers: Final = self.get_count_tokens_headers(auth_header)
+            headers: Final = self.get_count_tokens_headers(auth_header, betas)
 
             # Use LiteLLM's async httpx client
             async_client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)

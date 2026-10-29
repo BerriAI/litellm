@@ -299,7 +299,7 @@ def generate_feedback_box():
 import contextlib
 from collections import defaultdict
 from contextlib import AsyncExitStack, asynccontextmanager
-from functools import lru_cache, partial
+from functools import lru_cache, partial, reduce
 
 import litellm
 import litellm._redis
@@ -1374,6 +1374,8 @@ _LOGIN_REQUEST_BODY: Final = TypeAdapter(_LoginRequestBody)
 _LOGIN_EXCHANGE_REQUEST_BODY: Final = TypeAdapter(_LoginExchangeRequestBody)
 _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeadersReloadConfig)
 _LITELLM_PARAMS_COPY: Final = TypeAdapter(dict[str, object])
+_COUNT_REQUEST_OPTIONS: Final = TypeAdapter(Mapping[str, JsonValue])
+_DROPPED_PARAM_PATHS: Final = TypeAdapter(tuple[object, ...])
 _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
 _UNTYPED_VALUE: Final = TypeAdapter(object)
 
@@ -14810,6 +14812,7 @@ async def _try_provider_token_count(
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
     chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    request_options: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Attempt provider-specific token counting. Returns None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -14837,6 +14840,7 @@ async def _try_provider_token_count(
             output_format=output_format,
             context_management=context_management,
             chat_params=chat_params,
+            request_options=request_options,
         )
     except httpx.HTTPStatusError as e:
         return ProviderCountFailure(
@@ -15239,6 +15243,20 @@ def _count_context_management(
     )
 
 
+def _count_request_options(
+    request_options: Mapping[str, JsonValue],
+    deployment: Mapping[str, object] | None,
+    sent_params: Mapping[str, object],
+) -> Mapping[str, JsonValue]:
+    from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
+
+    deployment_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
+    dropped: Final = {**deployment_params, **sent_params}.get("additional_drop_params")
+    dropped_values: Final = _DROPPED_PARAM_PATHS.validate_python(dropped) if isinstance(dropped, list) else ()
+    dropped_paths: Final = tuple(path for path in dropped_values if isinstance(path, str))
+    return _COUNT_REQUEST_OPTIONS.validate_python(reduce(delete_nested_value, dropped_paths, dict(request_options)))
+
+
 def _responses_routing_kwargs(responses_request: Mapping[str, object] | None) -> Mapping[str, object]:
     previous_response_id: Final = None if responses_request is None else responses_request.get("previous_response_id")
     return {"previous_response_id": previous_response_id} if isinstance(previous_response_id, str) else {}
@@ -15316,6 +15334,7 @@ async def count_request_tokens(
     responses_request: Mapping[str, object] | None = None,
     litellm_call_id: str | None = None,
     client_oauth_token: str | None = None,
+    request_options: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> TokenCountResponse:
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
     if request.prompt is None and request.messages is None and request.contents is None:
@@ -15335,6 +15354,7 @@ async def count_request_tokens(
         request_litellm_params=request_litellm_params,
         responses_request=responses_request,
         client_oauth_token=client_oauth_token,
+        request_options=request_options,
     )
     return await logged_token_count(
         _with_anthropic_content_errors(count) if messages_format == "anthropic" else count,
@@ -15377,6 +15397,7 @@ async def _count_request_tokens(
     request_litellm_params: Mapping[str, JsonValue],
     responses_request: Mapping[str, object] | None,
     client_oauth_token: str | None,
+    request_options: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -15484,6 +15505,7 @@ async def _count_request_tokens(
                 output_format=output_format,
                 context_management=_count_context_management(context_management, request.model, request_litellm_params),
                 chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
+                request_options=_count_request_options(request_options, count_deployment, sent_params),
             ),
             model_to_use=model_to_use,
             request_model=request.model,

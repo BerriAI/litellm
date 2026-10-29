@@ -12,7 +12,7 @@ from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar
 from urllib.parse import quote, urlparse
 
 import httpx
-from pydantic import BeforeValidator, ConfigDict, Field, StrictBool, TypeAdapter, ValidationError
+from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, StrictBool, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -45,6 +45,7 @@ from litellm.llms.anthropic.wif import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
@@ -345,6 +346,20 @@ def _beta_header_values(side: str | Sequence[str] | None) -> tuple[str, ...]:
     if isinstance(side, str):
         return (side,)
     return tuple(entry for entry in side if isinstance(entry, str))
+
+
+def context_management_betas(context_management: JsonValue) -> frozenset[str]:
+    """The anthropic-beta values a ``context_management`` body needs: the compact beta for a
+    ``compact_20260112`` edit and the context-management beta for every other edit."""
+    edits: Final = context_management.get("edits") if isinstance(context_management, dict) else None
+    if not isinstance(edits, list):
+        return frozenset()
+    return frozenset(
+        ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value
+        if isinstance(edit, dict) and edit.get("type") == "compact_20260112"
+        else ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+        for edit in edits
+    )
 
 
 def merge_anthropic_beta_headers(existing: str | Sequence[str] | None, new_beta: str | Sequence[str] | None) -> str:
@@ -1306,8 +1321,6 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if is_vertex_request is True:
             # Vertex AI requires web search beta header for web search to work
             if web_search_tool_used:
-                from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-
                 headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
         elif len(all_betas) > 0:
             headers["anthropic-beta"] = ",".join(all_betas)

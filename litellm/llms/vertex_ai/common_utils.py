@@ -30,7 +30,7 @@ from litellm.types.llms.vertex_ai import (
     PartType,
     Schema,
 )
-from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
 
 GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
@@ -1391,8 +1391,6 @@ class VertexAITokenCounter(BaseTokenCounter):
         self,
         custom_llm_provider: str | None = None,
     ) -> bool:
-        from litellm.types.utils import LlmProviders
-
         return custom_llm_provider == LlmProviders.VERTEX_AI.value
 
     async def _count_translated_claude_request(
@@ -1454,6 +1452,7 @@ class VertexAITokenCounter(BaseTokenCounter):
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        request_options: Mapping[str, JsonValue] = MappingProxyType({}),
         count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         import copy
@@ -1508,6 +1507,17 @@ class VertexAITokenCounter(BaseTokenCounter):
             if translated_count is not None:
                 return translated_count
 
+            from litellm.llms.anthropic.count_tokens.transformation import (
+                ChatCountTranslationError,
+                claude_count_options,
+            )
+
+            claude_options: Final = claude_count_options(
+                model_to_use, LlmProviders.VERTEX_AI, request_options, context_management, deployment
+            )
+            if isinstance(claude_options, ChatCountTranslationError):
+                return claude_options.response(request_model, model_to_use, "vertex_ai_partner_models")
+
             # Use partner models token counter
             partner_models_handler: Final = VertexAIPartnerModels()
 
@@ -1538,7 +1548,8 @@ class VertexAITokenCounter(BaseTokenCounter):
                     vertex_credentials=vertex_credentials,
                     system=system,
                     tools=tools,
-                    count_options=count_options,
+                    count_options={**count_options, **claude_options.options},
+                    betas=claude_options.betas,
                 )
             except (PartnerVertexAIError, httpx.HTTPStatusError) as e:
                 status_code: Final = e.response.status_code

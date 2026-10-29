@@ -13,7 +13,13 @@ from typing_extensions import assert_never
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError, anthropic_count_fields
+from litellm.llms.anthropic.count_tokens.transformation import (
+    NO_CLAUDE_COUNT_OPTIONS,
+    ChatCountTranslationError,
+    ClaudeCountOptions,
+    anthropic_count_fields,
+    claude_count_options,
+)
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
@@ -72,6 +78,13 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
         and outcome.status_code in _RUNTIME_FALLBACK_STATUSES
         and is_mantle_claude_model(resolved_model)
     )
+
+
+def _invoke_fields(claude_options: ClaudeCountOptions) -> Mapping[str, object]:
+    return {
+        **claude_options.options,
+        **({"anthropic_beta": list(claude_options.betas)} if claude_options.betas else {}),
+    }
 
 
 def _request_data(
@@ -143,6 +156,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        request_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         if not messages:
             return None
@@ -167,11 +181,27 @@ class BedrockTokenCounter(BaseTokenCounter):
         )
         if isinstance(translated, ChatCountTranslationError):
             return translated.response(request_model, model_to_use, primary_tokenizer)
-        runtime_request: Final = (
-            _request_data(model_to_use, messages, tools, system)
-            if translated is None
-            else _request_data(model_to_use, translated.messages, translated.tools, translated.system)
+        claude_options: Final = (
+            claude_count_options(
+                counted_model,
+                LlmProviders.BEDROCK_MANTLE if use_mantle else LlmProviders.BEDROCK,
+                request_options,
+                context_management,
+                deployment,
+            )
+            if is_mantle_claude_model(resolved_model)
+            else NO_CLAUDE_COUNT_OPTIONS
         )
+        if isinstance(claude_options, ChatCountTranslationError):
+            return claude_options.response(request_model, model_to_use, primary_tokenizer)
+        runtime_request: Final = {
+            **(
+                _request_data(model_to_use, messages, tools, system)
+                if translated is None
+                else _request_data(model_to_use, translated.messages, translated.tools, translated.system)
+            ),
+            **_invoke_fields(claude_options),
+        }
         mantle_request: Final = runtime_request if translated is None else {**runtime_request, **translated.options}
 
         primary: Final = (

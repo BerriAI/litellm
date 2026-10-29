@@ -1,6 +1,6 @@
 # What is this?
 ## API Handler for calling Vertex AI Partner Models
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import Final
@@ -267,6 +267,7 @@ class VertexAIPartnerModels(VertexBase):
         system: object | None = None,
         tools: list[dict[str, object]] | None = None,
         count_options: Mapping[str, object] = MappingProxyType({}),
+        betas: Sequence[str] = (),
     ):
         """
         Count tokens for Vertex AI partner models (Anthropic Claude, Mistral, etc.)
@@ -321,6 +322,7 @@ class VertexAIPartnerModels(VertexBase):
                 model=model,
                 request_data=request_data,
                 litellm_params=_litellm_params,
+                betas=betas,
             )
 
             return result

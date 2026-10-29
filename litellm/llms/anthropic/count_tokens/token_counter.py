@@ -16,6 +16,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountFields,
     ChatCountTranslationError,
     anthropic_count_fields,
+    claude_count_options,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
@@ -49,6 +50,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        request_options: Mapping[str, JsonValue] = MappingProxyType({}),
         count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         """
@@ -93,6 +95,12 @@ class AnthropicTokenCounter(BaseTokenCounter):
             case None:
                 pass
 
+        claude_options: Final = claude_count_options(
+            model_to_use, LlmProviders.ANTHROPIC, request_options, context_management, deployment
+        )
+        if isinstance(claude_options, ChatCountTranslationError):
+            return claude_options.response(request_model, model_to_use, "anthropic_api")
+
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
         api_base: Final = litellm_params.get("api_base")
@@ -130,7 +138,8 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 api_base=api_base,
                 tools=tools,
                 system=system,
-                optional_params=count_options,
+                optional_params={**count_options, **claude_options.options},
+                betas=claude_options.betas,
             )
 
             if result is not None:

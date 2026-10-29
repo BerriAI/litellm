@@ -15,6 +15,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountFields,
     ChatCountTranslationError,
     anthropic_count_fields,
+    claude_count_options,
 )
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
@@ -63,6 +64,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        request_options: Mapping[str, JsonValue] = MappingProxyType({}),
         count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         """
@@ -107,6 +109,12 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
             case None:
                 pass
 
+        claude_options: Final = claude_count_options(
+            model_to_use, LlmProviders.AZURE_AI, request_options, context_management, deployment
+        )
+        if isinstance(claude_options, ChatCountTranslationError):
+            return claude_options.response(request_model, model_to_use, "azure_ai_anthropic_api")
+
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
 
@@ -134,7 +142,8 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 litellm_params=litellm_params,
                 tools=tools,
                 system=system,
-                optional_params=count_options,
+                optional_params={**count_options, **claude_options.options},
+                betas=claude_options.betas,
             )
 
             if result is not None:

@@ -367,6 +367,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
         request_litellm_params=None,
         litellm_call_id=None,
         client_oauth_token=None,
+        request_options=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
@@ -449,6 +450,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         request_litellm_params=None,
         litellm_call_id=None,
         client_oauth_token=None,
+        request_options=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
@@ -1269,6 +1271,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         request_litellm_params=None,
         litellm_call_id=None,
         client_oauth_token=None,
+        request_options=None,
     ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
@@ -1328,6 +1331,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
         request_litellm_params=None,
         litellm_call_id=None,
         client_oauth_token=None,
+        request_options=None,
     ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
@@ -1387,6 +1391,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         request_litellm_params=None,
         litellm_call_id=None,
         client_oauth_token=None,
+        request_options=None,
     ):
         raise ProxyException(
             message="Rate limit exceeded",
@@ -1607,6 +1612,103 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_malformed_t
     assert sent["messages"][2]["content"][0]["content"] == [{"type": "text", "text": "build ok"}]
 
 
+
+_CLAUDE_COUNT_OPTIONS: Final[dict[str, JsonValue]] = {
+    "thinking": {"type": "adaptive"},
+    "tool_choice": {"type": "auto"},
+    "output_config": {
+        "effort": "low",
+        "format": {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
+}
+
+
+def _sent_option_paths(body: Mapping[str, JsonValue]) -> frozenset[str]:
+    output_config: Final = body.get("output_config")
+    return frozenset(name for name in _CLAUDE_COUNT_OPTIONS if name in body) | frozenset(
+        f"output_config.{key}" for key in (output_config if isinstance(output_config, dict) else {})
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("additional_drop_params", "expected_paths"),
+    (
+        (
+            None,
+            {
+                "thinking",
+                "tool_choice",
+                "output_config",
+                "output_config.effort",
+                "output_config.format",
+                "context_management",
+            },
+        ),
+        (
+            ["tool_choice", "output_config.format"],
+            {"thinking", "output_config", "output_config.effort", "context_management"},
+        ),
+        (
+            ["context_management"],
+            {"thinking", "tool_choice", "output_config", "output_config.effort", "output_config.format"},
+        ),
+    ),
+    ids=("nothing-dropped", "deployment-drops-tool-choice-and-the-format", "deployment-drops-context-management"),
+)
+async def test_anthropic_count_tokens_on_a_claude_deployment_sends_the_options_inference_sends(
+    monkeypatch: pytest.MonkeyPatch, additional_drop_params: list[str] | None, expected_paths: set[str]
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-agent",
+                "litellm_params": {
+                    "model": "anthropic/claude-haiku-5-5",
+                    "api_key": "sk-ant-test",
+                    "additional_drop_params": additional_drop_params,
+                },
+            }
+        ]
+    )
+    request: Final = _json_request(
+        {
+            "model": "claude-agent",
+            "messages": [{"role": "user", "content": "Weather in SF?"}],
+            "tools": [{"name": "get_weather", "input_schema": {"type": "object"}}],
+            **_CLAUDE_COUNT_OPTIONS,
+        },
+        "python-httpx/0.28.1",
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock:
+        route: Final = respx.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 7})
+        )
+        response: Final = await anthropic_count_tokens(request, UserAPIKeyAuth())
+
+    assert response["input_tokens"] == 7
+    sent_request: Final = route.calls.last.request
+    assert _sent_option_paths(json.loads(sent_request.content)) == expected_paths
+    assert ("context-management-2025-06-27" in sent_request.headers["anthropic-beta"]) == (
+        "context_management" in expected_paths
+    )
+
+
 class _ScriptedCounter(BaseTokenCounter):
     def __init__(self, replies: dict[str, TokenCountResponse], burst: int = 1) -> None:
         self._replies = replies
@@ -1631,6 +1733,7 @@ class _ScriptedCounter(BaseTokenCounter):
         output_format: JsonValue = None,
         context_management: object = None,
         chat_params: object = None,
+        request_options: object = None,
     ) -> TokenCountResponse | None:
         self.calls.append((model_to_use, messages, tools, system))
         self.regions.append(None if deployment is None else deployment["litellm_params"].get("aws_region_name"))
@@ -3470,7 +3573,7 @@ class _PartnerCountRequest(BaseModel):
 
 
 async def _vertex_partner_word_count(
-    model: str, request_data: JsonValue, litellm_params: JsonValue
+    model: str, request_data: JsonValue, litellm_params: JsonValue, betas: object = ()
 ) -> dict[str, JsonValue]:
     body: Final = _PartnerCountRequest.model_validate(request_data)
     return {"input_tokens": sum(len(message.content.split()) for message in body.messages)}

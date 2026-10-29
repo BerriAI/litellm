@@ -13,6 +13,7 @@ import respx
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
@@ -26,7 +27,8 @@ from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAn
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
 )
-from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 
 
 @pytest.mark.parametrize(
@@ -475,6 +477,43 @@ _COUNTERS: Final = pytest.mark.parametrize(
 )
 
 
+_JSON_BODY: Final = TypeAdapter(dict[str, JsonValue])
+
+
+async def _counted_requests(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    messages: list[dict[str, JsonValue]],
+    tools: list[dict[str, JsonValue]] | None,
+    messages_format: TokenCountMessagesFormat,
+    chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    request_options: Mapping[str, JsonValue] = MappingProxyType({}),
+    context_management: CountContextManagement | None = None,
+    model: str = "claude-opus-5-5",
+) -> tuple[TokenCountResponse | None, tuple[httpx.Request, ...]]:
+    sent: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
+
+    def count(request: httpx.Request) -> httpx.Response:
+        sent.put(request)
+        return httpx.Response(200, json={"input_tokens": 31})
+
+    with respx.mock:
+        respx.post(count_endpoint).mock(side_effect=count)
+        result: Final = await counter_type().count_tokens(
+            model_to_use=model,
+            messages=messages,
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-ant-api03-test-key", "api_base": "https://gateway.example"}},
+            request_model=model,
+            tools=tools,
+            messages_format=messages_format,
+            chat_params=chat_params,
+            request_options=request_options,
+            context_management=context_management,
+        )
+    return result, tuple(sent.get() for _ in range(sent.qsize()))
+
+
 async def _counted_body(
     counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
     count_endpoint: str,
@@ -483,25 +522,10 @@ async def _counted_body(
     messages_format: TokenCountMessagesFormat,
     chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> tuple[TokenCountResponse | None, tuple[dict[str, JsonValue], ...]]:
-    sent: Final[SimpleQueue[bytes]] = SimpleQueue()
-
-    def count(request: httpx.Request) -> httpx.Response:
-        sent.put(request.content)
-        return httpx.Response(200, json={"input_tokens": 31})
-
-    with respx.mock:
-        respx.post(count_endpoint).mock(side_effect=count)
-        result: Final = await counter_type().count_tokens(
-            model_to_use="claude-opus-5-5",
-            messages=messages,
-            contents=None,
-            deployment={"litellm_params": {"api_key": "sk-ant-api03-test-key", "api_base": "https://gateway.example"}},
-            request_model="claude-opus-5-5",
-            tools=tools,
-            messages_format=messages_format,
-            chat_params=chat_params,
-        )
-    return result, tuple(TypeAdapter(dict[str, JsonValue]).validate_json(sent.get()) for _ in range(sent.qsize()))
+    result, requests = await _counted_requests(
+        counter_type, count_endpoint, messages, tools, messages_format, chat_params
+    )
+    return result, tuple(_JSON_BODY.validate_json(request.content) for request in requests)
 
 
 @pytest.mark.asyncio
@@ -842,3 +866,134 @@ async def test_counter_sends_the_structured_output_tool_choice_and_thinking_chat
         inference["tool_choice"],
         inference["tools"],
     )
+
+
+_MESSAGE_REPLY: Final[dict[str, JsonValue]] = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-5-5",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 3, "output_tokens": 1},
+}
+_INFERENCE_PROVIDERS: Final = MappingProxyType(
+    {AnthropicTokenCounter: "anthropic", AzureAIAnthropicTokenCounter: "azure_ai"}
+)
+_CONTEXT_BETAS: Final = frozenset(
+    (
+        ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
+        ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
+    )
+)
+_WEATHER_TOOL: Final[dict[str, JsonValue]] = {"name": "get_weather", "input_schema": _WEATHER_SCHEMA}
+_ENABLED_THINKING: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": 2000}
+
+
+async def _messages_inference_request(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    inference_endpoint: str,
+    request_options: Mapping[str, JsonValue],
+) -> httpx.Request:
+    sent: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.put(request)
+        return httpx.Response(200, json=_MESSAGE_REPLY)
+
+    with respx.mock:
+        respx.post(inference_endpoint).mock(side_effect=reply)
+        await litellm.anthropic_messages(
+            model=f"{_INFERENCE_PROVIDERS[counter_type]}/claude-haiku-5-5",
+            messages=[{"role": "user", "content": "Weather in SF?"}],
+            tools=[_WEATHER_TOOL],
+            max_tokens=4096,
+            api_key="sk-ant-api03-test-key",
+            api_base="https://gateway.example",
+            **request_options,
+        )
+    return sent.get()
+
+
+def _betas(request: httpx.Request) -> frozenset[str]:
+    return frozenset(beta for beta in request.headers.get("anthropic-beta", "").split(",") if beta)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize(
+    ("request_options", "context_management"),
+    (
+        ({"thinking": _ENABLED_THINKING}, None),
+        ({"tool_choice": {"type": "any"}}, None),
+        ({"output_config": {"effort": "low"}, "output_format": {"type": "json_schema", "schema": _ANSWER_SCHEMA}}, None),
+        (
+            {"thinking": _ENABLED_THINKING},
+            {"edits": [{"type": "clear_tool_uses_20250919"}, {"type": "clear_thinking_20251015"}]},
+        ),
+        ({}, {"edits": [{"type": "compact_20260112"}]}),
+    ),
+    ids=("thinking", "tool_choice", "output_config_and_output_format", "context_edits", "compact_edit"),
+)
+async def test_counter_sends_the_options_and_context_edits_messages_inference_sends(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    request_options: dict[str, JsonValue],
+    context_management: dict[str, JsonValue] | None,
+) -> None:
+    """A /v1/messages count that drops thinking, tool_choice, output_config or context_management
+    counts a different prompt than inference bills, so it carries them the way inference sends them."""
+    inference: Final = await _messages_inference_request(
+        counter_type,
+        count_endpoint.removesuffix("/count_tokens"),
+        {**request_options, **({} if context_management is None else {"context_management": context_management})},
+    )
+    _, (count,) = await _counted_requests(
+        counter_type,
+        count_endpoint,
+        [{"role": "user", "content": "Weather in SF?"}],
+        [_WEATHER_TOOL],
+        "anthropic",
+        request_options=request_options,
+        context_management=(
+            None if context_management is None else CountContextManagement(spec=context_management, drop_invalid_edits=False)
+        ),
+        model="claude-haiku-5-5",
+    )
+
+    inference_body: Final = _JSON_BODY.validate_json(inference.content)
+    count_body: Final = _JSON_BODY.validate_json(count.content)
+    inference_output_format: Final = inference_body.get("output_format")
+    inference_output_config: Final = inference_body.get("output_config")
+    assert "output_format" not in count_body
+    assert count_body.get("output_config") == (
+        inference_output_config
+        if inference_output_format is None
+        else {**(inference_output_config if isinstance(inference_output_config, dict) else {}), "format": inference_output_format}
+    )
+    assert {name: count_body.get(name) for name in ("thinking", "tool_choice", "context_management")} == {
+        name: inference_body.get(name) for name in ("thinking", "tool_choice", "context_management")
+    }
+    assert _betas(count) - {ANTHROPIC_TOKEN_COUNTING_BETA_VERSION} == _betas(inference) & _CONTEXT_BETAS
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_refuses_options_messages_inference_refuses_without_calling_anthropic(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
+) -> None:
+    result, requests = await _counted_requests(
+        counter_type,
+        count_endpoint,
+        [{"role": "user", "content": "Weather in SF?"}],
+        None,
+        "anthropic",
+        request_options={"output_config": {"effort": "fastest"}},
+        model="claude-haiku-4-5",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert requests == ()

@@ -19,6 +19,16 @@ from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 # max_tokens field; CountTokens only counts input, so it has no effect
 # on any generation.
 DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS: Final = 1024
+_INVOKE_MODEL_ONLY_FIELDS: Final = frozenset(
+    ("thinking", "tool_choice", "output_config", "context_management", "anthropic_beta")
+)
+
+
+def _invoke_model_max_tokens(thinking: JsonValue) -> int:
+    budget: Final = thinking.get("budget_tokens") if isinstance(thinking, dict) else None
+    if not isinstance(budget, int):
+        return DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS
+    return max(DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS, budget + 1)
 
 
 def _json_dict(value: JsonValue) -> dict[str, JsonValue]:
@@ -87,6 +97,8 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             'converse' or 'invokeModel'
         """
         messages: Final = request_data.get("messages")
+        if not _INVOKE_MODEL_ONLY_FIELDS.isdisjoint(request_data):
+            return "invokeModel"
         if isinstance(messages, list):
             # Anthropic content blocks carry a "type" key ({"type": "text", ...});
             # Converse blocks don't ({"text": ...}, {"toolUse": ...}). Converse
@@ -200,7 +212,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             # Bedrock validates the body against the model's InvokeModel schema;
             # Anthropic Messages bodies require these fields.
             body_data.setdefault("anthropic_version", "bedrock-2023-05-31")
-            body_data.setdefault("max_tokens", DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS)
+            body_data.setdefault("max_tokens", _invoke_model_max_tokens(body_data.get("thinking")))
 
         # The CountTokens API expects invokeModel.body as a base64-encoded blob
         encoded_body: Final = base64.b64encode(json.dumps(body_data).encode()).decode()

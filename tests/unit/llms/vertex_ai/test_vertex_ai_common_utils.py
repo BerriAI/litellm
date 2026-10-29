@@ -1,8 +1,10 @@
 import copy
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from enum import Enum
+from queue import SimpleQueue
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -1840,7 +1842,9 @@ _PARTNER_RESPONSES_TOOL: Final[dict[str, object]] = {
 
 
 async def _partner_counted_bodies(
-    model: str, chat_params: dict[str, JsonValue] | None = None
+    model: str,
+    chat_params: dict[str, JsonValue] | None = None,
+    request_options: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> tuple[dict[str, object], ...]:
     from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
 
@@ -1875,6 +1879,7 @@ async def _partner_counted_bodies(
             deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
             tools=[_PARTNER_RESPONSES_TOOL],
             chat_params=chat_params or {},
+            request_options=request_options,
         )
 
     assert result is not None
@@ -1952,6 +1957,101 @@ async def test_vertex_claude_count_sends_the_structured_output_vertex_inference_
         inference.get("tool_choice"),
         inference.get("output_config"),
     )
+
+
+_PARTNER_CLAUDE_REPLY: Final[dict[str, JsonValue]] = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-5-5",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 3, "output_tokens": 1},
+}
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_sends_the_options_context_edits_and_beta_vertex_messages_inference_sends() -> None:
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    context_edits: Final[dict[str, JsonValue]] = {
+        "edits": [{"type": "clear_tool_uses_20250919"}, {"type": "clear_thinking_20251015"}]
+    }
+    options: Final[dict[str, JsonValue]] = {
+        "thinking": {"type": "enabled", "budget_tokens": 2000},
+        "tool_choice": {"type": "auto"},
+    }
+    messages: Final[list[dict[str, JsonValue]]] = [{"role": "user", "content": "Weather in SF?"}]
+    tools: Final[list[dict[str, JsonValue]]] = [{"name": "get_weather", "input_schema": {"type": "object"}}]
+    sent: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
+
+    def vertex(request: httpx.Request) -> httpx.Response:
+        sent.put(request)
+        return httpx.Response(
+            200, json={"input_tokens": 37} if request.url.path.endswith("count-tokens:rawPredict") else _PARTNER_CLAUDE_REPLY
+        )
+
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(vertex))
+    with (
+        patch.object(handler, "get_async_httpx_client", return_value=client),
+        patch.object(
+            VertexBase, "_ensure_access_token_async", new=AsyncMock(return_value=("fake-token", "test-project"))
+        ),
+    ):
+        await litellm.anthropic_messages(
+            model="vertex_ai/claude-haiku-5-5",
+            messages=messages,
+            tools=tools,
+            max_tokens=4096,
+            context_management=context_edits,
+            vertex_project="test-project",
+            vertex_location="us-east5",
+            client=client,
+            **options,
+        )
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="claude-haiku-5-5",
+            messages=messages,
+            contents=None,
+            deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
+            tools=tools,
+            request_options=options,
+            context_management=CountContextManagement(spec=context_edits, drop_invalid_edits=False),
+        )
+
+    assert result is not None
+    assert result.total_tokens == 37
+    inference, count = tuple(sent.get() for _ in range(sent.qsize()))
+    assert count.url.path.endswith("count-tokens:rawPredict")
+    counted: Final = TypeAdapter(dict[str, JsonValue]).validate_json(count.content)
+    inferred: Final = TypeAdapter(dict[str, JsonValue]).validate_json(inference.content)
+    fields: Final = ("thinking", "tool_choice", "output_config", "context_management")
+    assert {name: counted.get(name) for name in fields} == {name: inferred.get(name) for name in fields}
+    assert count.headers["anthropic-beta"] == inference.headers["anthropic-beta"]
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_refuses_options_vertex_messages_inference_refuses_before_calling_vertex() -> None:
+    result: Final = await VertexAITokenCounter().count_tokens(
+        model_to_use="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Weather in SF?"}],
+        contents=None,
+        deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
+        request_options={"output_config": {"effort": "fastest"}},
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+
+
+@pytest.mark.asyncio
+async def test_vertex_llama_count_leaves_out_the_claude_only_options() -> None:
+    model: Final = "meta/llama-4-maverick-17b-128e-instruct-maas"
+
+    assert await _partner_counted_bodies(
+        model, request_options={"thinking": {"type": "enabled", "budget_tokens": 2000}}
+    ) == await _partner_counted_bodies(model)
 
 
 @pytest.mark.asyncio

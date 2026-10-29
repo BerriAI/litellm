@@ -26,6 +26,7 @@ class MantleCountTokensRequest(TypedDict):
 _COUNT_REQUEST: Final = TypeAdapter(MantleCountTokensRequest)
 _COUNT_RESPONSE: Final = TypeAdapter(dict[str, JsonValue])
 _COUNT_OPTIONS: Final[TypeAdapter[Mapping[str, JsonValue]]] = TypeAdapter(Mapping[str, JsonValue])
+_BETAS: Final = TypeAdapter(tuple[str, ...])
 
 
 class BedrockMantleCountTokensHandler(BaseAWSLLM):
@@ -70,10 +71,15 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
             )
             verbose_logger.debug("Making bedrock-mantle count_tokens request to: %s", endpoint_url)
             api_key: Final = litellm_params.get("api_key")
+            betas: Final = _BETAS.validate_python(request_data.get("anthropic_beta", ()))
             signed_headers, signed_body = await run_aws_signing(
                 self._sign_request,
                 service_name="bedrock",
-                headers={"Content-Type": "application/json", "anthropic-version": MANTLE_ANTHROPIC_VERSION},
+                headers={
+                    "Content-Type": "application/json",
+                    "anthropic-version": MANTLE_ANTHROPIC_VERSION,
+                    **({"anthropic-beta": ",".join(betas)} if betas else {}),
+                },
                 optional_params=litellm_params,
                 request_data=body,
                 api_base=endpoint_url,

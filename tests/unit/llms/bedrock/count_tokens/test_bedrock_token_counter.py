@@ -9,6 +9,7 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.utils import CountContextManagement
 
 RUNTIME_HOST: Final = "bedrock-runtime.us-east-1.amazonaws.com"
 MANTLE_HOST: Final = "bedrock-mantle.us-east-1.api.aws"
@@ -336,6 +337,105 @@ async def test_claude_count_sends_the_tool_search_tool_the_deployments_inference
     assert (result.error, result.total_tokens) == (False, 2177)
     counted_tools: Final = _JSON_BODY.validate_json(bedrock.requests[0].content)["tools"]
     assert counted_tools == _JSON_BODY.validate_json(inference.requests[0].content)["tools"]
+
+
+_CONTEXT_EDITS: Final[dict[str, JsonValue]] = {
+    "edits": [{"type": "clear_tool_uses_20250919"}, {"type": "clear_thinking_20251015"}]
+}
+_THINKING_AND_TOOL_CHOICE: Final[dict[str, JsonValue]] = {
+    "thinking": {"type": "enabled", "budget_tokens": 2000},
+    "tool_choice": {"type": "auto"},
+}
+_WEATHER_TOOL: Final[dict[str, JsonValue]] = {"name": "get_weather", "input_schema": {"type": "object"}}
+
+
+async def _messages_inference_and_count(deployment_model: str, model_to_use: str) -> tuple[_Bedrock, _Bedrock]:
+    credentials: Final = DEPLOYMENT["litellm_params"]
+    inference: Final = _Bedrock(runtime=(200, _CLAUDE_REPLY), mantle=(200, _CLAUDE_REPLY))
+    await litellm.anthropic_messages(
+        model=deployment_model,
+        messages=MESSAGES,
+        tools=[_WEATHER_TOOL],
+        max_tokens=4096,
+        context_management=_CONTEXT_EDITS,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        **_THINKING_AND_TOOL_CHOICE,
+        **credentials,
+    )
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=MESSAGES,
+        contents=None,
+        deployment={"litellm_params": {**credentials, "model": deployment_model}},
+        request_model="claude",
+        tools=[_WEATHER_TOOL],
+        request_options=_THINKING_AND_TOOL_CHOICE,
+        context_management=CountContextManagement(spec=_CONTEXT_EDITS, drop_invalid_edits=False),
+    )
+    assert result is not None
+    assert result.error is False
+    return inference, bedrock
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_model", "model_to_use"),
+    (
+        ("bedrock/invoke/global.anthropic.claude-haiku-5-5", "global.anthropic.claude-haiku-5-5"),
+        ("bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"),
+    ),
+)
+async def test_runtime_count_sends_the_options_and_context_edits_invoke_inference_sends(
+    deployment_model: str, model_to_use: str
+) -> None:
+    """Bedrock invoke inference drops edits InvokeModel rejects and sends its betas in the body, so a count
+    that skips either counts a prompt inference never sends, or gets the 400 inference avoids."""
+    inference, bedrock = await _messages_inference_and_count(deployment_model, model_to_use)
+
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    counted: Final = _invoke_body(bedrock.requests[0])
+    sent: Final = _JSON_BODY.validate_json(inference.requests[0].content)
+    fields: Final = ("thinking", "tool_choice", "output_config", "context_management", "anthropic_beta")
+    assert {name: counted.get(name) for name in fields} == {name: sent.get(name) for name in fields}
+    thinking: Final = counted["thinking"]
+    assert isinstance(thinking, dict)
+    budget_tokens: Final = thinking.get("budget_tokens", 0)
+    assert isinstance(budget_tokens, int) and isinstance(counted["max_tokens"], int)
+    assert counted["max_tokens"] > budget_tokens
+
+
+@pytest.mark.asyncio
+async def test_mantle_count_sends_the_options_context_edits_and_beta_mantle_inference_sends() -> None:
+    inference, bedrock = await _messages_inference_and_count(
+        "bedrock_mantle/us.anthropic.claude-opus-5-5", "bedrock_mantle/us.anthropic.claude-opus-5-5"
+    )
+
+    assert bedrock.posted_hosts() == (MANTLE_HOST,)
+    counted: Final = _JSON_BODY.validate_json(bedrock.requests[0].content)
+    sent: Final = _JSON_BODY.validate_json(inference.requests[0].content)
+    fields: Final = ("thinking", "tool_choice", "output_config", "context_management")
+    assert {name: counted.get(name) for name in fields} == {name: sent.get(name) for name in fields}
+    assert "anthropic_beta" not in counted
+    assert bedrock.requests[0].headers["anthropic-beta"] == inference.requests[0].headers["anthropic-beta"]
+
+
+@pytest.mark.asyncio
+async def test_claude_count_refuses_options_bedrock_messages_inference_refuses_without_calling_bedrock() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-sonnet-4-5",
+        request_options={"output_config": {"effort": "fastest"}},
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert bedrock.posted_hosts() == ()
 
 
 @pytest.mark.asyncio
