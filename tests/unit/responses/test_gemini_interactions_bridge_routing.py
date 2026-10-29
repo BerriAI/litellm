@@ -224,3 +224,74 @@ async def test_vertex_completion_and_acompletion_forward_credentials_project_and
         "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/sync-proj/locations/us-central1/interactions",
         "https://europe-west4-aiplatform.googleapis.com/v1beta1/projects/async-proj/locations/europe-west4/interactions",
     ]
+
+
+def test_top_level_interactions_kwargs_pass_preprocessing_with_drop_params_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
+    captured: Final[list[httpx.Request]] = []  # mutable-ok: transport spy
+
+    def responder(req: httpx.Request) -> httpx.Response:
+        captured.append(req)
+        if req.url.path == "/v1beta/interactions":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "v1_top_kwargs",
+                    "status": "completed",
+                    "steps": [{"type": "model_output", "content": [{"type": "text", "text": '{"ok": true}'}]}],
+                    "usage": {"total_input_tokens": 5, "total_output_tokens": 3, "total_tokens": 8},
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "GC_OK"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2, "totalTokenCount": 7},
+            },
+        )
+
+    schema: Final = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        http_handler: Final = HTTPHandler(client=raw_client)
+        bridged: Final = litellm.completion(
+            model="gemini/gemini-3-flash-preview",
+            messages=[{"role": "user", "content": "continue"}],
+            use_interactions=True,
+            previous_interaction_id="v1_prev_99",
+            background=True,
+            environment="browser",
+            audio={"voice": "alloy", "format": "pcm16"},
+            response_json_schema=schema,
+            api_key="unit-gemini-key",
+            api_base="https://generativelanguage.googleapis.com",
+            client=http_handler,
+        )
+
+        monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", True)
+        opted_out: Final = litellm.completion(
+            model="gemini/gemini-3-flash-preview",
+            messages=[{"role": "user", "content": "plain chat"}],
+            use_interactions=False,
+            api_key="unit-gemini-key",
+            api_base="https://generativelanguage.googleapis.com",
+            client=http_handler,
+        )
+
+    assert isinstance(bridged, ModelResponse)
+    assert isinstance(opted_out, ModelResponse)
+    assert len(captured) == 2
+    assert captured[0].url.path == "/v1beta/interactions"
+    assert json.loads(captured[0].content) == {
+        "model": "gemini-3-flash-preview",
+        "input": [{"type": "user_input", "content": [{"type": "text", "text": "continue"}]}],
+        "previous_interaction_id": "v1_prev_99",
+        "background": True,
+        "environment": "browser",
+        "response_format": {"type": "text", "mime_type": "application/json", "schema": schema},
+        "generation_config": {"speech_config": [{"voice": "Kore"}]},
+    }
+    assert captured[1].url.path.endswith("/models/gemini-3-flash-preview:generateContent")
+    assert "use_interactions" not in json.loads(captured[1].content)

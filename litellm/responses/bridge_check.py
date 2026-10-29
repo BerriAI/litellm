@@ -1,5 +1,6 @@
 import os
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # moved unchanged from litellm/main.py
 from urllib.parse import urlsplit
 
@@ -32,10 +33,19 @@ ROUTABLE_MODES: Final = frozenset({"chat", "responses", "interactions"})
 _INTERACTIONS_ELIGIBLE_PROVIDERS: Final = frozenset({"gemini", "vertex_ai", "vertex_ai_beta"})
 _INTERACTIONS_ALLOWED_OPENAI_PARAMS: Final = (
     "store",
+    "audio",
     "frequency_penalty",
     "presence_penalty",
     "logprobs",
     "top_logprobs",
+    "previous_interaction_id",
+    "background",
+    "environment",
+    "response_json_schema",
+    "response_schema",
+    "generation_config",
+    "cached_content",
+    "video_metadata",
 )
 _VERTEX_BRIDGE_PARAM_KEYS: Final = (
     "vertex_credentials",
@@ -414,6 +424,24 @@ def resolve_bridge_allowed_openai_params(
         return tuple(existing) if existing is not None else None
     extra_interactions: Final = _INTERACTIONS_ALLOWED_OPENAI_PARAMS if bridges_to_interactions_api else ()
     return (*(existing or ()), "reasoning_effort", *extra_interactions)
+
+
+def strip_interactions_routing_params(raw_params: object) -> Mapping[str, object]:
+    mapped: Final = str_keyed_mapping(raw_params)
+    if mapped is None:
+        return MappingProxyType({})
+    nested_eb: Final = str_keyed_mapping(mapped.get("extra_body"))
+    has_top: Final = "use_interactions" in mapped
+    has_nested: Final = nested_eb is not None and "use_interactions" in nested_eb
+    if not has_top and not has_nested:
+        return mapped
+    without_top: Final = {k: v for k, v in mapped.items() if k not in ("use_interactions", "extra_body")}
+    if nested_eb is None:
+        return MappingProxyType(without_top)
+    cleaned_eb: Final = {k: v for k, v in nested_eb.items() if k != "use_interactions"}
+    if cleaned_eb:
+        return MappingProxyType({**without_top, "extra_body": cleaned_eb})
+    return MappingProxyType(without_top)
 
 
 def _merge_vertex_bridge_params(

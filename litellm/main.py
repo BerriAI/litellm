@@ -1333,6 +1333,7 @@ from litellm.responses.bridge_check import (
     resolve_bridge_allowed_openai_params,
     should_route_to_interactions_api,
     str_keyed_mapping,
+    strip_interactions_routing_params,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     responses_api_bridge_check as responses_api_bridge_check,  # pyright: ignore[reportUnknownVariableType]  # noqa: PLC0414  # re-export of moved function
@@ -5982,6 +5983,9 @@ def completion(
             deployment_model_info=model_info,  # pyright: ignore[reportUnknownArgumentType]  # untyped model_info
             skip_bridge=skip_interactions_api_bridge,  # pyright: ignore[reportUnknownArgumentType]  # untyped skip flag
         )
+        cleaned_provider_params: Final = strip_interactions_routing_params(
+            provider_params  # pyright: ignore[reportUnknownArgumentType]  # untyped provider_params
+        )
         allowed_openai_params: Final = resolve_bridge_allowed_openai_params(
             raw_allowed=kwargs.get("allowed_openai_params"),  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # untyped kwargs
             bridges_to_responses_api=bool(bridges_to_responses_api),  # pyright: ignore[reportUnknownArgumentType]  # untyped responses_api_model_info
@@ -6041,13 +6045,13 @@ def completion(
         }
         provider_reasoning_effort: Final = reasoning_effort_with_summary_alias(
             resolved_reasoning_effort,
-            provider_params,
+            cleaned_provider_params,
             accepts_summary=provider_config is not None
             and provider_config.accepts_reasoning_summary_in_reasoning_effort,
         )
 
         mapping_args: Final = MappingProxyType({**optional_param_args, "reasoning_effort": provider_reasoning_effort})
-        mapping_special_params: Final = MappingProxyType(dict(provider_params))
+        mapping_special_params: Final = MappingProxyType(dict(cleaned_provider_params))
 
         def optional_params_for_model_info(deployment_info: Mapping[str, object] | None) -> dict[str, object]:
             return get_optional_params(**mapping_args, model_info=deployment_info, **mapping_special_params)
@@ -6085,7 +6089,7 @@ def completion(
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,
-            special_params=provider_params,
+            special_params=dict(cleaned_provider_params),
             custom_llm_provider=custom_llm_provider,
             additional_drop_params=kwargs.get("additional_drop_params"),
             remove_sensitive_keys=True,
@@ -6401,7 +6405,7 @@ def completion(
             organization=organization,
             provider_config=provider_config,
             request_params=MappingProxyType(
-                _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **provider_params})
+                _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **cleaned_provider_params})
             ),
             shared_session=shared_session,
             stream=stream,
