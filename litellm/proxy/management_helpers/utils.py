@@ -1,11 +1,11 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime
 from functools import wraps
 from types import MappingProxyType
-from typing import Any, Final, Protocol
+from typing import Any, Final, Protocol, TypeVar, cast
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
@@ -767,19 +767,31 @@ async def _emit_management_endpoint_otel_span(
         )
 
 
-def management_endpoint_wrapper(func):
+_Endpoint: Final = TypeVar("_Endpoint", bound=Callable[..., Awaitable[Any]])
+
+
+def management_endpoint_wrapper(func: _Endpoint) -> _Endpoint:
     """
     This wrapper does the following:
 
     1. Log I/O, Exceptions to OTEL
     2. Create an Audit log for success calls
     """
+    return _wrap_management_endpoint(func, log_payload=True)
 
-    @wraps(func)
+
+def management_endpoint_span_wrapper(func: _Endpoint) -> _Endpoint:
+    """``management_endpoint_wrapper`` without request/response payloads on the span, for
+    endpoints that serialize large or high-frequency responses (e.g. the model list)."""
+    return _wrap_management_endpoint(func, log_payload=False)
+
+
+def _wrap_management_endpoint(endpoint: _Endpoint, *, log_payload: bool) -> _Endpoint:
+    @wraps(endpoint)
     async def wrapper(*args, **kwargs):
         start_time: Final = datetime.now()
         try:
-            result: Final = await func(*args, **kwargs)
+            result: Final = await endpoint(*args, **kwargs)
             end_time = datetime.now()
             try:
                 user_api_key_dict: UserAPIKeyAuth = kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
@@ -787,17 +799,17 @@ def management_endpoint_wrapper(func):
                 await send_management_endpoint_alert(
                     request_kwargs=kwargs,
                     user_api_key_dict=user_api_key_dict,
-                    function_name=func.__name__,
+                    function_name=endpoint.__name__,
                 )
                 parent_otel_span: Span | None = getattr(user_api_key_dict, "parent_otel_span", None)
                 if parent_otel_span is not None:
                     await _emit_management_endpoint_otel_span(
-                        func=func,
+                        func=endpoint,
                         kwargs=kwargs,
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,
-                        result=result,
+                        result=result if log_payload else None,
                     )
 
                 # Delete updated/deleted info from cache
@@ -818,7 +830,7 @@ def management_endpoint_wrapper(func):
             if parent_otel_span is not None:
                 try:
                     await _emit_management_endpoint_otel_span(
-                        func=func,
+                        func=endpoint,
                         kwargs=kwargs,
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
@@ -835,4 +847,4 @@ def management_endpoint_wrapper(func):
 
             raise e
 
-    return wrapper
+    return cast(_Endpoint, wrapper)  # cast-ok: wraps() preserves the endpoint's signature
