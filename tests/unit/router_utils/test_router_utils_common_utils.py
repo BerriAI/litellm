@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from itertools import chain
 from typing import Dict, Final, List, Optional, Union
@@ -15,6 +16,7 @@ from litellm.router_utils.common_utils import (
     add_model_file_id_mappings,
     filter_team_based_models,
     filter_web_search_deployments,
+    pick_preferring_web_search,
     prefer_web_search_deployments,
     format_content_policy_no_fallback_note,
     format_fallback_outcome_message,
@@ -523,8 +525,11 @@ def test_sync_pick_keeps_a_group_without_web_search_for_openai_web_search(routin
 
 
 @pytest.mark.asyncio
-async def test_legacy_usage_based_async_pick_skips_deployments_without_web_search() -> None:
-    router: Final = _router_with_a_deployment_that_disables_web_search("usage-based-routing")
+@pytest.mark.parametrize(
+    "routing_strategy", ["usage-based-routing", "usage-based-routing-v2", "least-busy", "latency-based-routing"]
+)
+async def test_async_strategy_pick_skips_deployments_without_web_search(routing_strategy: str) -> None:
+    router: Final = _router_with_a_deployment_that_disables_web_search(routing_strategy)
     picks: Final = {
         (
             await router.async_get_available_deployment(
@@ -704,6 +709,151 @@ async def test_web_search_request_prefers_the_capable_deployment_inside_its_orde
         for _ in range(20)
     }
     assert picks == {"search"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+async def test_web_search_preference_gives_way_once_the_capable_deployment_failed_this_request(
+    metadata_field: str,
+) -> None:
+    router: Final = _router_with_a_mixed_web_search_group(False)
+    picks: Final = {
+        (
+            await router.async_get_available_deployment(
+                model="mixed",
+                messages=[{"role": "user", "content": "hi"}],
+                request_kwargs={
+                    **_ANTHROPIC_WEB_SEARCH_REQUEST,
+                    metadata_field: {"previous_models": ({"deployment_id": "search", "exception_type": "Timeout"},)},
+                },
+            )
+        )["model_info"]["id"]
+        for _ in range(40)
+    }
+    assert picks == {"search", "no-search"}
+
+
+@pytest.mark.asyncio
+@_WEB_SEARCH_REQUESTS
+async def test_retry_after_a_retryable_failure_on_the_capable_deployment_reaches_the_other_one(
+    web_search_request: dict[str, object],
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "openai/gpt-x",
+                    "api_key": "fake-key",
+                    "mock_response": Exception("connection error"),
+                    "weight": 1,
+                },
+                "model_info": {"id": "search"},
+            },
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "openai/gpt-y", "api_key": "fake-key", "mock_response": "hi", "weight": 10**6},
+                "model_info": {"id": "no-search", "supports_web_search": False},
+            },
+        ],
+        num_retries=1,
+        disable_cooldowns=True,
+    )
+    response: Final = await router.acompletion(
+        model="mixed", messages=[{"role": "user", "content": "hi"}], **web_search_request
+    )
+    assert response._hidden_params["model_id"] == "no-search"
+
+
+def _rate_limited_web_search_group(routing_strategy: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key", "mock_response": "hi", "rpm": 1},
+                "model_info": {"id": "search"},
+            },
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "openai/gpt-y", "api_key": "fake-key", "mock_response": "hi", "rpm": 1000},
+                "model_info": {"id": "no-search", "supports_web_search": False},
+            },
+        ],
+        routing_strategy=routing_strategy,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("routing_strategy", ["usage-based-routing-v2", "cost-based-routing"])
+async def test_web_search_request_goes_to_the_other_deployment_once_the_capable_one_is_at_its_rpm_limit(
+    routing_strategy: str,
+) -> None:
+    router: Final = _rate_limited_web_search_group(routing_strategy)
+    served_by: Final = []  # mutable-ok: collects one id per sequential request
+    for _ in range(3):
+        response = await router.acompletion(
+            model="mixed", messages=[{"role": "user", "content": "hi"}], **_ANTHROPIC_WEB_SEARCH_REQUEST
+        )
+        served_by.append(response._hidden_params["model_id"])
+        await asyncio.sleep(0.2)
+    assert served_by == ["search", "no-search", "no-search"]
+
+
+def test_sync_web_search_request_goes_to_the_other_deployment_once_the_capable_one_is_at_its_rpm_limit() -> None:
+    router: Final = _rate_limited_web_search_group("usage-based-routing-v2")
+    served_by: Final = tuple(
+        router.completion(
+            model="mixed", messages=[{"role": "user", "content": "hi"}], **_ANTHROPIC_WEB_SEARCH_REQUEST
+        )._hidden_params["model_id"]
+        for _ in range(3)
+    )
+    assert served_by == ("search", "no-search", "no-search")
+
+
+def test_sync_pick_falls_back_to_every_deployment_when_the_strategy_finds_none_that_can_search() -> None:
+    deployments: Final = [
+        {"model_info": {"id": "search"}},
+        {"model_info": {"id": "no-search", "supports_web_search": False}},
+    ]
+    picked: Final = pick_preferring_web_search(
+        lambda candidates: next((d for d in candidates if d["model_info"]["id"] == "no-search"), None),
+        deployments,
+        _ANTHROPIC_WEB_SEARCH_REQUEST,
+    )
+    assert picked == deployments[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("search_order", "no_search_order"),
+    [([1], [1]), ({"tier": 1}, None)],
+    ids=["list-order", "dict-order"],
+)
+async def test_web_search_request_routes_on_a_group_whose_order_is_not_a_number(
+    search_order: object, no_search_order: object
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key"},
+                "model_info": {"id": "search", "order": search_order},
+            },
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "openai/gpt-y", "api_key": "fake-key"},
+                "model_info": {
+                    "id": "no-search",
+                    "supports_web_search": False,
+                    **({} if no_search_order is None else {"order": no_search_order}),
+                },
+            },
+        ],
+    )
+    deployment: Final = await router.async_get_available_deployment(
+        model="mixed", messages=[{"role": "user", "content": "hi"}], request_kwargs=dict(_ANTHROPIC_WEB_SEARCH_REQUEST)
+    )
+    assert deployment["model_info"]["id"] == "search"
 
 
 @pytest.mark.asyncio

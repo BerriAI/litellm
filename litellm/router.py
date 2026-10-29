@@ -235,6 +235,7 @@ from litellm.router_utils.clientside_credential_handler import (
 )
 from litellm.router_utils.common_utils import (
     MID_STREAM_CONTINUATION_KWARG,
+    apick_preferring_web_search,
     as_retry_skipped_deployment_ids,
     deployments_the_caller_may_use,
     filter_team_based_models,
@@ -245,6 +246,7 @@ from litellm.router_utils.common_utils import (
     format_no_fallback_group_message,
     get_request_team_id,
     is_proxy_admin_request,
+    pick_preferring_web_search,
     prefer_web_search_deployments,
     provider_for_generic_call,
     request_user_api_key_auth,
@@ -15246,13 +15248,10 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = prefer_web_search_deployments(
-            self._without_declared_text_only_deployments(
-                cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
-                model,
-                messages,
-                cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
-            ),
+        batch_candidates: Final = self._without_declared_text_only_deployments(
+            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+            model,
+            messages,
             cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(
@@ -15535,26 +15534,31 @@ class Router:
                 return healthy_deployments[0]
 
             start_time: Final = time.time()
+            routing_kwargs: Final = cast(Mapping[str, object], request_kwargs)  # cast-ok: str-keyed request kwargs
             if strategy == "simple-shuffle":
                 shuffled: Final = simple_shuffle(
                     resolve_model_alias=self.get_model_from_alias,
-                    healthy_deployments=healthy_deployments,
+                    healthy_deployments=prefer_web_search_deployments(healthy_deployments, routing_kwargs),
                     model=model,
-                    request_kwargs=request_kwargs,
+                    request_kwargs=routing_kwargs,
                 )
                 phase_event(_DEPLOYMENT_SELECTED_EVENT, pick_attributes)
                 return shuffled
             with PrefetchedUsage.scoped(
                 routing_read_batch.prefetched_usage if routing_read_batch is not None else None
             ):
-                deployment: Final = await self._select_deployment_async(
-                    strategy=strategy,
-                    selector=strategy_selector,
-                    model=model,
-                    healthy_deployments=healthy_deployments,
-                    messages=messages,
-                    input=input,
-                    request_kwargs=request_kwargs,
+                deployment: Final = await apick_preferring_web_search(
+                    lambda candidates: self._select_deployment_async(
+                        strategy=strategy,
+                        selector=strategy_selector,
+                        model=model,
+                        healthy_deployments=candidates,
+                        messages=messages,
+                        input=input,
+                        request_kwargs=request_kwargs,
+                    ),
+                    cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+                    routing_kwargs,
                 )
             if deployment is None:
                 exception: Final = await async_raise_no_deployment_exception(
@@ -16481,13 +16485,10 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = prefer_web_search_deployments(
-            self._without_declared_text_only_deployments(
-                cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
-                model,
-                messages,
-                cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
-            ),
+        batch_candidates: Final = self._without_declared_text_only_deployments(
+            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+            model,
+            messages,
             cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(
@@ -16575,20 +16576,24 @@ class Router:
             ############## Check 'weight' param set for weighted pick #################
             shuffled: Final = simple_shuffle(
                 resolve_model_alias=self.get_model_from_alias,
-                healthy_deployments=healthy_deployments,
+                healthy_deployments=prefer_web_search_deployments(healthy_deployments, routing_kwargs),
                 model=model,
-                request_kwargs=request_kwargs,
+                request_kwargs=routing_kwargs,
             )
             phase_event(_DEPLOYMENT_SELECTED_EVENT, pick_attributes)
             return shuffled
-        deployment: Final = self._select_deployment_sync(
-            strategy=strategy,
-            selector=strategy_selector,
-            model=model,
-            healthy_deployments=healthy_deployments,
-            messages=messages,
-            input=input,
-            request_kwargs=request_kwargs,
+        deployment: Final = pick_preferring_web_search(
+            lambda candidates: self._select_deployment_sync(
+                strategy=strategy,
+                selector=strategy_selector,
+                model=model,
+                healthy_deployments=candidates,
+                messages=messages,
+                input=input,
+                request_kwargs=request_kwargs,
+            ),
+            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+            routing_kwargs,
         )
 
         if deployment is None:

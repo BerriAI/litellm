@@ -1,6 +1,6 @@
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
@@ -33,6 +33,8 @@ from litellm.types.utils import (
 )
 
 _V = TypeVar("_V")
+_Picked: Final = TypeVar("_Picked")
+_DeploymentT: Final = TypeVar("_DeploymentT", bound=dict[str, object])
 
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
@@ -53,6 +55,9 @@ _DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] =
     tuple[Mapping[str, object], ...]
 )
 _DEPLOYMENT_IDS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_RETRY_BREADCRUMBS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
+    tuple[Mapping[str, object], ...]
+)
 _FALLBACK_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
@@ -493,10 +498,31 @@ def _deployment_id(deployment: Mapping[str, object]) -> object:
     return None if model_info is None else model_info.get("id")
 
 
+def _retry_breadcrumbs(metadata: object) -> tuple[Mapping[str, object], ...]:
+    fields: Final = as_str_mapping(metadata)
+    breadcrumbs: Final = None if fields is None else fields.get("previous_models")
+    if breadcrumbs is None:
+        return ()
+    try:
+        return _RETRY_BREADCRUMBS_ADAPTER.validate_python(breadcrumbs)
+    except ValidationError:
+        return ()
+
+
+def _deployment_ids_retried_in_request(request_kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    breadcrumbs: Final = (
+        *_retry_breadcrumbs(request_kwargs.get("metadata")),
+        *_retry_breadcrumbs(request_kwargs.get("litellm_metadata")),
+    )
+    return tuple(
+        deployment_id for breadcrumb in breadcrumbs if isinstance(deployment_id := breadcrumb.get("deployment_id"), str)
+    )
+
+
 def prefer_web_search_deployments(
-    deployments: list[dict[str, object]],  # mutable-ok: router deployment-list contract
+    deployments: list[_DeploymentT],  # mutable-ok: router deployment-list contract
     request_kwargs: Mapping[str, object] | None,
-) -> list[dict[str, object]]:  # mutable-ok: returns a mutable deployment list
+) -> list[_DeploymentT]:  # mutable-ok: returns a mutable deployment list
     if request_kwargs is None or not _is_web_search_request(
         request_kwargs.get("tools"), request_kwargs.get("web_search_options")
     ):
@@ -505,10 +531,11 @@ def prefer_web_search_deployments(
         (
             *as_excluded_deployment_ids(request_kwargs.get("_excluded_deployment_ids")),
             *as_retry_skipped_deployment_ids(request_kwargs.get("_retry_skipped_deployment_ids")),
+            *_deployment_ids_retried_in_request(request_kwargs),
         )
     )
     untried: Final = (d for d in deployments if _deployment_id(d) not in tried)
-    orders_with_an_untried_capable_deployment: Final = frozenset(
+    orders_with_an_untried_capable_deployment: Final = tuple(
         litellm.utils.get_deployment_order(d) for d in untried if _deployment_supports_web_search(d)
     )
     if not orders_with_an_untried_capable_deployment:
@@ -520,6 +547,36 @@ def prefer_web_search_deployments(
         if _deployment_supports_web_search(d)
         or litellm.utils.get_deployment_order(d) not in orders_with_an_untried_capable_deployment
     ]
+
+
+def pick_preferring_web_search(
+    pick: Callable[[list[_DeploymentT]], _Picked | None],  # mutable-ok: router deployment-list contract
+    deployments: list[_DeploymentT],  # mutable-ok: router deployment-list contract
+    request_kwargs: Mapping[str, object] | None,
+) -> _Picked | None:
+    preferred: Final = prefer_web_search_deployments(deployments, request_kwargs)
+    if len(preferred) == len(deployments):
+        return pick(deployments)
+    try:
+        from_preferred: Final = pick(preferred)
+    except (litellm.RateLimitError, ValueError):
+        return pick(deployments)
+    return from_preferred if from_preferred is not None else pick(deployments)
+
+
+async def apick_preferring_web_search(
+    pick: Callable[[list[_DeploymentT]], Awaitable[_Picked | None]],  # mutable-ok: router deployment-list contract
+    deployments: list[_DeploymentT],  # mutable-ok: router deployment-list contract
+    request_kwargs: Mapping[str, object] | None,
+) -> _Picked | None:
+    preferred: Final = prefer_web_search_deployments(deployments, request_kwargs)
+    if len(preferred) == len(deployments):
+        return await pick(deployments)
+    try:
+        from_preferred: Final = await pick(preferred)
+    except (litellm.RateLimitError, ValueError):
+        return await pick(deployments)
+    return from_preferred if from_preferred is not None else await pick(deployments)
 
 
 # Credential params that only one provider family reads, paired with the providers
