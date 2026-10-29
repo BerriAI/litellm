@@ -48688,7 +48688,9 @@ export interface components {
             allowed_fails?: number | null;
             /** Content Policy Fallbacks */
             content_policy_fallbacks?: {
-                [key: string]: string[];
+                [key: string]: (string | {
+                    [key: string]: components["schemas"]["JsonValue"];
+                })[];
             }[] | null;
             /** Context Window Fallbacks */
             context_window_fallbacks?: {

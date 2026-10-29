@@ -703,6 +703,9 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 )
 from litellm.proxy.management_endpoints.daily_activity_routes import router as daily_activity_router
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
+    apply_content_policy_fallbacks,
+)
+from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     router as fallback_management_router,
 )
 from litellm.proxy.management_endpoints.gateway_request_endpoints import (
@@ -8094,7 +8097,11 @@ class ProxyConfig:
 
     @staticmethod
     def _apply_router_settings(llm_router: Router, router_settings: Mapping[str, object]) -> None:
-        llm_router.update_settings(**{k: v for k, v in router_settings.items() if k != "routing_groups"})
+        llm_router.update_settings(
+            **{k: v for k, v in router_settings.items() if k not in ("routing_groups", "content_policy_fallbacks")}
+        )
+        if "content_policy_fallbacks" in router_settings:
+            apply_content_policy_fallbacks(llm_router, router_settings["content_policy_fallbacks"])
         if "routing_groups" not in router_settings:
             return
         try:

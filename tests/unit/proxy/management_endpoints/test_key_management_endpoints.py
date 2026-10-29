@@ -7597,6 +7597,7 @@ async def test_generate_key_with_router_settings(monkeypatch):
         "num_retries": 3,
         "model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}},
         "weights": {"gpt-4": {"weighted-id": 1}},
+        "content_policy_fallbacks": [{"gpt-4": ["gpt-4o", {"model": "gpt-4o-mini", "temperature": 0}]}],
     }
 
     request_data = GenerateKeyRequest(

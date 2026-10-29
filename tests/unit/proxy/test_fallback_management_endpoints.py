@@ -19,6 +19,7 @@ import pytest
 from fastapi import HTTPException
 from pydantic import JsonValue, TypeAdapter
 
+import litellm
 from litellm import Router
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     FallbackCreateRequest,
@@ -330,6 +331,31 @@ class TestFallbackWritesSeeTheLatestStoredRules:
 
         assert stored.stored_fallbacks() == [TEAM_RULE, GATEWAY_RULE]
         assert await stored.cached_fallbacks() == [TEAM_RULE, GATEWAY_RULE]
+
+    async def test_content_policy_writes_keep_the_litellm_settings_rules_for_other_models(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "content_policy_fallbacks", [TEAM_RULE])
+        router: Final = _team_router()
+        stored: Final = _StoredRouterSettings(None)
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
+            patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            await create_fallback(
+                FallbackCreateRequest(
+                    model="gpt-5.4-mini", fallback_models=["team-fallback"], fallback_type="content_policy"
+                ),
+                MagicMock(),
+            )
+            after_create: Final = await get_fallback("team-primary", "content_policy", MagicMock())
+            await delete_fallback("gpt-5.4-mini", "content_policy", MagicMock())
+            after_delete: Final = await get_fallback("team-primary", "content_policy", MagicMock())
+
+        assert after_create.fallback_models == ["team-fallback"]
+        assert after_delete.fallback_models == ["team-fallback"]
 
     async def test_a_create_keeps_a_rule_another_instance_stored_since_this_one_last_read(self) -> None:
         stored: Final = _StoredRouterSettings({})

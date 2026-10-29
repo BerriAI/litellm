@@ -185,6 +185,9 @@ OptionalPreCallChecks = list[
 ]
 
 
+ContentPolicyFallbackRules: TypeAlias = Sequence[Mapping[str, Sequence[str | Mapping[str, JsonValue]]]]
+
+
 class UpdateRouterConfig(LiteLLMBaseModel):
     """
     Set of params that you can modify via `router.update_settings()`.
@@ -204,7 +207,7 @@ class UpdateRouterConfig(LiteLLMBaseModel):
     retry_after: float | None = None
     fallbacks: list[dict] | None = None
     context_window_fallbacks: list[dict] | None = None
-    content_policy_fallbacks: Sequence[Mapping[str, Sequence[str]]] | None = None
+    content_policy_fallbacks: ContentPolicyFallbackRules | None = None
     model_group_alias: dict[str, str | dict] | None = Field(default={})
     enable_tag_filtering: bool | None = None
     weights: RouterWeights | None = None

@@ -14,8 +14,9 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Annotated, Final, Literal
 
-from pydantic import Field, JsonValue, TypeAdapter
+from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.model_checks import get_all_fallbacks
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
     from fastapi import APIRouter, Depends, HTTPException, status
 
     from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.router import Router
 else:
     try:
         from fastapi import APIRouter, Depends, HTTPException, status
@@ -40,6 +42,7 @@ from litellm.types.management_endpoints.router_settings_endpoints import (
     FallbackGetResponse,
     FallbackResponse,
 )
+from litellm.types.router import ContentPolicyFallbackRules
 
 router: Final = APIRouter()
 
@@ -48,10 +51,42 @@ FallbackRule = dict[str, list[str]]
 StoredFallback = Annotated[FallbackRule | dict[str, object] | str, Field(union_mode="left_to_right")]
 _STORED_FALLBACKS: Final = TypeAdapter(list[StoredFallback])
 _JSON_RULES: Final = TypeAdapter(list[JsonValue])
+_CONTENT_POLICY_FALLBACK_RULES: Final = TypeAdapter(ContentPolicyFallbackRules)
 
 
 def _rule_covers(entry: StoredFallback, model: str) -> bool:
     return isinstance(entry, dict) and model in entry
+
+
+def _layered_over_config_rules(
+    runtime_rules: ContentPolicyFallbackRules, config_rules: ContentPolicyFallbackRules
+) -> ContentPolicyFallbackRules:
+    covered: Final = frozenset[str]().union(*runtime_rules)
+    return [*runtime_rules, *(rule for rule in config_rules if covered.isdisjoint(rule))]
+
+
+def apply_content_policy_fallbacks(llm_router: "Router", rules: object) -> None:
+    try:
+        runtime_rules: Final = _CONTENT_POLICY_FALLBACK_RULES.validate_python(rules)
+        config_rules: Final = _CONTENT_POLICY_FALLBACK_RULES.validate_python(
+            litellm.content_policy_fallbacks or []  # pyright: ignore[reportUnknownMemberType]  # untyped module list
+        )
+    except ValidationError as invalid_rules:
+        verbose_proxy_logger.error(
+            "Ignoring invalid content_policy_fallbacks from config/DB, all other router settings still apply. "
+            "Fix the content policy fallbacks in the Admin UI or config to load them: %s",
+            invalid_rules,
+        )
+        return
+    layered_rules: Final = _layered_over_config_rules(runtime_rules, config_rules)
+    llm_router.update_settings(content_policy_fallbacks=layered_rules)  # pyright: ignore[reportUnknownMemberType]  # untyped kwargs
+
+
+def _apply_fallback_rules(llm_router: "Router", fallback_key: str, rules: Sequence[StoredFallback]) -> None:
+    if fallback_key == "content_policy_fallbacks":
+        apply_content_policy_fallbacks(llm_router, rules)
+        return
+    setattr(llm_router, fallback_key, rules)
 
 
 async def _router_settings_fresh_from_db(proxy_config: "ProxyConfig") -> dict[str, object]:
@@ -195,7 +230,7 @@ async def create_fallback(
         await _persist_router_settings(prisma_client, router_settings)
 
         # Update the in-memory router configuration
-        setattr(llm_router, fallback_key, existing_fallbacks)
+        _apply_fallback_rules(llm_router, fallback_key, existing_fallbacks)
 
         verbose_proxy_logger.info(
             "Fallback configured: %s -> %s (type: %s)", data.model, data.fallback_models, data.fallback_type
@@ -348,7 +383,7 @@ async def delete_fallback(
         await _persist_router_settings(prisma_client, router_settings)
 
         # Update the in-memory router configuration
-        setattr(llm_router, fallback_key, updated_fallbacks)
+        _apply_fallback_rules(llm_router, fallback_key, updated_fallbacks)
 
         verbose_proxy_logger.info("Fallback deleted: %s (type: %s)", model, fallback_type)
 

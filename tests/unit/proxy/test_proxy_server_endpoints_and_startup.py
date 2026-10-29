@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import types
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
@@ -5581,6 +5582,92 @@ async def test_valid_db_routing_groups_still_replace_router_groups():
     assert router._get_routing_context("m2", None)[0] == "least-busy"
 
 
+def _content_policy_router(**router_kwargs: object) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "primary answered"},
+            },
+            {
+                "model_name": "secondary",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "secondary answered"},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "fake", "mock_response": "backup answered"},
+            },
+        ],
+        num_retries=0,
+        **router_kwargs,
+    )
+
+
+def _router_settings_row(content_policy_fallbacks: object) -> MagicMock:
+    row: Final = MagicMock()
+    row.param_value = {"allowed_fails": 7, "content_policy_fallbacks": content_policy_fallbacks}
+    prisma: Final = MagicMock()
+    prisma.db.litellm_config.find_first = AsyncMock(return_value=row)
+    return prisma
+
+
+async def _answer_after_content_policy_refusal(router: litellm.Router, model: str = "primary") -> str | None:
+    response: Final = await router.acompletion(
+        model=model, messages=[{"role": "user", "content": "hi"}], mock_testing_content_policy_fallbacks=True
+    )
+    return response.choices[0].message.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_target", ["backup", {"model": "backup"}])
+async def test_db_content_policy_fallbacks_reach_the_router(stored_target: str | dict[str, str]):
+    router: Final = _content_policy_router()
+
+    await proxy_server_module.ProxyConfig()._add_router_settings_from_db_config(
+        llm_router=router, prisma_client=_router_settings_row([{"primary": [stored_target]}])
+    )
+
+    assert await _answer_after_content_policy_refusal(router) == "backup answered"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("litellm_settings_rules", "stored_rules", "refused_model"),
+    [
+        ([{"secondary": ["backup"]}], [{"primary": ["backup"]}], "secondary"),
+        ([{"*": ["secondary"]}], [{"*": ["backup"]}], "primary"),
+        ([{"primary": ["backup"]}], [], "primary"),
+    ],
+)
+async def test_db_content_policy_fallbacks_layer_over_the_litellm_settings_rules(
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_settings_rules: list[dict[str, list[str]]],
+    stored_rules: list[dict[str, list[str]]],
+    refused_model: str,
+):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", litellm_settings_rules)
+    router: Final = _content_policy_router()
+
+    await proxy_server_module.ProxyConfig()._add_router_settings_from_db_config(
+        llm_router=router, prisma_client=_router_settings_row(stored_rules)
+    )
+
+    assert await _answer_after_content_policy_refusal(router, refused_model) == "backup answered"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_rules", ["oops", [{"primary": "backup"}], [["backup"]]])
+async def test_invalid_db_content_policy_fallbacks_keep_the_router_rules(stored_rules: object):
+    router: Final = _content_policy_router(content_policy_fallbacks=[{"primary": ["backup"]}])
+
+    await proxy_server_module.ProxyConfig()._add_router_settings_from_db_config(
+        llm_router=router, prisma_client=_router_settings_row(stored_rules)
+    )
+
+    assert router.allowed_fails == 7
+    assert await _answer_after_content_policy_refusal(router) == "backup answered"
+
+
 @pytest.mark.asyncio
 async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_config_fallbacks():
     """
@@ -5589,6 +5676,7 @@ async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_
     empty lists are "no value" and must not clobber config.yaml fallbacks,
     matching _deep_merge_dicts semantics. Non-empty DB lists still win.
     """
+    from collections import ChainMap
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.proxy_server import ProxyConfig
@@ -5623,7 +5711,7 @@ async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_
         prisma_client=mock_prisma_client,
     )
 
-    combined_settings = mock_router.update_settings.call_args.kwargs
+    combined_settings = ChainMap(*(call.kwargs for call in reversed(mock_router.update_settings.call_args_list)))
     assert combined_settings["fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
     assert combined_settings["context_window_fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
     assert combined_settings["content_policy_fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
@@ -9962,9 +10050,11 @@ def test_update_config_accepts_disjoint_routing_groups(_update_config_setup):
         restore()
 
 
-def test_update_config_validates_content_policy_fallbacks_like_fallbacks(_update_config_setup):
+def test_update_config_validates_content_policy_fallbacks_like_fallbacks(
+    _update_config_setup: Callable[..., tuple[TestClient, _FakePrismaClient, Callable[[], None]]],
+):
     client, prisma, restore = _update_config_setup(initial_rows={"router_settings": {"num_retries": 2}})
-    rule: Final = [{"gpt-5.4-mini": ["gpt-5.4-nano"]}]
+    rule: Final = [{"gpt-5.4-mini": ["gpt-5.4-nano", {"model": "gpt-5.4-nano", "temperature": 1}]}]
     malformed: Final = ("oops", 5, [1, 2], [{"gpt-5.4-mini": "gpt-5.4-nano"}], [{"gpt-5.4-mini": ["gpt-5.4-nano", 7]}])
     try:
         rejected: Final = tuple(

@@ -10071,9 +10071,10 @@ class TestResolveUserProviderCredentials:
         assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
 
     @pytest.mark.asyncio
-    async def test_key_router_settings_fallback_loads_per_user_tokens(self, monkeypatch):
-        """The proxy prefers key/team router_settings.fallbacks over router-level
-        fallbacks (_configured_fallbacks), so discovery must read them too."""
+    @pytest.mark.parametrize("fallback_key", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+    async def test_key_router_settings_fallback_loads_per_user_tokens(self, monkeypatch, fallback_key):
+        """The proxy forwards key/team router_settings fallback lists into the
+        request after discovery, so discovery must read every one of them."""
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table = self._env(monkeypatch)
@@ -10103,7 +10104,7 @@ class TestResolveUserProviderCredentials:
             authenticated_user_id="user-a",
             team_id=None,
             llm_router=router,
-            router_settings={"fallbacks": [{"gpt-4o": [{"model": "copilot-chat"}]}]},
+            router_settings={fallback_key: [{"gpt-4o": [{"model": "copilot-chat"}]}]},
         )
         table.find_many.assert_awaited()
         assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
