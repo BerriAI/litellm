@@ -2006,6 +2006,7 @@ async def test_streamable_http_session_manager_is_stateless():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("debug", (False, True))
+@pytest.mark.parametrize("role,diagnostics_allowed", [("proxy_admin", True), ("internal_user", False), (None, False)])
 @pytest.mark.parametrize(
     ("method", "request_body", "stateful"),
     (
@@ -2017,7 +2018,13 @@ async def test_streamable_http_session_manager_is_stateless():
     ),
 )
 async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(
-    _mcp_request_ctx, debug: bool, method: str, request_body: bytes, stateful: bool
+    _mcp_request_ctx,
+    debug: bool,
+    role: str | None,
+    diagnostics_allowed: bool,
+    method: str,
+    request_body: bytes,
+    stateful: bool,
 ) -> None:
     from starlette.requests import Request
     from starlette.types import Message, Receive, Scope, Send
@@ -2050,7 +2057,7 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(
             "litellm.proxy.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(
-                UserAPIKeyAuth(user_id="debug-user"),
+                UserAPIKeyAuth(user_id="debug-user", user_role=role),
                 None,
                 None,
                 None,
@@ -2072,12 +2079,12 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(
 
     assert stateful_handle.await_count == (1 if stateful else 0)
     assert stateless_handle.await_count == (0 if stateful else 1)
-    observe_start.assert_awaited_once_with(0 if debug and method == "POST" else 1)
+    observe_start.assert_awaited_once_with(0 if debug and diagnostics_allowed and method == "POST" else 1)
     assert send.await_count == 2
     assert send.call_args_list[0].args[0]["status"] == 200
     assert send.call_args_list[1].args[0] == body
     headers: Final = dict(send.call_args_list[0].args[0]["headers"])
-    if debug:
+    if debug and diagnostics_allowed:
         assert headers[b"x-mcp-debug-auth-resolution"] == (b"stored-user-token" if method == "POST" else b"unresolved")
     else:
         assert not any(name.startswith(b"x-mcp-debug") for name in headers)

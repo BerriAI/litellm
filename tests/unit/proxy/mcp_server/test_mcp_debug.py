@@ -9,6 +9,7 @@ import httpx
 import pytest
 from starlette.types import Message
 
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.mcp_debug import (
     MCP_DEBUG_REQUEST_HEADER,
     MCPAuthDiagnostics,
@@ -16,6 +17,43 @@ from litellm.proxy.mcp_server.mcp_debug import (
     describe_upstream_http_failure,
 )
 from litellm.proxy.mcp_server.outbound_credentials.types import AuthResolution
+
+
+def test_mcp_debug_requires_authenticated_admin() -> None:
+    headers: Final = MCPDebug.maybe_build_debug_headers(
+        raw_headers={MCP_DEBUG_REQUEST_HEADER: "true"},
+        scope={"type": "http", "headers": []},
+        mcp_servers=None,
+        oauth2_headers=None,
+        client_ip=None,
+    )
+    assert headers == {}
+
+
+@pytest.mark.parametrize(
+    "role,enabled,expected",
+    [
+        ("proxy_admin", True, True),
+        ("proxy_admin_viewer", True, True),
+        ("proxy_admin", False, False),
+        ("internal_user", True, False),
+        ("internal_user_viewer", True, False),
+        ("org_admin", True, False),
+        (None, True, False),
+    ],
+)
+def test_mcp_debug_uses_authenticated_role(role: str | None, enabled: bool, expected: bool) -> None:
+    headers: Final = MCPDebug.maybe_build_debug_headers(
+        raw_headers={MCP_DEBUG_REQUEST_HEADER: str(enabled), "user-role": "proxy_admin"},
+        scope={"type": "http", "headers": []},
+        mcp_servers=None,
+        oauth2_headers=None,
+        client_ip=None,
+        user_api_key_auth=UserAPIKeyAuth(user_role=role, metadata={"user_role": "proxy_admin"}),
+    )
+    assert bool(headers) is expected
+    assert ("x-mcp-debug-auth-resolution" in headers) is expected
+    assert ("x-mcp-debug-outbound-url" in headers) is expected
 
 
 class TestIsDebugEnabled:
