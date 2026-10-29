@@ -22,7 +22,9 @@ import json
 import asyncio
 import logging
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
@@ -3857,3 +3859,104 @@ async def test_model_list_return_wildcard_routes_defaults_to_general_setting(
 
     assert "gpt-6.1-sol" in listed, listed
     assert ("openai/*" in listed) is wildcard_listed, listed
+
+
+_DEBUG_LOG_SENTINEL: Final = "sentinel-request-body-7f3a"
+_LONG_PROMPT: Final = f"{_DEBUG_LOG_SENTINEL} " + "Keep edits minimal and explain them briefly. " * 20
+_TOOL_PARAMETERS: Final = {"type": "object", "properties": {"cmd": {"type": "string"}}}
+
+
+class _MessageCollector(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.messages: list[str] = []  # mutable-ok: a logging.Handler collects records as they are emitted
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+@pytest.mark.parametrize(
+    "route, path_suffix, body, upstream_json",
+    [
+        (
+            "/v1/chat/completions",
+            "/chat/completions",
+            {
+                "model": "test_openai_models",
+                "messages": [{"role": "user", "content": _LONG_PROMPT}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "shell", "description": _LONG_PROMPT, "parameters": _TOOL_PARAMETERS},
+                    }
+                ],
+            },
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-3.5-turbo",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        ),
+        (
+            "/v1/responses",
+            "/responses",
+            {
+                "model": "test_openai_models",
+                "instructions": _LONG_PROMPT,
+                "input": "hi",
+                "tools": [
+                    {"type": "function", "name": "shell", "description": _LONG_PROMPT, "parameters": _TOOL_PARAMETERS}
+                ],
+            },
+            {
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-3.5-turbo",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        ),
+    ],
+)
+def test_detailed_debug_logs_request_body_only_as_received_and_as_sent(
+    client_no_auth: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    path_suffix: str,
+    body: Mapping[str, object],
+    upstream_json: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__regex=rf".*{path_suffix}$").mock(return_value=httpx.Response(200, json=upstream_json))
+    collector: Final = _MessageCollector()
+    loggers: Final = tuple(logging.getLogger(name) for name in ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy"))
+    original_levels: Final = tuple(lg.level for lg in loggers)
+    for lg in loggers:
+        lg.addHandler(collector)
+        lg.setLevel(logging.DEBUG)
+    try:
+        response: Final = client_no_auth.post(route, json=body)
+    finally:
+        for lg, level in zip(loggers, original_levels):
+            lg.removeHandler(collector)
+            lg.setLevel(level)
+
+    assert response.status_code == 200, response.text
+    body_dumps: Final = [message for message in collector.messages if _DEBUG_LOG_SENTINEL in message]
+    assert len(body_dumps) == 2, [message[:120] for message in body_dumps]
+    assert body_dumps[0].startswith("Request received by LiteLLM:")
+    assert "POST Request Sent from LiteLLM" in body_dumps[1]
