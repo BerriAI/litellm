@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - "litellm_**"
     paths:
       - ci_cd/cost_map_pins.json
 
