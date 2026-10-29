@@ -73,7 +73,6 @@ def _tool_output(client_event: Mapping[str, object], item: Mapping[str, object])
 
 
 def realtime_guarded_item(client_event: Mapping[str, object]) -> RealtimeGuardedItem | None:
-    """The client-controlled text a pre_call guardrail checks before a conversation.item.create reaches the model."""
     if client_event.get("type") != "conversation.item.create":
         return None
     item: Final = _json_object(client_event.get("item"))
@@ -130,7 +129,6 @@ async def realtime_guardrail_block(
     user_api_key_dict: object | None,
     callbacks: Iterable[object],
 ) -> RealtimeGuardrailBlock | None:
-    """The first block any guardrail registered for ``event_hooks`` raises on realtime ``text``, or None when clean."""
     from litellm.integrations.custom_guardrail import CustomGuardrail
 
     check_data: Final = {**request_data, "transcript": text, "stream": True}
@@ -158,8 +156,9 @@ def guardrail_violation_error_event(message: str) -> str:
 
 
 def guardrail_voice_prompt_events(message: str) -> tuple[str, str]:
-    """The client events that make the model say the violation ``message`` aloud as its next response."""
-    prompt: Final = f"Say exactly the following message to the user, word for word, do not add anything else: {message}"
+    prompt: Final = (
+        f'Say exactly the following message to the user, word for word, do not add anything else: "{message}"'
+    )
     return (
         json.dumps(
             {

@@ -1362,7 +1362,7 @@ class TestBedrockRealtimeGuardrails:
         )
 
         assert "hunter2" not in json.dumps(self._bedrock_events(stream))
-        assert [self.VIOLATION in text for text in self._text_inputs(stream)] == [True]
+        assert [f'"{self.VIOLATION}"' in text for text in self._text_inputs(stream)] == [True]
         assert self._guardrail_errors(client_ws) == [
             {"type": "guardrail_violation", "message": self.VIOLATION, "code": "content_policy_violation"}
         ]
@@ -1381,7 +1381,7 @@ class TestBedrockRealtimeGuardrails:
         assert guardrail.checked == [((self.CLEAN_TEXT,), None)]
 
     @pytest.mark.asyncio
-    async def test_blocked_tool_output_is_replaced_before_the_violation_is_voiced(self, stub_aws_models):
+    async def test_blocked_tool_output_is_replaced_and_answered_by_the_model_itself(self, stub_aws_models):
         tool_output: Final = json.dumps(
             {
                 "type": "conversation.item.create",
@@ -1389,7 +1389,7 @@ class TestBedrockRealtimeGuardrails:
             }
         )
 
-        stream, client_ws = await self._forward_client([tool_output], self._guardrail())
+        stream, client_ws = await self._forward_client([tool_output, self.RESPONSE_CREATE], self._guardrail())
 
         events: Final = self._bedrock_events(stream)
         assert "hunter2" not in json.dumps(events)
@@ -1399,11 +1399,9 @@ class TestBedrockRealtimeGuardrails:
             event["contentStart"] for event in events if event.get("contentStart", {}).get("type") == "TOOL"
         ]
         assert [start["toolResultInputConfiguration"]["toolUseId"] for start in tool_starts] == ["tool_1"]
-        voice_index: Final = next(
-            i for i, event in enumerate(events) if self.VIOLATION in event.get("textInput", {}).get("content", "")
-        )
-        assert tool_result_index < voice_index
+        assert self._text_inputs(stream) == []
         assert [error["message"] for error in self._guardrail_errors(client_ws)] == [self.VIOLATION]
+        assert any("audioInput" in event for event in events[tool_result_index:]), "the client's response.create runs"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

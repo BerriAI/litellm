@@ -35,7 +35,6 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.realtime_guardrails import (
     RealtimeGuardrailBlock,
     RealtimeToolOutput,
-    RealtimeUserText,
     guardrail_violation_error_event,
     guardrail_voice_prompt_events,
     realtime_guarded_item,
@@ -315,7 +314,6 @@ async def _reject_session_update(
 
 
 async def _send_guardrail_violation(client_ws: RealtimeClientWebSocket, block: RealtimeGuardrailBlock) -> bool:
-    """Tell the client a guardrail blocked its input; False means the client is gone."""
     try:
         await client_ws.send_text(guardrail_violation_error_event(block.message))
     except Exception as e:  # noqa: BLE001  # any send failure means the client is gone
@@ -395,14 +393,14 @@ class BedrockRealtimeGuardrails:
         if self._ends_session(block):
             await _end_guarded_session(client_ws)
             return _ClientEventRoute.END_SESSION
+        if isinstance(guarded_item, RealtimeToolOutput):
+            return _ClientEventRoute.DROP
         for voice_prompt_event in guardrail_voice_prompt_events(block.message):
             await forward_to_bedrock(voice_prompt_event)
-        if isinstance(guarded_item, RealtimeUserText):
-            self._drop_next_response_create = True
+        self._drop_next_response_create = True
         return _ClientEventRoute.DROP
 
     def hides(self, provider_event: Mapping[str, object]) -> bool:
-        """Whether ``provider_event`` belongs to the assistant turn answering a blocked user transcript."""
         event_type: Final = provider_event.get("type")
         if not self._hiding_response or not isinstance(event_type, str) or not event_type.startswith("response."):
             return False
@@ -416,7 +414,6 @@ class BedrockRealtimeGuardrails:
     async def continues_after(
         self, provider_event: Mapping[str, object], client_ws: RealtimeClientWebSocket, client_audio_streamed: bool
     ) -> bool:
-        """False when a guardrail blocked the user transcript in ``provider_event`` and the session must end."""
         from litellm.types.guardrails import GuardrailEventHooks
 
         transcript: Final = provider_event.get("transcript")
