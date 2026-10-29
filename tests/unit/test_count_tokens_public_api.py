@@ -203,3 +203,32 @@ def test_acount_tokens_sends_chat_tool_use_to_anthropic_in_the_shape_claude_infe
     assert sent["tools"] == [{"name": "get_weather", "input_schema": schema, "type": "custom"}]
     assert [message["role"] for message in sent["messages"]] == ["user", "assistant", "user"]
     assert sent["messages"][2]["content"] == [{"type": "tool_result", "tool_use_id": "call_1", "content": "sunny"}]
+
+
+def test_acount_tokens_adds_the_cost_map_framing_to_an_xai_count(httpx_transport_clients):
+    with respx.mock(assert_all_called=True) as router:
+        router.post("https://api.x.ai/v1/tokenize-text").mock(
+            return_value=httpx.Response(200, json={"token_ids": [{"token_id": i} for i in range(5)]})
+        )
+        result = asyncio.run(
+            litellm.acount_tokens(model="xai/grok-4.7", messages=[{"role": "user", "content": "hi"}], api_key="k")
+        )
+
+    framing = litellm.get_model_info("xai/grok-4.7")["token_count_framing"]
+    assert isinstance(framing, int) and framing > 0
+    assert (result.total_tokens, result.tokenizer_type) == (5 + framing, "xai_api")
+
+
+def test_acount_tokens_estimates_an_xai_model_without_known_framing_locally(httpx_transport_clients):
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post("https://api.x.ai/v1/tokenize-text").mock(
+            return_value=httpx.Response(200, json={"token_ids": [{"token_id": i} for i in range(5)]})
+        )
+        result = asyncio.run(
+            litellm.acount_tokens(
+                model="xai/grok-not-in-the-cost-map", messages=[{"role": "user", "content": "hi"}], api_key="k"
+            )
+        )
+
+    assert route.call_count == 0
+    assert result.tokenizer_type == "local_tokenizer"

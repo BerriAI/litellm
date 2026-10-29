@@ -166,6 +166,21 @@ async def test_without_an_xai_key_it_answers_401_and_sends_nothing() -> None:
     assert xai.requests == ()
 
 
+@pytest.mark.asyncio
+async def test_an_xai_deployment_without_a_key_falls_back_to_the_local_estimate() -> None:
+    xai: Final = _XAI(_tokens(4))
+
+    result: Final = await _counter(xai).count_tokens(
+        model_to_use="xai/grok-4.7",
+        messages=HI,
+        contents=None,
+        deployment={"litellm_params": {"model": "xai/grok-4.7", "use_xai_oauth": True}},
+    )
+
+    assert result is None
+    assert xai.requests == ()
+
+
 def _refuse(request: httpx.Request) -> httpx.Response:
     raise httpx.ReadError("connection reset", request=request)
 
@@ -176,7 +191,7 @@ def _refuse(request: httpx.Request) -> httpx.Response:
         (lambda request: httpx.Response(429, text="slow down", request=request), 429, "slow down"),
         (lambda request: httpx.Response(503, request=request), 503, "answered 503"),
         (lambda request: httpx.Response(200, json={"tokens": []}, request=request), 502, "ValidationError"),
-        (lambda request: httpx.Response(200, text="<html>", request=request), 502, "JSONDecodeError"),
+        (lambda request: httpx.Response(200, text="<html>", request=request), 502, "ValidationError"),
         (_refuse, 502, "ReadError"),
     ],
     ids=["provider_error", "empty_error_body", "unexpected_shape", "not_json", "unreachable"],

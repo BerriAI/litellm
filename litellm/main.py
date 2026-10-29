@@ -9344,8 +9344,15 @@ async def acount_tokens(
 
         if provider_model_info is not None:
             token_counter_instance: Final = provider_model_info.get_token_counter()
-            if token_counter_instance is not None and token_counter_instance.should_use_token_counting_api(
-                custom_llm_provider
+            added_framing: Final = (
+                0
+                if token_counter_instance is None or token_counter_instance.includes_framing
+                else litellm.get_model_info(model).get("token_count_framing")
+            )
+            if (
+                token_counter_instance is not None
+                and added_framing is not None
+                and token_counter_instance.should_use_token_counting_api(custom_llm_provider)
             ):
                 result: Final = await token_counter_instance.count_tokens(
                     model_to_use=resolved_model,
@@ -9358,7 +9365,7 @@ async def acount_tokens(
                     messages_format="openai",
                 )
                 if result is not None and not result.error:
-                    return result
+                    return result.model_copy(update={"total_tokens": result.total_tokens + added_framing})
     except Exception as e:
         verbose_logger.debug("Provider token counting failed for model=%s, falling back to local: %s", model, e)
 

@@ -14706,6 +14706,14 @@ def _count_model_counter(settings: TokenCountSettings) -> BaseTokenCounter | Non
     return XAITokenCounter()
 
 
+def _counter_with_known_framing(
+    counter: BaseTokenCounter | None, settings: TokenCountSettings
+) -> BaseTokenCounter | None:
+    if counter is None or counter.includes_framing or settings.framing is not None:
+        return counter
+    return None
+
+
 def _get_provider_token_counter(
     deployment: dict, model_to_use: str
 ) -> tuple[BaseTokenCounter | None, str | None, str | None]:
@@ -14893,6 +14901,10 @@ async def _try_native_responses_count(
     )
 
 
+def _bare_count_model(model: str, litellm_provider: str) -> str:
+    return model.removeprefix(f"{litellm_provider}/").removeprefix("bedrock/").removeprefix("bedrock_mantle/")
+
+
 async def _provider_token_count(
     count_with: Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]],
     model_to_use: str,
@@ -14911,7 +14923,7 @@ async def _provider_token_count(
         if count_model is None
         else count_model.model
         if count_model.litellm_provider is None
-        else f"{count_model.litellm_provider}/{count_model.model.removeprefix('bedrock/').removeprefix('bedrock_mantle/')}"
+        else f"{count_model.litellm_provider}/{_bare_count_model(count_model.model, count_model.litellm_provider)}"
     )
     counted: Final = await count_with(counting_model, None if count_model is None else count_model.region)
     if counted is None:
@@ -15446,8 +15458,8 @@ async def _count_request_tokens(
     if call_endpoint is True and deployment is not None:
         # Auto-route to the correct provider based on model
         routed_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
-        provider_counter = _with_client_oauth_token(
-            _count_model_counter(settings) or routed_counter, client_oauth_token
+        provider_counter = _counter_with_known_framing(
+            _with_client_oauth_token(_count_model_counter(settings) or routed_counter, client_oauth_token), settings
         )
         if _model is not None:
             model_to_use = _model

@@ -183,8 +183,11 @@ class XAITokenCounter(BaseTokenCounter):
         if not text:
             return None
         litellm_params: Final = _LITELLM_PARAMS.validate_python((deployment or {}).get("litellm_params") or {})
-        credentials: Final[Mapping[str, object]] = litellm_params if _is_xai_deployment(litellm_params) else {}
+        xai_deployment: Final = _is_xai_deployment(litellm_params)
+        credentials: Final[Mapping[str, object]] = litellm_params if xai_deployment else {}
         api_key: Final = XAIModelInfo.get_api_key(_non_blank(credentials.get("api_key")))
+        if api_key is None and xai_deployment:
+            return None
         if api_key is None:
             return self._error(
                 request_model,
@@ -201,7 +204,7 @@ class XAITokenCounter(BaseTokenCounter):
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={"text": text, "model": model},
             )
-            reply: Final = _TokenizeTextReply.model_validate(response.json())
+            reply: Final = _TokenizeTextReply.model_validate_json(response.content)
         except MaskedHTTPStatusError as e:
             status_code: Final = e.response.status_code
             return self._error(request_model, model, status_code, e.text or f"xAI tokenize-text answered {status_code}")
