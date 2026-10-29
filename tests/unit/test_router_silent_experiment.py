@@ -972,18 +972,41 @@ async def test_aembedding_with_silent_model_sends_provider_body_without_it(
     assert response.data[0]["embedding"] == [0.1, 0.2]
 
 
-@pytest.mark.parametrize("run_silent_experiment", SILENT_EXPERIMENT_RUNNERS)
-def test_silent_experiment_does_not_launch_from_a_shadow_request(run_silent_experiment):
-    router = Router(model_list=_streaming_model_list(["shadow-a"]))
-    with patch.object(router, "acompletion", new_callable=AsyncMock, return_value=None) as acompletion:
-        run_silent_experiment(
-            router,
-            silent_model="shadow-a",
-            messages=[{"role": "user", "content": "hi"}],
-            metadata={"is_silent_experiment": True},
-        )
+def _mirrored_groups_are_logged(logger: _RecordingLogger) -> bool:
+    return _silent_flag_by_group(logger).keys() >= {"primary-model", "shadow-a"}
 
-    acompletion.assert_not_awaited()
+
+def test_a_caller_sent_silent_experiment_flag_does_not_turn_off_mirroring_on_the_sync_path(
+    sync_and_async_recording_logger: _SyncAndAsyncRecordingLogger,
+) -> None:
+    router: Final = Router(model_list=_streaming_model_list("shadow-a"))
+    response: Final = router.completion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+        metadata={"is_silent_experiment": True},
+    )
+    assert response.choices[0].message.content == "pong"
+    sync_and_async_recording_logger.wait_until(lambda: _mirrored_groups_are_logged(sync_and_async_recording_logger))
+
+    assert _silent_flag_by_group(sync_and_async_recording_logger) == {"primary-model": None, "shadow-a": True}
+
+
+@pytest.mark.asyncio
+async def test_a_caller_sent_silent_experiment_flag_does_not_turn_off_mirroring_on_the_async_path(
+    recording_logger: _RecordingLogger,
+) -> None:
+    router: Final = Router(model_list=_streaming_model_list("shadow-a"))
+    response: Final = await router.acompletion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+        metadata={"is_silent_experiment": True},
+    )
+    assert response.choices[0].message.content == "pong"
+    await asyncio.to_thread(recording_logger.wait_until, lambda: _mirrored_groups_are_logged(recording_logger))
+
+    assert _silent_flag_by_group(recording_logger) == {"primary-model": None, "shadow-a": True}
 
 
 def _judged_router(shadow_outcome: str) -> Router:

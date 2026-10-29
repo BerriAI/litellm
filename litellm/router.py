@@ -3394,10 +3394,6 @@ class Router:
         Run a silent experiment in the background (thread).
         """
         try:
-            # Prevent infinite recursion if silent model also has a silent model
-            if kwargs.get("metadata", {}).get("is_silent_experiment", False):
-                return
-
             messages = copy.deepcopy(messages)
 
             verbose_router_logger.info("Starting silent experiment for model %s", silent_model)
@@ -4582,10 +4578,6 @@ class Router:
         Run a silent experiment in the background.
         """
         try:
-            # Prevent infinite recursion if silent model also has a silent model
-            if kwargs.get("metadata", {}).get("is_silent_experiment", False):
-                return
-
             messages = copy.deepcopy(messages)
 
             verbose_router_logger.info("Starting silent experiment for model %s", silent_model)
