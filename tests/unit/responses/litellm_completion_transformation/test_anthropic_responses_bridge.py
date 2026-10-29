@@ -1598,20 +1598,39 @@ _WEATHER_USE: Final = {"type": "tool_use", "id": "toolu_01Weather", "name": "get
 _WEATHER_ANSWER: Final = {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "18C and sunny"}
 
 
+_TOOL_NAMES_ON_EACH_SIDE: Final = pytest.mark.parametrize(
+    ("caller_name", "claude_name"),
+    [("get_weather", "get_weather"), ("weather.get", "weather_get")],
+    ids=["valid_name", "name_anthropic_rewrites"],
+)
+
+
+def _search_result_finding(tool_name: str) -> Mapping[str, object]:
+    return {
+        **_SEARCH_RESULT,
+        "content": {
+            "type": "tool_search_tool_search_result",
+            "tool_references": [{"type": "tool_reference", "tool_name": tool_name}],
+        },
+    }
+
+
+@_TOOL_NAMES_ON_EACH_SIDE
 def test_responses_over_anthropic_return_the_tool_search_output_and_send_the_search_back_without_a_stored_turn(
-    respx_mock: respx.MockRouter,
+    respx_mock: respx.MockRouter, caller_name: str, claude_name: str
 ) -> None:
+    tools: Final = [{"type": "tool_search"}, {**_WEATHER_TOOL, "name": caller_name}]
+    search_result: Final = _search_result_finding(claude_name)
+    weather_use: Final = {**_WEATHER_USE, "name": claude_name}
     route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=_anthropic_message(_SEARCH_USE, _SEARCH_RESULT, _WEATHER_USE)
+        return_value=_anthropic_message(_SEARCH_USE, search_result, weather_use)
     )
 
-    first: Final = litellm.responses(
-        model=_MODEL, input=list(_WEATHER_QUESTION), tools=list(_SEARCHABLE_TOOLS), api_key="mock_api_key"
-    )
+    first: Final = litellm.responses(model=_MODEL, input=list(_WEATHER_QUESTION), tools=tools, api_key="mock_api_key")
     litellm.responses(
         model=_MODEL,
         input=[*_WEATHER_QUESTION, *(item.model_dump(exclude_none=True) for item in first.output), _WEATHER_ANSWER],
-        tools=list(_SEARCHABLE_TOOLS),
+        tools=tools,
         api_key="mock_api_key",
     )
 
@@ -1619,8 +1638,9 @@ def test_responses_over_anthropic_return_the_tool_search_output_and_send_the_sea
     search_output: Final = first.output[1]
     assert (search_output.id, search_output.call_id) == ("tso_srvtoolu_01Search", "srvtoolu_01Search")
     assert (search_output.execution, search_output.status) == ("server", "completed")
-    assert [dict(tool) for tool in search_output.tools] == [_WEATHER_TOOL]
-    assert _sent_assistant_content(route) == [_SEARCH_USE, _SEARCH_RESULT, _WEATHER_USE]
+    assert [dict(tool) for tool in search_output.tools] == tools[1:]
+    assert first.output[2].name == caller_name
+    assert _sent_assistant_content(route) == [_SEARCH_USE, search_result, weather_use]
 
 
 def _tool_search_stream(*events: Mapping[str, object]) -> httpx.Response:
@@ -1658,22 +1678,22 @@ def _streamed_tool_use(index: int, block: Mapping[str, object]) -> tuple[Mapping
     )
 
 
+@_TOOL_NAMES_ON_EACH_SIDE
 def test_streamed_responses_over_anthropic_emit_the_tool_search_output_in_order_at_its_completed_position(
-    respx_mock: respx.MockRouter,
+    respx_mock: respx.MockRouter, caller_name: str, claude_name: str
 ) -> None:
+    tools: Final = [{"type": "tool_search"}, {**_WEATHER_TOOL, "name": caller_name}]
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
         return_value=_tool_search_stream(
             *_streamed_tool_use(0, _SEARCH_USE),
-            {"type": "content_block_start", "index": 1, "content_block": _SEARCH_RESULT},
+            {"type": "content_block_start", "index": 1, "content_block": _search_result_finding(claude_name)},
             {"type": "content_block_stop", "index": 1},
-            *_streamed_tool_use(2, _WEATHER_USE),
+            *_streamed_tool_use(2, {**_WEATHER_USE, "name": claude_name}),
         )
     )
 
     events: Final = tuple(
-        litellm.responses(
-            model=_MODEL, input=list(_WEATHER_QUESTION), tools=list(_SEARCHABLE_TOOLS), stream=True, api_key="mock"
-        )
+        litellm.responses(model=_MODEL, input=list(_WEATHER_QUESTION), tools=tools, stream=True, api_key="mock")
     )
 
     completed: Final = events[-1].response.output
@@ -1696,7 +1716,8 @@ def test_streamed_responses_over_anthropic_emit_the_tool_search_output_in_order_
     search_output: Final = next(event.item for event in done if event.item.type == "tool_search_output")
     assert search_output.model_dump() == completed[1].model_dump()
     assert (search_output.call_id, search_output.status) == ("srvtoolu_01Search", "completed")
-    assert [dict(tool) for tool in search_output.tools] == [_WEATHER_TOOL]
+    assert [dict(tool) for tool in search_output.tools] == tools[1:]
+    assert completed[2].name == caller_name
 
 
 _STATELESS_SEARCH_TURN: Final = {

@@ -24,7 +24,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
     is_object_schema,
@@ -45,6 +45,8 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     inline_remote_image_urls,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    message_field,
+    parts_of,
     place_mid_conversation_system,
     split_leading_system_run,
 )
@@ -127,6 +129,8 @@ from ..common_utils import (
     refusal_provider_specific_fields,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
+    tool_search_content_renamed,
+    tool_search_result_renamed,
     tools_marked_for_a_tool_config_point,
     without_stale_tool_search_results,
 )
@@ -267,6 +271,25 @@ class _AnthropicToolResultBlock(TypedDict, total=False):
     type: ReadOnly[str]
     tool_use_id: ReadOnly[str]
     content: ReadOnly[object]
+
+
+def _provider_fields_with_tool_names(message: object, forward_map: Mapping[str, str]) -> Mapping[str, object] | None:
+    provider_fields: Final = as_str_mapping(message_field(message, "provider_specific_fields"))
+    replayed_results: Final = parts_of(provider_fields.get("tool_results")) if provider_fields is not None else ()
+    if provider_fields is None or not replayed_results:
+        return None
+    return {
+        **provider_fields,
+        "tool_results": [tool_search_result_renamed(result, forward_map) for result in replayed_results],
+    }
+
+
+def _tool_result_with_caller_names(
+    result: _AnthropicToolResultBlock, reverse_map: Mapping[str, str]
+) -> _AnthropicToolResultBlock:
+    if result.get("type") != "tool_search_tool_result":
+        return result
+    return {**result, "content": tool_search_content_renamed(result.get("content"), reverse_map)}
 
 
 _ENUM_TYPE_CHECKS: Final[Mapping[object, Callable[[object], bool]]] = MappingProxyType(
@@ -1307,8 +1330,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         messages: list[AllMessageValues],
         name_forward_map: dict[str, str],
     ) -> list[AllMessageValues]:
-        """Return a copy of `messages` with tool_call/function_call names
-        rewritten using the per-request forward map.
+        """Return a copy of `messages` with tool_call/function_call names, and
+        the tools a replayed tool search found, rewritten using the per-request
+        forward map.
 
         Only mutates messages whose tool_call/function_call name is *in* the
         forward map. Names absent from the map (already valid, no collision)
@@ -1350,6 +1374,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 new_fc = dict(function_call)
                 new_fc["name"] = name_forward_map[fc_name]
                 new_msg["function_call"] = new_fc
+            renamed_provider_fields = _provider_fields_with_tool_names(msg, name_forward_map)
+            if renamed_provider_fields is not None:
+                new_msg["provider_specific_fields"] = renamed_provider_fields
             new_messages.append(cast(AllMessageValues, new_msg))
         return new_messages
 
@@ -3021,6 +3048,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _name = fn.get("name")
                 if isinstance(_name, str) and _name in tool_name_reverse_map:
                     fn["name"] = tool_name_reverse_map[_name]
+        caller_tool_results: Final = (
+            [_tool_result_with_caller_names(result, tool_name_reverse_map) for result in tool_results]
+            if tool_name_reverse_map and tool_results
+            else tool_results
+        )
 
         if (
             prefix_prompt is not None
@@ -3034,7 +3066,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             citations,
             thinking_blocks,
             web_search_results,
-            tool_results,
+            caller_tool_results,
             compaction_blocks,
             tool_calls,
         )

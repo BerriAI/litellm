@@ -24,6 +24,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
     is_encrypted_reasoning_block,
@@ -1749,6 +1750,29 @@ def _without_stale_tool_search_blocks(
     if len(kept) == len(blocks):
         return message
     return {**message, "content": kept} if kept else None
+
+
+def _tool_reference_renamed(reference: object, name_map: Mapping[str, str]) -> object:
+    fields: Final = as_str_mapping(reference)
+    name: Final = fields.get("tool_name") if fields is not None else None
+    if fields is None or not isinstance(name, str) or name not in name_map:
+        return reference
+    return {**fields, "tool_name": name_map[name]}
+
+
+def tool_search_content_renamed(content: object, name_map: Mapping[str, str]) -> object:
+    fields: Final = as_str_mapping(content)
+    if fields is None or "tool_references" not in fields:
+        return content
+    references: Final = parts_of(fields["tool_references"])
+    return {**fields, "tool_references": [_tool_reference_renamed(reference, name_map) for reference in references]}
+
+
+def tool_search_result_renamed(block: object, name_map: Mapping[str, str]) -> object:
+    fields: Final = as_str_mapping(block)
+    if fields is None or fields.get("type") != "tool_search_tool_result":
+        return block
+    return {**fields, "content": tool_search_content_renamed(fields.get("content"), name_map)}
 
 
 def without_stale_tool_search_results(

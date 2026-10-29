@@ -69,7 +69,12 @@ from litellm.types.utils import (
 )
 
 from ...base import BaseLLM
-from ..common_utils import AnthropicError, process_anthropic_headers, refusal_provider_specific_fields
+from ..common_utils import (
+    AnthropicError,
+    process_anthropic_headers,
+    refusal_provider_specific_fields,
+    tool_search_content_renamed,
+)
 from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig, JsonModeRequest
 
 if TYPE_CHECKING:
@@ -1080,14 +1085,22 @@ class ModelResponseIterator:
                         # Fixes: https://github.com/BerriAI/litellm/issues/18137
                         self.web_search_results.append(content_block_start["content_block"])
                         provider_specific_fields["web_search_results"] = self.web_search_results
+                    elif content_type == "tool_search_tool_result":
+                        tool_search_result: Final = content_block_start["content_block"]
+                        self.tool_results.append(
+                            {
+                                **tool_search_result,
+                                "content": tool_search_content_renamed(
+                                    tool_search_result.get("content"), self.tool_name_reverse_map
+                                ),
+                            }
+                        )
+                        provider_specific_fields["tool_results"] = self.tool_results
                     else:
                         self.tool_results.append(content_block_start["content_block"])
                         provider_specific_fields["tool_results"] = self.tool_results
-                        if content_type != "tool_search_tool_result":
-                            # Convert to provider-neutral code_interpreter_results
-                            provider_specific_fields["code_interpreter_results"] = (
-                                self._build_code_interpreter_results()
-                            )
+                        # Convert to provider-neutral code_interpreter_results
+                        provider_specific_fields["code_interpreter_results"] = self._build_code_interpreter_results()
 
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)
