@@ -76,6 +76,14 @@ class FunctionObj(LiteLLMBaseModel):
     name: str
     arguments: str
 
+    @model_validator(mode="before")
+    @classmethod
+    def default_arguments(cls, value: object) -> object:
+        fields: Final = as_str_mapping(value)
+        if fields is None or "arguments" in fields:
+            return value
+        return {**fields, "arguments": ""}
+
 
 class FunctionTool(LiteLLMBaseModel):
     description: str = ""
