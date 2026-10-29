@@ -158,63 +158,25 @@ class TestBaseOpenAIPassThroughHandler:
         print(f"Base URL with trailing slash: '{base_url}' + '{path}' → '{result}'")
         assert str(result) == "https://api.example.com/v1/chat/completions"
 
-    def test_append_openai_beta_header(self):
-        print("\nTesting _append_openai_beta_header method...")
+    def test_assemble_headers_keeps_the_operators_openai_beta_over_the_clients(self):
+        client_request: Final = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/azure/v1/agents/sessions",
+                "headers": [(b"openai-beta", b"agents=v1")],
+                "query_string": b"",
+            }
+        )
 
-        # Create mock requests with different paths
-        assistants_request = MagicMock(spec=Request)
-        assistants_request.url = MagicMock()
-        assistants_request.url.path = "/v1/threads/thread_123456/messages"
+        assembled: Final = BaseOpenAIPassThroughHandler._assemble_headers(
+            api_key="sk-upstream",
+            endpoint="v1/agents/sessions",
+            request=client_request,
+            extra_headers={"OpenAI-Beta": "agents=v2"},
+        )
 
-        non_assistants_request = MagicMock(spec=Request)
-        non_assistants_request.url = MagicMock()
-        non_assistants_request.url.path = "/v1/chat/completions"
-
-        headers = {"authorization": "Bearer test_key"}
-
-        # Test with assistants API request
-        result = BaseOpenAIPassThroughHandler._append_openai_beta_header(headers, assistants_request)
-        print(f"Assistants API request: Added header: {result}")
-        assert result["OpenAI-Beta"] == "assistants=v2"
-
-        # Test with non-assistants API request
-        headers = {"authorization": "Bearer test_key"}
-        result = BaseOpenAIPassThroughHandler._append_openai_beta_header(headers, non_assistants_request)
-        print(f"Non-assistants API request: Headers: {result}")
-        assert "OpenAI-Beta" not in result
-
-        # Test with assistant in the path
-        assistant_request = MagicMock(spec=Request)
-        assistant_request.url = MagicMock()
-        assistant_request.url.path = "/v1/assistants/asst_123456"
-
-        headers = {"authorization": "Bearer test_key"}
-        result = BaseOpenAIPassThroughHandler._append_openai_beta_header(headers, assistant_request)
-        print(f"Assistant API request: Added header: {result}")
-        assert result["OpenAI-Beta"] == "assistants=v2"
-
-    def test_assemble_headers(self):
-        print("\nTesting _assemble_headers method...")
-
-        # Mock request
-        mock_request = MagicMock(spec=Request)
-        api_key = "test_api_key"
-
-        # Patch the _append_openai_beta_header method to avoid testing it again
-        with patch.object(
-            BaseOpenAIPassThroughHandler,
-            "_append_openai_beta_header",
-            return_value={
-                "authorization": "Bearer test_api_key",
-                "api-key": "test_api_key",
-                "test-header": "value",
-            },
-        ):
-            result = BaseOpenAIPassThroughHandler._assemble_headers(api_key, mock_request)
-            print(f"Assembled headers: {result}")
-            assert result["authorization"] == "Bearer test_api_key"
-            assert result["api-key"] == "test_api_key"
-            assert result["test-header"] == "value"
+        assert assembled == {"authorization": "Bearer sk-upstream", "api-key": "sk-upstream", "OpenAI-Beta": "agents=v2"}
 
     @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
@@ -4055,6 +4017,62 @@ def test_openai_passthrough_forwards_verbatim_to_openai(
 
         assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
         assert route.calls.last.request.headers["authorization"] == "Bearer sk-upstream"
+
+
+@pytest.mark.parametrize(
+    ("method", "client_base_path", "path", "client_headers", "upstream_openai_beta"),
+    [
+        pytest.param("POST", "/openai/v1", "/agents/sessions", {"OpenAI-Beta": "agents=v1"}, ["agents=v1"], id="sdk_agents"),
+        pytest.param(
+            "GET",
+            "/openai_passthrough/v1",
+            "/agents/sessions/sess_123/events",
+            {"OpenAI-Beta": "agents=v1"},
+            ["agents=v1"],
+            id="sdk_agents_events",
+        ),
+        pytest.param("POST", "/openai/v1", "/agents/sessions", {}, ["agents=v1"], id="agents_default"),
+        pytest.param("POST", "/openai", "/agents/sessions", {}, ["agents=v1"], id="agents_default_without_v1"),
+        pytest.param("GET", "/openai_passthrough/v1", "/vaults", {}, ["agents=v1"], id="vaults_default"),
+        pytest.param(
+            "POST",
+            "/openai/v1",
+            "/chatkit/sessions",
+            {"OpenAI-Beta": "chatkit_beta=v1"},
+            ["chatkit_beta=v1"],
+            id="sdk_chatkit",
+        ),
+        pytest.param(
+            "POST",
+            "/openai/v1",
+            "/agents/sessions",
+            {"OpenAI-Beta": "agents=v1", "x-pass-openai-beta": "agents=v2"},
+            ["agents=v2"],
+            id="x_pass_wins",
+        ),
+        pytest.param("POST", "/openai/v1", "/assistants", {}, ["assistants=v2"], id="assistants_default"),
+        pytest.param("POST", "/openai/v1", "/threads/thread_123/messages", {}, ["assistants=v2"], id="threads_default"),
+        pytest.param("POST", "/openai/v1", "/chat/completions", {}, [], id="no_beta"),
+    ],
+)
+def test_openai_passthrough_sends_the_openai_beta_header_upstream(
+    openai_passthrough_client: TestClient,
+    method: str,
+    client_base_path: str,
+    path: str,
+    client_headers: dict[str, str],
+    upstream_openai_beta: list[str],
+) -> None:
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.request(method, f"https://api.openai.com/v1{path}").mock(
+            return_value=httpx.Response(200, json={"id": "upstream_123"})
+        )
+        response: Final = openai_passthrough_client.request(
+            method, f"{client_base_path}{path}", headers=client_headers
+        )
+
+        assert response.status_code == 200
+        assert route.calls.last.request.headers.get_list("openai-beta") == upstream_openai_beta
 
 
 @pytest.fixture
