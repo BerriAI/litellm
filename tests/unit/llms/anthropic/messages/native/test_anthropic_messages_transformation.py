@@ -501,3 +501,23 @@ def test_messages_request_drops_clear_at_from_a_mid_conversation_system_turn_wit
     )
     assert request["messages"][1] == {"role": "system", "content": "be terse"}
     assert system_turn == {"role": "system", "content": "be terse", "clear_at": "end_turn"}
+
+
+def test_a_provider_without_a_beta_headers_row_forwards_beta_gated_fields_under_drop_params(
+    local_beta_headers_config: None,
+) -> None:
+    thinking: Final = {"type": "enabled", "budget_tokens": 1024, "display": "updates"}
+    request: Final = MinimaxMessagesConfig().transform_anthropic_messages_request(
+        model="MiniMax-M2",
+        messages=[
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "Hello"},
+            {"role": "user", "content": "how are you"},
+            {"role": "system", "content": "Answer in French", "output_config": {"effort": "low"}},
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "thinking": dict(thinking)},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+    assert request["thinking"] == thinking
+    assert request["messages"][-1]["output_config"] == {"effort": "low"}

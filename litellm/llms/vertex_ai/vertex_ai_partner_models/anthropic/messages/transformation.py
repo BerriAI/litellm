@@ -174,6 +174,12 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         if messages_carry_output_config(messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
 
+        beta_values.update(
+            anthropic_model_info.thinking_betas(
+                optional_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # optional_params is the base config's bare dict
+            )
+        )
+
         if beta_values:
             request_headers["anthropic-beta"] = ",".join(beta_values)
 

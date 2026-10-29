@@ -12,7 +12,11 @@ from litellm.anthropic_beta_gated_fields import (
     strip_beta_gated_system_messages,
     unstripped_native_request,
 )
-from litellm.anthropic_beta_headers_manager import get_unsupported_headers, is_beta_header_supported_by_bundled_config
+from litellm.anthropic_beta_headers_manager import (
+    get_unsupported_headers,
+    has_beta_headers_config,
+    is_beta_header_supported_by_bundled_config,
+)
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -230,8 +234,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self, messages: Sequence[object], model: str, drop_params: object
     ) -> tuple[Mapping[str, object], ...]:
         validated: Final = _MESSAGE_MAPPINGS.validate_python(messages)
+        if not has_beta_headers_config(self._resolved_provider):
+            return validated
         gated: Final = strip_beta_gated_system_messages(validated, frozenset(), drop_params=drop_params)
-        log_beta_gated_strips(gated.stripped, model=model, provider=self.custom_llm_provider or "anthropic")
+        log_beta_gated_strips(gated.stripped, model=model, provider=self._resolved_provider)
         return _MESSAGE_MAPPINGS.validate_python(gated.messages) if gated.stripped else validated
 
     def _normalize_system_role_messages(
@@ -351,7 +357,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     model=model,
                 ),
             )
-        return self._finalize_messages_headers(headers, optional_params, messages), api_base
+        return self.finalize_messages_headers(headers, optional_params, messages), api_base
 
     async def avalidate_anthropic_messages_environment(
         self,
@@ -391,7 +397,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     model=model,
                 ),
             )
-        return self._finalize_messages_headers(oauth_headers, optional_params, messages), api_base
+        return self.finalize_messages_headers(oauth_headers, optional_params, messages), api_base
 
     def _require_auth_header(self, auth_header: Mapping[str, str] | None, model: str) -> Mapping[str, str]:
         if auth_header is None:
@@ -425,7 +431,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         return config_allows_workload_identity(self)
 
-    def _finalize_messages_headers(
+    def finalize_messages_headers(
         self,
         headers: dict,  # mutable-ok: out-param
         optional_params: dict,  # mutable-ok: out-param
@@ -636,8 +642,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     def strips_beta_gated_fields_from_final_headers(self) -> bool:
         """False on legs whose final ``anthropic_beta`` list is only known after this transform (Bedrock Invoke),
-        which strip beta-gated fields themselves once that list exists."""
-        return True
+        which strip beta-gated fields themselves once that list exists, and on providers with no row in
+        ``anthropic_beta_headers_config.json``, whose filter drops every beta and so cannot say which fields fail."""
+        return has_beta_headers_config(self._resolved_provider)
 
     def transform_anthropic_messages_request(
         self,

@@ -1,7 +1,6 @@
 import base64
 import copy
 import json
-import logging
 import os
 import re
 from collections.abc import Iterator, Mapping
@@ -10883,3 +10882,17 @@ def test_converse_keeps_beta_gated_thinking_fields_the_body_anthropic_beta_carri
         "block_binding": {"prefix_mismatch_behavior": "error"},
         "display": "updates",
     }
+
+
+def test_converse_sends_only_the_header_betas_when_header_and_body_both_carry_betas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    fields: Final = _converse_bound_thinking_request(
+        {"anthropic-beta": "context-1m-2025-08-07"}, body_betas=("not-a-real-beta-2099",)
+    )
+    assert sorted(fields["anthropic_beta"]) == [
+        "context-1m-2025-08-07",
+        "thinking-binding-controls-2026-08-01",
+        "thinking-display-updates-2026-08-18",
+    ]

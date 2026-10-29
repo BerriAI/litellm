@@ -144,7 +144,7 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
             ("content-type" if key.lower() == "content-type" else key): value
             for key, value in {**auth_headers, **client_anthropic_headers}.items()
         }
-        finalized_headers: Final[dict[str, str]] = self._finalize_messages_headers(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the shared helper returns a bare dict  # mutable-ok: becomes the outbound headers
+        finalized_headers: Final[dict[str, str]] = self.finalize_messages_headers(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the shared helper returns a bare dict  # mutable-ok: becomes the outbound headers
             headers=normalized_headers,
             optional_params=optional_params,
             messages=messages,

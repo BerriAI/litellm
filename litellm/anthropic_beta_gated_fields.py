@@ -196,11 +196,17 @@ def _strip_beta_gated_message(message: object, active_betas: Set[str]) -> Stripp
     return _strip_beta_gated_system_message(mapping, active_betas)
 
 
+def _ends_on_assistant(messages: Sequence[object]) -> bool:
+    last: Final = _as_mapping(messages[-1]) if messages else None
+    return last is not None and last.get("role") == "assistant"
+
+
 def strip_beta_gated_system_messages(
     messages: Sequence[object], active_betas: Set[str], *, drop_params: object
 ) -> StrippedMessages:
     """Drop the gated fields of every mid-conversation ``role: system`` message. Returns the same
-    sequence when nothing is gated."""
+    sequence when nothing is gated, or when dropping an emptied system turn would leave the conversation
+    ending on an assistant turn, which the model would read as a prefill to continue."""
     if not drops_unsupported_params(drop_params):
         return StrippedMessages(messages=messages, stripped=())
     per_message: Final = tuple(_strip_beta_gated_message(message, active_betas) for message in messages)
@@ -209,12 +215,12 @@ def strip_beta_gated_system_messages(
     )  # comprehension-ok: flattening per-message strip reports
     if not stripped:
         return StrippedMessages(messages=messages, stripped=())
-    return StrippedMessages(
-        messages=[
-            message for result in per_message for message in result.messages
-        ],  # comprehension-ok: flattening per-message results
-        stripped=stripped,
-    )
+    kept: Final = [
+        message for result in per_message for message in result.messages
+    ]  # comprehension-ok: flattening per-message results
+    if _ends_on_assistant(kept) and not _ends_on_assistant(messages):
+        return StrippedMessages(messages=messages, stripped=())
+    return StrippedMessages(messages=kept, stripped=stripped)
 
 
 def strip_beta_gated_request_fields(
@@ -291,12 +297,18 @@ def strip_beta_gated_native_request(
 def log_beta_gated_strips(stripped: Sequence[str], model: str | None, provider: str) -> None:
     if not stripped:
         return
+    described: Final = ", ".join(
+        f"{field} (unlocked by anthropic-beta {' or '.join(sorted(_FIELD_BETAS[field]))})"
+        if field in _FIELD_BETAS
+        else field
+        for field in sorted(set(stripped))
+    )
     verbose_logger.warning(
         "Dropped %s for model=%s provider=%s because drop_params is on and the provider would reject them on "
-        "this request, either since this provider leg does not send the anthropic-beta that unlocks them (see "
+        "this request, either since this provider leg does not send that anthropic-beta (see "
         "anthropic_beta_headers_config.json) or since the model turns mid-conversation system messages into user "
         "messages.",
-        sorted(set(stripped)),
+        described,
         model,
         provider,
     )

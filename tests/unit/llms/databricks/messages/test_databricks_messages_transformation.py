@@ -324,9 +324,8 @@ async def _workspace_request_body(**request_params: object) -> dict[str, object]
 @pytest.mark.asyncio
 @pytest.mark.parametrize("drop_params", [True, False])
 async def test_bound_thinking_with_display_updates_reaches_the_workspace_with_both_betas(
-    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch, local_beta_headers_config: None
 ) -> None:
-    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
     monkeypatch.setattr(litellm, "drop_params", False)
     thinking: Final = {
         "type": "enabled",

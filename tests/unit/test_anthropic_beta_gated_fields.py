@@ -119,7 +119,9 @@ def test_system_message_loses_exactly_the_fields_whose_betas_are_absent() -> Non
 def test_per_turn_control_beta_also_unlocks_system_output_config() -> None:
     messages: Final = [{"role": "system", "output_config": {"effort": "low"}, "content": "terse"}]
     assert (
-        strip_beta_gated_system_messages(messages, frozenset({"per-turn-control-2026-07-01"}), drop_params=True).messages
+        strip_beta_gated_system_messages(
+            messages, frozenset({"per-turn-control-2026-07-01"}), drop_params=True
+        ).messages
         is messages
     )
     assert (
@@ -135,7 +137,10 @@ def test_per_turn_control_beta_also_unlocks_system_output_config() -> None:
 
 def test_inline_tools_beta_also_unlocks_system_tool_changes() -> None:
     messages: Final = [
-        {"role": "system", "content": [{"type": "tool_removal", "tool_names": ["lookup"]}, {"type": "text", "text": "x"}]}
+        {
+            "role": "system",
+            "content": [{"type": "tool_removal", "tool_names": ["lookup"]}, {"type": "text", "text": "x"}],
+        }
     ]
     assert (
         strip_beta_gated_system_messages(
@@ -166,6 +171,28 @@ def test_system_message_emptied_by_the_strip_is_dropped() -> None:
         "messages[].system.content[].tool_addition|tool_removal",
         "messages[].system (emptied by the strip)",
     )
+
+
+def test_emptied_trailing_system_turn_after_an_assistant_turn_is_sent_as_is() -> None:
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "system", "content": [{"type": "tool_removal", "tool_names": ["lookup"]}]},
+    ]
+    result: Final = strip_beta_gated_system_messages(messages, frozenset(), drop_params=True)
+    assert result.messages is messages
+    assert result.stripped == ()
+
+
+def test_emptied_system_turn_is_dropped_when_a_user_turn_still_ends_the_conversation() -> None:
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "system", "content": [{"type": "tool_removal", "tool_names": ["lookup"]}]},
+        {"role": "user", "content": "go on"},
+    ]
+    result: Final = strip_beta_gated_system_messages(messages, frozenset(), drop_params=True)
+    assert [message["role"] for message in result.messages] == ["user", "assistant", "user"]
 
 
 def test_system_turn_emptied_by_the_strip_stays_as_a_directive_when_its_output_config_survives() -> None:
@@ -222,7 +249,9 @@ def test_request_strip_is_identity_when_nothing_is_gated() -> None:
 
 
 @pytest.mark.parametrize("drop_params", [None, False, "false"])
-def test_without_drop_params_every_gated_field_is_sent_as_is(drop_params: object, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_without_drop_params_every_gated_field_is_sent_as_is(
+    drop_params: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     messages: Final = [{"role": "user", "content": "hi"}, _system_turn()]
     request: Final = {"thinking": BOUND_THINKING, "messages": messages}
@@ -259,5 +288,7 @@ def test_every_strip_is_logged_once_at_warning_with_the_fields_model_and_provide
         log_beta_gated_strips((), model="claude", provider="azure_ai")
     warnings: Final = [record for record in caplog.records if record.levelno == logging.WARNING]
     assert len(warnings) == 1
-    assert "['thinking.block_binding']" in warnings[0].getMessage()
-    assert "model=claude provider=azure_ai" in warnings[0].getMessage()
+    assert (
+        "Dropped thinking.block_binding (unlocked by anthropic-beta thinking-binding-controls-2026-08-01) for "
+        "model=claude provider=azure_ai" in warnings[0].getMessage()
+    )

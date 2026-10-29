@@ -1830,14 +1830,12 @@ class AmazonConverseConfig(BaseConfig):
 
         base_model: Final = BedrockModelInfo.get_base_model(model)
         header_beta_list: Final = get_anthropic_beta_from_headers(headers or {})
-        body_beta_list: Final = sorted(
+        client_beta_list: Final = header_beta_list or sorted(
             active_beta_values(
                 {},
                 additional_request_params.get("anthropic_beta"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # additional_request_params is a bare dict
             )
-            - set(header_beta_list)
         )
-        client_beta_list: Final = [*header_beta_list, *body_beta_list]
         eager_beta: Final = (
             (ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,)
             if base_model.startswith("anthropic")

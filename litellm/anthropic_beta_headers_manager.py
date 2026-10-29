@@ -241,6 +241,10 @@ def get_provider_name(provider: str) -> str:
     return aliases.get(provider, provider)
 
 
+def has_beta_headers_config(provider: str) -> bool:
+    return get_provider_name(provider) in _load_beta_headers_config()
+
+
 def filter_and_transform_beta_headers(
     beta_headers: list[str],
     provider: str,
