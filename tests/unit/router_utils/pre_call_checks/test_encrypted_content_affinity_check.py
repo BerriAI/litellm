@@ -16,6 +16,7 @@ The mechanism works without any cache and supports two encoding strategies:
 """
 
 import time
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -2717,12 +2718,14 @@ async def test_affinity_keeps_reasoning_when_every_deployment_already_refused_th
     assert reasoning_input[0] == original_reasoning
 
 
-def _default_endpoint_deployment(model_id: str, litellm_params: dict[str, object]) -> dict[str, object]:
-    return {"model_name": "gpt-5.5", "litellm_params": litellm_params, "model_info": {"id": model_id}}
+def _default_endpoint_deployment(model_id: str, litellm_params: Mapping[str, object]) -> dict[str, object]:
+    return {"model_name": "gpt-5.5", "litellm_params": dict(litellm_params), "model_info": {"id": model_id}}
 
 
 def _deployment_of(router: litellm.Router, model_id: str) -> dict[str, object]:
-    return next(deployment for deployment in router.model_list if deployment["model_info"]["id"] == model_id)
+    deployment: Final = router.get_deployment(model_id=model_id)
+    assert deployment is not None
+    return deployment.model_dump(exclude_none=True)
 
 
 SUMMARY_ONLY_REASONING: Final = {"type": "reasoning", "summary": [{"type": "summary_text", "text": "scattering"}]}
@@ -2840,16 +2843,16 @@ async def test_affinity_pins_to_the_same_key_peer_on_the_default_endpoint_when_t
             _default_endpoint_deployment("other-org", {**OPENAI_SHARED_KEY, "api_key": "other-key"}),
         ]
     )
-    healthy: Final = [_deployment_of(router, "peer"), _deployment_of(router, "other-org")]
+    peer: Final = _deployment_of(router, "peer")
     reasoning_input: Final = _reasoning_input_minted_by("origin")
     original_reasoning: Final = dict(reasoning_input[0])
 
-    result: Final = await EncryptedContentAffinityCheck(router=router).async_filter_deployments(
+    result: Final[list[dict[str, object]]] = await EncryptedContentAffinityCheck(router=router).async_filter_deployments(
         model="gpt-5.5",
-        healthy_deployments=healthy,
+        healthy_deployments=[peer, _deployment_of(router, "other-org")],
         messages=None,
         request_kwargs={"litellm_metadata": {}, "input": reasoning_input},
     )
 
-    assert [deployment["model_info"]["id"] for deployment in result] == ["peer"]
+    assert result == [peer]
     assert reasoning_input[0] == original_reasoning
