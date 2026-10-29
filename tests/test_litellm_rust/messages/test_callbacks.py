@@ -11,7 +11,7 @@ import litellm
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.integrations.argilla import ArgillaItem
-from litellm.types.utils import ModelResponse, StandardLoggingPayload
+from litellm.types.utils import Choices, ModelResponse, StandardLoggingPayload
 from tests.test_litellm_rust.messages.data import BAD_REQUEST, MESSAGES_RESPONSE, RATE_LIMITED, call
 from tests.test_litellm_rust.support.callback_recorder import HookRecorder, RecordingLogger, request_body
 from tests.test_litellm_rust.support.gaps import gap
@@ -25,6 +25,43 @@ pytestmark = pytest.mark.requires_rust_extension
 SYNC_HANDLERS_ON_ASYNC_CALLS: Final = gap("native async calls also run the sync success and failure handlers")
 _OBJECT: Final = TypeAdapter(dict[str, object])
 _HEADERS: Final = TypeAdapter(dict[str, str])
+_SEARCH_URL: Final = "https://en.wikipedia.org/wiki/Reykjav%C3%ADk"
+_ANSWER: Final = "About 140,000 people live in Reykjavik."
+_CITATION: Final = {
+    "type": "web_search_result_location",
+    "url": _SEARCH_URL,
+    "title": "Reykjavik",
+    "encrypted_index": "EpMBCioIBxgCIiQ",
+    "cited_text": "Reykjavik has a population of around 140,000",
+}
+_WEB_SEARCH_RESPONSE: Final = {
+    **MESSAGES_RESPONSE,
+    "id": "msg_web_search",
+    "content": [
+        {"type": "text", "text": "I'll search for the current population."},
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_01",
+            "name": "web_search",
+            "input": {"query": "Reykjavik population"},
+        },
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_01",
+            "content": [
+                {
+                    "type": "web_search_result",
+                    "url": _SEARCH_URL,
+                    "title": "Reykjavik",
+                    "encrypted_content": "EqgfCioIARgBEiQ",
+                    "page_age": "October 1, 2026",
+                }
+            ],
+        },
+        {"type": "text", "text": _ANSWER, "citations": [_CITATION]},
+    ],
+    "usage": {"input_tokens": 2100, "output_tokens": 90, "server_tool_use": {"web_search_requests": 1}},
+}
 
 
 @pytest.fixture
@@ -58,6 +95,31 @@ async def test_success_hook_fires_the_expected_number_of_times(
 
     assert_served_natively(server, response)
     assert recorder.names.count(hook) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop_reason", ("pause_turn", "model_context_window_exceeded"))
+async def test_web_search_reply_logs_success_with_its_cost_and_citations(
+    server: RecordingServer, stop_reason: str
+) -> None:
+    server.default_response = ResponseSpec(body={**_WEB_SEARCH_RESPONSE, "stop_reason": stop_reason})
+    recorder: Final = RecordingLogger()
+
+    with rebound(litellm, "callbacks", [recorder]):
+        response: Final = await call(server)
+        success: Final = await recorder.wait_for_async("async_log_success_event")
+
+    assert_served_natively(server, response)
+    assert len(success) == 1
+    logged: Final = success[0].response
+    assert isinstance(logged, ModelResponse)
+    assert logged.id == _WEB_SEARCH_RESPONSE["id"]
+    assert TypeAdapter(float).validate_python(_OBJECT.validate_python(success[0].kwargs)["response_cost"]) > 0
+    choice: Final = logged.choices[0]
+    assert isinstance(choice, Choices)
+    fields: Final = choice.message.provider_specific_fields
+    assert fields is not None
+    assert fields["citations"] == [[{**_CITATION, "supported_text": _ANSWER}]]
 
 
 @pytest.mark.asyncio

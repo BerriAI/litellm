@@ -4943,13 +4943,8 @@ class Logging(LiteLLMLoggingBaseClass):
             verbose_logger.warning("LiteLLM: the anthropic_messages stream assembled no response, logging an empty one")
             return litellm.ModelResponse(model=self.model)
         else:
-            from litellm.types.llms.anthropic import AnthropicResponse
-
-            pydantic_result: Final = AnthropicResponse.model_validate({"stop_sequence": None, **(served_body or {})})
-            import httpx
-
             result = litellm.AnthropicConfig().transform_parsed_response(
-                completion_response=pydantic_result.model_dump(),
+                completion_response=_LITELLM_PARAMS.validate_python(raw_body),
                 raw_response=httpx.Response(
                     status_code=200,
                     headers={},
