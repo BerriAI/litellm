@@ -6,6 +6,7 @@ import anthropicLogo from "../../public/assets/logos/anthropic.svg";
 import assemblyaiSmallLogo from "../../public/assets/logos/assemblyai_small.png";
 import basetenLogo from "../../public/assets/logos/baseten.svg";
 import bedrockLogo from "../../public/assets/logos/bedrock.svg";
+import bigmodelLogo from "../../public/assets/logos/bigmodel.png";
 import cerebrasLogo from "../../public/assets/logos/cerebras.svg";
 import cloudflareLogo from "../../public/assets/logos/cloudflare.svg";
 import cohereLogo from "../../public/assets/logos/cohere.svg";
@@ -199,6 +200,7 @@ export enum Providers {
   xAI = "xAI",
   XINFERENCE = "Xinference",
   ZAI = "Z.AI (Zhipu AI)",
+  BIGMODEL = "BigModel (Zhipu AI)",
   ZeroGPU = "ZeroGPU",
 }
 
@@ -330,6 +332,7 @@ export const provider_map: Record<string, string> = {
   xAI: "xai",
   XINFERENCE: "xinference",
   ZAI: "zai",
+  BIGMODEL: "bigmodel",
   ZeroGPU: "zerogpu",
 };
 
@@ -339,6 +342,7 @@ export const resolveLitellmProviderSlug = (provider: string): string =>
   provider_map[provider] ?? provider.toLowerCase();
 
 export const providerLogoMap: Partial<Record<Providers, string>> = {
+  [Providers.BIGMODEL]: bigmodelLogo.src,
   [Providers.A2A_Agent]: a2aAgentLogo.src,
   [Providers.AI21]: ai21Logo.src,
   [Providers.AI21_CHAT]: ai21Logo.src,
@@ -505,6 +509,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Voyage]: "voyage/",
   [Providers.WATSONX]: "watsonx/ibm/granite-3-3-8b-instruct",
   [Providers.ZAI]: "zai/glm-4.5",
+  [Providers.BIGMODEL]: "bigmodel/glm-5.3",
   [Providers.ZeroGPU]: "zerogpu/gpt-oss-120b",
 };
 
