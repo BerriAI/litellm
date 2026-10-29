@@ -2486,6 +2486,21 @@ class TestBatchCostAttribution:
         assert metadata["user_api_key_team_alias"] == "Team Alpha"
         assert metadata["tags"] == ["env:prod"]
 
+    @pytest.mark.parametrize(("key_row_exists", "expected"), [(True, "team-alpha"), (False, "")])
+    @pytest.mark.asyncio
+    async def test_tag_spend_team_needs_the_batch_to_come_from_a_virtual_key(self, key_row_exists, expected):
+        """Tag spend is attributed to a team only when the creating key is a real virtual key row,
+        not a JWT, a CLI session or a deleted key."""
+        from types import SimpleNamespace
+
+        from litellm.proxy.db.db_spend_update_writer import _virtual_key_team_id
+
+        instance = self._instance(key_row=SimpleNamespace(key_alias="prod-key") if key_row_exists else None)
+
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
+
+        assert _virtual_key_team_id({"litellm_params": {"metadata": metadata}}) == expected
+
     @pytest.mark.asyncio
     async def test_metadata_tolerates_legacy_row_without_columns(self):
         """Rows created before the columns existed carry only created_by/team_id and must

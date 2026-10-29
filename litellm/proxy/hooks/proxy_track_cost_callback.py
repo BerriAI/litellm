@@ -13,7 +13,11 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.caching.redis_batch import flush_post_call_redis_batches
-from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED, BILLED_RETRY_ATTEMPT_METADATA_KEY
+from litellm.constants import (
+    BACKGROUND_INTERACTION_COST_POLLING_ENABLED,
+    BILLED_RETRY_ATTEMPT_METADATA_KEY,
+    USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     budget_reservation_from_metadata,
@@ -480,6 +484,9 @@ class _ProxyDBLogger(CustomLogger):
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
         _metadata["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
+        _metadata[USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY] = LiteLLMProxyRequestSetup.authenticated_with_virtual_key(
+            user_api_key_dict
+        )
         _metadata["status"] = "failure"
         _error_information = StandardLoggingPayloadSetup.get_error_information(
             original_exception=original_exception,
