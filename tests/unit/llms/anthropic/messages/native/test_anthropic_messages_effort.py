@@ -347,6 +347,18 @@ CLEAR_TOOL_USES_EDIT: Final = {"type": "clear_tool_uses_20250919"}
     [
         pytest.param("claude-sonnet-4-5", {"reasoning_effort": "none"}, False, id="reasoning-effort-none"),
         pytest.param("claude-haiku-4-5", {"reasoning_effort": "high"}, True, id="reasoning-effort-high"),
+        pytest.param(
+            "claude-haiku-4-5",
+            {"max_tokens": 1024, "reasoning_effort": "high"},
+            False,
+            id="reasoning-effort-budget-cannot-fit",
+        ),
+        pytest.param(
+            "claude-haiku-4-5",
+            {"max_tokens": 1024, "reasoning_effort": "high", "thinking": {"type": "enabled", "budget_tokens": 1000}},
+            True,
+            id="caller-thinking-kept-when-budget-cannot-fit",
+        ),
         pytest.param("claude-opus-4-5", _claude_code_payload(effort="high"), False, id="effort-model-drops-adaptive"),
         pytest.param("claude-sonnet-4-6", _claude_code_payload(effort="high"), True, id="adaptive-model"),
         pytest.param("claude-3-5-haiku-latest", _claude_code_payload(), False, id="non-reasoning-model"),

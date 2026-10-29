@@ -459,6 +459,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         fitted_thinking: Final = AnthropicConfig.cap_thinking_budget_to_max_tokens(mapped_thinking, max_tokens)
         if fitted_thinking is None:
             verbose_logger.warning(DROP_UNFITTING_REASONING_EFFORT_WARNING, reasoning_effort, model, max_tokens)
+            if "thinking" not in optional_params:
+                self._drop_thinking(optional_params, model, custom_llm_provider)
             return
 
         optional_params.setdefault("thinking", fitted_thinking)
