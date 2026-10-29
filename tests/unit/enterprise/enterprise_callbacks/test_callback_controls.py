@@ -197,6 +197,17 @@ class TestEnterpriseCallbackControls:
         )
         assert result is False
 
+    def test_no_disable_request_logs_nothing(self, caplog):
+        litellm_params = {"proxy_server_request": {"url": "test", "headers": {"user-agent": "codex"}}}
+
+        with caplog.at_level("DEBUG", logger="LiteLLM"):
+            result = EnterpriseCallbackControls.is_callback_disabled_dynamically(
+                DataDogLogger.__new__(DataDogLogger), litellm_params, StandardCallbackDynamicParams()
+            )
+
+        assert result is False
+        assert caplog.records == []
+
     def test_callback_not_disabled_when_header_none(
         self, mock_premium_user, mock_request_headers
     ):
