@@ -24,7 +24,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.messages.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
@@ -153,6 +153,7 @@ class _TextAttrBlock(Protocol):
     text: str
 
 
+@runtime_checkable
 class _WritableMessage(Protocol):
     @overload
     def get(self, key: str, /) -> object | None: ...
@@ -193,6 +194,116 @@ EMPTY_EXTRACTED_INPUT: Final = ExtractedInput(scanned=(), images=())
 class _ToolCallShape:
     name: str | None
     arguments: str
+
+
+@dataclass(frozen=True, slots=True)
+class _WebSearchString:
+    block_idx: int
+    result_idx: int | None
+    field: str
+    value: str
+
+
+def _web_search_results(block: Mapping[str, object]) -> Iterable[object]:
+    return iter_items(block.get("content")) if isinstance(block.get("content"), list) else ()
+
+
+def _web_search_result_strings(block_idx: int, result_idx: int, result: object) -> tuple[_WebSearchString, ...]:
+    fields: Final = as_str_mapping(result)
+    if fields is None or fields.get("type") != "web_search_result":
+        return ()
+    values: Final = ((field, fields.get(field)) for field in ("title", "url"))
+    return tuple(
+        _WebSearchString(block_idx, result_idx, field, value)
+        for field, value in values
+        if isinstance(value, str) and value
+    )
+
+
+def _web_search_block_strings(
+    block_idx: int, block: Mapping[str, object], *, with_query: bool
+) -> tuple[_WebSearchString, ...]:
+    """The strings a client reads off a native web search block: the ``server_tool_use`` query and each
+    ``web_search_tool_result`` result's title and url."""
+    match block.get("type"):
+        case "server_tool_use" if with_query:
+            tool_input: Final = as_str_mapping(block.get("input"))
+            query: Final = None if tool_input is None else tool_input.get("query")
+            return (_WebSearchString(block_idx, None, "query", query),) if isinstance(query, str) and query else ()
+        case "web_search_tool_result":
+            return tuple(
+                chain.from_iterable(
+                    _web_search_result_strings(block_idx, result_idx, result)
+                    for result_idx, result in enumerate(_web_search_results(block))
+                )
+            )
+        case _:
+            return ()
+
+
+def _rewritten_web_search_result(
+    result_idx: int, result: object, rewrites: Mapping[tuple[int | None, str], str]
+) -> object:
+    fields: Final = as_str_mapping(result)
+    if fields is None:
+        return result
+    return {
+        **fields,
+        **{field: rewrites[(result_idx, field)] for field in ("title", "url") if (result_idx, field) in rewrites},
+    }
+
+
+def _rewritten_web_search_block(
+    block: Mapping[str, object], rewrites: Sequence[tuple[_WebSearchString, str]]
+) -> Mapping[str, object]:
+    by_location: Final = MappingProxyType({(target.result_idx, target.field): value for target, value in rewrites})
+    if block.get("type") == "server_tool_use":
+        query: Final = by_location.get((None, "query"))
+        tool_input: Final = as_str_mapping(block.get("input")) or MappingProxyType({})
+        return block if query is None else {**block, "input": {**tool_input, "query": query}}
+    if not isinstance(block.get("content"), list):
+        return block
+    return {
+        **block,
+        "content": [
+            _rewritten_web_search_result(result_idx, result, by_location)
+            for result_idx, result in enumerate(_web_search_results(block))
+        ],
+    }
+
+
+def _write_back_web_search_block(content_block: object, rewrites: Sequence[tuple[_WebSearchString, str]]) -> None:
+    block: Final = as_str_mapping(content_block)
+    if block is None or not isinstance(content_block, _WritableMessage):
+        return
+    rewritten: Final = _rewritten_web_search_block(block, rewrites)
+    writable: Final = _as_writable(content_block)
+    for key in ("input", "content"):
+        if key in rewritten:
+            writable[key] = rewritten[key]
+
+
+def _split_web_search_texts(
+    guardrailed: Sequence[str], web_search_count: int, reply_count: int
+) -> tuple[Sequence[str], Sequence[str]]:
+    split_at: Final = web_search_count if len(guardrailed) == web_search_count + reply_count else 0
+    return guardrailed[:split_at], guardrailed[split_at:]
+
+
+def _web_search_rewrites_by_block(
+    strings: Sequence[_WebSearchString], guardrailed: Sequence[object]
+) -> Mapping[int, tuple[tuple[_WebSearchString, str], ...]]:
+    rewrites: Final = tuple(
+        (target, value)
+        for target, value in zip(strings, guardrailed)
+        if isinstance(value, str) and value != target.value
+    )
+    return MappingProxyType(
+        {
+            block_idx: tuple(rewrite for rewrite in rewrites if rewrite[0].block_idx == block_idx)
+            for block_idx in {target.block_idx for target, _ in rewrites}
+        }
+    )
 
 
 def _is_client_tool_use(block: Mapping[str, object]) -> bool:
@@ -289,6 +400,7 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
 
 _TOOL_USE_INPUT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _DECODED_SSE_DATA: Final = TypeAdapter(object)
+_REBUILT_TOOL_CALL_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use"})
 _RELEASED_TOOL_USE_STOP: Final = (
     b"event: message_delta\n"
     b'data: {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": null}, '
@@ -1244,9 +1356,17 @@ class AnthropicMessagesHandler(BaseTranslation):
             task_mappings,
             tool_calls_to_check,
         )
+        block_fields: Final = tuple(map(self._output_block_fields, response_content))
+        web_search_strings: Final = tuple(
+            chain.from_iterable(
+                _web_search_block_strings(content_idx, fields[1], with_query=True)
+                for content_idx, fields in enumerate(block_fields)
+                if fields is not None
+            )
+        )
 
         # Step 2: Apply guardrail to all texts in batch
-        if texts_to_check or tool_calls_to_check:
+        if texts_to_check or tool_calls_to_check or web_search_strings:
             request_data = self._prepare_request_data(
                 request_data,
                 response,
@@ -1255,7 +1375,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
 
             inputs: Final = self._build_guardrail_inputs(
-                texts_to_check,
+                [*(target.value for target in web_search_strings), *texts_to_check],
                 images_to_check,
                 tool_calls_to_check,
                 response,
@@ -1268,13 +1388,18 @@ class AnthropicMessagesHandler(BaseTranslation):
                 logging_obj=litellm_logging_obj,
             )
 
-            guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
+            web_search_rewrites, reply_rewrites = _split_web_search_texts(
+                guardrailed_inputs.get("texts", []), len(web_search_strings), len(texts_to_check)
+            )
 
             # Step 3: Map guardrail responses back to original response structure
             await self._apply_guardrail_responses_to_output(
                 response=response,
-                responses=guardrailed_texts,
+                responses=list(reply_rewrites),
                 task_mappings=task_mappings,
+            )
+            self._write_back_web_search_strings(
+                response_content, _web_search_rewrites_by_block(web_search_strings, web_search_rewrites)
             )
 
         verbose_proxy_logger.debug("Anthropic Messages: Processed output response: %s", response)
@@ -1321,8 +1446,11 @@ class AnthropicMessagesHandler(BaseTranslation):
                 string_so_far = first_choice.message.content
                 pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_list or ())
                 guardrail_inputs: Final = GenericGuardrailAPIInputs()
-                if string_so_far:
-                    guardrail_inputs["texts"] = [string_so_far]
+                leading_texts: Final = (string_so_far,) if isinstance(string_so_far, str) and string_so_far else ()
+                streamed_result_strings: Final = self._streamed_web_search_result_strings(responses_so_far)
+                texts_to_check: Final = [*(target.value for target in streamed_result_strings), *leading_texts]
+                if texts_to_check:
+                    guardrail_inputs["texts"] = texts_to_check
                 if tool_calls_list:
                     guardrail_inputs["tool_calls"] = tool_calls_list
 
@@ -1345,18 +1473,24 @@ class AnthropicMessagesHandler(BaseTranslation):
                             responses_so_far, request_data
                         )
                     raise
-                guardrailed_texts: Final = _guardrailed_inputs.get("texts")
+                web_search_rewrites, reply_rewrites = _split_web_search_texts(
+                    _guardrailed_inputs.get("texts") or [], len(streamed_result_strings), len(leading_texts)
+                )
                 if (
                     deliver_ended_stream_rewrites
                     and isinstance(string_so_far, str)
                     and string_so_far
-                    and guardrailed_texts
-                    and guardrailed_texts[0] != string_so_far
+                    and reply_rewrites
+                    and reply_rewrites[0] != string_so_far
                 ):
                     self._write_ended_stream_text_rewrite(
                         responses_so_far,
-                        guardrailed_texts[0],
+                        reply_rewrites[0],
                         guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
+                    )
+                if deliver_ended_stream_rewrites:
+                    self._write_ended_stream_web_search_rewrites(
+                        responses_so_far, _web_search_rewrites_by_block(streamed_result_strings, web_search_rewrites)
                     )
                 if deliver_ended_stream_rewrites:
                     returned_tool_calls: Final = _guardrailed_inputs.get("tool_calls")
@@ -1421,6 +1555,14 @@ class AnthropicMessagesHandler(BaseTranslation):
             if user_metadata:
                 request_data["litellm_metadata"] = user_metadata
         return request_data
+
+    @staticmethod
+    def _write_back_web_search_strings(
+        response_content: Sequence[object],
+        rewrites_by_block: Mapping[int, tuple[tuple[_WebSearchString, str], ...]],
+    ) -> None:
+        for block_idx, rewrites in rewrites_by_block.items():
+            _write_back_web_search_block(_content_block_at(response_content, block_idx), rewrites)
 
     @staticmethod
     def _get_response_content(response: object) -> Sequence[object]:
@@ -1544,8 +1686,8 @@ class AnthropicMessagesHandler(BaseTranslation):
     ) -> None:
         """Deliver ended-stream guardrail tool-call rewrites by rewriting the
         buffered chunks in place: the rebuilt response lists tool calls in the
-        order of the stream's ``tool_use`` blocks, so the nth rewritten call lands
-        on the nth block, its first ``input_json_delta`` carrying the full rewritten
+        order of the stream's ``tool_use`` and ``server_tool_use`` blocks, so the nth
+        rewritten call lands on the nth block, its first ``input_json_delta`` carrying the full rewritten
         arguments, every later one blanked, and ``content_block_start`` carrying the
         rewritten name. Blocks that do not line up with the rebuilt tool calls make
         the rewrite undeliverable, so the pipeline executor discards it and releases
@@ -1558,7 +1700,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             for event in cls._iter_sse_events(item)
             if event.get("type") == "content_block_start"
             and isinstance(block := event.get("content_block"), Mapping)
-            and block.get("type") == "tool_use"
+            and block.get("type") in _REBUILT_TOOL_CALL_BLOCK_TYPES
             and isinstance(index := event.get("index"), int)
         )
         if len(block_indices) != len(post_guardrail_tool_calls):
@@ -1567,7 +1709,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             raise UndeliverableStreamRewrite(
                 guardrail_name,
                 f"the guardrail returned {len(post_guardrail_tool_calls)} tool calls for a stream that carried "
-                f"{len(block_indices)} tool_use blocks",
+                f"{len(block_indices)} tool_use or server_tool_use blocks",
             )
         rewrites_by_block: Final = MappingProxyType(
             {
@@ -1606,6 +1748,45 @@ class AnthropicMessagesHandler(BaseTranslation):
                 tool_use_id for index, tool_use_id in streamed_tool_use_ids.items() if index not in rewrites_by_block
             ),
         )
+
+    @classmethod
+    def _streamed_web_search_result_strings(cls, responses_so_far: Sequence[object]) -> tuple[_WebSearchString, ...]:
+        events: Final = chain.from_iterable(cls._iter_sse_events(item) for item in responses_so_far)
+        result_blocks: Final = (
+            (index, block)
+            for event in events
+            if event.get("type") == "content_block_start"
+            and isinstance(index := event.get("index"), int)
+            and (block := as_str_mapping(event.get("content_block"))) is not None
+        )
+        return tuple(
+            chain.from_iterable(
+                _web_search_block_strings(index, block, with_query=False) for index, block in result_blocks
+            )
+        )
+
+    @classmethod
+    def _write_ended_stream_web_search_rewrites(
+        cls,
+        responses_so_far: MutableSequence[object],  # mutable-ok: rewrites the caller's buffered chunks in place
+        rewrites_by_block: Mapping[int, tuple[tuple[_WebSearchString, str], ...]],
+    ) -> None:
+        """Deliver ended-stream guardrail rewrites of web search result titles and urls into the
+        ``content_block_start`` that carries each whole ``web_search_tool_result`` block."""
+        if not rewrites_by_block:
+            return
+
+        def rewrite_result_block(event: Mapping[str, object]) -> _SSEFieldRewrite | None:
+            index: Final = event.get("index")
+            block: Final = as_str_mapping(event.get("content_block"))
+            rewrites: Final = rewrites_by_block.get(index) if isinstance(index, int) else None
+            if event.get("type") != "content_block_start" or block is None or rewrites is None:
+                return None
+            return _SSEFieldRewrite(
+                "content_block", "content", _rewritten_web_search_block(block, rewrites).get("content")
+            )
+
+        cls._rewrite_ended_stream_events(responses_so_far, rewrite_result_block)
 
     @classmethod
     def _streamed_tool_use_ids(cls, responses_so_far: Sequence[object]) -> Mapping[int, str]:
@@ -1709,8 +1890,10 @@ class AnthropicMessagesHandler(BaseTranslation):
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         stream_ended: Final = self._check_streaming_has_ended(responses_so_far)
         tool_use_fingerprints: Final = self._streamed_tool_use_fingerprints(responses_so_far)
+        streamed_text: Final = self.get_streaming_string_so_far(responses_so_far)
+        result_strings: Final = self._streamed_web_search_result_strings(responses_so_far) if stream_ended else ()
         return StreamingScanKey(
-            texts=(self.get_streaming_string_so_far(responses_so_far),),
+            texts=(*(target.value for target in result_strings), streamed_text),
             tool_calls=tool_use_fingerprints if stream_ended else (),
             stream_ended=stream_ended,
             tool_calls_in_flight=bool(tool_use_fingerprints) and not stream_ended,

@@ -5,6 +5,7 @@ Uses mock guardrails to validate pipeline execution without external services.
 """
 
 import copy
+import json
 import logging
 import pickle
 from typing import Literal
@@ -15,6 +16,7 @@ import pytest
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
@@ -1823,6 +1825,77 @@ async def test_streaming_step_discards_a_legacy_rewrite_the_translation_cannot_r
 
     _assert_passed_with_discard_warning(result, caplog, "the legacy hook's response could not be rescanned")
     assert chunks == [_chunk()]
+
+
+class _AnthropicTextRewritingLegacyGuardrail(_LegacyHookGuardrail):
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        self.calls.append({"response": copy.deepcopy(response)})
+        for block in response["content"]:
+            if block["type"] == "text":
+                block["text"] = "[REWRITTEN] " + block["text"]
+
+
+def _anthropic_web_search_stream():
+    result_block = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_1",
+        "content": [
+            {"type": "web_search_result", "url": "https://example.test/a", "title": "A", "encrypted_content": ""}
+        ],
+    }
+    events = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "m",
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 1, "output_tokens": 0},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"query": "a"}'},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1, "content_block": result_block},
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "hello world"}},
+        {"type": "content_block_stop", "index": 2},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}},
+        {"type": "message_stop"},
+    )
+    return [f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_delivers_a_legacy_text_rewrite_past_web_search_results_its_hook_cannot_see(
+    monkeypatch, caplog
+):
+    guardrail = _AnthropicTextRewritingLegacyGuardrail()
+    chunks = _anthropic_web_search_stream()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_legacy_streaming_step(
+            monkeypatch, guardrail, chunks, translation=AnthropicMessagesHandler()
+        )
+
+    assert result.terminal_action == "allow"
+    assert [step.outcome for step in result.step_results] == ["pass"]
+    raw = b"".join(chunks).decode()
+    assert "[REWRITTEN] hello world" in raw
+    assert '"title": "A"' in raw and '"url": "https://example.test/a"' in raw
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio
