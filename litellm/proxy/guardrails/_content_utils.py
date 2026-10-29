@@ -62,6 +62,9 @@ def is_non_conversational_call_type(call_type: str) -> bool:
     return call_type in NON_CONVERSATIONAL_CALL_TYPES
 
 
+_PASSTHROUGH_EMBEDDINGS_ENDPOINT: Final = re.compile(r"/?(?:[\w-]+/)*embeddings/?")
+
+
 def is_non_conversational_request(call_type: str, data: Mapping[str, object]) -> bool:
     if is_non_conversational_call_type(call_type):
         return True
@@ -69,7 +72,7 @@ def is_non_conversational_request(call_type: str, data: Mapping[str, object]) ->
     return (
         call_type == "allm_passthrough_route"
         and isinstance(endpoint, str)
-        and endpoint.rstrip("/").endswith("embeddings")
+        and _PASSTHROUGH_EMBEDDINGS_ENDPOINT.fullmatch(endpoint) is not None
     )
 
 

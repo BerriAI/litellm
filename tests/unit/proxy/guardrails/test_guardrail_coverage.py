@@ -962,6 +962,14 @@ async def test_google_text_moderation_leaves_embedding_input_unmoderated(
             "allm_passthrough_route",
             {"model": "gigachat", "endpoint": "chat/completions", "messages": [{"role": "user", "content": "stocks"}]},
         ),
+        (
+            "allm_passthrough_route",
+            {
+                "model": "gigachat",
+                "endpoint": "chat/completions#embeddings",
+                "messages": [{"role": "user", "content": "stocks"}],
+            },
+        ),
     ],
 )
 async def test_google_text_moderation_still_blocks_conversations(
