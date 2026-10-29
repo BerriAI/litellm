@@ -5,7 +5,7 @@ from typing import Callable, Coroutine, Final, Iterable, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from redis.asyncio import Redis
 
 import litellm
@@ -837,6 +837,8 @@ def _recording_publish_with_ids(
 
 
 class _ModelRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     model_id: str
     model_name: str
 
