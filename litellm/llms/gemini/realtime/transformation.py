@@ -84,18 +84,64 @@ OPENAI_STOCK_REALTIME_VOICES: Final[frozenset[str]] = frozenset(
     {"alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"}
 )
 
+# Per https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api/configure-language-voice (2026-10-28)
+GEMINI_LIVE_DOCUMENTED_VOICES: Final[frozenset[str]] = frozenset(
+    {
+        "achernar",
+        "achird",
+        "algenib",
+        "algieba",
+        "alnilam",
+        "aoede",
+        "autonoe",
+        "callirrhoe",
+        "charon",
+        "despina",
+        "enceladus",
+        "erinome",
+        "fenrir",
+        "gacrux",
+        "iapetus",
+        "kore",
+        "laomedeia",
+        "leda",
+        "orus",
+        "puck",
+        "pulcherrima",
+        "rasalgethi",
+        "sadachbia",
+        "sadaltager",
+        "schedar",
+        "sulafat",
+        "umbriel",
+        "vindemiatrix",
+        "zephyr",
+        "zubenelgenubi",
+    }
+)
 
-def _gemini_live_speech_config(voice: object) -> Mapping[str, object] | None:
+
+def _gemini_live_speech_config(voice: object, drop_params: bool) -> Mapping[str, object] | None:
     """Build the Gemini Live speechConfig for a client-requested voice.
 
-    OpenAI stock voice names have no Gemini equivalent and Gemini Live closes
-    the session on an unknown voice, so they are dropped with a warning and
-    the model keeps its default voice. Every other name is forwarded verbatim.
+    Gemini Live closes the session on a voice name it does not know. OpenAI
+    stock voice names are always dropped, and with drop_params so is any name
+    outside Google's documented Live voices, keeping the model's default voice.
+    Every other name is forwarded verbatim for Gemini to accept or refuse.
     """
-    if isinstance(voice, str) and voice.lower() in OPENAI_STOCK_REALTIME_VOICES:
+    if not isinstance(voice, str):
+        return VertexGeminiConfig().map_audio_params({"voice": voice})
+    if voice.lower() in OPENAI_STOCK_REALTIME_VOICES:
         verbose_logger.warning(
             "Gemini Realtime: voice %s is an OpenAI voice with no Gemini equivalent; "
             "dropping it so the session keeps the model's default voice.",
+            voice,
+        )
+        return None
+    if drop_params and voice.lower() not in GEMINI_LIVE_DOCUMENTED_VOICES:
+        verbose_logger.warning(
+            "Gemini Realtime: voice %s is not a documented Gemini Live voice; "
+            "drop_params is set, so it is dropped and the session keeps the model's default voice.",
             voice,
         )
         return None
@@ -373,29 +419,35 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
             elif key == "input_audio_transcription" and value is not None:
                 optional_params["inputAudioTranscription"] = {}
-            elif key == "turn_detection" and value is not None:
-                value_typed = cast(OpenAIRealtimeTurnDetection, value)
-                if (
-                    isinstance(value_typed, dict)
-                    and value_typed.get("type") == "semantic_vad"
-                    and "create_response" not in value_typed
-                ):
-                    # Pipecat/OpenAI GA semantic VAD — skip; Gemini uses its own VAD.
-                    # Only skip when there is no create_response override so that
-                    # a guardrail-injected create_response:false is not dropped.
-                    continue
-                transformed_audio_activity_config = self.map_automatic_turn_detection(value_typed)
-                if transformed_audio_activity_config:
-                    optional_params["realtimeInputConfig"] = BidiGenerateContentRealtimeInputConfig(
-                        automaticActivityDetection=transformed_audio_activity_config
-                    )
+            elif key == "turn_detection":
+                realtime_input_config = self._realtime_input_config(cast(object, value))
+                if realtime_input_config is not None:
+                    optional_params["realtimeInputConfig"] = realtime_input_config
             elif key == "voice":
-                speech_config = _gemini_live_speech_config(value)
+                speech_config = _gemini_live_speech_config(value, self.drop_params)
                 if speech_config:
                     optional_params["generationConfig"]["speechConfig"] = speech_config
         if len(optional_params["generationConfig"]) == 0:
             optional_params.pop("generationConfig")
         return optional_params
+
+    def _realtime_input_config(self, turn_detection: object) -> BidiGenerateContentRealtimeInputConfig | None:
+        if turn_detection is None:
+            return BidiGenerateContentRealtimeInputConfig(automaticActivityDetection={"disabled": True})
+        value_typed: Final = cast(OpenAIRealtimeTurnDetection, turn_detection)
+        if (
+            isinstance(value_typed, dict)
+            and value_typed.get("type") == "semantic_vad"
+            and "create_response" not in value_typed
+        ):
+            # Pipecat/OpenAI GA semantic VAD — skip; Gemini uses its own VAD.
+            # Only skip when there is no create_response override so that
+            # a guardrail-injected create_response:false is not dropped.
+            return None
+        transformed_audio_activity_config: Final = self.map_automatic_turn_detection(value_typed)
+        if not transformed_audio_activity_config:
+            return None
+        return BidiGenerateContentRealtimeInputConfig(automaticActivityDetection=transformed_audio_activity_config)
 
     @staticmethod
     def _extract_turn_detection(session: dict) -> dict | None:
@@ -445,6 +497,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             if isinstance(input_cfg, dict):
                 if "input_audio_transcription" not in normalized and "transcription" in input_cfg:
                     normalized["input_audio_transcription"] = input_cfg["transcription"]
+                if "turn_detection" not in normalized and "turn_detection" in input_cfg:
+                    normalized["turn_detection"] = input_cfg["turn_detection"]
             output_cfg: Final = audio.get("output")
             if isinstance(output_cfg, dict) and output_cfg.get("voice"):
                 normalized["voice"] = output_cfg["voice"]

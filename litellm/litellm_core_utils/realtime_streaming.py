@@ -350,6 +350,7 @@ class RealTimeStreaming:
         # content (realtimeInput / clientContent / toolResponse) has been sent.
         self._content_sent_after_setup: bool = False
         self._held_session_update: Mapping[str, object] | None = None
+        self._applied_session_fields: Mapping[str, object] | None = None
         self._held_session_update_bytes: int = 0
         # Whether this is a transcription-only session (session.type == "transcription",
         # e.g. gpt-realtime-whisper). Such sessions must not be sent response.create and
@@ -661,7 +662,7 @@ class RealTimeStreaming:
     def _builds_setup_lazily(self) -> bool:
         if self.provider_config is None:
             return False
-        return self.provider_config.builds_setup_from_session_update() and not self._uses_deferred_backend_setup()
+        return self.provider_config.builds_setup_from_session_update()
 
     def _holds_session_updates_until_first_content(self) -> bool:
         return self.session_configuration_request is None and self._builds_setup_lazily()
@@ -672,10 +673,12 @@ class RealTimeStreaming:
             return False
         client_event: Final = _decode_json_object(message)
         session: Final = client_event.get("session")
+        update: Final = _SESSION_FIELDS.validate_python(session) if isinstance(session, Mapping) else _NO_SESSION_FIELDS
+        if self._leaves_applied_setup_unchanged(update):
+            await self._acknowledge_session_setup(self._applied_session_fields or _NO_SESSION_FIELDS)
+            return True
         rejection: Final = provider_config.setup_session_update_rejection(
-            self.model,
-            _SESSION_FIELDS.validate_python(session) if isinstance(session, Mapping) else _NO_SESSION_FIELDS,
-            setup_sent=self.session_configuration_request is not None,
+            self.model, update, setup_sent=self.session_configuration_request is not None
         )
         if rejection is None:
             return False
@@ -694,18 +697,37 @@ class RealTimeStreaming:
             return
         session: Final = client_event.get("session")
         update: Final = _SESSION_FIELDS.validate_python(session) if isinstance(session, Mapping) else _NO_SESSION_FIELDS
-        self._held_session_update = _merge_session_fields(self._held_session_update or _NO_SESSION_FIELDS, update)
-        held_message: Final = self._held_session_update_message()
-        self._held_session_update_bytes = len(held_message.encode("utf-8"))
-        await self._acknowledge_held_session_update(held_message)
+        held: Final = _merge_session_fields(self._held_session_update or _NO_SESSION_FIELDS, update)
+        self._held_session_update = held
+        self._held_session_update_bytes = len(_session_update_frame(held).encode("utf-8"))
+        await self._acknowledge_session_setup(held)
 
-    async def _acknowledge_held_session_update(self, held_message: str) -> None:
+    def _setup_preview(self, session: Mapping[str, object]) -> str | None:
         if self.provider_config is None:
-            return
-        preview: Final = self.provider_config.transform_realtime_request(held_message, self.model, None)
-        setup: Final = next(
+            return None
+        preview: Final = self.provider_config.transform_realtime_request(
+            _session_update_frame(session), self.model, None
+        )
+        return next(
             (frame for frame in preview if isinstance(frame, str) and "setup" in _decode_json_object(frame)), None
         )
+
+    def _leaves_applied_setup_unchanged(self, update: Mapping[str, object]) -> bool:
+        applied: Final = self._applied_session_fields
+        if self.session_configuration_request is None or applied is None:
+            return False
+        applied_setup: Final = self._setup_preview(applied)
+        merged_setup: Final = self._setup_preview(_merge_session_fields(applied, update))
+        return (
+            applied_setup is not None
+            and merged_setup is not None
+            and _decode_json_object(applied_setup) == _decode_json_object(merged_setup)
+        )
+
+    async def _acknowledge_session_setup(self, session: Mapping[str, object]) -> None:
+        if self.provider_config is None:
+            return
+        setup: Final = self._setup_preview(session)
         if setup is None:
             return
         acknowledged: Final = self.provider_config.transform_session_created_event(
@@ -719,12 +741,14 @@ class RealTimeStreaming:
         await self._send_event_to_client(event, event_str)
 
     async def _send_held_session_update_as_setup(self) -> None:
-        if self._held_session_update is None:
+        held: Final = self._held_session_update
+        if held is None:
             return
         message: Final = self._held_session_update_message()
         self._held_session_update = None
         self._held_session_update_bytes = 0
-        await self._send_to_backend(message)
+        if await self._send_to_backend(message):
+            self._applied_session_fields = held
 
     async def _send_setup_before_content(self, msg_type: str | None) -> None:
         if self._holds_session_updates_until_first_content():
@@ -754,6 +778,7 @@ class RealTimeStreaming:
         setup: Final = self.maybe_inject_guardrail_auto_response_disable(default_setup)
         await self.backend_ws.send(setup)
         self._cache_session_configuration_request(setup)
+        self._applied_session_fields = _NO_SESSION_FIELDS
 
     def _enforce_transcription_session_model(self, message: str) -> str:
         """Force client transcription session updates to the authorized model.
@@ -1816,6 +1841,9 @@ class RealTimeStreaming:
                 # turn_detection injection) so audit logs reflect what we
                 # actually forward to the backend.
                 self.store_input(message=message)
+
+                if msg_type != "session.update" and self._uses_deferred_backend_setup():
+                    await self._send_setup_before_content(msg_type)
 
                 if self._should_buffer_client_message_until_setup(message):
                     self._buffer_pending_message_until_setup(message)

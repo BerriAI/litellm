@@ -8,7 +8,7 @@ import pytest
 
 
 import litellm
-from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+from litellm.llms.gemini.realtime.transformation import GEMINI_LIVE_DOCUMENTED_VOICES, GeminiRealtimeConfig
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
 
 
@@ -1461,6 +1461,27 @@ def test_gemini_manual_vad_activity_markers_are_empty_messages():
     assert [json.loads(frame) for frame in turn_end] == [{"realtimeInput": {"activityEnd": {}}}]
 
 
+@pytest.mark.parametrize(
+    ("session", "expected_keys"),
+    [
+        ({"turn_detection": None}, [["activityStart", "audio"], ["activityEnd"]]),
+        ({"type": "realtime", "audio": {"input": {"turn_detection": None}}}, [["activityStart", "audio"], ["activityEnd"]]),
+        ({"type": "realtime", "audio": {"input": {}}}, [["audio"], ["audioStreamEnd"]]),
+    ],
+)
+def test_gemini_null_turn_detection_makes_the_client_mark_each_turn(session, expected_keys):
+    """OpenAI's turn_detection null turns server VAD off, so the client commits each turn itself."""
+    config = GeminiRealtimeConfig()
+    setup = config.transform_realtime_request(
+        json.dumps({"type": "session.update", "session": session}), "gemini-live-2.5-flash-native-audio", None
+    )
+    commit = json.dumps({"type": "input_audio_buffer.commit"})
+
+    keys = [_realtime_input_keys(config, event, setup[0]) for event in (_APPEND, commit)]
+
+    assert keys == expected_keys
+
+
 def test_gemini_automatic_vad_sends_no_activity_markers():
     config = GeminiRealtimeConfig()
     commit = json.dumps({"type": "input_audio_buffer.commit"})
@@ -1946,6 +1967,28 @@ def test_map_openai_params_drops_stock_voice_case_insensitively():
 
     passthrough = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Kore"})
     assert passthrough["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+_DOCUMENTED_VOICE: Final = sorted(GEMINI_LIVE_DOCUMENTED_VOICES)[0].capitalize()
+
+
+@pytest.mark.parametrize(
+    ("voice", "drop_params", "forwarded"),
+    [
+        ("Notavoice", True, None),
+        ("Notavoice", False, "Notavoice"),
+        (_DOCUMENTED_VOICE, True, _DOCUMENTED_VOICE),
+    ],
+)
+def test_map_openai_params_drops_an_undocumented_voice_only_with_drop_params(voice, drop_params, forwarded):
+    """Gemini Live closes the session on a voice it does not know, and AI Studio knows
+    names Vertex AI refuses, so only drop_params narrows to the documented voices."""
+    mapped = GeminiRealtimeConfig(drop_params=drop_params).map_openai_params(
+        optional_params={}, non_default_params={"voice": voice}
+    )
+
+    speech_config = mapped.get("generationConfig", {}).get("speechConfig")
+    assert (speech_config["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] if speech_config else None) == forwarded
 
 
 @pytest.fixture(autouse=False)
