@@ -1614,6 +1614,38 @@ async def test_a_denied_toolset_beside_a_granted_one_adds_nothing_to_the_scoped_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "toolset_lookup",
+    [AsyncMock(return_value=None), AsyncMock(side_effect=ConnectionError("database unreachable"))],
+    ids=["no_such_toolset", "toolset_lookup_fails"],
+)
+async def test_a_name_that_does_not_resolve_to_a_toolset_is_listed_as_a_server_name(
+    monkeypatch: pytest.MonkeyPatch, toolset_lookup: AsyncMock
+):
+    mock_get_tools: Final = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
+    monkeypatch.setattr("litellm.proxy.mcp_server.server._get_tools_from_mcp_servers", mock_get_tools)
+    manager: Final = types.SimpleNamespace(
+        **{**vars(_toolset_gateway_manager("srv-1")), "get_toolset_by_name_cached": toolset_lookup}
+    )
+    monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+
+    async def no_toolset_grants(context: UserAPIKeyAuth) -> frozenset[str]:
+        return frozenset()
+
+    await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+        user_api_key_auth=UserAPIKeyAuth(api_key="sk-team", team_id="team-1"),
+        mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/wiki"}],
+        granted_toolsets=no_toolset_grants,
+    )
+
+    assert mock_get_tools.await_args is not None
+    listed: Final = mock_get_tools.await_args.kwargs
+    assert listed["mcp_servers"] == ["wiki"]
+    assert listed["user_api_key_auth"].object_permission is None
+
+
+@pytest.mark.asyncio
 async def test_apply_toolset_permissions_pins_the_auth_to_explicit_grants_only(monkeypatch: pytest.MonkeyPatch):
     """A toolset gateway URL must not widen to operator-open (allow_all_keys) servers."""
     from litellm.proxy._types import UserAPIKeyAuth
