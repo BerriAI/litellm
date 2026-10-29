@@ -23,7 +23,7 @@ from httpx import Response, Timeout
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
-from litellm._internal_context import in_mirrored_call, post_response_phase
+from litellm._internal_context import in_mirrored_call, outside_mirrored_call, post_response_phase
 from litellm._logging import (
     is_debugging_on,
     redact_string,
@@ -3246,7 +3246,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            with post_response_phase():
+            with post_response_phase(), outside_mirrored_call():
                 return self._success_handler_body(
                     result=result,
                     start_time=start_time,
@@ -3746,7 +3746,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            with post_response_phase():
+            with post_response_phase(), outside_mirrored_call():
                 return await self._async_success_handler_body(
                     result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
                 )
@@ -4263,13 +4263,14 @@ class Logging(LiteLLMLoggingBaseClass):
         ``for_async_request`` marks the sync run of a failure whose async run also logs it, so a
         CustomLogger that gets ``async_log_failure_event`` from that async run skips its sync hook."""
         try:
-            return self._failure_handler_body(
-                exception=exception,
-                traceback_exception=traceback_exception,
-                start_time=start_time,
-                end_time=end_time,
-                for_async_request=for_async_request,
-            )
+            with outside_mirrored_call():
+                return self._failure_handler_body(
+                    exception=exception,
+                    traceback_exception=traceback_exception,
+                    start_time=start_time,
+                    end_time=end_time,
+                    for_async_request=for_async_request,
+                )
         finally:
             self._restore_correlation_context()
 
@@ -4462,12 +4463,13 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own failure
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            return await self._async_failure_handler_body(
-                exception=exception,
-                traceback_exception=traceback_exception,
-                start_time=start_time,
-                end_time=end_time,
-            )
+            with outside_mirrored_call():
+                return await self._async_failure_handler_body(
+                    exception=exception,
+                    traceback_exception=traceback_exception,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
         finally:
             self._restore_correlation_context()
 
@@ -7714,9 +7716,8 @@ def get_standard_logging_metadata(
     )
     if isinstance(metadata, dict):
         # Update the clean_metadata with values from input metadata that match StandardLoggingMetadata fields
-        for key in StandardLoggingMetadata.__annotations__:
-            if key in metadata:
-                clean_metadata[key] = metadata[key]
+        for key in metadata.keys() & _STANDARD_LOGGING_METADATA_KEYS:
+            clean_metadata[key] = metadata[key]
 
         if metadata.get("user_api_key") is not None:
             if is_valid_sha256_hash(str(metadata.get("user_api_key"))):

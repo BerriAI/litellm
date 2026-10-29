@@ -11976,6 +11976,16 @@ def test_get_standard_logging_metadata(metadata_key, metadata_value):
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+def test_module_level_get_standard_logging_metadata_ignores_a_caller_sent_silent_experiment_flag():
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_metadata
+
+    result = get_standard_logging_metadata({"is_silent_experiment": True, "user_api_key_alias": "alias"})
+
+    assert "is_silent_experiment" not in result
+    assert result["user_api_key_alias"] == "alias"
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_get_standard_logging_metadata_user_api_key_hash():
     valid_hash = "a" * 64  # 64 character string
     metadata = {"user_api_key": valid_hash}

@@ -2,7 +2,7 @@ import asyncio
 import datetime
 import json
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -42,20 +42,58 @@ async def _settle_shared_logging_worker() -> None:
         await GLOBAL_LOGGING_WORKER.stop()
 
 
-@pytest.fixture
-def recording_logger():
+class _JudgingLogger(_RecordingLogger):
+    async def _judge(self, kwargs: Mapping[str, object]) -> None:
+        metadata: Final = kwargs["litellm_params"]["metadata"]
+        if "judge_of" in metadata:
+            return
+        await litellm.acompletion(
+            model="openai/gpt-5.4-nano",
+            api_key="fake-key",
+            messages=[{"role": "user", "content": "score it"}],
+            mock_response="ok",
+            metadata={"judge_of": metadata["model_group"]},
+        )
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        await super().async_log_success_event(kwargs, response_obj, start_time, end_time)
+        await self._judge(kwargs)
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        await self._judge(kwargs)
+
+    def judge_flags(self) -> dict[str, object]:
+        return {
+            call["litellm_params"]["metadata"]["judge_of"]: call["standard_logging_object"]["metadata"].get(
+                "is_silent_experiment"
+            )
+            for call in self.success_kwargs
+            if "judge_of" in call["litellm_params"]["metadata"]
+        }
+
+
+def _installed(logger: _RecordingLogger) -> Generator[_RecordingLogger]:
     settle_loop: Final = asyncio.new_event_loop()
     try:
         settle_loop.run_until_complete(_settle_shared_logging_worker())
     finally:
         settle_loop.close()
     original_callbacks: Final = litellm.callbacks
-    logger: Final = _RecordingLogger()
     litellm.callbacks = [logger]
     try:
         yield logger
     finally:
         litellm.callbacks = original_callbacks
+
+
+@pytest.fixture
+def recording_logger():
+    yield from _installed(_RecordingLogger())
+
+
+@pytest.fixture
+def judging_logger():
+    yield from _installed(_JudgingLogger())
 
 
 async def _wait_for_shadow_successes(logger: _RecordingLogger, expected: int, timeout: float = 5.0) -> None:
@@ -68,6 +106,21 @@ async def _wait_for_all_successes(logger: _RecordingLogger, expected: int, timeo
     deadline: Final = time.monotonic() + timeout
     while len(logger.success_kwargs) < expected and time.monotonic() < deadline:
         await asyncio.sleep(0.05)
+
+
+async def _wait_for_judges(logger: _JudgingLogger, judged: set[str], timeout: float = 5.0) -> None:
+    deadline: Final = time.monotonic() + timeout
+    while not judged <= logger.judge_flags().keys() and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+
+
+def _silent_flag_by_group(logger: _RecordingLogger) -> dict[str, object]:
+    return {
+        call["standard_logging_object"]["model_group"]: call["standard_logging_object"]["metadata"].get(
+            "is_silent_experiment"
+        )
+        for call in logger.success_kwargs
+    }
 
 
 def _wait_for_shadow_successes_sync(logger: _RecordingLogger, expected: int, timeout: float = 5.0) -> None:
@@ -806,15 +859,62 @@ async def test_aembedding_with_silent_model_sends_provider_body_without_it(
     request_body: Final = json.loads(route.calls.last.request.read())
     assert request_body == {"model": "embed-model", "input": ["black dresses"], "input_type": "query"}
     assert response.data[0]["embedding"] == [0.1, 0.2]
-@pytest.mark.parametrize("run_silent_experiment", SILENT_EXPERIMENT_RUNNERS)
-def test_silent_experiment_does_not_launch_from_a_shadow_request(run_silent_experiment):
-    router = Router(model_list=_streaming_model_list(["shadow-a"]))
-    with patch.object(router, "acompletion", new_callable=AsyncMock, return_value=None) as acompletion:
-        run_silent_experiment(
-            router,
-            silent_model="shadow-a",
-            messages=[{"role": "user", "content": "hi"}],
-            metadata={"is_silent_experiment": True},
-        )
+@pytest.mark.asyncio
+async def test_a_caller_sent_silent_experiment_flag_still_mirrors_the_request_async(
+    recording_logger: _RecordingLogger,
+) -> None:
+    router: Final = Router(model_list=_streaming_model_list(["shadow-a"]))
+    await router.acompletion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+        metadata={"is_silent_experiment": True},
+    )
+    await _wait_for_all_successes(recording_logger, expected=2)
 
-    acompletion.assert_not_awaited()
+    assert _silent_flag_by_group(recording_logger) == {"primary-model": None, "shadow-a": True}
+
+
+def test_a_caller_sent_silent_experiment_flag_still_mirrors_the_request_sync(
+    recording_logger: _RecordingLogger,
+) -> None:
+    router: Final = Router(model_list=_streaming_model_list(["shadow-a"]))
+    router.completion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+        metadata={"is_silent_experiment": True},
+    )
+    deadline: Final = time.monotonic() + 5.0
+    while "shadow-a" not in _silent_flag_by_group(recording_logger) and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    assert _silent_flag_by_group(recording_logger) == {"shadow-a": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shadow_outcome", ["pong", "litellm.InternalServerError"])
+async def test_calls_a_callback_starts_while_logging_a_mirrored_call_are_not_marked_as_mirrored(
+    judging_logger: _JudgingLogger, shadow_outcome: str
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake-key",
+                    "silent_model": "shadow-a",
+                    "mock_response": "pong",
+                },
+            },
+            {
+                "model_name": "shadow-a",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "fake-key", "mock_response": shadow_outcome},
+            },
+        ]
+    )
+    await router.acompletion(model="primary-model", messages=[{"role": "user", "content": "hi"}])
+    await _wait_for_judges(judging_logger, {"primary-model", "shadow-a"})
+
+    assert judging_logger.judge_flags() == {"primary-model": None, "shadow-a": None}

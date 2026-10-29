@@ -52,7 +52,7 @@ from typing_extensions import assert_never, overload
 import litellm
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
-from litellm._internal_context import mirrored_call, service_target, with_service_target
+from litellm._internal_context import in_mirrored_call, mirrored_call, service_target, with_service_target
 from litellm._logging import verbose_router_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import (
@@ -702,7 +702,7 @@ def _every_deployment_refused(
 
 
 def _silent_experiment_targets(silent_model: object) -> tuple[str, ...]:
-    if silent_model is None:
+    if silent_model is None or in_mirrored_call():
         return ()
     try:
         targets: Final = _SILENT_MODEL_ADAPTER.validate_python(silent_model)
@@ -3325,10 +3325,6 @@ class Router:
         Run a silent experiment in the background (thread).
         """
         try:
-            # Prevent infinite recursion if silent model also has a silent model
-            if kwargs.get("metadata", {}).get("is_silent_experiment", False):
-                return
-
             messages = copy.deepcopy(messages)
 
             verbose_router_logger.info("Starting silent experiment for model %s", silent_model)
@@ -4513,10 +4509,6 @@ class Router:
         Run a silent experiment in the background.
         """
         try:
-            # Prevent infinite recursion if silent model also has a silent model
-            if kwargs.get("metadata", {}).get("is_silent_experiment", False):
-                return
-
             messages = copy.deepcopy(messages)
 
             verbose_router_logger.info("Starting silent experiment for model %s", silent_model)

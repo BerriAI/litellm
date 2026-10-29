@@ -140,6 +140,16 @@ def in_mirrored_call() -> bool:
 
 
 @contextmanager
+def outside_mirrored_call() -> Generator[None]:
+    """Logging a mirrored call: the calls its callbacks start are not mirrors themselves."""
+    token: Final = _mirrored_call.set(False)
+    try:
+        yield
+    finally:
+        _restore(_mirrored_call, token)
+
+
+@contextmanager
 def pinned_billing_time(moment: datetime) -> Generator[None]:
     """Price every rate lookup inside this block at ``moment`` rather than at each one's own clock read."""
     token: Final = _billing_time.set(moment)
