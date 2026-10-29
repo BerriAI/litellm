@@ -1015,6 +1015,49 @@ def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
     assert "Response with id 'resp_abc' not found." in excinfo.value.message
 
 
+@pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
+@pytest.mark.parametrize(
+    "status_code, message, expected_exception",
+    [
+        (400, "Invalid 'temperature'", litellm.BadRequestError),
+        (401, "Invalid API key", litellm.AuthenticationError),
+        (404, "The model does not exist", litellm.NotFoundError),
+    ],
+)
+def test_openai_invalid_request_error_respects_status_code(
+    provider: str, status_code: int, message: str, expected_exception: type[openai.APIStatusError]
+) -> None:
+    error_message: Final = json.dumps({"error": {"message": message, "type": "invalid_request_error"}})
+    original_exception: Final = OpenAIError(status_code=status_code, message=error_message, headers={})
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="some-model",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert type(excinfo.value) is expected_exception
+    assert excinfo.value.status_code == status_code
+    assert message in excinfo.value.message
+
+
+@pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
+def test_openai_invalid_request_error_without_a_status_code_maps_to_bad_request(provider: str) -> None:
+    message: Final = "Missing required parameter: 'input'."
+    original_exception: Final = Exception(json.dumps({"error": {"message": message, "type": "invalid_request_error"}}))
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="some-model",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert type(excinfo.value) is litellm.BadRequestError
+    assert message in excinfo.value.message
+
+
 class _UpstreamHTTPError(Exception):
     def __init__(self, status_code: int) -> None:
         super().__init__("upstream failure")
