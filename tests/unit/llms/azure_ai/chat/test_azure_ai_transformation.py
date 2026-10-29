@@ -1028,6 +1028,23 @@ def test_azure_ai_drops_a_file_part_next_to_the_breakpoint_like_the_string_conve
     assert flattened["messages"][0]["content"] == "summarize"
 
 
+def test_azure_ai_sends_a_pdf_part_next_to_the_breakpoint_as_is(_local_model_cost_map):
+    content: Final = [
+        {"type": "file", "file": {"filename": "document.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"}},
+        {"type": "text", "text": "What is the codeword?", "prompt_cache_breakpoint": {"mode": "explicit"}},
+    ]
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[{"role": "user", "content": content}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": content}]
+
+
 def test_azure_ai_puts_a_message_level_mark_on_the_last_text_part_when_a_file_part_follows(_local_model_cost_map):
     request: Final = AzureAIStudioConfig().transform_request(
         model="gpt-6-astra",
@@ -1380,6 +1397,58 @@ def test_map_azure_model_group(model_group_header, expected_model):
 
     config = AzureAICohereConfig()
     assert config._map_azure_model_group(model_group_header) == expected_model
+
+
+def test_azure_ai_sends_file_parts_instead_of_flattening_them_to_text() -> None:
+    file_part: Final = {
+        "type": "file",
+        "file": {"filename": "document.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+    }
+    content: Final = [file_part, {"type": "text", "text": "What is the codeword?"}]
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="Kimi-K2.6",
+        messages=[{"role": "user", "content": content}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": content}]
+
+
+def test_azure_ai_passes_dict_message_content_through_for_the_provider_to_judge() -> None:
+    content: Final = {"type": "text", "text": "Say hi"}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-5.6-sol",
+        messages=[{"role": "user", "content": content}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": content}]
+
+
+@pytest.mark.parametrize(
+    "file",
+    [
+        {"filename": "notes.txt", "file_data": "data:text/plain;base64,aGVsbG8="},
+        {"file_id": "file-abc"},
+    ],
+    ids=["text_data_url", "file_id_only"],
+)
+def test_azure_ai_flattens_a_non_pdf_file_part_to_its_text_as_before(file: dict[str, str]) -> None:
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="Llama-3.3-70B-Instruct",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "summarize"}, {"type": "file", "file": file}]}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": "summarize"}]
 
 
 def test_translate_developer_role_hoists_a_later_developer_message_for_a_model_that_rejects_it(
