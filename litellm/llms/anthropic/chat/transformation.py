@@ -515,6 +515,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _resolved_provider(self) -> str:
         return self.custom_llm_provider or "anthropic"
 
+    @property
+    def default_max_tokens_provider(self) -> str | None:
+        return self.custom_llm_provider
+
     def uses_native_structured_output(self, model: str) -> bool:
         return AnthropicConfig._supports_model_capability(
             model, "supports_native_structured_output", self._resolved_provider
@@ -2436,7 +2440,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         config: Final[Mapping[str, object]] = MappingProxyType(
             litellm.AnthropicConfig.get_config(
                 model=model,
-                custom_llm_provider=self.custom_llm_provider,
+                custom_llm_provider=self.default_max_tokens_provider,
                 base_model=_deployment_base_model(deployment_params),
                 deployment_model_info=deployment_params.get("model_info"),
             )

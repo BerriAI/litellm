@@ -38,6 +38,10 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
     Usage: model="bedrock/mantle/anthropic.claude-mythos-preview"
     """
 
+    @property
+    def default_max_tokens_provider(self) -> str | None:
+        return "bedrock_mantle"
+
     def get_complete_url(
         self,
         api_base: str | None,

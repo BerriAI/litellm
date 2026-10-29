@@ -2,11 +2,14 @@ import base64
 import json
 import uuid
 from types import SimpleNamespace
+from typing import Final
 
 import httpx
 import pytest
 
 import litellm
+from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
@@ -243,3 +246,18 @@ async def test_mantle_claude_async_completion_streams_a_wrapped_json_schema_answ
     chunks = tuple([chunk async for chunk in stream])
 
     assert _streamed_answer(chunks) == BARE_STREAMED_ANSWER
+
+
+def test_mantle_claude_default_max_tokens_comes_from_the_mantle_row(local_model_cost_map):
+    mapped_cap: Final = litellm.get_max_tokens("bedrock_mantle/anthropic.claude-haiku-4-5")
+    assert mapped_cap != DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the model's mapped cap must differ from the fallback"
+
+    body: Final = AmazonMantleConfig().transform_request(
+        model="mantle/anthropic.claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == mapped_cap, f"Mantle should send its mapped cap, got {body['max_tokens']}"
