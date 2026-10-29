@@ -7776,7 +7776,7 @@ async def test_vertex_live_setup_frame_nested_too_deep_to_parse_is_refused() -> 
     ],
 )
 async def test_vertex_live_setup_frame_only_vertex_can_parse_still_reaches_vertex_for_an_unrestricted_key(
-    lenient_setup,
+    lenient_setup: str,
 ) -> None:
     """A key that may call any model loses nothing the proxy cannot read, so its lenient frames still go through"""
     websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
@@ -8360,7 +8360,7 @@ async def test_vertex_live_setup_frame_naming_another_providers_group_runs_that_
     ids=["other-provider-group", "vertex-group-serving-it", "vertex-model-id"],
 )
 async def test_vertex_live_setup_frame_naming_another_providers_group_is_authorized_by_the_vertex_model_it_runs(
-    models, reaches_vertex
+    models: list[str], reaches_vertex: bool
 ) -> None:
     websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
         [_setup_frame("studio-live")],
