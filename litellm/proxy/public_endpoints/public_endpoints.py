@@ -371,9 +371,9 @@ async def public_skill_hub():
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
         MANIFEST_FIELDS,
         get_installation_preference,
-        get_prisma_client,
     )
     from litellm.proxy.common_utils.claude_code_marketplace_auth import marketplace_auth_required
+    from litellm.proxy.proxy_server import prisma_client
     from litellm.types.proxy.claude_code_endpoints import (
         ListPluginsResponse,
         PluginListItem,
@@ -381,8 +381,9 @@ async def public_skill_hub():
 
     if marketplace_auth_required():
         return ListPluginsResponse(plugins=[], count=0)
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     try:
-        prisma_client: Final = await get_prisma_client()
         plugins: Final = await _plugin_table(prisma_client).find_many(where={"enabled": True})
         items: Final = []
         for plugin in plugins:

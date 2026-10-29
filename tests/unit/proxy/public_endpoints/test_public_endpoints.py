@@ -20,6 +20,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
 from litellm.proxy.public_endpoints import router
 from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
+from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
@@ -1802,7 +1803,7 @@ def test_public_skill_hub_500_body_carries_no_exception_text() -> None:
     assert "db.internal" not in response.text
 
 
-def test_public_skill_hub_without_a_database_answers_a_fixed_string_detail() -> None:
+def test_public_skill_hub_without_a_database_answers_db_not_connected() -> None:
     app: Final = FastAPI()
     app.include_router(router)
 
@@ -1813,4 +1814,4 @@ def test_public_skill_hub_without_a_database_answers_a_fixed_string_detail() -> 
         response: Final = TestClient(app).get("/public/skill_hub")
 
     assert response.status_code == 500
-    assert response.json() == {"detail": "Failed to list skills"}
+    assert response.json() == {"detail": CommonProxyErrors.db_not_connected_error.value}

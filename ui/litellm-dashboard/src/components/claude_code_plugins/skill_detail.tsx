@@ -239,7 +239,9 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
             <>
               <div className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-4 py-3">
                 <p className="m-0 mb-2 text-[13px] leading-relaxed text-muted-foreground">
-                  If you added this marketplace before without a key, remove it first in Claude Code:
+                  If you added this marketplace before without a key, remove it first in Claude Code. Removing it also
+                  uninstalls the plugins you installed from it, so install them again from /plugin after you add the
+                  snippet:
                 </p>
                 <pre className="m-0 bg-transparent font-mono text-[13px] text-foreground">
                   /plugin marketplace remove litellm

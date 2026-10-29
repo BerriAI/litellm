@@ -86,5 +86,6 @@ describe("SkillDetail marketplace setup", () => {
     expect(screen.queryByText(/\/plugin marketplace add/)).not.toBeInTheDocument();
     expect(screen.getByText(/"Authorization": "Bearer <your-litellm-key>"/)).toBeInTheDocument();
     expect(screen.getByText("/plugin marketplace remove litellm")).toBeInTheDocument();
+    expect(screen.getByText(/uninstalls the plugins you installed from it/)).toBeInTheDocument();
   });
 });
