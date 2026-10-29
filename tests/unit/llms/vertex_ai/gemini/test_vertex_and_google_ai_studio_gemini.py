@@ -3514,6 +3514,39 @@ def test_vertex_ai_annotation_conversion():
     assert "Current time" in time_annotation["url_citation"]["title"]
 
 
+@pytest.mark.parametrize(
+    "indices, expected_indices",
+    [([2, 0], [2, 0]), ([1, 99, -1, 2, 0], [2, 0]), ([0], [0]), ([], []), ([1, 99], [])],
+    ids=["multiple-sources", "non-web-first", "single-source", "empty", "no-web"],
+)
+def test_grounding_annotations_preserve_all_web_sources(indices: list[int], expected_indices: list[int]) -> None:
+    chunks: Final = [
+        {"web": {"uri": "https://example.com/first", "title": "First"}},
+        {"retrievedContext": {"uri": "gs://documents/source"}},
+        {"web": {"uri": "https://example.com/second", "title": "Second"}},
+    ]
+    metadata: Final = {
+        "groundingChunks": chunks,
+        "groundingSupports": [
+            {"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}
+        ],
+    }
+    annotations: Final = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata], "The passage")
+    expected: Final = [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "start_index": 4,
+                "end_index": 11,
+                "url": chunks[index]["web"]["uri"],
+                "title": chunks[index]["web"]["title"],
+            },
+        }
+        for index in expected_indices
+    ]
+    assert json.dumps(annotations) == json.dumps(expected)
+
+
 def test_vertex_ai_annotation_empty_grounding_metadata():
     """
     Test handling of empty or missing grounding metadata.
