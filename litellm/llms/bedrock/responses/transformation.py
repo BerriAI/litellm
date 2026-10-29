@@ -64,6 +64,9 @@ from litellm.types.utils import LlmProviders
 
 BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH: Final = "/openai/v1/responses"
 BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES: Final = (
+    "/openai/v1/chat/completions",
+    "/v1/chat/completions",
+    "/chat/completions",
     "/openai/v1/responses",
     "/v1/responses",
     "/responses",
@@ -224,17 +227,13 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         litellm_params: dict,  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
     ) -> str:
         region: Final = self._get_aws_region_name(optional_params=litellm_params, model=None)
-        configured_endpoint: Final = litellm_params.get("aws_bedrock_runtime_endpoint")
-        override: Final = (
-            api_base
-            or (f"{configured_endpoint}" if configured_endpoint else None)
-            or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
+        configured_endpoint: Final = litellm_params.get("aws_bedrock_runtime_endpoint") or None
+        _, runtime_endpoint = self.get_runtime_endpoint(
+            api_base=api_base or None,
+            aws_bedrock_runtime_endpoint=configured_endpoint if isinstance(configured_endpoint, str) else None,
+            aws_region_name=region,
         )
-        # Partition-aware: bedrock-runtime is amazonaws.com.cn in China, and other
-        # suffixes in GovCloud/ISO, so defer to the shared endpoint builder.
-        host: Final = (
-            override or self._select_default_endpoint_url(endpoint_type="runtime", aws_region_name=region)
-        ).rstrip("/")
+        host: Final = runtime_endpoint.rstrip("/")
         base: Final = next(
             (host[: -len(suffix)] for suffix in BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES if host.endswith(suffix)),
             host,
