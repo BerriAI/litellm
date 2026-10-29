@@ -12,7 +12,7 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 
 import itertools
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from itertools import accumulate, chain, islice, product
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -60,7 +60,7 @@ def _chunk(content: str, finish_reason: str | None = None) -> ModelResponseStrea
 
 
 class _FakeStreamWrapper:
-    def __init__(self, chunks):
+    def __init__(self, chunks: Iterable[ModelResponseStream]) -> None:
         self._chunks = list(chunks)
         self.logging_obj = MagicMock()
 
@@ -896,6 +896,33 @@ async def test_streaming_events_share_the_chat_completion_response_id():
     assert decoded["custom_llm_provider"] == "anthropic"
 
 
+class _ClosableStreamWrapper(_FakeStreamWrapper):
+    def __init__(self, chunks: Iterable[ModelResponseStream]) -> None:
+        super().__init__(chunks)
+        self.closed = False
+
+    async def aclose(self):
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_the_bridged_chat_completion_stream():
+    wrapper: Final = _ClosableStreamWrapper([_chunk("Hello"), _chunk("!", finish_reason="stop")])
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=wrapper,
+        request_input="What is the weather in San Francisco?",
+        responses_api_request={},
+        custom_llm_provider="anthropic",
+        litellm_metadata={},
+    )
+
+    await iterator.__anext__()
+    await iterator.aclose()
+
+    assert wrapper.closed is True
+
+
 def test_sync_streaming_events_share_the_chat_completion_response_id():
     iterator = _build_iterator([_chunk("Hello"), _chunk("!", finish_reason="stop")])
 
@@ -1689,21 +1716,36 @@ async def test_plain_text_stream_announces_exactly_one_message_item(sync_mode: b
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("execution", ["server", "client"])
+@pytest.mark.parametrize("late_name", [False, True])
 @pytest.mark.asyncio
-async def test_anthropic_tool_search_call_streams_as_tool_search_call_item(sync_mode: bool):
+async def test_anthropic_tool_search_call_streams_as_tool_search_call_item(
+    sync_mode: bool, execution: str, late_name: bool
+):
+    call_id: Final = "srvtoolu_01Search" if execution == "server" else "toolu_01Search"
+    name: Final = "tool_search_tool_regex" if execution == "server" else "tool_search"
     deltas: Final = (
         Delta(
             content=None,
             tool_calls=[
                 {
                     "index": 0,
-                    "id": "srvtoolu_01Search",
+                    "id": call_id,
                     "type": "function",
-                    "function": {"name": "tool_search_tool_regex", "arguments": ""},
+                    "function": {
+                        **({} if late_name else {"name": name}),
+                        "arguments": '{"pattern": ' if late_name else "",
+                    },
                 }
             ],
         ),
-        Delta(content=None, tool_calls=[{"index": 0, "function": {"arguments": '{"pattern": '}}]),
+        Delta(
+            content=None,
+            tool_calls=[{
+                "index": 0,
+                "function": {"name": name, "arguments": ""} if late_name else {"arguments": '{"pattern": '},
+            }],
+        ),
         Delta(content=None, tool_calls=[{"index": 0, "function": {"arguments": '"weather|forecast"}'}}]),
         Delta(
             content=None,
@@ -1737,7 +1779,7 @@ async def test_anthropic_tool_search_call_streams_as_tool_search_call_item(sync_
         request_input="What is the weather in Paris right now?",
         responses_api_request={
             "tools": [
-                {"type": "tool_search", "execution": "server"},
+                {"type": "tool_search", "execution": execution},
                 {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True},
             ]
         },
@@ -1760,16 +1802,17 @@ async def test_anthropic_tool_search_call_streams_as_tool_search_call_item(sync_
     ]
 
     assert completed["type"] == "response.completed"
-    assert search_item["id"] == "tsc_srvtoolu_01Search"
-    assert search_item["call_id"] == "srvtoolu_01Search"
+    assert search_item["id"] == f"tsc_{call_id}"
+    assert search_item["call_id"] == call_id
     assert search_item["arguments"] == {"pattern": "weather|forecast"}
-    assert search_item["execution"] == "server"
+    assert search_item["execution"] == execution
     assert search_item["status"] == "completed"
     assert [event["type"] for event in search_events] == [
         "response.output_item.added",
         "response.output_item.done",
     ]
     assert search_events[0]["item"]["status"] == "in_progress"
+    assert search_events[0]["item"]["execution"] == execution
     assert search_events[0]["item"]["arguments"] == {}
     assert search_events[-1]["item"] == search_item
     assert function_item["name"] == "get_weather"
