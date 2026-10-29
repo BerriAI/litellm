@@ -7429,6 +7429,34 @@ async def test_legacy_delegate_expired_upstream_token_gets_reauthorization_chall
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("authorization", ["Bearer ", "Bearer"])
+async def test_legacy_delegate_blank_bearer_gets_reauthorization_challenge(authorization: str) -> None:
+    """A blank bearer on a delegate without a static Authorization keeps the v1.102 answer: 401 with the
+    RFC 9728 invalid_token challenge, not LiteLLM's malformed-key error."""
+    from litellm.proxy.mcp_server.server import (  # noqa: PLC0415  # imported after patches apply
+        _check_passthrough_upstream_auth,
+    )
+
+    with _rejecting_delegate_upstream(), pytest.raises(HTTPException) as exc_info:
+        await _check_passthrough_upstream_auth(
+            scope=_delegate_scope([(b"authorization", authorization.encode())]),
+            user_api_key_auth=UserAPIKeyAuth().model_copy(update={"mcp_forwards_caller_authorization": True}),
+            mcp_servers=["delegate_test"],
+            client_ip=None,
+            oauth2_headers={"Authorization": authorization},
+            mcp_server_auth_headers=None,
+            raw_headers={"authorization": authorization},
+        )
+
+    assert exc_info.value.status_code == 401
+    challenge: Final = exc_info.value.headers["www-authenticate"]
+    assert 'error="invalid_token"' in challenge
+    assert (
+        'resource_metadata="http://localhost:4000/.well-known/oauth-protected-resource/mcp/delegate_test"' in challenge
+    )
+
+
+@pytest.mark.asyncio
 async def test_legacy_delegate_multi_server_scope_is_not_failed_by_one_upstream_token() -> None:
     """A multi-server scope is not probed, so one rejected upstream token cannot fail the whole connect."""
     with _rejecting_delegate_upstream():

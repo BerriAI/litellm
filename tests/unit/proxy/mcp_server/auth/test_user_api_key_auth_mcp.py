@@ -3624,22 +3624,32 @@ class TestMCPDelegateAuthToUpstream:
         admission.assert_awaited_once()
 
     @pytest.mark.parametrize("authorization", [b"Bearer ", b"Bearer", b"BEARER"])
-    async def test_delegate_blank_bearer_takes_normal_admission(self, authorization: bytes) -> None:
-        """A bearer with no token carries nothing to forward, so it gets LiteLLM's 401 like any malformed key."""
-        refusal: Final = HTTPException(status_code=401, detail="Malformed API Key")
-        admission: Final = AsyncMock(side_effect=refusal)
-        with TestMCPDelegateAuthToUpstream._delegate_admission(admission):
-            with pytest.raises(HTTPException) as exc_info:
-                await MCPRequestHandler.process_mcp_request(
-                    {
-                        "type": "http",
-                        "method": "POST",
-                        "path": "/mcp/delegated_oauth_server",
-                        "headers": [(b"authorization", authorization)],
-                    }
-                )
+    async def test_delegate_blank_bearer_is_left_to_the_upstream_probe(self, authorization: bytes) -> None:
+        """On a delegate without a static Authorization a blank bearer stays on the delegate path, as in
+        v1.102, so the upstream probe can answer with the OAuth re-authorization challenge."""
+        from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 
-        assert exc_info.value is refusal
+        admission: Final = AsyncMock()
+        with (
+            TestMCPDelegateAuthToUpstream._delegate_admission(admission),
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore.resolve",
+                new_callable=AsyncMock,
+                side_effect=KeyNotFoundError("hashed-token"),
+            ),
+        ):
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(
+                {
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/mcp/delegated_oauth_server",
+                    "headers": [(b"authorization", authorization)],
+                }
+            )
+
+        assert auth_result.api_key is None
+        assert auth_result.mcp_forwards_caller_authorization is True
+        admission.assert_not_awaited()
 
     async def test_delegate_with_static_authorization_admits_a_litellm_key(self) -> None:
         """A LiteLLM key still reaches a delegate server with a static Authorization, and is never forwarded."""
@@ -3741,6 +3751,7 @@ class TestMCPDelegateAuthToUpstream:
 
         warning.assert_called_once()
         assert "static Authorization" in warning.call_args.args[0]
+        assert "delegate auth is disabled" in warning.call_args.args[0]
         assert "operator-token" not in repr(warning.call_args)
 
     async def test_true_passthrough_skips_litellm_auth_anonymously(self):

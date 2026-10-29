@@ -1117,16 +1117,15 @@ class MCPRequestHandler:
     ) -> UserAPIKeyAuth:
         """Admit a bare ``Authorization`` bearer sent to legacy ``delegate_auth_to_upstream`` servers.
 
-        A LiteLLM credential runs normal admission, and its errors propagate, as does a blank bearer
-        (``Bearer`` with nothing after it), which carries no upstream token to forward. Any other bearer is
-        the upstream token and is marked for forwarding: a user it also proves who is granted every target
-        is admitted as that user, and every other caller is admitted anonymously."""
+        A LiteLLM credential runs normal admission, and its errors propagate. Any other bearer is the
+        upstream token and is marked for forwarding: a user it also proves who is granted every target is
+        admitted as that user, and every other caller is admitted anonymously."""
         from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # manager imports this module
             global_mcp_server_manager,
         )
 
         token: Final = _normalize_caller_admission_credential(authorization_value)
-        if token.lower() in ("", "bearer") or await _bearer_is_litellm_credential(token):
+        if await _bearer_is_litellm_credential(token):
             return await user_api_key_auth(api_key=litellm_api_key, request=request)
         identity: Final = await _upstream_bearer_identity(token, litellm_api_key, request)
         if identity is not None:

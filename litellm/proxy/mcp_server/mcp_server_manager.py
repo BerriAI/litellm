@@ -1567,7 +1567,7 @@ async def _materialize_auth_headers(auth: httpx2.Auth | None) -> dict[str, str] 
 
 
 def _has_static_authorization(server: MCPServer) -> bool:
-    """True when the server's ``static_headers`` set ``Authorization``, which replaces any caller token."""
+    """True when the server's ``static_headers`` set ``Authorization`` (any casing)."""
     return any(isinstance(name, str) and name.lower() == "authorization" for name in server.static_headers or ())
 
 
@@ -1576,8 +1576,8 @@ def is_legacy_upstream_delegate(server: MCPServer) -> bool:
     caller ``Authorization`` is the upstream token. The flow is resolved, not read from the column, so an
     unstamped M2M-shaped row stays excluded: its stored client credentials drive egress, and admitting it
     anonymously would let any caller act as LiteLLM's service account. A static ``Authorization`` excludes
-    it too: that header, not the caller's, reaches the upstream, so the caller's token proves nothing and
-    admitting it would let any caller ride the operator's credential."""
+    it too: the operator's credential is sent upstream with or instead of the caller's, so the caller's
+    token proves nothing and admitting it would let any caller ride the operator's credential."""
     return _is_interactive_delegate_config(server) and not _has_static_authorization(server)
 
 
@@ -1762,9 +1762,9 @@ def _warn_legacy_delegate_auth_if_applicable(server: MCPServer, *, source: str) 
     if not is_legacy_upstream_delegate(server):
         if _is_interactive_delegate_config(server):
             verbose_logger.warning(
-                "MCP server %r (id=%s, source=%s) sets delegate_auth_to_upstream=true with a static "
-                "Authorization header. The static header replaces the caller's token, so callers need a "
-                "LiteLLM credential. Remove one of the two.",
+                "MCP server %r (id=%s, source=%s) sets delegate_auth_to_upstream=true and a static "
+                "Authorization header, so delegate auth is disabled for it and callers need a LiteLLM key. "
+                "Remove one of the two.",
                 get_server_prefix(server),
                 server.server_id,
                 source,
