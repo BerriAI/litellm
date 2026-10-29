@@ -1,11 +1,3 @@
-"""A streamed /v1/completions bills its tokens without the client asking for stream_options.include_usage.
-
-The scripted OpenAI-compatible upstream sends a usage chunk only when the request asks for one, the way OpenAI
-does, so the proxy has to ask on the client's behalf and keep the answer to itself: the spend row of a streamed
-text completion with no stream_options equals the include_usage variant's and the non-streamed twin's, and the
-client gets no usage frame it did not ask for
-"""
-
 import json
 from pathlib import Path
 from typing import Final
