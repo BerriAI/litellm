@@ -79,6 +79,8 @@ class _ModelList(LiteLLMBaseModel):
 
 
 class _ModelGroup(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     model_group: str
     max_input_tokens: float | None = None
     max_output_tokens: float | None = None

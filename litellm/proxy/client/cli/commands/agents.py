@@ -517,6 +517,8 @@ class _OpenCodeReasoningOption(LiteLLMBaseModel):
 
 
 class _OpenCodeModel(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     name: str
     limit: _OpenCodeLimit | None = None
     reasoning: Literal[True] | None = None

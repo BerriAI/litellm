@@ -49,6 +49,7 @@ _BODY_SUFFIX: Final = "]}"
 _FIRST_CODEX_WITH_CUSTOM_EFFORTS: Final = Version("0.138.0")
 _EFFORTS_EVERY_CODEX_PARSES: Final = frozenset({"none", "minimal", "low", "medium", "high", "xhigh"})
 _PREFERRED_DEFAULT_EFFORT: Final = "medium"
+_CODEX_UNSET_EFFORT: Final = "none"
 
 
 class CodexServiceTier(LiteLLMBaseModel):
@@ -96,6 +97,8 @@ class CodexFallbackModel(LiteLLMBaseModel):
     a model slug it does not know, so picking such a proxy model behaves the
     same as `codex -m` did.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     slug: str
     display_name: str
@@ -277,7 +280,8 @@ def codex_reasoning_levels(
 
     Codex before 0.138.0 fails the whole catalog on an effort it has no name for, so for it, and for
     a version that does not parse, only the efforts every release knows are offered. The default is
-    set whenever a level is offered, because Codex reads a missing one as `none`: medium, else the
+    set whenever a level is offered, because Codex reads a missing one as `none`: `none` itself when the
+    group accepts it, so a user who picks no level sends what Codex sent before, else medium, else the
     nearest stronger declared level, else the first one."""
     parses_any: Final = _parses_custom_efforts(client_version)
     offered: Final = tuple(effort for effort in efforts if parses_any or effort in _EFFORTS_EVERY_CODEX_PARSES)
@@ -288,6 +292,8 @@ def codex_reasoning_levels(
         CodexReasoningLevel(effort=effort, description=f"Sends reasoning_effort={effort} upstream")
         for effort in offered
     )
+    if _CODEX_UNSET_EFFORT in offered:
+        return levels, _CODEX_UNSET_EFFORT
     return levels, nearest if nearest in offered else offered[0]
 
 

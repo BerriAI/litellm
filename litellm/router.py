@@ -12589,7 +12589,14 @@ class Router:
         configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
         reasoning_efforts_initialized = False
         reasoning_efforts_unknown = False
-        model_list: Final = self.get_model_list_of_routed_group(model_group)
+        serves_team_deployments: Final = team_id is not None and bool(
+            self._team_deployments_named(team_id, model_group)
+        )
+        model_list: Final = (
+            self.get_all_deployments(model_name=model_group, team_id=team_id)
+            if serves_team_deployments
+            else self.get_model_list_of_routed_group(model_group)
+        )
         model_group_description: Final[str | None] = next(
             (d for d in (_configured_model_info(m).get("description") for m in model_list) if isinstance(d, str)),
             None,
@@ -12597,7 +12604,8 @@ class Router:
         for model in model_list:
             is_match = False
             if (
-                "model_name" in model
+                serves_team_deployments
+                or "model_name" in model
                 and model["model_name"] == model_group
                 or "model_name" in model
                 and self.pattern_router.route(model_group) is not None

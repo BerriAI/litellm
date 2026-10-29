@@ -12445,7 +12445,8 @@ async def model_list(
         admin_listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
         if client_version is not None:
             return Response(
-                content=codex_model_list_body(
+                content=await asyncio.to_thread(
+                    codex_model_list_body,
                     admin_listing,
                     admin_entries,
                     llm_router,
@@ -12520,7 +12521,8 @@ async def model_list(
     listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
     if client_version is not None:
         return Response(
-            content=codex_model_list_body(
+            content=await asyncio.to_thread(
+                codex_model_list_body,
                 listing,
                 entries,
                 llm_router,
