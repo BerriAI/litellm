@@ -1102,9 +1102,9 @@ def should_auto_drop_params_for_agentic_cli(
 ) -> bool:
     """drop_params defaults to on for agentic CLIs so their client-specific
     params (e.g. Claude Code's thinking, Codex's service_tier) don't fail
-    requests routed to providers that reject them. An explicit drop_params
-    from the caller or in the operator's ``litellm_settings`` always wins
-    over this default."""
+    requests routed to providers that reject them. A drop_params from the
+    caller wins over this default, and the operator's ``litellm_settings``
+    turns it off only with a value that reads as false."""
     from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 
     if not (is_claude_code_user_agent(user_agent) or is_codex_user_agent(user_agent)):
