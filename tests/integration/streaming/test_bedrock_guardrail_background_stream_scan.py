@@ -3,6 +3,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -23,6 +24,7 @@ _TRIGGER: Final = "FORBIDDEN"
 _DENIAL: Final = "Output withheld by policy."
 _CLEAN: Final = tuple(f"w{index} " for index in range(40))
 _LEAKY: Final = ("w0 ", f"{_TRIGGER} ", *_CLEAN[2:])
+_OUTAGE: Final = ("w0 ", "OUTAGE ", *_CLEAN[2:])
 _HOLD_SECONDS: Final = 8.0
 _ALLOWED: Final = json.dumps({"action": "NONE", "outputs": [], "assessments": []}).encode()
 _INTERVENED: Final = json.dumps(
@@ -39,13 +41,17 @@ class _Scans:
     """The scripted ApplyGuardrail peer holds each output scan until `release` is set or the hold runs out."""
 
     release: threading.Event = field(default_factory=threading.Event)
+    started_at: list[float] = field(default_factory=list)
     replied_at: list[float] = field(default_factory=list)
 
     def answer(self, request: Request) -> Reply:
+        self.started_at.append(time.monotonic())
         body: Final = request.body.decode()
         if '"OUTPUT"' in body:
             self.release.wait(_HOLD_SECONDS)
         self.replied_at.append(time.monotonic())
+        if "OUTAGE" in body:
+            return Reply(status=500, body=b'{"message": "synthetic ApplyGuardrail outage"}')
         return Reply(body=_INTERVENED if _TRIGGER in body else _ALLOWED)
 
 
@@ -60,6 +66,7 @@ class _Streamed:
     pieces: tuple[str, ...]
     arrived_at: tuple[float, ...]
     finished_after: tuple[int, ...]
+    errors: tuple[str, ...]
 
 
 def _chat_sse(pieces: tuple[str, ...]) -> tuple[bytes, ...]:
@@ -109,7 +116,7 @@ def _anthropic_sse(pieces: tuple[str, ...]) -> tuple[bytes, ...]:
 
 def _model_reply(request: Request) -> Reply:
     prompt: Final = str(object_value(list_value(object_value(json.loads(request.body))["messages"])[-1])["content"])
-    pieces: Final = _LEAKY if "leak" in prompt else _CLEAN
+    pieces: Final = _LEAKY if "leak" in prompt else _OUTAGE if "outage" in prompt else _CLEAN
     return Reply(
         chunks=_anthropic_sse(pieces) if request.target.endswith("/v1/messages") else _chat_sse(pieces),
         content_type="text/event-stream",
@@ -194,6 +201,11 @@ def _messages_text(event: dict[str, JsonValue]) -> str | None:
     return text if isinstance(text, str) and text else None
 
 
+def _responses_text(event: dict[str, JsonValue]) -> str | None:
+    delta: Final = event.get("delta") if event.get("type") == "response.output_text.delta" else None
+    return delta if isinstance(delta, str) and delta else None
+
+
 def _chat_finished(event: dict[str, JsonValue]) -> bool:
     return any(object_value(choice).get("finish_reason") for choice in list_value(event.get("choices") or []))
 
@@ -202,9 +214,33 @@ def _messages_finished(event: dict[str, JsonValue]) -> bool:
     return event.get("type") == "message_delta"
 
 
+def _responses_finished(event: dict[str, JsonValue]) -> bool:
+    return event.get("type") in ("response.completed", "response.incomplete")
+
+
+def _error_message(event: dict[str, JsonValue]) -> str | None:
+    error: Final = event.get("error")
+    if isinstance(error, dict):
+        return str(error.get("message"))
+    return str(event.get("message")) if event.get("type") == "error" else None
+
+
+def _chat_body(prompt: str) -> dict[str, JsonValue]:
+    return {"model": _MODEL, "messages": [{"role": "user", "content": prompt}]}
+
+
+def _messages_body(prompt: str) -> dict[str, JsonValue]:
+    return {**_chat_body(prompt), "model": _CLAUDE, "max_tokens": 256}
+
+
+def _responses_body(prompt: str) -> dict[str, JsonValue]:
+    return {"model": _CLAUDE, "max_output_tokens": 256, "input": prompt}
+
+
 _ROUTES: Final = {
-    "/v1/chat/completions": (_MODEL, {}, _chat_text, _chat_finished),
-    "/v1/messages": (_CLAUDE, {"max_tokens": 256}, _messages_text, _messages_finished),
+    "/v1/chat/completions": (_chat_body, _chat_text, _chat_finished),
+    "/v1/messages": (_messages_body, _messages_text, _messages_finished),
+    "/v1/responses": (_responses_body, _responses_text, _responses_finished),
 }
 
 
@@ -214,20 +250,19 @@ def _stream(
     """Stream `route`, releasing held scans once `release_after` text pieces have arrived."""
     scans: Final = _Scans()
     rig.scans[0] = scans
-    model, extra, text_of, finished = _ROUTES[route]
+    return _read(rig, guardrail, prompt, route, scans, release_after), scans
+
+
+def _read(rig: _Rig, guardrail: str, prompt: str, route: str, scans: _Scans, release_after: int) -> _Streamed:
+    body_of, text_of, finished = _ROUTES[route]
     pieces: Final[list[str]] = []
     arrived_at: Final[list[float]] = []
     finished_after: Final[list[int]] = []
+    errors: Final[list[str]] = []
     with rig.gateway.client.stream(
         "POST",
         route,
-        json={
-            "model": model,
-            "stream": True,
-            "guardrails": [guardrail],
-            "messages": [{"role": "user", "content": f"{prompt} {uuid.uuid4().hex}"}],
-            **extra,
-        },
+        json={**body_of(f"{prompt} {uuid.uuid4().hex}"), "stream": True, "guardrails": [guardrail]},
         headers={"Authorization": f"Bearer {rig.gateway.key}"},
     ) as response:
         assert response.status_code == 200, response.read()
@@ -241,9 +276,12 @@ def _stream(
                 arrived_at.append(time.monotonic())
             if finished(event):
                 finished_after.append(len(pieces))
+            error = _error_message(event)
+            if error is not None:
+                errors.append(error)
             if len(pieces) >= release_after:
                 scans.release.set()
-    return _Streamed(tuple(pieces), tuple(arrived_at), tuple(finished_after)), scans
+    return _Streamed(tuple(pieces), tuple(arrived_at), tuple(finished_after), tuple(errors))
 
 
 def test_chunks_after_the_nth_keep_streaming_while_its_scan_is_pending(rig: _Rig) -> None:
@@ -269,10 +307,44 @@ def test_block_verdict_that_lands_after_the_upstream_finished_replaces_the_finis
     assert streamed.pieces == (*_LEAKY, _DENIAL)
     assert streamed.arrived_at[len(_LEAKY) - 1] < scans.replied_at[0], "the verdict landed before the upstream finished"
     assert streamed.finished_after == (len(streamed.pieces),), "the stream finished before the block verdict"
-    assert len(scans.replied_at) == 1, "a scan started while another was still in flight"
+    overlaps: Final = zip(scans.started_at[1:], scans.replied_at[:-1], strict=True)
+    assert all(started >= replied for started, replied in overlaps), "a scan started while another was in flight"
 
 
 def test_without_the_flag_the_nth_chunk_still_waits_for_its_scan(rig: _Rig) -> None:
     streamed, scans = _stream(rig, "inline", "clean", release_after=_RATE - 1)
     assert streamed.pieces == _CLEAN
     assert scans.replied_at[0] < streamed.arrived_at[_RATE - 1]
+
+
+@pytest.mark.parametrize("route", tuple(_ROUTES))
+def test_a_failed_background_scan_ends_the_stream_with_the_inline_scan_error(rig: _Rig, route: str) -> None:
+    background, _ = _stream(rig, "background", "outage", release_after=_RATE + 1, route=route)
+    inline, _ = _stream(rig, "inline", "outage", release_after=0, route=route)
+    assert len(inline.errors) == 1, inline
+    assert background.errors == inline.errors
+    assert _RATE < len(background.pieces) < len(_OUTAGE), background.pieces
+    assert background.pieces == _OUTAGE[: len(background.pieces)]
+    assert background.finished_after == ()
+
+
+def test_a_mixed_burst_ends_every_stream_on_its_own_verdict_while_the_scan_peer_fails_some(rig: _Rig) -> None:
+    scans: Final = _Scans()
+    scans.release.set()
+    rig.scans[0] = scans
+    calls: Final = tuple((kind, route) for kind in ("clean", "leak", "outage") for route in _ROUTES for _ in range(2))
+    with ThreadPoolExecutor(len(calls)) as pool:
+        served: Final = tuple(pool.map(lambda call: _read(rig, "background", call[0], call[1], scans, 0), calls))
+    for (kind, route), streamed in zip(calls, served, strict=True):
+        match kind:
+            case "clean":
+                assert (streamed.pieces, streamed.errors) == (_CLEAN, ()), (route, streamed)
+                assert streamed.finished_after == (len(_CLEAN),), (route, streamed)
+            case "leak":
+                assert streamed.pieces[-1] == _DENIAL and streamed.errors == (), (route, streamed)
+                assert streamed.finished_after == (len(streamed.pieces),), (route, streamed)
+            case _:
+                assert len(streamed.errors) == 1 and streamed.finished_after == (), (route, streamed)
+                assert streamed.pieces == _OUTAGE[: len(streamed.pieces)], (route, streamed)
+    after: Final = _read(rig, "background", "clean", "/v1/chat/completions", scans, 0)
+    assert after.pieces == _CLEAN
