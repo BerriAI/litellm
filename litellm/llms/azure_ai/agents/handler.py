@@ -35,6 +35,7 @@ from litellm.llms.azure_ai.agents.transformation import (
     AzureAIAgentsConfig,
     AzureAIAgentsError,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
     ChatCompletionAnnotationURLCitation,
@@ -632,7 +633,7 @@ class AzureAIAgentsHandler:
 
         current_event = None
 
-        async for line in response.aiter_lines():
+        async for line in aiter_sse_lines(response.aiter_text()):
             line = line.strip()
 
             if line.startswith("event:"):
