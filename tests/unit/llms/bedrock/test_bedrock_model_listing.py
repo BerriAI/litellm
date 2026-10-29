@@ -122,6 +122,14 @@ def _control_plane(
     return handler
 
 
+def _refuse_connection(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("Connection refused", request=request)
+
+
+def _hosts(handler: Mock) -> tuple[str, ...]:
+    return tuple(call.args[0].url.host for call in handler.call_args_list)
+
+
 def _bedrock(handler: Callable[[httpx.Request], httpx.Response]) -> BedrockModelInfo:
     return BedrockModelInfo(client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))))
 
@@ -150,16 +158,37 @@ def test_lists_in_the_deployment_region_not_the_ambient_one(monkeypatch: pytest.
         _bedrock(_control_plane()).discover_models(_deployment(region="us-west-2"))
 
 
-@pytest.mark.parametrize("api_key", [None, BEARER_TOKEN], ids=["sigv4", "bearer"])
-def test_lists_through_the_configured_control_plane_endpoint_only(api_key: str | None) -> None:
-    endpoint_only: Final = _bedrock(_control_plane(bearer_token=api_key, host=VPC_ENDPOINT_HOST))
+def test_lists_through_the_configured_control_plane_endpoint_only() -> None:
+    endpoint_only: Final = Mock(wraps=_control_plane(host=VPC_ENDPOINT_HOST))
 
     assert (
-        endpoint_only.discover_models(
-            _deployment(api_key=api_key, control_plane_endpoint=f" https://{VPC_ENDPOINT_HOST}/ ")
+        _bedrock(endpoint_only).discover_models(_deployment(control_plane_endpoint=f" https://{VPC_ENDPOINT_HOST}/ "))
+        == EXPECTED_MODELS
+    )
+    assert set(_hosts(endpoint_only)) == {VPC_ENDPOINT_HOST}
+
+
+def test_bedrock_api_key_never_goes_to_the_configured_endpoint() -> None:
+    regional: Final = Mock(wraps=_control_plane(bearer_token=BEARER_TOKEN))
+
+    assert (
+        _bedrock(regional).discover_models(
+            _deployment(api_key=BEARER_TOKEN, control_plane_endpoint=f"https://{VPC_ENDPOINT_HOST}")
         )
         == EXPECTED_MODELS
     )
+    assert set(_hosts(regional)) == {REGIONAL_HOST}
+
+
+def test_ambient_bedrock_api_key_never_goes_to_the_configured_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", BEARER_TOKEN)
+    regional: Final = Mock(wraps=_control_plane(bearer_token=BEARER_TOKEN))
+
+    assert (
+        _bedrock(regional).discover_models(_deployment(control_plane_endpoint=f"http://{VPC_ENDPOINT_HOST}"))
+        == EXPECTED_MODELS
+    )
+    assert set(_hosts(regional)) == {REGIONAL_HOST}
 
 
 def test_configured_endpoint_without_the_list_routes_falls_back_to_the_regional_host() -> None:
@@ -169,22 +198,43 @@ def test_configured_endpoint_without_the_list_routes_falls_back_to_the_regional_
         _bedrock(regional_only).discover_models(_deployment(control_plane_endpoint=f"https://{VPC_ENDPOINT_HOST}"))
         == EXPECTED_MODELS
     )
-    hosts: Final = tuple(call.args[0].url.host for call in regional_only.call_args_list)
+    hosts: Final = _hosts(regional_only)
     assert hosts[0] == VPC_ENDPOINT_HOST
     assert set(hosts) == {VPC_ENDPOINT_HOST, REGIONAL_HOST}
 
 
-@pytest.mark.parametrize("status", [401, 403, 429, 500, 503])
-def test_configured_endpoint_failure_other_than_404_never_reaches_the_regional_host(status: int) -> None:
+@pytest.mark.parametrize(
+    "endpoint_answer",
+    [
+        lambda request: httpx.Response(401, json={"message": "Unauthorized"}),
+        lambda request: httpx.Response(403, json={"message": "Missing Authentication Token"}),
+        lambda request: httpx.Response(429, json={"message": "Too many requests"}),
+        lambda request: httpx.Response(503, json={"message": "Service unavailable"}),
+        lambda request: httpx.Response(200, text="<html>batch gateway</html>"),
+        _refuse_connection,
+    ],
+    ids=["401", "403", "429", "503", "not-json", "connection-refused"],
+)
+def test_any_failure_through_the_configured_endpoint_lists_through_the_regional_host(
+    endpoint_answer: Callable[[httpx.Request], httpx.Response], caplog: pytest.LogCaptureFixture
+) -> None:
     regional: Final = _control_plane()
 
-    def endpoint_refuses(request: httpx.Request) -> httpx.Response:
-        if request.url.host == VPC_ENDPOINT_HOST:
-            return httpx.Response(status, json={"message": "refused by the endpoint"})
-        return regional(request)
+    def endpoint_fails(request: httpx.Request) -> httpx.Response:
+        return endpoint_answer(request) if request.url.host == VPC_ENDPOINT_HOST else regional(request)
 
-    with pytest.raises(BedrockError, match=rf"{re.escape(VPC_ENDPOINT_HOST)} in {REGION}.*{status}"):
-        _bedrock(endpoint_refuses).discover_models(_deployment(control_plane_endpoint=f"https://{VPC_ENDPOINT_HOST}"))
+    handler: Final = Mock(wraps=endpoint_fails)
+
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        assert (
+            _bedrock(handler).discover_models(_deployment(control_plane_endpoint=f"https://{VPC_ENDPOINT_HOST}"))
+            == EXPECTED_MODELS
+        )
+    assert _hosts(handler)[0] == VPC_ENDPOINT_HOST
+    assert set(_hosts(handler)) == {VPC_ENDPOINT_HOST, REGIONAL_HOST}
+    assert any(
+        VPC_ENDPOINT_HOST in record.getMessage() and REGIONAL_HOST in record.getMessage() for record in caplog.records
+    )
 
 
 def test_bearer_token_api_key_replaces_sigv4() -> None:
@@ -203,14 +253,15 @@ def test_get_models_without_a_deployment_uses_ambient_credentials(monkeypatch: p
     assert _bedrock(_control_plane()).get_models() == EXPECTED_MODELS
 
 
-@pytest.mark.parametrize(
-    ("control_plane_endpoint", "host"),
-    [(None, REGIONAL_HOST), (f"https://{VPC_ENDPOINT_HOST}", VPC_ENDPOINT_HOST)],
-    ids=["regional", "configured"],
-)
-def test_listing_failure_names_the_host_region_and_response(control_plane_endpoint: str | None, host: str) -> None:
+@pytest.mark.parametrize("control_plane_endpoint", [None, f"https://{VPC_ENDPOINT_HOST}"], ids=["regional", "configured"])
+def test_listing_failure_names_the_regional_host_region_and_response(control_plane_endpoint: str | None) -> None:
     def throttled(request: httpx.Request) -> httpx.Response:
         return httpx.Response(429, json={"message": "Too many requests"})
 
-    with pytest.raises(BedrockError, match=rf"{re.escape(host)} in {REGION}.*429.*Too many requests"):
+    with pytest.raises(BedrockError, match=rf"{re.escape(REGIONAL_HOST)} in {REGION}.*429.*Too many requests"):
         _bedrock(throttled).discover_models(_deployment(control_plane_endpoint=control_plane_endpoint))
+
+
+def test_unreachable_host_error_names_the_host_and_region() -> None:
+    with pytest.raises(BedrockError, match=rf"{re.escape(REGIONAL_HOST)} .*{REGION}.*ConnectError"):
+        _bedrock(_refuse_connection).discover_models(_deployment())

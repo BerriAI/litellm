@@ -158,11 +158,12 @@ def test_admin_models_list_through_the_configured_control_plane_endpoint_only(ri
         assert_sigv4(requests, key=key, secret=secret, region="us-east-1", host=CONFIGURED_CONTROL_PLANE_HOST)
 
 
-def test_configured_endpoint_without_the_list_routes_lists_through_the_regional_host(rig: Rig) -> None:
+@pytest.mark.parametrize("status", (403, 404, 500))
+def test_configured_endpoint_failure_lists_through_the_regional_host(rig: Rig, status: int) -> None:
     key, secret = credential()
     marker: Final = stem()
     catalog: Final = catalog_for(marker)
-    with rig.gateway.scenario() as scenario, rig.plane.answering(key, _configured_endpoint_answering(404, catalog)):
+    with rig.gateway.scenario() as scenario, rig.plane.answering(key, _configured_endpoint_answering(status, catalog)):
         _configured_endpoint_deployment(scenario, key, secret)
         assert discovered(rig.gateway, catalog, marker) == catalog.invocable_ids()
         requests: Final = mine(rig.plane, key)
@@ -170,17 +171,23 @@ def test_configured_endpoint_without_the_list_routes_lists_through_the_regional_
         assert {request.host for request in requests} == {CONFIGURED_CONTROL_PLANE_HOST, control_plane_host("us-east-1")}
 
 
-@pytest.mark.parametrize("status", (403, 500))
-def test_configured_endpoint_refusal_never_reaches_the_regional_host(rig: Rig, status: int) -> None:
-    key, secret = credential()
+def test_bearer_token_deployment_never_sends_the_token_to_the_configured_endpoint(rig: Rig) -> None:
+    token: Final = f"bearer-{uuid.uuid4().hex}"
     marker: Final = stem()
     catalog: Final = catalog_for(marker)
-    with rig.gateway.scenario() as scenario, rig.plane.answering(key, _configured_endpoint_answering(status, catalog)):
-        _configured_endpoint_deployment(scenario, key, secret)
-        assert from_stem(marker, listed_ids(rig.gateway)) == frozenset()
-        requests: Final = mine(rig.plane, key)
-        assert requests, "the proxy never asked the configured endpoint"
-        assert {request.host for request in requests} == {CONFIGURED_CONTROL_PLANE_HOST}, requests
+    with rig.gateway.scenario() as scenario, rig.plane.answering(token, catalog.respond):
+        deployment(
+            scenario,
+            litellm_params={
+                "api_key": token,
+                "aws_region_name": "us-east-1",
+                "aws_bedrock_control_plane_endpoint": f"https://{CONFIGURED_CONTROL_PLANE_HOST}",
+            },
+        )
+        assert discovered(rig.gateway, catalog, marker) == catalog.invocable_ids()
+        requests: Final = mine(rig.plane, token)
+        assert requests, "the proxy never listed with the token"
+        assert {request.host for request in requests} == {control_plane_host("us-east-1")}, requests
 
 
 def _info_rows(gateway: Gateway, path: str, marker: str, identity: str) -> Mapping[str, str]:

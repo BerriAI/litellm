@@ -1,6 +1,6 @@
 # Bedrock batch endpoints
 
-Set `aws_bedrock_control_plane_endpoint` on a deployment when Bedrock control-plane requests must use a custom endpoint, such as a VPC endpoint or the FIPS host. Batch create, retrieve, and cancel requests use it, and so does `bedrock/*` model discovery when `check_provider_endpoint` is on. The proxy signs these requests for the configured URL. Without this setting, they use the standard regional Bedrock endpoint. When the configured endpoint answers 404 to a model-listing request, for example because it serves only batch routes, discovery sends that request to the regional endpoint instead. Any other error from the configured endpoint is not retried there
+Set `aws_bedrock_control_plane_endpoint` on a deployment when Bedrock control-plane requests must use a custom endpoint, such as a VPC endpoint or the FIPS host. Batch create, retrieve, and cancel requests use it, and so does `bedrock/*` model discovery when `check_provider_endpoint` is on. The proxy signs these requests with SigV4 for the configured URL. Without this setting, they use the standard regional Bedrock endpoint. When model listing through the configured endpoint fails, for example because it serves only batch routes, discovery logs a warning and lists through the regional endpoint instead. A deployment that authenticates with a Bedrock API key lists through the regional endpoint, so the key never goes to the configured endpoint
 
 ```yaml
 model_list:
