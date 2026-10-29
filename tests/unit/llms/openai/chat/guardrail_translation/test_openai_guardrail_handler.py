@@ -1146,10 +1146,12 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         )
 
         assert result is chunks
-        fragments = [chunk.choices[0].delta.tool_calls for chunk in chunks[:3]]
-        assert [fragment[0].function.arguments for fragment in fragments] == ['{"fruit": "PERSIMMON"}', "", ""]
-        assert fragments[0][0].function.name == "lookup_fruit"
-        assert fragments[0][0].id == "call_1"
+        fragments = [call for chunk in chunks for call in chunk.choices[0].delta.tool_calls or ()]
+        arguments = [fragment.function.arguments for fragment in fragments]
+        assert "".join(arguments) == '{"fruit": "PERSIMMON"}'
+        assert arguments.count("") <= 1
+        assert fragments[0].function.name == "lookup_fruit"
+        assert fragments[0].id == "call_1"
         assert chunks[3].choices[0].delta.tool_calls is None
         assert chunks[3].choices[0].finish_reason == "tool_calls"
 
@@ -1171,8 +1173,10 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
             deliver_ended_stream_rewrites=True,
         )
 
-        fragments = [chunk.choices[0].delta.tool_calls[0] for chunk in chunks[:3]]
-        assert [fragment.function.name for fragment in fragments] == ["lookup_fruit_reviewed", None, None]
+        fragments = [call for chunk in chunks for call in chunk.choices[0].delta.tool_calls or ()]
+        assert [fragment.function.name for fragment in fragments if fragment.function.name] == [
+            "lookup_fruit_reviewed"
+        ]
         assert json.loads("".join(fragment.function.arguments for fragment in fragments)) == {"fruit": "persimmon"}
         assert fragments[0].id == "call_1"
 

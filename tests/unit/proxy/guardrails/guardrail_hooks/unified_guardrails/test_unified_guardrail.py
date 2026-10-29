@@ -1172,6 +1172,91 @@ class TestStreamingTransform:
         assert streamed != streamed.upper()
 
     @pytest.mark.asyncio
+    @pytest.mark.asyncio
+    async def test_rewritten_tool_arguments_do_not_leave_empty_fragments_on_the_wire(self):
+        """Blanking the trailing fragments pads the stream with meaningless tool-call deltas."""
+        def fragment(
+            arguments: str, announce: bool = False, finish_reason: str | None = None
+        ) -> ModelResponseStream:
+            call: Final[dict[str, object]] = {"index": 0, "function": {"arguments": arguments}}
+            announced: Final = (
+                {**call, "id": "call_0", "type": "function", "function": {"name": "lookup", "arguments": arguments}}
+                if announce
+                else call
+            )
+            return ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(content=None, role="assistant", tool_calls=[announced]),
+                        finish_reason=finish_reason,
+                    )
+                ],
+            )
+
+        chunks: Final = [
+            _stream_chunk("looking"),
+            fragment("", announce=True),
+            fragment('{"q": "SE'),
+            fragment('CRET"}', finish_reason="tool_calls"),
+        ]
+        out: Final = await _drive_stream(UnifiedLLMGuardrails(), _ToolRedactingGuardrail(), chunks)
+
+        delivered_arguments: Final = tuple(
+            call.function.arguments
+            for item in out
+            for choice in getattr(item, "choices", ()) or ()
+            for call in getattr(choice.delta, "tool_calls", None) or ()
+        )
+        assert "".join(delivered_arguments) == '{"q": "MASKED"}'
+        assert delivered_arguments.count("") <= 1
+
+    @pytest.mark.asyncio
+    async def test_a_mixed_text_and_tool_call_chunk_never_finishes_ahead_of_its_text(self):
+        """A client that stops at finish_reason must not lose rewritten text held behind it."""
+        mixed: Final = ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content="the code is SECRET",
+                        role="assistant",
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "call_0",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": '{"q": "SECRET"}'},
+                            }
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+        )
+        leading: Final = _stream_chunk("the code is ")
+        out: Final = await _drive_stream(UnifiedLLMGuardrails(), _ToolRedactingGuardrail(), [leading, mixed])
+
+        delivered: Final = "".join(_delta_text(item) for item in out)
+        assert "MASKED" in delivered
+
+        finished_at: Final = next(
+            (
+                position
+                for position, item in enumerate(out)
+                if any(getattr(choice, "finish_reason", None) for choice in getattr(item, "choices", ()) or ())
+            ),
+            None,
+        )
+        text_at: Final = next(
+            (position for position, item in enumerate(out) if "MASKED" in _delta_text(item)),
+            None,
+        )
+        assert finished_at is not None
+        assert text_at is not None
+        assert finished_at >= text_at
+
+    @pytest.mark.asyncio
     async def test_incremental_diff_emits_uppercased_deltas(self):
         """incremental_diff: the client receives uppercased deltas whose
         concatenation equals uppercase(full)."""

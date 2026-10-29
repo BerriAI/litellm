@@ -1257,16 +1257,36 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 f"the guardrail returned {len(post_guardrail_tool_calls)} tool calls for a stream that carried "
                 f"{len(fragments_by_tool_call)}",
             )
-        for before, (name, arguments), fragments in zip(
-            pre_guardrail_tool_calls, post_guardrail_tool_calls, fragments_by_tool_call
-        ):
-            if (name, arguments) == before:
-                continue
-            head, *tail = fragments
+        rewritten: Final = tuple(
+            (fragments, shape)
+            for before, shape, fragments in zip(
+                pre_guardrail_tool_calls, post_guardrail_tool_calls, fragments_by_tool_call
+            )
+            if shape != before
+        )
+        for fragments, (name, arguments) in rewritten:
+            head, last = fragments[0], fragments[-1]
             head.function.name = name
-            head.function.arguments = arguments
-            for fragment in tail:
-                fragment.function.arguments = ""
+            if head is not last:
+                head.function.arguments = ""
+            last.function.arguments = arguments
+        superseded: Final = chain.from_iterable(fragments[1:-1] for fragments, _ in rewritten)
+        self._drop_tool_call_fragments(responses_so_far, frozenset(id(fragment) for fragment in superseded))
+
+    @staticmethod
+    def _drop_tool_call_fragments(
+        responses_so_far: list["ModelResponseStream"],  # mutable-ok: strips the caller's buffered chunks in place
+        superseded: frozenset[int],
+    ) -> None:
+        """Remove fragments a rewrite superseded, so the stream carries no empty-argument tool deltas."""
+        if not superseded:
+            return
+        for response in responses_so_far:
+            for choice in response.choices:
+                present = choice.delta.tool_calls or ()
+                kept = [call for call in present if id(call) not in superseded]
+                if len(kept) != len(present):
+                    choice.delta.tool_calls = kept or None
 
     async def _apply_guardrail_responses_to_output_streaming(
         self,
