@@ -131,14 +131,14 @@ def _provider_mapped_params(
     params: ResponsesAPIOptionalRequestParams,
     model: str,
     drop_params: bool,
-    declared_reasoning_efforts: Collection[str],
+    declared_reasoning_efforts: Collection[str] | None,
 ) -> Mapping[str, object]:
     from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 
     if (
-        declared_reasoning_efforts
+        declared_reasoning_efforts is not None
         and isinstance(config, OpenAIResponsesAPIConfig)
-        and type(config).map_openai_params is OpenAIResponsesAPIConfig.map_openai_params
+        and config.honors_declared_reasoning_efforts()
     ):
         return config.map_openai_params_for_deployment(
             params, model, drop_params, declared_reasoning_efforts=declared_reasoning_efforts
@@ -287,7 +287,7 @@ class ResponsesAPIRequestUtils:
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         allowed_openai_params: list[str] | None = None,
         drop_params: bool | None = None,
-        declared_reasoning_efforts: Collection[str] = (),
+        declared_reasoning_efforts: Collection[str] | None = None,
     ) -> dict:
         """
         Get optional parameters for the responses API.
@@ -765,6 +765,12 @@ class ResponsesAPIRequestUtils:
                 custom_llm_provider=custom_llm_provider,
                 model_id=model_id,
                 response_id=decoded_response_id,
+            )
+        except ValueError:
+            return DecodedResponseId(
+                custom_llm_provider=None,
+                model_id=None,
+                response_id=response_id,
             )
         except Exception as e:
             verbose_logger.debug("Error decoding response_id '%s': %s", response_id, e)
