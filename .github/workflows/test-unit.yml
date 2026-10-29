@@ -236,6 +236,7 @@ jobs:
               tests/unit/llms/azure_ai
               tests/unit/llms/base_llm
               tests/unit/llms/baseten
+              tests/unit/llms/bigmodel
               tests/unit/llms/black_forest_labs
               tests/unit/llms/brave
               tests/unit/llms/bytez
@@ -321,6 +322,7 @@ jobs:
               tests/unit/llms/openai_like
               tests/unit/llms/opencode
               tests/unit/llms/opensandbox
+              tests/unit/llms/opensearch
               tests/unit/llms/openrouter
               tests/unit/llms/ovhcloud
               tests/unit/llms/parallel_ai

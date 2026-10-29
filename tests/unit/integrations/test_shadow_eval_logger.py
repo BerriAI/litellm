@@ -98,6 +98,13 @@ def _job_record(job: ActiveShadowEvalJob, target_type="key", target_id="key-hash
     return record
 
 
+def _serve_aliases(router: MagicMock, aliases: Mapping[str, str]) -> None:
+    """Point the mock router's ``registry().resolve(name, kind="alias")`` at this model_group_alias map."""
+    router.registry.return_value.resolve.side_effect = lambda name, *, kind: (
+        aliases.get(name) if kind == "alias" else None
+    )
+
+
 def _router(
     shadow_text="shadow answer",
     judge_json='{"preference": "A", "confidence": 0.9, "reasoning": "x"}',
@@ -110,7 +117,7 @@ def _router(
     model reports the model it served on the response, which is how each direction learns
     which model answered."""
     router = MagicMock()
-    router.model_group_alias = {}
+    _serve_aliases(router, {})
     router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
 
     async def acompletion(**kwargs):
@@ -145,7 +152,7 @@ def _shadow_reply_router(message, finish_reason="stop", routed_model="cheap-mode
     yields no judgeable text can be posed as the two different things it can be: an arm
     that chose a tool, or an arm that returned nothing."""
     router = MagicMock()
-    router.model_group_alias = {}
+    _serve_aliases(router, {})
     router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
 
     async def acompletion(**kwargs):
@@ -165,7 +172,7 @@ def _reasoning_judge_router(
     elevated reasoning_effort does: reasoning bills against the caller's own max_tokens and
     the reply is cut off at that cap. One character stands in for one token."""
     router = MagicMock()
-    router.model_group_alias = {}
+    _serve_aliases(router, {})
     router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
 
     async def acompletion(**kwargs):
@@ -184,7 +191,7 @@ def _judge_reply_router(content: str | None, finish_reason: str = "stop", served
     on the same parser error can be posed apart: no content at all, versus JSON cut off
     mid-object."""
     router = MagicMock()
-    router.model_group_alias = {}
+    _serve_aliases(router, {})
     router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
 
     async def acompletion(**kwargs):
@@ -1391,7 +1398,7 @@ class TestModelScope:
         map at match time, so re-pointing an alias follows config rather than freezing at
         job start."""
         router = _router()
-        router.model_group_alias = {"fast": "sonnet-group"}
+        _serve_aliases(router, {"fast": "sonnet-group"})
         prisma = _prisma(jobs=[_job_record(_job(models=frozenset({scoped_to})))])
         logger = _logger(router=router, prisma=prisma)
 
@@ -1403,14 +1410,14 @@ class TestModelScope:
 
     async def test_a_repointed_alias_applies_to_the_next_request_without_a_cache_refill(self):
         router = _router()
-        router.model_group_alias = {"fast": "sonnet-group"}
+        _serve_aliases(router, {"fast": "sonnet-group"})
         prisma = _prisma(jobs=[_job_record(_job(models=frozenset({"fast"})))])
         logger = _logger(router=router, prisma=prisma)
         await logger.async_log_success_event(_success_kwargs(model_group="sonnet-group"), RESPONSE, None, None)
         await _drain(logger)
         assert prisma.db.litellm_shadowevalattempt.create.await_count == 1
 
-        router.model_group_alias = {"fast": "haiku-group"}
+        _serve_aliases(router, {"fast": "haiku-group"})
         await logger.async_log_success_event(
             _success_kwargs(request_id="req-2", model_group="sonnet-group"), RESPONSE, None, None
         )
@@ -1656,7 +1663,7 @@ class TestShadowPipeline:
         """The shape reader runs inside the failure path: it must never raise a second time
         and cost the row entirely."""
         router = MagicMock()
-        router.model_group_alias = {}
+        _serve_aliases(router, {})
         router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
 
         async def acompletion(**kwargs):
@@ -2303,7 +2310,7 @@ class TestActiveJobsFailClosed:
 
 def _failing_router():
     router = MagicMock()
-    router.model_group_alias = {}
+    _serve_aliases(router, {})
     router.get_model_list = MagicMock(return_value=None)
     router.acompletion = AsyncMock(side_effect=RuntimeError("provider exploded"))
     return router

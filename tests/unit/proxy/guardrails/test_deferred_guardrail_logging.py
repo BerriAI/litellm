@@ -75,11 +75,13 @@ class _RecordingLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.standard_logging_object: StandardLoggingPayload | None = None
+        self.logged: asyncio.Event = asyncio.Event()
 
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
         self.standard_logging_object = cast(StandardLoggingPayload, kwargs["standard_logging_object"])
+        self.logged.set()
 
 
 class PostCallGuardrail(CustomGuardrail):
@@ -239,52 +241,33 @@ class TestHasPostCallGuardrailsForPassthrough:
 
 
 @pytest.mark.asyncio
-async def test_deferred_flag_stores_and_executes_closure():
-    """
-    When defer_async_logging is True on logging_obj:
-    1. wrapper_async stores a callable closure instead of calling create_task
-    2. Calling the closure fires create_task
-    3. Sync callbacks fire immediately (not deferred)
-    """
-    mock_logging_obj = MagicMock()
-    mock_logging_obj.defer_async_logging = True
-    mock_logging_obj.enqueue_deferred_logging = None
-
-    await litellm.acompletion(
-        model="gpt-3.5-turbo",
+@pytest.mark.parametrize("deferred", (False, True))
+async def test_success_logging_waits_for_deferred_closure_when_requested(deferred: bool) -> None:
+    recorder: Final = _RecordingLogger()
+    logging_obj: Final = Logging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="deferred-success",
+        function_id="deferred-success",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.defer_async_logging = deferred
+    response: Final = await litellm.acompletion(
+        model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
         mock_response="Hello!",
-        litellm_logging_obj=mock_logging_obj,
+        litellm_logging_obj=logging_obj,
     )
-
-    # Closure was stored
-    enqueue_fn = mock_logging_obj.enqueue_deferred_logging
-    assert callable(enqueue_fn), "Closure should be stored on logging_obj"
-
-    # Sync callbacks fired immediately
-    mock_logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
-
-    # Calling the closure fires create_task
-    created_tasks = []
-    real_create_task = asyncio.create_task
-
-    def tracking_create_task(coro):
-        task = real_create_task(coro)
-        created_tasks.append(task)
-        return task
-
-    with patch("asyncio.create_task", side_effect=tracking_create_task):
-        enqueue_fn()
-
-    assert len(created_tasks) >= 1, "Closure should fire asyncio.create_task"
-
-    for task in created_tasks:
-        if not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+    if deferred:
+        assert recorder.standard_logging_object is None
+        assert logging_obj.enqueue_deferred_logging is not None
+        logging_obj.enqueue_deferred_logging()
+    await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+    assert recorder.standard_logging_object is not None
+    assert recorder.standard_logging_object["id"] == response.id
 
 
 @pytest.mark.asyncio
@@ -399,40 +382,6 @@ async def test_deferred_anthropic_messages_bridged_to_the_responses_api_logs_the
     assert recorder.standard_logging_object["prompt_tokens"] == 7336
     assert recorder.standard_logging_object["metadata"]["usage_object"]["prompt_tokens_details"]["cached_tokens"] == 7333
     assert recorder.standard_logging_object["response_cost"] == pytest.approx(3 * 2e-7 + 7333 * 2e-8 + 23 * 1.25e-6)
-
-
-# ---------------------------------------------------------------------------
-# 3. Non-streaming regression: without flag, create_task fires normally
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_no_flag_fires_create_task_normally():
-    """Without defer_async_logging, wrapper_async calls create_task as before."""
-    created_tasks = []
-    real_create_task = asyncio.create_task
-
-    def tracking_create_task(coro):
-        task = real_create_task(coro)
-        created_tasks.append(task)
-        return task
-
-    with patch("asyncio.create_task", side_effect=tracking_create_task):
-        await litellm.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response="Hello!",
-        )
-
-    assert len(created_tasks) >= 1
-
-    for task in created_tasks:
-        if not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
 
 
 # ---------------------------------------------------------------------------
@@ -1536,6 +1485,27 @@ class TestArmDeferredStreamDispatch:
         assert recorded["result"] is assembled
         assert recorded["cache_hit"] is False
         assert recorded["prefer_async_handlers"] is True
+
+    @pytest.mark.asyncio
+    async def test_text_completion_stream_logs_after_the_guardrails_finish(self):
+        from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
+
+        logging_obj, recorded = self._dispatch_recording_logging_obj()
+
+        self._processor()._arm_deferred_stream_dispatch(
+            response=TextCompletionStreamWrapper(completion_stream=MagicMock(), model="gpt-test"),
+            route_type="atext_completion",
+            user_api_key_dict=MagicMock(),
+            logging_obj=logging_obj,
+        )
+
+        assembled = object()
+        logging_obj._deferred_stream_complete_args = (assembled, False)
+        ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+        await asyncio.sleep(0)
+
+        assert recorded["result"] is assembled
+        assert recorded["cache_hit"] is False
 
     @pytest.mark.asyncio
     async def test_router_wrapped_bridged_iterator_gets_csw_arg_shape(self):
