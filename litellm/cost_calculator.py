@@ -2334,6 +2334,14 @@ def response_cost_calculator(
                     )
                     provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
                     if provider_response_cost is not None and not custom_pricing:
+                        _store_cost_breakdown_in_logging_obj(
+                            litellm_logging_obj=litellm_logging_obj,
+                            prompt_tokens_cost_usd_dollar=0.0,
+                            completion_tokens_cost_usd_dollar=provider_response_cost,
+                            cost_for_built_in_tools_cost_usd_dollar=0.0,
+                            total_cost_usd_dollar=provider_response_cost,
+                            original_cost=provider_response_cost,
+                        )
                         return provider_response_cost
 
             response_cost = completion_cost(

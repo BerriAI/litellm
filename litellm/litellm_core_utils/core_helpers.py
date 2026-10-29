@@ -1020,17 +1020,28 @@ def chunk_usage(chunk: object) -> object:
 OWN_REPORTED_COST_READER_PROVIDERS: Final = frozenset({"xai", "perplexity", "opencode_go"})
 
 
-def _carries_litellm_bill(response: object) -> bool:
+LITELLM_BILLED_USAGE_COST: Final = "litellm_billed_usage_cost"
+
+
+def mark_usage_cost_as_litellm_bill(response: object, bill: float) -> None:
+    """Records litellm's bill as the response's ``response_cost`` and notes that ``usage.cost`` now holds that bill,
+    so ``billed_usage_cost`` does not read it back as the upstream's charge on a later pricing pass."""
+    hidden: Final[object] = getattr(response, "_hidden_params", None)
+    if isinstance(hidden, dict):
+        cast(dict[str, object], hidden).update({"response_cost": bill, LITELLM_BILLED_USAGE_COST: bill})
+
+
+def _usage_cost_is_litellm_bill(response: object) -> bool:
     hidden: Final = as_str_mapping(getattr(response, "_hidden_params", None))
-    stamped: Final[object] = None if hidden is None else hidden.get("response_cost")
-    return isinstance(stamped, (int, float)) and not isinstance(stamped, bool)
+    bill: Final[object] = None if hidden is None else hidden.get(LITELLM_BILLED_USAGE_COST)
+    usage_cost: Final[object] = getattr(_usage_field(response, "usage"), "cost", None)
+    return isinstance(bill, (int, float)) and not isinstance(bill, bool) and bill == usage_cost
 
 
 def billed_usage_cost(response: object, custom_llm_provider: str | None) -> float | None:
-    """The charge an OpenAI-compatible upstream reports in ``usage.cost``, skipped once litellm stamped its own bill
-    onto the response, because the stream builder and the Responses terminal event then rewrite ``usage.cost`` to
-    that bill."""
-    if custom_llm_provider in OWN_REPORTED_COST_READER_PROVIDERS or _carries_litellm_bill(response):
+    """The charge an OpenAI-compatible upstream reports in ``usage.cost``, skipped for providers with their own reader
+    and once litellm rewrote ``usage.cost`` to its own bill (the stream builder and the Responses terminal event do)."""
+    if custom_llm_provider in OWN_REPORTED_COST_READER_PROVIDERS or _usage_cost_is_litellm_bill(response):
         return None
     cost: Final = provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
     return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None

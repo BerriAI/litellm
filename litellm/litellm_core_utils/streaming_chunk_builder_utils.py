@@ -15,6 +15,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import (
     OWN_REPORTED_COST_READER_PROVIDERS,
     chunk_usage,
+    mark_usage_cost_as_litellm_bill,
     provider_reported_usage_cost,
 )
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
@@ -1428,6 +1429,7 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
         return
     setattr(usage, "cost", computed_cost)
     _set_hidden_response_cost(response, float(computed_cost))
+    mark_usage_cost_as_litellm_bill(response, float(computed_cost))
 
 
 def _field_of(value: object, name: str) -> object:

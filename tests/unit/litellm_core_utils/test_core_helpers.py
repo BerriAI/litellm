@@ -808,7 +808,7 @@ class TestReceiveStampSurvivesASecondMetadataBucket:
 def test_billed_usage_cost_bills_any_chat_upstream_without_its_own_reader() -> None:
     from types import SimpleNamespace
 
-    from litellm.litellm_core_utils.core_helpers import billed_usage_cost
+    from litellm.litellm_core_utils.core_helpers import billed_usage_cost, mark_usage_cost_as_litellm_bill
     from litellm.types.utils import ModelResponse, Usage
 
     usage = Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120, cost=0.037)
@@ -817,6 +817,8 @@ def test_billed_usage_cost_bills_any_chat_upstream_without_its_own_reader() -> N
     assert billed_usage_cost(chat, "openrouter") == 0.037
     assert billed_usage_cost(chat, "xai") is None
     assert billed_usage_cost(SimpleNamespace(usage=usage), "openai") == 0.037
-    stamped = ModelResponse(usage=usage)
-    stamped._hidden_params["response_cost"] = 0.037
-    assert billed_usage_cost(stamped, "openai") is None
+    priced_by_litellm = ModelResponse(usage=usage)
+    priced_by_litellm._hidden_params["response_cost"] = 0.037
+    assert billed_usage_cost(priced_by_litellm, "openai") == 0.037
+    mark_usage_cost_as_litellm_bill(priced_by_litellm, 0.037)
+    assert billed_usage_cost(priced_by_litellm, "openai") is None

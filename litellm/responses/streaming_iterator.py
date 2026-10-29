@@ -40,6 +40,7 @@ from litellm.constants import (
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
+    mark_usage_cost_as_litellm_bill,
     process_response_headers,
     provider_reported_usage_cost,
     set_response_cost_in_hidden_params,
@@ -1870,7 +1871,7 @@ def stamp_responses_usage_cost(
         return
     if bill > 0 or isinstance(getattr(usage_obj, "cost", None), (int, float)):
         setattr(usage_obj, "cost", float(bill))
-        response_obj.hidden_params = {**response_obj.hidden_params, "response_cost": float(bill)}
+        mark_usage_cost_as_litellm_bill(response_obj, float(bill))
 
 
 def opening_item_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
