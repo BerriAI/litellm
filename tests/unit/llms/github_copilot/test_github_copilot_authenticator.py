@@ -1,11 +1,9 @@
 import json
 import logging
 import os
-import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
 from pathlib import Path
-from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -14,24 +12,25 @@ import respx
 
 from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.common_utils import (
-    APIKeyExpiredError,
+    DEFAULT_COPILOT_EDITOR_PLUGIN_VERSION,
+    DEFAULT_COPILOT_EDITOR_VERSION,
+    DEFAULT_COPILOT_INTEGRATION_ID,
+    DEFAULT_COPILOT_USER_AGENT,
+    DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAccessTokenError,
     GetAPIKeyError,
     GetDeviceCodeError,
-    RefreshAPIKeyError,
+    InvalidAPIBaseError,
+    get_copilot_api_base,
+    get_copilot_default_headers,
 )
 
-API_KEY_URL: Final = "https://copilot-key.test/copilot_internal/v2/token"
-REFRESHED_KEY: Final = MappingProxyType({"token": "new-api-key", "expires_at": 4102444800})
-TENANT_API: Final = "https://api.tenant.githubcopilot.com"
-REPAIRED_API: Final = "https://api.repaired.githubcopilot.com"
 TRUNCATED_UTF_16: Final = b"\xff\xfe\x00\xd8"
 
 
 @pytest.fixture
 def logged_in_token_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-    monkeypatch.setenv("GITHUB_COPILOT_API_KEY_URL", API_KEY_URL)
     (tmp_path / "access-token").write_text("gho_logged_in")
     return tmp_path
 
@@ -65,7 +64,6 @@ class TestGitHubCopilotAuthenticator:
             auth = Authenticator()
             assert auth.token_dir.endswith("/github_copilot")
             assert auth.access_token_file.endswith("/access-token")
-            assert auth.api_key_file.endswith("/api-key.json")
             mock_makedirs.assert_called_once()
 
     def test_ensure_token_dir(self):
@@ -77,33 +75,225 @@ class TestGitHubCopilotAuthenticator:
             auth = Authenticator()
             mock_makedirs.assert_called_once_with(auth.token_dir, exist_ok=True)
 
-    def test_get_github_headers(self, authenticator):
-        """Test that GitHub headers are correctly generated."""
-        headers = authenticator._get_github_headers()
-        assert "accept" in headers
-        assert "editor-version" in headers
-        assert "user-agent" in headers
-        assert "content-type" in headers
+    @pytest.mark.parametrize(
+        "api_base",
+        (
+            "https://configured.example.com",
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+            "http://[::1]:8080",
+            "http://copilot-relay:8080",
+            "http://10.0.0.1:8080",
+        ),
+    )
+    def test_get_api_base_prefers_environment(self, api_base):
+        with patch.dict(os.environ, {"GITHUB_COPILOT_API_BASE": api_base}, clear=True):
+            assert get_copilot_api_base() == api_base
 
-        headers_with_token = authenticator._get_github_headers("test-token")
-        assert headers_with_token["authorization"] == "token test-token"
+    @pytest.mark.parametrize(
+        "api_base",
+        (
+            "ftp://api.githubcopilot.com",
+            "https://user:password@api.githubcopilot.com",
+            "https://api.githubcopilot.com?tenant=example",
+            "https://api.githubcopilot.com#fragment",
+            "api.githubcopilot.com",
+            "https:///missing-host",
+            "https://[invalid",
+        ),
+    )
+    def test_get_api_base_rejects_invalid_configuration(self, api_base):
+        with (
+            patch.dict(os.environ, {"GITHUB_COPILOT_API_BASE": api_base}, clear=True),
+            pytest.raises(
+                InvalidAPIBaseError, match="GitHub Copilot GITHUB_COPILOT_API_BASE must be an HTTP or HTTPS URL"
+            ),
+        ):
+            get_copilot_api_base()
+
+    def test_get_api_base_uses_default_when_unconfigured(self):
+        with patch.dict(os.environ, {}, clear=True):
+            assert get_copilot_api_base() == DEFAULT_GITHUB_COPILOT_API_BASE
+
+    @pytest.mark.parametrize(
+        "api_base", ("https://deployment.example.com", "http://localhost:9000", "http://deployment.example.com")
+    )
+    def test_get_api_base_prefers_deployment_endpoint(self, api_base):
+        with patch.dict(
+            os.environ,
+            {"GITHUB_COPILOT_API_BASE": "https://configured.example.com"},
+            clear=True,
+        ):
+            assert get_copilot_api_base(api_base) == api_base
+
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "ftp://deployment.example.com",
+            "https://user:pw@deployment.example.com",
+            "https://deployment.example.com?q=1",
+            "https://deployment.example.com#fragment",
+            "https:///missing-host",
+            "deployment.example.com",
+        ],
+    )
+    def test_get_api_base_rejects_invalid_deployment_endpoint_instead_of_falling_back(self, api_base):
+        with (
+            patch.dict(
+                os.environ,
+                {"GITHUB_COPILOT_API_BASE": "https://configured.example.com"},
+                clear=True,
+            ),
+            pytest.raises(InvalidAPIBaseError, match="GitHub Copilot api_base must be an HTTP or HTTPS URL"),
+        ):
+            get_copilot_api_base(api_base)
+
+    @pytest.mark.parametrize("deployment_base", [None, ""])
+    @pytest.mark.parametrize("environment_base", [None, ""])
+    def test_get_api_base_skips_empty_candidates_without_warning(self, deployment_base, environment_base, caplog):
+        environment = {} if environment_base is None else {"GITHUB_COPILOT_API_BASE": environment_base}
+        with patch.dict(os.environ, environment, clear=True), caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            assert get_copilot_api_base(deployment_base) == DEFAULT_GITHUB_COPILOT_API_BASE
+        assert caplog.text == ""
+
+    def test_get_api_base_refuses_an_enterprise_token_exchange_url_without_a_copilot_base(self):
+        with (
+            patch.dict(
+                os.environ,
+                {"GITHUB_COPILOT_API_KEY_URL": "https://api.octo.ghe.com/copilot_internal/v2/token"},
+                clear=True,
+            ),
+            pytest.raises(InvalidAPIBaseError, match="Set GITHUB_COPILOT_API_BASE"),
+        ):
+            get_copilot_api_base()
+
+    @pytest.mark.parametrize(
+        ("environment", "expected"),
+        (
+            (
+                {"GITHUB_COPILOT_API_KEY_URL": "https://api.github.com/copilot_internal/v2/token"},
+                DEFAULT_GITHUB_COPILOT_API_BASE,
+            ),
+            (
+                {
+                    "GITHUB_COPILOT_API_KEY_URL": "https://api.octo.ghe.com/copilot_internal/v2/token",
+                    "GITHUB_COPILOT_API_BASE": "https://copilot-api.octo.ghe.com",
+                },
+                "https://copilot-api.octo.ghe.com",
+            ),
+        ),
+    )
+    def test_get_api_base_accepts_a_token_exchange_url_that_needs_no_action(self, environment, expected):
+        with patch.dict(os.environ, environment, clear=True):
+            assert get_copilot_api_base() == expected
+
+    def test_get_github_headers(self, authenticator):
+        with patch.dict(os.environ, {}, clear=True):
+            headers = authenticator._get_github_headers()
+        assert headers == {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "copilot-integration-id": DEFAULT_COPILOT_INTEGRATION_ID,
+            "editor-version": DEFAULT_COPILOT_EDITOR_VERSION,
+            "editor-plugin-version": DEFAULT_COPILOT_EDITOR_PLUGIN_VERSION,
+            "user-agent": DEFAULT_COPILOT_USER_AGENT,
+        }
+
+    def test_auth_requests_support_opencode_identity(self, authenticator, mock_http_client):
+        mock_client, mock_response = mock_http_client
+        mock_response.json.side_effect = (
+            {
+                "device_code": "dc",
+                "user_code": "UC",
+                "verification_uri": "https://github.com/login/device",
+            },
+            {"access_token": "opencode-oauth-token"},
+        )
+        environment = {
+            "GITHUB_COPILOT_CLIENT_ID": "Ov23li8tweQw6odWQebz",
+            "GITHUB_COPILOT_USER_AGENT": "opencode/1.18.7",
+            "GITHUB_COPILOT_INTEGRATION_ID": "",
+            "GITHUB_COPILOT_EDITOR_VERSION": "",
+            "GITHUB_COPILOT_EDITOR_PLUGIN_VERSION": "",
+            "GITHUB_COPILOT_API_VERSION": "2026-06-01",
+            "GITHUB_COPILOT_OPENAI_INTENT": "conversation-edits",
+            "GITHUB_COPILOT_USER_AGENT_LIBRARY_VERSION": "",
+            "GITHUB_COPILOT_API_BASE": "https://api.githubcopilot.com",
+        }
+
+        with (
+            patch.dict(os.environ, environment, clear=True),
+            patch(
+                "litellm.llms.github_copilot.authenticator.get_httpx_client",
+                return_value=mock_client,
+            ),
+            patch.object(authenticator, "get_access_token", return_value="opencode-oauth-token"),
+        ):
+            authenticator._get_device_code()
+            assert authenticator._poll_for_access_token("dc") == "opencode-oauth-token"
+            assert authenticator.get_api_key() == "opencode-oauth-token"
+            request_headers = get_copilot_default_headers("opencode-oauth-token")
+
+        expected_auth_headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "user-agent": "opencode/1.18.7",
+        }
+        assert mock_client.post.call_args_list[0].kwargs == {
+            "headers": expected_auth_headers,
+            "json": {
+                "client_id": "Ov23li8tweQw6odWQebz",
+                "scope": "read:user",
+            },
+        }
+        assert mock_client.post.call_args_list[1].kwargs == {
+            "headers": expected_auth_headers,
+            "json": {
+                "client_id": "Ov23li8tweQw6odWQebz",
+                "device_code": "dc",
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            },
+        }
+        assert {header: value for header, value in request_headers.items() if header != "x-request-id"} == {
+            **expected_auth_headers,
+            "openai-intent": "conversation-edits",
+            "x-github-api-version": "2026-06-01",
+            "Authorization": "Bearer " + "opencode-oauth-token",
+        }
+        assert str(uuid.UUID(request_headers["x-request-id"])) == request_headers["x-request-id"]
+        mock_client.get.assert_not_called()
 
     def test_get_access_token_from_file(self, logged_in_token_dir: Path) -> None:
         """Test retrieving an access token from a file."""
         assert Authenticator().get_access_token() == "gho_logged_in"
 
     def test_get_access_token_login(self, authenticator):
-        """Test logging in to get an access token."""
+        mock_token = "mock-access-token"
+        write_open = mock_open()
+
+        with (
+            patch.object(authenticator, "_login", return_value=mock_token) as mock_login,
+            patch("builtins.open", side_effect=(IOError, write_open.return_value)),
+        ):
+            token = authenticator.get_access_token()
+
+        assert token == mock_token
+        mock_login.assert_called_once()
+        write_open().write.assert_called_once_with(mock_token)
+
+    def test_get_access_token_survives_persistence_failure(self, authenticator, caplog):
         mock_token = "mock-access-token"
 
         with (
-            patch.object(authenticator, "_login", return_value=mock_token),
-            patch("builtins.open", mock_open()),
-            patch("builtins.open", side_effect=IOError) as mock_read,
+            patch.object(authenticator, "_login", return_value=mock_token) as mock_login,
+            patch("builtins.open", side_effect=IOError),
+            caplog.at_level(logging.ERROR, logger="LiteLLM"),
         ):
             token = authenticator.get_access_token()
-            assert token == mock_token
-            authenticator._login.assert_called_once()
+
+        assert token == mock_token
+        mock_login.assert_called_once()
+        assert "Error saving access token to file" in caplog.text
 
     @pytest.mark.asyncio
     async def test_get_access_token_refuses_device_code_login_in_event_loop(self, authenticator):
@@ -134,17 +324,14 @@ class TestGitHubCopilotAuthenticator:
         mock_login.assert_not_called()
 
     @pytest.mark.parametrize("encoding", ["utf-16", "utf-16-le", "utf-8-sig"])
-    def test_saved_access_token_in_another_encoding_is_sent_on_refresh(
+    def test_saved_access_token_in_another_encoding_is_sent_to_copilot(
         self, logged_in_token_dir: Path, encoding: str
     ) -> None:
-        """An access-token file a Windows editor saved as UTF-16 or with a BOM still refreshes the key."""
+        """An access-token file a Windows editor saved as UTF-16 or with a BOM is still the token Copilot gets."""
         (logged_in_token_dir / "access-token").write_bytes("gho_logged_in\n".encode(encoding))
 
-        with respx.mock(assert_all_called=True) as router:
-            route: Final = router.get(API_KEY_URL).respond(json=dict(REFRESHED_KEY))
-            assert Authenticator().get_api_key() == "new-api-key"
-
-        assert route.calls.last.request.headers["authorization"] == "token gho_logged_in"
+        with respx.mock:
+            assert Authenticator().get_api_key() == "gho_logged_in"
 
     def test_undecodable_access_token_is_refused_like_a_missing_one(self, logged_in_token_dir: Path) -> None:
         """A proxy worker gets the login hint for an access-token file it cannot decode, and the file is kept."""
@@ -171,36 +358,14 @@ class TestGitHubCopilotAuthenticator:
                 authenticator.get_access_token()
             assert authenticator._login.call_count == 3
 
-    def test_get_api_key_from_file(self, authenticator):
-        """Test retrieving an API key from a file."""
-        future_time = (datetime.now() + timedelta(hours=1)).timestamp()
-        mock_api_key_data = json.dumps(
-            {"token": "mock-api-key", "expires_at": future_time}
-        ).encode()
-
-        with patch("builtins.open", mock_open(read_data=mock_api_key_data)):
-            api_key = authenticator.get_api_key()
-            assert api_key == "mock-api-key"
-
-    def test_get_api_key_expired(self, authenticator):
-        """Test refreshing an expired API key."""
-        past_time = (datetime.now() - timedelta(hours=1)).timestamp()
-        mock_expired_data = json.dumps(
-            {"token": "expired-api-key", "expires_at": past_time}
-        ).encode()
-        mock_new_data = {
-            "token": "new-api-key",
-            "expires_at": (datetime.now() + timedelta(hours=1)).timestamp(),
-        }
-
-        with (
-            patch("builtins.open", mock_open(read_data=mock_expired_data)),
-            patch.object(authenticator, "_refresh_api_key", return_value=mock_new_data),
-            patch("json.dump") as mock_json_dump,
+    def test_get_api_key_maps_access_token_failure(self, authenticator):
+        with patch.object(
+            authenticator,
+            "get_access_token",
+            side_effect=GetAccessTokenError(message="OAuth failed", status_code=401),
         ):
-            api_key = authenticator.get_api_key()
-            assert api_key == "new-api-key"
-            authenticator._refresh_api_key.assert_called_once()
+            with pytest.raises(GetAPIKeyError, match="Failed to get OAuth access token"):
+                authenticator.get_api_key()
 
     @pytest.mark.parametrize(
         "malformed",
@@ -212,204 +377,17 @@ class TestGitHubCopilotAuthenticator:
         ],
         ids=["json-list", "text-expires-at", "truncated-utf-16", "list-endpoints-beside-live-key"],
     )
-    def test_get_api_key_malformed_file_refreshes_like_missing(
+    def test_get_api_key_malformed_api_key_file_is_ignored_like_a_missing_one(
         self, logged_in_token_dir: Path, malformed: bytes
     ) -> None:
-        """A file that is not a Copilot key object is ignored, refreshed over, never answered with a parse error."""
+        """A leftover api-key.json in any shape never replaces the access token and is left for inspection."""
         api_key_file: Final = logged_in_token_dir / "api-key.json"
         api_key_file.write_bytes(malformed)
-
-        with respx.mock(assert_all_called=True) as router:
-            route: Final = router.get(API_KEY_URL).respond(json=dict(REFRESHED_KEY))
-            assert Authenticator().get_api_key() == "new-api-key"
-
-        assert route.call_count == 1
-        assert route.calls.last.request.headers["authorization"] == "token gho_logged_in"
-        assert json.loads(api_key_file.read_text()) == REFRESHED_KEY
-
-    @pytest.mark.parametrize(
-        "malformed",
-        [
-            b"[]",
-            json.dumps({"token": "tid=abc", "expires_at": "soon"}).encode(),
-            TRUNCATED_UTF_16,
-            json.dumps({"token": "tid=abc", "expires_at": 4102444800, "endpoints": []}).encode(),
-        ],
-        ids=["json-list", "text-expires-at", "truncated-utf-16", "list-endpoints-beside-live-key"],
-    )
-    def test_get_api_key_malformed_file_is_kept_when_refresh_fails(
-        self, logged_in_token_dir: Path, malformed: bytes
-    ) -> None:
-        """Ignoring the file never deletes it, so a failed refresh leaves the operator's file for inspection."""
-        api_key_file: Final = logged_in_token_dir / "api-key.json"
-        api_key_file.write_bytes(malformed)
-
-        with respx.mock(assert_all_called=True) as router:
-            router.get(API_KEY_URL).respond(401)
-            with pytest.raises(GetAPIKeyError):
-                Authenticator().get_api_key()
-
-        assert api_key_file.read_bytes() == malformed
-
-    def test_refreshed_key_that_cannot_be_saved_is_reused_with_its_endpoint(self, logged_in_token_dir: Path) -> None:
-        unwritable_key_file: Final = logged_in_token_dir / "api-key.json"
-        unwritable_key_file.mkdir()
-        first: Final = Authenticator()
-        second: Final = Authenticator()
-
-        with respx.mock(assert_all_called=True) as router:
-            route: Final = router.get(API_KEY_URL).respond(json={**REFRESHED_KEY, "endpoints": {"api": TENANT_API}})
-            served: Final = (first.get_api_key(), second.get_api_key(), first.get_api_key())
-
-        assert served == ("new-api-key",) * 3
-        assert (first.get_api_base(), second.get_api_base()) == (TENANT_API, TENANT_API)
-        assert route.call_count == 1
-        assert unwritable_key_file.is_dir()
-
-    def test_refreshed_key_that_cannot_be_saved_and_has_expired_is_refreshed_again(
-        self, logged_in_token_dir: Path
-    ) -> None:
-        (logged_in_token_dir / "api-key.json").mkdir()
-        auth: Final = Authenticator()
-
-        with respx.mock(assert_all_called=True) as router:
-            route: Final = router.get(API_KEY_URL).respond(json={"token": "expired-api-key", "expires_at": 1})
-            served: Final = (auth.get_api_key(), auth.get_api_key())
-
-        assert served == ("expired-api-key",) * 2
-        assert route.call_count == 2
-
-    def test_kept_key_and_its_endpoint_stay_paired_after_the_key_file_is_repaired(
-        self, logged_in_token_dir: Path
-    ) -> None:
-        key_file: Final = logged_in_token_dir / "api-key.json"
-        key_file.mkdir()
-        auth: Final = Authenticator()
-
-        with respx.mock(assert_all_called=True) as router:
-            router.get(API_KEY_URL).respond(json={**REFRESHED_KEY, "endpoints": {"api": TENANT_API}})
-            auth.get_api_key()
-        key_file.rmdir()
-        key_file.write_text(
-            json.dumps({"token": "repaired-api-key", "expires_at": 9999999999, "endpoints": {"api": REPAIRED_API}})
-        )
-
-        assert (auth.get_api_key(), auth.get_api_base()) in (
-            ("new-api-key", TENANT_API),
-            ("repaired-api-key", REPAIRED_API),
-        )
-
-    def test_unsaved_key_is_not_reused_after_the_access_token_changes(self, logged_in_token_dir: Path) -> None:
-        (logged_in_token_dir / "api-key.json").mkdir()
-
-        with respx.mock(assert_all_called=True) as router:
-            route: Final = router.get(API_KEY_URL).respond(json=dict(REFRESHED_KEY))
-            Authenticator().get_api_key()
-            (logged_in_token_dir / "access-token").write_text("gho_logged_in_again")
-            Authenticator().get_api_key()
-
-        assert [call.request.headers["authorization"] for call in route.calls] == [
-            "token gho_logged_in",
-            "token gho_logged_in_again",
-        ]
-
-    @pytest.mark.parametrize(
-        "malformed",
-        [
-            b"[]",
-            json.dumps({"endpoints": {"api": 5}}).encode(),
-            json.dumps({"token": "t", "expires_at": 1, "endpoints": []}).encode(),
-            TRUNCATED_UTF_16,
-        ],
-        ids=["json-list", "number-api", "list-endpoints", "truncated-utf-16"],
-    )
-    def test_get_api_base_malformed_file_returns_none(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, malformed: bytes
-    ) -> None:
-        """get_api_base runs before get_api_key on every request, so it must survive malformed shapes too."""
-        monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-        (tmp_path / "api-key.json").write_bytes(malformed)
-
-        assert Authenticator().get_api_base() is None
-
-    def test_get_api_base_keeps_endpoints_when_the_key_is_malformed(self, logged_in_token_dir: Path) -> None:
-        """The endpoint is read on its own, so a bad key never sends the refreshed key to the default host."""
-        (logged_in_token_dir / "api-key.json").write_text(
-            json.dumps({"token": "tid=abc", "expires_at": "soon", "endpoints": {"api": TENANT_API}})
-        )
-        auth: Final = Authenticator()
-
-        assert auth.get_api_base() == TENANT_API
-        with respx.mock(assert_all_called=True) as router:
-            router.get(API_KEY_URL).respond(json=dict(REFRESHED_KEY))
-            assert auth.get_api_key() == "new-api-key"
-
-    @pytest.mark.parametrize("encoding", ["utf-16", "utf-16-le", "utf-8-sig"])
-    def test_live_key_file_in_another_json_encoding_is_used_without_a_refresh(
-        self, logged_in_token_dir: Path, encoding: str
-    ) -> None:
-        """A key file a Windows editor saved as UTF-16 or with a BOM still holds a live key and tenant."""
-        live_key: Final = json.dumps({"token": "tid=abc", "expires_at": 4102444800, "endpoints": {"api": TENANT_API}})
-        api_key_file: Final = logged_in_token_dir / "api-key.json"
-        api_key_file.write_bytes(live_key.encode(encoding))
-        auth: Final = Authenticator()
 
         with respx.mock:
-            assert auth.get_api_base() == TENANT_API
-            assert auth.get_api_key() == "tid=abc"
+            assert Authenticator().get_api_key() == "gho_logged_in"
 
-        assert api_key_file.read_bytes() == live_key.encode(encoding)
-
-    def test_ignored_key_file_is_logged_without_its_contents(
-        self, logged_in_token_dir: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """The warning names the file but never echoes a token saved in the wrong shape."""
-        (logged_in_token_dir / "api-key.json").write_text(
-            json.dumps({"token": ["tid=secret-value"], "expires_at": 4102444800})
-        )
-
-        with caplog.at_level(logging.WARNING, logger="LiteLLM"), respx.mock(assert_all_called=True) as router:
-            router.get(API_KEY_URL).respond(json=dict(REFRESHED_KEY))
-            assert Authenticator().get_api_key() == "new-api-key"
-
-        assert "not a Copilot API key file" in caplog.text
-        assert "tid=secret-value" not in caplog.text
-
-    def test_refresh_api_key(self, authenticator, mock_http_client):
-        """Test refreshing an API key."""
-        mock_client, mock_response = mock_http_client
-        mock_token = "mock-access-token"
-        mock_api_key_data = {"token": "new-api-key", "expires_at": 12345}
-
-        with (
-            patch.object(authenticator, "get_access_token", return_value=mock_token),
-            patch(
-                "litellm.llms.github_copilot.authenticator.get_httpx_client",
-                return_value=mock_client,
-            ),
-            patch.object(mock_response, "json", return_value=mock_api_key_data),
-        ):
-            result = authenticator._refresh_api_key()
-            assert result == mock_api_key_data
-            mock_client.get.assert_called_once()
-            authenticator.get_access_token.assert_called_once()
-
-    def test_refresh_api_key_failure(self, authenticator, mock_http_client):
-        """Test failure to refresh an API key."""
-        mock_client, mock_response = mock_http_client
-        mock_token = "mock-access-token"
-
-        with (
-            patch.object(authenticator, "get_access_token", return_value=mock_token),
-            patch(
-                "litellm.llms.github_copilot.authenticator.get_httpx_client",
-                return_value=mock_client,
-            ),
-            patch.object(mock_response, "json", return_value={}),
-        ):
-            with pytest.raises(RefreshAPIKeyError):
-                authenticator._refresh_api_key()
-            assert mock_client.get.call_count == 3
+        assert api_key_file.read_bytes() == malformed
 
     def test_get_device_code(self, authenticator, mock_http_client):
         """Test getting a device code."""
@@ -458,34 +436,15 @@ class TestGitHubCopilotAuthenticator:
         mock_token = "mock-access-token"
 
         with (
-            patch.object(
-                authenticator, "_get_device_code", return_value=mock_device_code_data
-            ),
-            patch.object(
-                authenticator, "_poll_for_access_token", return_value=mock_token
-            ),
+            patch.object(authenticator, "_get_device_code", return_value=mock_device_code_data),
+            patch.object(authenticator, "_poll_for_access_token", return_value=mock_token),
             patch("builtins.print") as mock_print,
         ):
             result = authenticator._login()
             assert result == mock_token
             authenticator._get_device_code.assert_called_once()
-            authenticator._poll_for_access_token.assert_called_once_with(
-                "mock-device-code"
-            )
+            authenticator._poll_for_access_token.assert_called_once_with("mock-device-code")
             mock_print.assert_called_once()
-
-    def test_get_api_base_from_file(self, authenticator):
-        """Test retrieving the API base endpoint from a file."""
-        mock_api_key_data = json.dumps(
-            {
-                "token": "mock-api-key",
-                "expires_at": (datetime.now() + timedelta(hours=1)).timestamp(),
-                "endpoints": {"api": "https://api.enterprise.githubcopilot.com"},
-            }
-        ).encode()
-        with patch("builtins.open", mock_open(read_data=mock_api_key_data)):
-            api_base = authenticator.get_api_base()
-            assert api_base == "https://api.enterprise.githubcopilot.com"
 
     def test_get_device_code_with_custom_url(self, authenticator, mock_http_client):
         """GITHUB_COPILOT_DEVICE_CODE_URL env var must be used by _get_device_code at call time."""
@@ -544,16 +503,3 @@ class TestGitHubCopilotAuthenticator:
         ):
             authenticator._poll_for_access_token("dc")
             assert mock_client.post.call_args[1]["json"]["client_id"] == custom_id
-
-    def test_refresh_api_key_with_custom_url(self, authenticator, mock_http_client):
-        """GITHUB_COPILOT_API_KEY_URL env var must be used by _refresh_api_key at call time."""
-        mock_client, mock_response = mock_http_client
-        custom_url = "https://custom.example.com/api-key"
-        mock_response.json.return_value = {"token": "api-tok", "expires_at": 9999999999}
-        with (
-            patch.dict(os.environ, {"GITHUB_COPILOT_API_KEY_URL": custom_url}),
-            patch("litellm.llms.github_copilot.authenticator.get_httpx_client", return_value=mock_client),
-            patch.object(authenticator, "get_access_token", return_value="access-tok"),
-        ):
-            authenticator._refresh_api_key()
-            assert mock_client.get.call_args[0][0] == custom_url

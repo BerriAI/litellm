@@ -1,5 +1,4 @@
 import json
-import os
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # spread dict loses the role literal without a cast
 
@@ -15,11 +14,12 @@ from litellm.types.utils import ModelResponse
 
 from ..authenticator import Authenticator
 from ..common_utils import (
-    DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
+    InvalidAPIBaseError,
+    get_copilot_api_base,
     get_copilot_default_headers,
 )
-from ..per_user_auth import require_github_copilot_user_session
+from ..per_user_auth import GithubCopilotUserSession, require_github_copilot_user_session
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -38,13 +38,13 @@ class GithubCopilotConfig(OpenAIConfig):
         super().__init__()
         self.authenticator = Authenticator()
 
-    def api_base_without_login(self, api_base: str | None = None) -> str:
-        return (
-            api_base
-            or self.authenticator.get_api_base()
-            or os.getenv("GITHUB_COPILOT_API_BASE")
-            or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
+    def api_base_without_login(self, user_session: GithubCopilotUserSession | None = None) -> str | None:
+        try:
+            if user_session is not None:
+                return get_copilot_api_base(None, lambda: user_session.token, user_session.endpoints)
+            return get_copilot_api_base(None, self.authenticator.stored_access_token)
+        except InvalidAPIBaseError:
+            return None
 
     def _get_openai_compatible_provider_info(
         self,
@@ -53,7 +53,6 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: str | None,
         custom_llm_provider: str,
     ) -> tuple[str | None, str | None, str]:
-        dynamic_api_base: Final = self.api_base_without_login(api_base)
         try:
             dynamic_api_key: Final = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
@@ -62,7 +61,7 @@ class GithubCopilotConfig(OpenAIConfig):
                 llm_provider=custom_llm_provider,
                 message=str(e),
             )
-        return dynamic_api_base, dynamic_api_key, custom_llm_provider
+        return get_copilot_api_base(api_base, lambda: dynamic_api_key), dynamic_api_key, custom_llm_provider
 
     def get_openai_compatible_provider_info(
         self,

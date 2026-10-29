@@ -9,12 +9,11 @@ from litellm.llms.anthropic.messages.native.transformation import (
 
 from ..authenticator import Authenticator
 from ..common_utils import (
-    DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
     pin_session_authorization,
 )
-from ..per_user_auth import require_github_copilot_user_session
+from ..per_user_auth import require_github_copilot_user_session, resolve_copilot_api_base
 
 _MESSAGES_PROXY_API_VERSION: Final = "2026-06-01"
 
@@ -63,23 +62,10 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
     ) -> tuple[dict, str | None]:
         """
         Validate environment for GitHub Copilot and add Copilot-specific headers.
-
-        The caller-supplied ``api_base`` is intentionally ignored. Routing this
-        request anywhere other than the authenticated Copilot endpoint would
-        leak the Copilot bearer token to a caller-controlled URL.
         """
-        # Always use the Copilot endpoint resolved from the authenticated
-        # session, never the caller-supplied api_base. rstrip so a
-        # tenant-specific base with a trailing slash does not yield a
-        # double-slash URL once "/v1/messages" is appended downstream.
         user_session: Final = require_github_copilot_user_session(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
-        dynamic_api_base: Final = (
-            user_session.api_base
-            if user_session is not None
-            else (self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE)
-        ).rstrip("/")
         try:
             dynamic_api_key: Final = (
                 user_session.token if user_session is not None else self.authenticator.get_api_key()
@@ -90,6 +76,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
                 llm_provider="github_copilot",
                 message=str(e),
             )
+        dynamic_api_base: Final = resolve_copilot_api_base(api_base, user_session, lambda: dynamic_api_key).rstrip("/")
 
         # Merge Copilot headers with provided headers
         copilot_headers: Final = get_copilot_default_headers(dynamic_api_key)
@@ -126,21 +113,9 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
     ) -> str:
         """
         Return the complete URL for GitHub Copilot /v1/messages endpoint.
-
-        ``api_base`` here is the value already resolved by
-        ``validate_anthropic_messages_environment`` (the authenticated Copilot
-        host), not the raw caller-supplied base — that one is discarded there to
-        avoid leaking the Copilot bearer token to a caller-controlled URL. We
-        reuse it to avoid a second authenticator read, falling back to a fresh
-        resolution only if it was not provided.
         """
         user_session: Final = require_github_copilot_user_session(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
-        resolved: Final = (
-            (user_session.api_base if user_session is not None else None)
-            or api_base
-            or self.authenticator.get_api_base()
-            or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
+        resolved: Final = resolve_copilot_api_base(api_base, user_session, self.authenticator.get_api_key)
         return ensure_api_route(resolved, "v1/messages")

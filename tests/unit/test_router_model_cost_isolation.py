@@ -10,7 +10,6 @@ should still use the built-in pricing.
 import asyncio
 import copy
 import itertools
-import json
 import logging
 import os
 import pathlib
@@ -46,9 +45,6 @@ from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     reapply_runtime_model_cost_registrations,
 )
-
-
-_COPILOT_TOKEN_EXPIRES_AT: Final = 4_102_444_800
 
 
 def _simulate_price_data_reload(fetched_catalog):
@@ -2761,7 +2757,7 @@ def test_a_github_copilot_chat_pin_opts_a_dual_endpoint_model_out_of_the_respons
     from litellm.llms.github_copilot.responses.transformation import github_copilot_supports_responses_api
 
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-    (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": _COPILOT_TOKEN_EXPIRES_AT}))
+    (tmp_path / "access-token").write_text("gho_test")
     monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
     litellm.model_cost["github_copilot/routing-test-model"] = {
         "litellm_provider": "github_copilot",
@@ -2801,7 +2797,7 @@ def test_a_github_copilot_responses_pin_still_opts_the_model_into_the_responses_
     from litellm.llms.github_copilot.responses.transformation import github_copilot_supports_responses_api
 
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-    (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": _COPILOT_TOKEN_EXPIRES_AT}))
+    (tmp_path / "access-token").write_text("gho_test")
     monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
     litellm.model_cost["github_copilot/routing-test-model"] = {
         "litellm_provider": "github_copilot",

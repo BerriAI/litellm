@@ -11,8 +11,8 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
-from collections.abc import MutableMapping
-from typing import Final, cast  # noqa: TID251  # narrows the untyped request dict for mutation
+from collections.abc import Mapping, MutableMapping
+from typing import Final, Protocol, cast  # noqa: TID251  # narrows the untyped request dict for mutation
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.credential_accessor import sends_api_key_secret_reference
@@ -84,6 +84,20 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
 _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE: Final = _admin_config_fields_to_clear_on_base_override()
 
 
+class DeploymentParamLookup(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+def github_copilot_caller_endpoint_keys(
+    deployment_litellm_params: DeploymentParamLookup, request_kwargs: Mapping[str, object]
+) -> tuple[str, ...]:
+    model: Final = deployment_litellm_params.get("model")
+    is_github_copilot: Final = deployment_litellm_params.get("custom_llm_provider") == "github_copilot" or (
+        isinstance(model, str) and model.startswith("github_copilot/")
+    )
+    return tuple(key for key in ("api_base", "base_url") if is_github_copilot and request_kwargs.get(key))
+
+
 def is_clientside_credential(request_kwargs: dict) -> bool:
     """
     Check if the credential is a clientside credential.
@@ -130,8 +144,8 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
         # A per-user OAuth credential must survive the clear: dropping
         # litellm_credential_name / github_copilot_auth_type would flip the call to
         # shared mode and send the admin's Copilot token to the redirected host.
-        # Per-user mode ignores the caller's api_base anyway (the session's
-        # validated host wins), so keeping the mode is fail-closed.
+        # Per-user mode ignores the caller's api_base anyway (only the
+        # operator-configured Copilot base is used), so keeping the mode is fail-closed.
         credential_name_value: Final[object] = litellm_params.get(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm_params is the untyped request dict
             "litellm_credential_name"
         )

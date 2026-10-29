@@ -7,7 +7,6 @@ Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
 """
 
-import os
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -29,12 +28,11 @@ from litellm.utils import convert_to_model_response_object
 
 from ..authenticator import Authenticator
 from ..common_utils import (
-    DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
     pin_session_authorization,
 )
-from ..per_user_auth import require_github_copilot_user_session
+from ..per_user_auth import require_github_copilot_user_session, resolve_copilot_api_base
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -122,15 +120,8 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         user_session: Final = require_github_copilot_user_session(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
-        effective_api_base: Final = (
-            (user_session.api_base if user_session is not None else None)
-            or api_base
-            or self.authenticator.get_api_base()
-            or os.getenv("GITHUB_COPILOT_API_BASE")
-            or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
-
-        return join_api_base(effective_api_base, "embeddings")
+        resolved: Final = resolve_copilot_api_base(api_base, user_session, self.authenticator.get_api_key)
+        return join_api_base(resolved, "embeddings")
 
     def transform_embedding_request(
         self,
