@@ -27,6 +27,7 @@ from litellm.constants import (
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.health_check_helpers import native_health_check_mode
+from litellm.llms.sagemaker.common_utils import deployment_inference_component
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     StrategyRouterDependency,
     classify_strategy_router_model,
@@ -855,6 +856,8 @@ def update_litellm_params_for_health_check(
       `deployment_model` (default: the incoming `litellm_params` model), so a `health_check_model` or a `model`
       in `health_check_params` is judged on its own. Keys already set through `health_check_params` are kept,
       and `modalities` set there without "audio" turns the audio fields off
+    - sends a SageMaker deployment's `X-Amzn-SageMaker-Inference-Component` extra header as `model_id` when the
+      deployment sets none, so legacy `sagemaker/` probes reach that component the way routed requests do
     """
     incoming_model: Final = _PROBE_PARAMS_ADAPTER.validate_python(litellm_params).get("model")
     base_model_owner: Final = deployment_model or (incoming_model if isinstance(incoming_model, str) else None)
@@ -935,9 +938,11 @@ def update_litellm_params_for_health_check(
     audio_output_params: Final = _health_check_audio_output_params(
         _MODEL_INFO_ADAPTER.validate_python(model_info), probe_params, mode, base_model_owner
     )
+    inference_component: Final = deployment_inference_component(probe_params)
+    component_pin: Final = {} if inference_component is None else {"model_id": inference_component}
     return {
         key: value
-        for key, value in {**audio_output_params, **probe_params}.items()
+        for key, value in {**audio_output_params, **component_pin, **probe_params}.items()
         if not is_model_capability_field(key)
     }
 

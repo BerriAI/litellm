@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import io
 import json
 import logging
 from typing import Final
@@ -1561,3 +1562,40 @@ async def test_a_failing_health_probe_leaves_the_deployment_serving_requests(mon
 
     assert "error" in probe
     assert reply.choices[0].message.content == "ok"
+
+
+@pytest.mark.parametrize(
+    ("component_params", "probed_component"),
+    [
+        ({"extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"}}, "header-component"),
+        (
+            {"model_id": "own-component", "extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"}},
+            "own-component",
+        ),
+    ],
+    ids=["header_pinned", "own_model_id_beats_the_header"],
+)
+@pytest.mark.asyncio
+async def test_run_model_health_check_probes_a_legacy_sagemaker_embedding_at_the_deployments_component(
+    component_params: dict[str, object], probed_component: str
+) -> None:
+    embedding_reply: Final = {"object": "list", "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}]}
+    invoke_endpoint: Final = MagicMock(return_value={"Body": io.BytesIO(json.dumps(embedding_reply).encode())})
+    client: Final = MagicMock(invoke_endpoint=invoke_endpoint)
+    deployment: Final = {
+        "litellm_params": {
+            "model": "sagemaker/openai/embed-endpoint",
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "test-key",
+            "aws_secret_access_key": "test-secret",
+            **component_params,
+        },
+        "model_info": {"mode": "embedding"},
+    }
+
+    with patch("boto3.Session", return_value=MagicMock(client=MagicMock(return_value=client))):
+        result: Final = await hc_module._run_model_health_check(deployment)
+
+    assert "error" not in result, result
+    assert invoke_endpoint.call_count == 1
+    assert invoke_endpoint.call_args.kwargs["InferenceComponentName"] == probed_component
