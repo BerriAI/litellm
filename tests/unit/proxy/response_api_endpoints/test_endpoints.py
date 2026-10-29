@@ -1051,17 +1051,45 @@ async def test_a_finished_read_or_cancel_bills_usage_only_the_configured_deploym
     assert row.status == "completed"
 
 
+def _complexity_router_over(model_group: str, return_raw_model_name: bool) -> dict[str, object]:
+    return {
+        "model_name": "auto",
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "tiers": {tier: model_group for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")},
+                "return_raw_model_name": return_raw_model_name,
+            },
+        },
+    }
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "endpoint_name, finished_status",
     [("get_response", "completed"), ("cancel_response", "cancelled")],
 )
 @pytest.mark.parametrize(
-    "deployment_name, return_raw_model_name, reported_model",
+    "deployment_name, model_info, other_deployments, return_raw_model_name, reported_model",
     [
-        ("oai-alias", False, "oai-alias"),
-        ("oai-alias", True, "gpt-5.4-mini-2026-03-17"),
-        ("openai/*", False, "gpt-5.4-mini-2026-03-17"),
+        ("oai-alias", {}, (), False, "oai-alias"),
+        ("oai-alias", {}, (), True, "gpt-5.4-mini-2026-03-17"),
+        ("openai/*", {}, (), False, "gpt-5.4-mini-2026-03-17"),
+        (
+            "model_name_team-1_abc",
+            {"team_id": "team-1", "team_public_model_name": "team-gpt"},
+            (),
+            False,
+            "team-gpt",
+        ),
+        (
+            "oai-alias",
+            {},
+            (_complexity_router_over("oai-alias", return_raw_model_name=True),),
+            False,
+            "gpt-5.4-mini-2026-03-17",
+        ),
+        ("oai-alias", {}, (_complexity_router_over("oai-alias", return_raw_model_name=False),), False, "oai-alias"),
     ],
 )
 async def test_a_read_or_cancel_reports_the_deployment_model_name_while_billing_logs_the_provider_model(
@@ -1069,6 +1097,8 @@ async def test_a_read_or_cancel_reports_the_deployment_model_name_while_billing_
     endpoint_name: str,
     finished_status: str,
     deployment_name: str,
+    model_info: dict[str, str],
+    other_deployments: tuple[dict[str, object], ...],
     return_raw_model_name: bool,
     reported_model: str,
 ):
@@ -1089,8 +1119,9 @@ async def test_a_read_or_cancel_reports_the_deployment_model_name_while_billing_
             {
                 "model_name": deployment_name,
                 "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-fake"},
-                "model_info": {"id": "deployment-read"},
-            }
+                "model_info": {"id": "deployment-read", **model_info},
+            },
+            *other_deployments,
         ]
     )
     provider_response: Final = _background_response(stored.response_id, finished_status, 100).model_copy(

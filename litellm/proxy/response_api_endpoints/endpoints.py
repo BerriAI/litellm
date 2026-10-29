@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import itertools
 import json
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
@@ -875,11 +876,20 @@ def _with_deployment_model_name(
 ) -> object:
     if return_raw_model_name or llm_router is None or not isinstance(response, ResponsesAPIResponse):
         return response
+    if _routes_with_raw_model_names(llm_router):
+        return response
     model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(decrypted_response_id(response_id))
     deployment: Final = None if model_id is None else llm_router.get_deployment(model_id=model_id)
     if deployment is None or "*" in deployment.model_name:
         return response
-    return response.model_copy(update={"model": deployment.model_name})
+    return response.model_copy(update={"model": deployment.model_info.team_public_model_name or deployment.model_name})
+
+
+def _routes_with_raw_model_names(llm_router: Router) -> bool:
+    return any(
+        tagged.strategy.config.return_raw_model_name
+        for tagged in itertools.chain.from_iterable(llm_router.complexity_routers.values())
+    )
 
 
 def _background_response_spend_tags(data: Mapping[str, object]) -> tuple[str, ...] | None:
