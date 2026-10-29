@@ -1649,21 +1649,14 @@ def test_rag_query_forwards_managed_store_credentials_to_search(client_internal_
 
 @pytest.mark.parametrize(
     "blocked_key",
-    [
-        "embedding_model",
-        "litellm_embedding_model",
-        "litellm_embedding_config",
-        "litellm_credential_name",
-        "opensearch_index_name",
-    ],
+    ["embedding_model", "litellm_embedding_model", "litellm_embedding_config", "litellm_credential_name"],
 )
-def test_rag_query_rejects_caller_store_selection_params(client_internal_user, blocked_key):
+def test_rag_query_rejects_caller_embedding_selection_params(client_internal_user, blocked_key):
     """
-    Regression: a caller must not pick the embedding model, credential, or index
-    used at search time. The model and credential resolve through the Router with the
-    proxy's credentials, bypassing the key's model permissions, and the index can be one
-    no store grants the key, so they may only come from the managed store's
-    server-side registration.
+    Regression: a caller must not pick the embedding model or credential used at
+    search time. Those resolve through the Router with the proxy's credentials,
+    bypassing the key's model permissions, so they may only come from the
+    managed store's server-side registration.
     """
     response = client_internal_user.post(
         "/v1/rag/query",
@@ -1676,6 +1669,62 @@ def test_rag_query_rejects_caller_store_selection_params(client_internal_user, b
 
     assert response.status_code == 400, response.json()
     assert blocked_key in str(response.json())
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected_status", "expected_searches"),
+    [("opensearch", 400, 0), ("openai", 200, 1)],
+)
+def test_rag_query_rejects_caller_opensearch_index_name_only_on_opensearch_stores(
+    client_internal_user, provider, expected_status, expected_searches
+):
+    """
+    Regression: retrieval_config must not pick the index an OpenSearch store searches,
+    while other providers keep ignoring the key as they did before OpenSearch support.
+    """
+    import litellm
+    from litellm import Router
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    store = {
+        "vector_store_id": "kb",
+        "custom_llm_provider": provider,
+        "litellm_params": {"vector_store_id": "kb", "custom_llm_provider": provider},
+    }
+    registry = MagicMock()
+    registry.get_litellm_managed_vector_store_from_registry.return_value = store
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "mock_response": "hi"},
+            }
+        ]
+    )
+
+    with (
+        patch("litellm.vector_stores.asearch", new=fake_search),  # test-quality-ok: the search boundary under test
+        patch.object(litellm, "vector_store_registry", registry),  # test-quality-ok: seeds the store under test
+        patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: mock-response router for completion
+        patch(  # test-quality-ok: store access is not under test, so the request reaches the search boundary
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "retrieval_config": {"vector_store_id": "kb", "opensearch_index_name": "another-teams-index"},
+            },
+        )
+
+    assert response.status_code == expected_status, response.json()
+    assert fake_search.await_count == expected_searches
 
 
 EICAR = r"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
