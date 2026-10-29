@@ -73,6 +73,7 @@ class TeamGrants(TypedDict, total=False):
     team_member_spend: ReadOnly[float | None]
     team_member_tpm_limit: ReadOnly[int | None]
     team_member_rpm_limit: ReadOnly[int | None]
+    team_member_budget: ReadOnly[float | None]
 
 
 _TEAM_GRANT_AUTH_FIELDS: Final[frozenset[str]] = frozenset(
@@ -209,5 +210,10 @@ def team_grants(
         ),
         team_member_rpm_limit=(
             team_membership.safe_get_team_member_rpm_limit() if team_membership is not None else None
+        ),
+        team_member_budget=(
+            team_membership.litellm_budget_table.max_budget
+            if team_membership is not None and team_membership.litellm_budget_table is not None
+            else None
         ),
     )
