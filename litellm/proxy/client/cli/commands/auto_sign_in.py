@@ -232,6 +232,13 @@ def _sign_in(ctx: click.Context, base_url: str, sign_in: BrowserSignIn) -> str:
     credential: Final = sign_in(base_url, _echo_to_stderr)
     if isinstance(credential, PkceFailure):
         raise click.ClickException(_sign_in_failure(base_url, credential))
+    other_proxy: Final = _login_for_another_proxy(ctx, base_url)
+    if other_proxy is not None:
+        _echo_to_stderr(
+            f"A login for {other_proxy} was stored while this sign-in waited, so lite kept it "
+            f"and used this sign-in for `{ctx.command_path}` only."
+        )
+        return credential.access_token
     stored: Final = replace_stored_token(
         pkce_token_record(base_url, credential), requests.Session(), context_secret_vault(ctx)
     )

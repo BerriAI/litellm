@@ -32,9 +32,16 @@ SIGNED_IN_AT: Final = 1_790_000_000.0
 EXPIRES_AT: Final = 4_102_444_800.0
 
 
+def _nothing_else_happens() -> None:
+    return None
+
+
 class FakeBrowserSignIn:
-    def __init__(self, outcome: PkceCredential | PkceFailure) -> None:
+    def __init__(
+        self, outcome: PkceCredential | PkceFailure, meanwhile: Callable[[], None] = _nothing_else_happens
+    ) -> None:
         self.outcome = outcome
+        self.meanwhile = meanwhile
         self.calls: list[str] = []
 
     def unavailable_because(self) -> PkceFailure | None:
@@ -43,6 +50,7 @@ class FakeBrowserSignIn:
     def __call__(self, base_url: str, echo: Callable[[str], None]) -> PkceCredential | PkceFailure:
         self.calls.append(base_url)
         echo(f"Opening browser to: {base_url}/v1/cli/authorize?state=fake")
+        self.meanwhile()
         return self.outcome
 
 
@@ -85,6 +93,13 @@ def _lite(args: Sequence[str], vault: object, sign_in: FakeBrowserSignIn, global
         [*global_args, "--base-url", BASE_URL, *args],
         obj={"secret_vault": vault, "browser_sign_in": sign_in},
     )
+
+
+class _ResponseContext(Protocol):
+    status_code: int
+
+
+_Respond = Callable[["Request", _ResponseContext], dict[str, dict[str, str]]]
 
 
 class _MockedRoute(Protocol):
@@ -196,6 +211,38 @@ def test_a_login_for_another_proxy_is_never_replaced_by_an_automatic_sign_in(
     assert sign_in.calls == []
     assert _bearers(route) == [None]
     assert get_stored_api_key(other_proxy, vault=vault) == "sk-other"
+
+
+def test_a_login_for_another_proxy_stored_during_the_browser_wait_is_kept_and_not_revoked(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    other_proxy: Final = "https://other.example.com"
+    other_login: Final = replace(
+        _credential("sk-other"),
+        token_endpoint=f"{other_proxy}/v1/cli/token",
+        revocation_endpoint=f"{other_proxy}/v1/cli/revoke",
+        resource=other_proxy,
+    )
+    other_revoke: Final = requests_mock.post(f"{other_proxy}/v1/cli/revoke", status_code=200)
+    vault: Final = secret_vault_factory()
+    route: Final = requests_mock.post(
+        f"{BASE_URL}/key/generate", [{"status_code": 401, "json": REJECTED}, {"status_code": 200, "json": GENERATED}]
+    )
+
+    def explicit_login_for_another_proxy() -> None:
+        save_token(pkce_token_record(other_proxy, other_login), vault=vault)
+
+    sign_in: Final = FakeBrowserSignIn(_credential(), meanwhile=explicit_login_for_another_proxy)
+
+    result: Final = _lite(["keys", "generate"], vault, sign_in)
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == GENERATED
+    assert _bearers(route) == [None, f"Bearer {SIGNED_IN_KEY}"]
+    assert get_stored_api_key(other_proxy, vault=vault) == "sk-other"
+    assert get_stored_api_key(BASE_URL, vault=vault) is None
+    assert other_revoke.call_count == 0
+    assert f"A login for {other_proxy} was stored while this sign-in waited" in result.stderr
 
 
 def test_the_browser_sign_in_fails_at_once_on_a_machine_without_a_browser(requests_mock: Mocker) -> None:
@@ -437,8 +484,8 @@ def test_models_import_signs_in_instead_of_reporting_models_it_never_added(
     assert _bearers(route) == [None, f"Bearer {SIGNED_IN_KEY}"]
 
 
-def _rejected_once_it_is_read(models_file: Path):
-    def respond(request, context):
+def _rejected_once_it_is_read(models_file: Path) -> _Respond:
+    def respond(_request: "Request", context: _ResponseContext) -> dict[str, dict[str, str]]:
         models_file.unlink()
         context.status_code = 401
         return REJECTED
@@ -632,8 +679,8 @@ def test_a_signed_in_key_the_proxy_also_rejects_is_not_followed_by_another_sign_
     assert _bearers(route) == [None, f"Bearer {SIGNED_IN_KEY}"]
 
 
-def _rejected_while_a_sibling_signs_in(vault):
-    def respond(request, context):
+def _rejected_while_a_sibling_signs_in(vault: FakeSecretVault) -> _Respond:
+    def respond(_request: "Request", context: _ResponseContext) -> dict[str, dict[str, str]]:
         save_token(_classic_login("sk-sibling"), vault=vault)
         context.status_code = 401
         return REJECTED
