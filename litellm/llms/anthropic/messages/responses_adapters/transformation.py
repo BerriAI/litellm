@@ -25,9 +25,15 @@ from litellm.llms.anthropic.messages.native.utils import (
     refusal_stop_details,
     responses_output_refusal_text,
 )
+from litellm.llms.anthropic.messages.responses_adapters.tool_translation import (
+    ResponsesTool,
+    TranslatedTool,
+    UntranslatableTool,
+    responses_tool,
+    untranslatable_tools_error,
+)
 from litellm.llms.anthropic.messages.utils import (
     is_reasoning_auto_summary_enabled,
-    json_copy_or_original,
     prompt_cache_key_from_user_id,
 )
 from litellm.types.llms.anthropic import (
@@ -465,45 +471,51 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return input_items
 
     @staticmethod
-    def _translate_tool_to_responses_api(tool_dict: Mapping[str, object]) -> dict[str, object]:
-        tool_type: Final = tool_dict.get("type", "")
-        tool_name: Final = tool_dict.get("name", "")
-        # web_search tool
-        if (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool_name == "web_search":
-            return {"type": "web_search_preview"}
-        # Responses turns strict mode on when `strict` is omitted, silently rewriting
-        # `required` to every property. Anthropic tools are non-strict unless asked.
-        func_tool: Final[dict[str, object]] = {
-            "type": "function",
-            "name": tool_name,
-            "strict": bool(tool_dict.get("strict")),
-        }
-        if "description" in tool_dict:
-            func_tool["description"] = tool_dict["description"]
-        if "input_schema" in tool_dict:
-            func_tool["parameters"] = json_copy_or_original(tool_dict["input_schema"])
-        return func_tool
+    def translated_tools(
+        tools: Sequence[AllAnthropicToolsValues],
+        *,
+        drop_params: bool = True,
+    ) -> tuple[TranslatedTool, ...]:
+        translated: Final = tuple(responses_tool(tool) for tool in tools)
+        untranslatable: Final = tuple(tool for tool in translated if isinstance(tool, UntranslatableTool))
+        if untranslatable and not drop_params:
+            raise untranslatable_tools_error(untranslatable)
+        return translated
 
     def translate_tools_to_responses_api(
         self,
         tools: list[AllAnthropicToolsValues],
+        *,
+        drop_params: bool = True,
     ) -> list[dict[str, object]]:
-        """Convert Anthropic tool definitions to Responses API function tools."""
-        return [self._translate_tool_to_responses_api(tool) for tool in tools]
+        """Convert Anthropic tool definitions to Responses API tools."""
+        return [
+            dict(tool.payload)
+            for tool in self.translated_tools(tools, drop_params=drop_params)
+            if isinstance(tool, ResponsesTool)
+        ]
 
     @staticmethod
     def translate_tool_choice_to_responses_api(
         tool_choice: AnthropicMessagesToolChoice,
-    ) -> str | dict[str, object]:
-        """Convert Anthropic tool_choice to Responses API tool_choice."""
+        tools: Sequence[TranslatedTool] = (),
+    ) -> str | dict[str, object] | None:
+        """Convert Anthropic tool_choice to Responses API tool_choice, or None when it names a dropped tool."""
         tc_type: Final = tool_choice.get("type")
         if tc_type == "any":
             return "required"
-        elif tc_type == "tool":
-            return {"type": "function", "name": tool_choice.get("name", "")}
-        elif tc_type == "none":
+        if tc_type == "none":
             return "none"
-        return "auto"
+        if tc_type != "tool":
+            return "auto"
+        name: Final = tool_choice.get("name", "")
+        match next((tool for tool in tools if tool.name == name), None):
+            case ResponsesTool(choice=choice):
+                return dict(choice)
+            case UntranslatableTool():
+                return None
+            case None:
+                return {"type": "function", "name": name}
 
     @staticmethod
     def translate_context_management_to_responses_api(
@@ -653,19 +665,24 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if "top_p" in anthropic_request:
             responses_kwargs["top_p"] = anthropic_request["top_p"]
 
-        # tools
-        tools: Final = anthropic_request.get("tools")
-        if tools:
-            responses_kwargs["tools"] = self.translate_tools_to_responses_api(
-                cast(list[AllAnthropicToolsValues], tools)
-            )
+        translated_tools: Final = self.translated_tools(
+            cast(list[AllAnthropicToolsValues], anthropic_request.get("tools") or []),
+            drop_params=drop_params,
+        )
+        responses_tools: Final = [dict(tool.payload) for tool in translated_tools if isinstance(tool, ResponsesTool)]
+        if responses_tools:
+            responses_kwargs["tools"] = responses_tools
 
-        # tool_choice
         tool_choice: Final = anthropic_request.get("tool_choice")
-        if tool_choice:
-            responses_kwargs["tool_choice"] = self.translate_tool_choice_to_responses_api(
-                cast(AnthropicMessagesToolChoice, tool_choice)
+        responses_tool_choice: Final = (
+            self.translate_tool_choice_to_responses_api(
+                cast(AnthropicMessagesToolChoice, tool_choice), translated_tools
             )
+            if tool_choice and (responses_tools or not translated_tools)
+            else None
+        )
+        if responses_tool_choice is not None:
+            responses_kwargs["tool_choice"] = responses_tool_choice
 
         # thinking -> reasoning
         thinking: Final = anthropic_request.get("thinking")
