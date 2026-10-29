@@ -270,24 +270,25 @@ def _alias_context_window(row: CodexCatalogRow, stock_model: CodexStockModel) ->
     return MappingProxyType({"context_window": min(stock_model.context_window, row.max_input_tokens)})
 
 
-def _alias_reasoning_level(row: CodexCatalogRow, stock_model: CodexStockModel) -> Mapping[str, str]:
+def _alias_reasoning_level(row: CodexCatalogRow, stock_model: CodexStockModel) -> str | None:
     efforts: Final = frozenset(level.effort for level in stock_model.supported_reasoning_levels)
-    if row.reasoning_effort not in efforts:
-        return MappingProxyType({})
-    return MappingProxyType({"default_reasoning_level": row.reasoning_effort})
+    return row.reasoning_effort if row.reasoning_effort in efforts else None
 
 
 def _deployment_defaults(row: CodexCatalogRow, stock_model: CodexStockModel) -> Mapping[str, object]:
     """What an alias's deployments decide in place of the defaults Codex picks for the model they route to:
-    no service tier or upgrade nudge, so a tier or model the deployment pins stays in force, the
-    pinned reasoning effort when Codex offers it, and a window no larger than the alias's own limit."""
+    no service tier, verbosity, upgrade nudge or startup promo of Codex's own, so what the deployment
+    pins (or OpenAI's API default) stays in force, the pinned reasoning effort when Codex offers it and
+    none otherwise, and a window no larger than the alias's own limit."""
     return MappingProxyType(
         {
             "service_tiers": (),
             "default_service_tier": None,
+            "default_verbosity": None,
             "upgrade": None,
+            "availability_nux": None,
+            "default_reasoning_level": _alias_reasoning_level(row, stock_model),
             **_alias_context_window(row, stock_model),
-            **_alias_reasoning_level(row, stock_model),
         }
     )
 

@@ -776,6 +776,9 @@ class TestCodexModelSync:
             "priority": 0,
             "service_tiers": [],
             "default_service_tier": None,
+            "default_verbosity": None,
+            "availability_nux": None,
+            "default_reasoning_level": None,
         }
         assert "supports_search_tool" not in entries["m"]
 
@@ -792,9 +795,9 @@ class TestCodexModelSync:
         [
             (("high",), "high"),
             (("high", "high"), "high"),
-            (("high", None), "medium"),
-            (("high", "low"), "medium"),
-            (({"effort": "high"},), "medium"),
+            (("high", None), None),
+            (("high", "low"), None),
+            (({"effort": "high"},), None),
         ],
         ids=["one_deployment", "every_deployment_agrees", "one_unpinned", "pins_differ", "non_string_pin"],
     )
@@ -840,12 +843,23 @@ class TestCodexModelSync:
                     "litellm_params": {"model": "openai/gpt-5.6-terra", "api_base": "https://eu.api.openai.com/v1"},
                 }
             ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {
+                        "model": "openai/gpt-5.6-terra",
+                        "api_base": "https://api.openai.com/v1",
+                        "litellm_credential_name": "openai-key",
+                    },
+                }
+            ],
         ],
         ids=[
             "same_model_with_and_without_prefix",
             "openai_custom_llm_provider",
             "paused_deployment_ignored",
             "openai_regional_host",
+            "credential_under_an_openai_host",
         ],
     )
     def test_alias_whose_deployments_all_route_to_one_openai_model_gets_its_entry(self, tmp_path, deployments):
@@ -884,6 +898,12 @@ class TestCodexModelSync:
                     "litellm_params": {"model": "gpt-5.6-terra", "api_base": "https://api.openai.com.example.invalid"},
                 }
             ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "openai/gpt-5.6-terra", "litellm_credential_name": "gateway"},
+                }
+            ],
         ],
         ids=[
             "team_row_and_global_row_differ",
@@ -892,6 +912,7 @@ class TestCodexModelSync:
             "azure_provider",
             "openai_prefix_on_another_host",
             "openai_lookalike_host",
+            "host_only_a_credential_knows",
         ],
     )
     def test_alias_without_one_shared_openai_upstream_keeps_the_fallback_entry(self, tmp_path, deployments):
