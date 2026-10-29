@@ -440,13 +440,15 @@ class TestContentFilterGuardrail:
     @pytest.mark.parametrize(
         ("text", "expected"),
         [
-            ("ids 4853 4091 4909 4475 5508 5016 6232 6258 end", "ids [VISA_REDACTED] end"),
-            ("ids 4336 4262 4755 4637 3753 786027 13221 end", "ids [VISA_REDACTED] end"),
-            ("4000 4000 0000 0000\n5555 5555 5555 4444", "[VISA_REDACTED]"),
+            ("ids 4853 4091 4909 4475 5508 5016 6232 6258 end", "ids [VISA_REDACTED] [MASTERCARD_REDACTED] end"),
+            ("ids 4336 4262 4755 4637 3753 786027 13221 end", "ids [VISA_REDACTED] [AMEX_REDACTED] end"),
+            ("4000 4000 0000 0000\n5555 5555 5555 4444", "[VISA_REDACTED]\n[MASTERCARD_REDACTED]"),
+            ("cards 4378 4937 4618 4485 5555 5555 5555 4444 ok", "cards [VISA_REDACTED] [MASTERCARD_REDACTED] ok"),
+            ("pay 5472 3038 5280 1841 1485 4534 3853 6336 1330 ok", "pay [VISA_REDACTED] ok"),
             ("cards 4532 0151 1283 0366 5555 5555 5555 4444 ok", "cards [VISA_REDACTED] [MASTERCARD_REDACTED] ok"),
         ],
     )
-    async def test_checksum_pattern_masks_the_valid_cards_of_later_patterns_it_overlaps(self, text: str, expected: str):
+    async def test_checksum_patterns_mask_each_valid_card_where_two_brands_overlap(self, text: str, expected: str):
         guardrail: Final = ContentFilterGuardrail(
             guardrail_name="test-checksum-cross-pattern",
             patterns=[
@@ -462,6 +464,50 @@ class TestContentFilterGuardrail:
         )
 
         assert guardrailed_inputs.get("texts") == [expected]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("masking_pattern", "blocking_pattern", "text"),
+        [
+            ("visa", "mastercard", "4004 5555 5555 5557 5555 5555 5555 4444"),
+            ("visa", "mastercard", "4000 4000 0000 0000 5555 5555 5555 4444"),
+            ("visa", "mastercard", "ids 4853 4091 4909 4475 5508 5016 6232 6258 end"),
+            ("discover", "credit_card", "4629 4611-6260-8050-5592-2700 65405563 93269332"),
+        ],
+    )
+    async def test_checksum_mask_leaves_a_later_blocking_pattern_its_valid_card(
+        self, masking_pattern: str, blocking_pattern: str, text: str
+    ):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-checksum-mask-then-block",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt", pattern_name=masking_pattern, action=ContentFilterAction.MASK
+                ),
+                ContentFilterPattern(
+                    pattern_type="prebuilt", pattern_name=blocking_pattern, action=ContentFilterAction.BLOCK
+                ),
+            ],
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(inputs={"texts": [text]}, request_data={}, input_type="request")
+        assert exc_info.value.detail["pattern"] == blocking_pattern
+
+    @pytest.mark.asyncio
+    async def test_checksum_mask_before_a_blocking_pattern_still_masks_the_card_both_match(self):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-checksum-mask-before-block",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt", pattern_name="credit_card", action=ContentFilterAction.MASK
+                ),
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="visa", action=ContentFilterAction.BLOCK),
+            ],
+        )
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": ["card 4111 1111 1111 1111 ok"]}, request_data={}, input_type="request"
+        )
+        assert guardrailed_inputs.get("texts") == ["card [CREDIT_CARD_REDACTED] ok"]
 
     @pytest.mark.asyncio
     async def test_checksum_pattern_streams_the_same_text_as_a_whole_response(self):

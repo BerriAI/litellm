@@ -13,8 +13,8 @@ import json
 import os
 import re
 import time
-from bisect import bisect_left
-from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping, Sequence
+from bisect import bisect_left, bisect_right
+from collections.abc import AsyncGenerator, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from re import Pattern
@@ -159,6 +159,12 @@ class _StreamedChoiceState:
     committed_detections: tuple[ContentFilterDetection, ...] = ()
     latest_detections: tuple[ContentFilterDetection, ...] = ()
     next_trim_len: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _SpanIndex:
+    spans: tuple[tuple[int, int], ...]
+    furthest_ends: tuple[int, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -902,30 +908,85 @@ class ContentFilterGuardrail(CustomGuardrail):
         spans: Sequence[tuple[int, int]],
         check_candidate: CandidateCheck,
     ) -> Sequence[tuple[int, int]]:
-        other_checksum_spans: Final = tuple(
+        if pattern_entry["action"] == ContentFilterAction.BLOCK:
+            return spans
+        position: Final = next(index for index, entry in enumerate(self.compiled_patterns) if entry is pattern_entry)
+        later_entries: Final = self.compiled_patterns[position + 1 :]
+        masking: Final = self._span_index(
+            text, (entry for entry in later_entries if entry["action"] != ContentFilterAction.BLOCK), check_candidate
+        )
+        blocking: Final = self._span_index(
+            text, (entry for entry in later_entries if entry["action"] == ContentFilterAction.BLOCK), check_candidate
+        )
+        if not masking.spans and not blocking.spans:
+            return spans
+        leftmost_spans: Final = tuple(match.span() for match in pattern_entry["regex"].finditer(text))
+        union_regions: Final = tuple(self._merge_spans([*spans, *masking.spans]))
+        resolved: Final = self._merge_spans(
+            [
+                *itertools.chain.from_iterable(
+                    self._resolve_component(component, leftmost_spans, masking, union_regions) for component in spans
+                )
+            ]
+        )
+        return tuple(
             itertools.chain.from_iterable(
-                self._entry_checksum_valid_spans(entry, text, check_candidate)
-                for entry in self.compiled_patterns
-                if entry is not pattern_entry
+                self._spans_overlapping(leftmost_spans, region)
+                if any(self._spans_reaching(region, blocking))
+                else (region,)
+                for region in resolved
             )
         )
-        if not other_checksum_spans:
-            return spans
-        span_starts: Final = tuple(start for start, _ in spans)
-        span_ends: Final = tuple(end for _, end in spans)
-        return tuple(
-            component
-            for component in self._merge_spans([*spans, *other_checksum_spans])
-            if self._overlaps_any_span(component, span_starts, span_ends)
-        )
 
-    def _entry_checksum_valid_spans(
+    def _resolve_component(
+        self,
+        component: tuple[int, int],
+        leftmost_spans: Sequence[tuple[int, int]],
+        masking: _SpanIndex,
+        union_regions: Sequence[tuple[int, int]],
+    ) -> Sequence[tuple[int, int]]:
+        sticking_out: Final = tuple(
+            span
+            for span in self._spans_reaching(component, masking)
+            if span[0] < component[0] or span[1] > component[1]
+        )
+        if not sticking_out:
+            return (component,)
+        leftmost_in_component: Final = self._spans_overlapping(leftmost_spans, component)
+        if not any(self._spans_overlapping(leftmost_in_component, span) for span in sticking_out):
+            return leftmost_in_component
+        return (union_regions[bisect_right(union_regions, component[0], key=lambda region: region[0]) - 1],)
+
+    def _span_index(
+        self, text: str, entries: Iterable[CompiledPatternEntry], check_candidate: CandidateCheck
+    ) -> _SpanIndex:
+        spans: Final = tuple(
+            sorted(itertools.chain.from_iterable(self._entry_spans(entry, text, check_candidate) for entry in entries))
+        )
+        return _SpanIndex(spans=spans, furthest_ends=tuple(itertools.accumulate((end for _, end in spans), max)))
+
+    def _entry_spans(
         self, entry: CompiledPatternEntry, text: str, check_candidate: CandidateCheck
-    ) -> tuple[tuple[int, int], ...]:
+    ) -> Sequence[tuple[int, int]]:
         validator: Final = entry.get("validator")
         if validator is None:
-            return ()
+            return self._find_pattern_spans(text, entry, check_candidate)
         return self._checksum_valid_spans(entry["regex"], text, validator, check_candidate)
+
+    @staticmethod
+    def _spans_reaching(component: tuple[int, int], index: _SpanIndex) -> Iterator[tuple[int, int]]:
+        later_position: Final = bisect_left(index.spans, (component[1],))
+        positions_reaching_start: Final = itertools.takewhile(
+            lambda position: index.furthest_ends[position] > component[0], range(later_position - 1, -1, -1)
+        )
+        return (
+            index.spans[position] for position in positions_reaching_start if index.spans[position][1] > component[0]
+        )
+
+    @staticmethod
+    def _spans_overlapping(spans: Sequence[tuple[int, int]], component: tuple[int, int]) -> Sequence[tuple[int, int]]:
+        first: Final = bisect_right(spans, component[0], key=lambda span: span[1])
+        return spans[first : bisect_left(spans, component[1], lo=first, key=lambda span: span[0])]
 
     def _checksum_valid_spans(
         self,
