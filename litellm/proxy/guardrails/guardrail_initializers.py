@@ -46,6 +46,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         streaming_sampling_rate=streaming_params.streaming_sampling_rate,
         streaming_end_of_stream_only=streaming_params.streaming_end_of_stream_only,
         streaming_buffer_release_on_scan=streaming_params.streaming_buffer_release_on_scan,
+        streaming_scan_in_background=streaming_params.streaming_scan_in_background,
         timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_bedrock_callback)

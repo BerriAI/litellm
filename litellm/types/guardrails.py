@@ -709,6 +709,12 @@ class BedrockGuardrailStreamingParams(LiteLLMBaseModel):
         "and release the withheld chunks once the scan passes, instead of holding everything to end of stream. "
         "Flagged content is never released. Ignored when streaming_end_of_stream_only is true.",
     )
+    streaming_scan_in_background: bool = Field(
+        default=False,
+        description="When not buffering and not end-of-stream-only, run each sampled ApplyGuardrail scan in the "
+        "background so the sampled chunk and the ones after it stream while the scan runs. One scan runs at a time. "
+        "A flagged scan ends the stream before the next chunk, so content streamed while it ran reaches the client.",
+    )
 
     @classmethod
     def from_extras(cls, extras: Mapping[str, object] | None) -> "BedrockGuardrailStreamingParams":
