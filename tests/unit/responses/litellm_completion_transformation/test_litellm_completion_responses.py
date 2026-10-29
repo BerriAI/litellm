@@ -4318,6 +4318,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._custom_tool_names = set()
         iterator._computer_use_requested = False
         iterator._computer_call_ids = frozenset()
+        iterator._code_execution_call_ids = frozenset()
         iterator.responses_api_request = {}
         iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(None)
         iterator._web_search_calls = {}

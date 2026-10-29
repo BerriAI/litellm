@@ -7,20 +7,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
+from openai.types.responses import ResponseCodeInterpreterToolCall, ResponseStreamEvent
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import CustomLLM
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.responses.litellm_completion_transformation.handler import (
-    LiteLLMCompletionTransformationHandler,
-)
 from litellm.responses.litellm_completion_transformation.claude_hosted_tools import (
     CLAUDE_CODE_EXECUTION_TOOL_TYPE,
     CLAUDE_COMPUTER_TOOLSET_TYPE,
     openai_computer_call,
+)
+from litellm.responses.litellm_completion_transformation.handler import (
+    LiteLLMCompletionTransformationHandler,
 )
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -1015,9 +1016,7 @@ class _RecordingCustomLLM(CustomLLM):
 
     def completion(self, *args: object, **kwargs: object) -> ModelResponse:
         self.sent_messages.extend(cast(list[object], kwargs["messages"]))
-        return litellm.completion(
-            model="gpt-5.6", messages=[{"role": "user", "content": "Hi."}], mock_response="dog."
-        )
+        return litellm.completion(model="gpt-5.6", messages=[{"role": "user", "content": "Hi."}], mock_response="dog.")
 
 
 def test_responses_over_a_custom_provider_send_a_compaction_item_as_summary_text(
@@ -1434,3 +1433,185 @@ def test_responses_code_interpreter_setting_claude_lacks_answers_400_or_drops_on
     assert [tool["type"] for tool in json.loads(route.calls.last.request.content)["tools"]] == [
         CLAUDE_CODE_EXECUTION_TOOL_TYPE
     ]
+
+
+_CODE_INTERPRETER: Final = {"type": "code_interpreter", "container": {"type": "auto"}}
+_OPENAI_STREAM_EVENT: Final = TypeAdapter(ResponseStreamEvent)
+_CODE_EXECUTION_USE: Final = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_run",
+    "name": "bash_code_execution",
+    "input": {"command": "python3 -c 'print(2**100)'"},
+}
+_CODE_EXECUTION_RESULT: Final = {
+    "type": "bash_code_execution_tool_result",
+    "tool_use_id": "srvtoolu_run",
+    "content": {
+        "type": "bash_code_execution_result",
+        "stdout": "1267650600228229401496703205376\n",
+        "stderr": "",
+        "return_code": 0,
+        "content": [],
+    },
+}
+_CODE_EXECUTION_ANSWER: Final = {"type": "text", "text": "2**100 is 1267650600228229401496703205376."}
+_CODE_EXECUTION_CONTAINER: Final = {"id": "cntr_run", "expires_at": "2026-10-29T18:00:00Z"}
+
+
+def _content_block_events(index: int, block: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    match block:
+        case {"input": block_input}:
+            return (
+                {"type": "content_block_start", "index": index, "content_block": {**block, "input": {}}},
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "input_json_delta", "partial_json": json.dumps(block_input)},
+                },
+                {"type": "content_block_stop", "index": index},
+            )
+        case {"type": "text", "text": str() as text}:
+            return (
+                {"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": text}},
+                {"type": "content_block_stop", "index": index},
+            )
+        case _:
+            return (
+                {"type": "content_block_start", "index": index, "content_block": block},
+                {"type": "content_block_stop", "index": index},
+            )
+
+
+def _anthropic_code_execution_turn(stream: bool, *content: Mapping[str, object]) -> httpx.Response:
+    stop_reason: Final = "end_turn" if content[-1]["type"] == "text" else "pause_turn"
+    if not stream:
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_code_execution",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": list(content),
+                "container": _CODE_EXECUTION_CONTAINER,
+                "stop_reason": stop_reason,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 9, "output_tokens": 30},
+            },
+        )
+    blocks: Final = chain.from_iterable(_content_block_events(index, block) for index, block in enumerate(content))
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=_anthropic_sse(
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_code_execution",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5-5",
+                    "content": [],
+                    "usage": {"input_tokens": 9, "output_tokens": 1},
+                },
+            },
+            *blocks,
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": stop_reason, "container": _CODE_EXECUTION_CONTAINER},
+                "usage": {"output_tokens": 30},
+            },
+            {"type": "message_stop"},
+        ),
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+def test_responses_code_interpreter_call_comes_before_the_answer_message(
+    respx_mock: respx.MockRouter, stream: bool
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_code_execution_turn(
+            stream, _CODE_EXECUTION_USE, _CODE_EXECUTION_RESULT, _CODE_EXECUTION_ANSWER
+        )
+    )
+
+    response: Final = litellm.responses(
+        model=_MODEL,
+        input="Use code to compute 2**100.",
+        tools=[_CODE_INTERPRETER],
+        stream=stream,
+        api_key="mock_api_key",
+    )
+
+    output: Final = tuple(response)[-1].response.output if stream else response.output
+    assert [item.type for item in output] == ["code_interpreter_call", "message"]
+
+
+def test_streamed_responses_code_interpreter_emit_the_code_interpreter_call_the_response_completes_with(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_code_execution_turn(
+            True, _CODE_EXECUTION_USE, _CODE_EXECUTION_RESULT, _CODE_EXECUTION_ANSWER
+        )
+    )
+
+    events: Final = tuple(
+        litellm.responses(
+            model=_MODEL,
+            input="Use code to compute 2**100.",
+            tools=[_CODE_INTERPRETER],
+            stream=True,
+            api_key="mock_api_key",
+        )
+    )
+
+    completed_call: Final = ResponseCodeInterpreterToolCall.model_validate_json(
+        events[-1].response.output[0].model_dump_json()
+    )
+    call_events: Final = [
+        json.loads(event.model_dump_json()) for event in events if getattr(event, "output_index", None) == 0
+    ]
+    assert [event["type"] for event in call_events] == [
+        "response.output_item.added",
+        "response.code_interpreter_call.in_progress",
+        "response.code_interpreter_call_code.delta",
+        "response.code_interpreter_call_code.done",
+        "response.code_interpreter_call.interpreting",
+        "response.code_interpreter_call.completed",
+        "response.output_item.done",
+    ]
+    progress_events: Final = [_OPENAI_STREAM_EVENT.validate_python(event) for event in call_events[1:-1]]
+    assert {event.item_id for event in progress_events} == {completed_call.id}
+    assert ResponseCodeInterpreterToolCall.model_validate(call_events[0]["item"]).status == "in_progress"
+    assert ResponseCodeInterpreterToolCall.model_validate(call_events[-1]["item"]) == completed_call
+    assert completed_call.code == _CODE_EXECUTION_USE["input"]["command"]
+    assert call_events[3]["code"] == completed_call.code
+    assert "function_call" not in {getattr(getattr(event, "item", None), "type", None) for event in events}
+    assert {
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+    }.isdisjoint(event.type for event in events)
+
+
+def test_streamed_code_execution_call_with_no_result_streams_what_the_response_completes_with(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_code_execution_turn(True, _CODE_EXECUTION_USE)
+    )
+
+    events: Final = tuple(
+        litellm.responses(
+            model=_MODEL,
+            input="Use code to compute 2**100.",
+            tools=[_CODE_INTERPRETER],
+            stream=True,
+            api_key="mock_api_key",
+        )
+    )
+
+    done_items: Final = [event.item.type for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+    assert done_items == [item.type for item in events[-1].response.output]

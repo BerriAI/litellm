@@ -56,6 +56,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
@@ -876,6 +877,16 @@ def _chain_session_metadata(chain_session: str, request_kwargs: Mapping[str, obj
     if not isinstance(metadata, dict):
         return MappingProxyType({})
     return {key: {**_STR_KEY_DICT_ADAPTER.validate_python(metadata), CALLER_SESSION_ID_METADATA_KEY: chain_session}}
+
+
+def _code_interpreter_call_replacing(
+    item: object, code_interpreter_calls: Mapping[str, OutputCodeInterpreterCall]
+) -> OutputCodeInterpreterCall | None:
+    match item:
+        case ResponseFunctionToolCall(call_id=call_id):
+            return code_interpreter_calls.get(call_id)
+        case _:
+            return None
 
 
 class LiteLLMCompletionResponsesConfig:
@@ -3389,45 +3400,35 @@ class LiteLLMCompletionResponsesConfig:
             | ResponseComputerToolCall
         ] = []
 
+        tool_items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=chat_completion_response,
+            responses_api_request=responses_api_request,
+        )
+        code_interpreter_calls: Final = LiteLLMCompletionResponsesConfig.code_interpreter_calls_by_id(
+            chat_completion_response
+        )
+        server_executed_calls: Final = tuple(
+            filter(None, (_code_interpreter_call_replacing(item, code_interpreter_calls) for item in tool_items))
+        )
+        client_tool_items: Final = tuple(
+            item for item in tool_items if _code_interpreter_call_replacing(item, code_interpreter_calls) is None
+        )
+
         responses_output.extend(LiteLLMCompletionResponsesConfig._extract_compaction_output_items(choices))
         responses_output.extend(
             LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(chat_completion_response, choices)
         )
+        responses_output.extend(server_executed_calls)
         responses_output.extend(
             LiteLLMCompletionResponsesConfig._extract_message_output_items(chat_completion_response, choices)
         )
-        responses_output.extend(
-            LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
-                chat_completion_response=chat_completion_response,
-                responses_api_request=responses_api_request,
-            )
-        )
-
-        # Convert server-side tool results (e.g. Anthropic code execution)
-        # into code_interpreter_call output items, replacing the corresponding
-        # function_call items so the output matches OpenAI's native shape.
-        tool_result_items = LiteLLMCompletionResponsesConfig._extract_tool_result_output_items(chat_completion_response)
-        if tool_result_items:
-            result_by_id: Final = {item.id: item for item in tool_result_items}
-            replaced_ids: Final = set(result_by_id.keys())
-            responses_output = [
-                (
-                    result_by_id[getattr(item, "call_id", None)]
-                    if (
-                        getattr(item, "type", None) == "function_call"
-                        and getattr(item, "call_id", None) in replaced_ids
-                    )
-                    else item
-                )
-                for item in responses_output
-            ]
-
+        responses_output.extend(client_tool_items)
         return responses_output
 
     @staticmethod
     def _extract_tool_result_output_items(
         chat_completion_response: ModelResponse,
-    ) -> list:
+    ) -> list[object]:
         """Extract pre-built code_interpreter_call output items from provider_specific_fields.
 
         Provider transformers (e.g. Anthropic) convert their native tool results
@@ -3435,7 +3436,7 @@ class LiteLLMCompletionResponsesConfig:
         provider_specific_fields["code_interpreter_results"]. This method
         simply retrieves them — no provider-specific parsing here.
         """
-        output_items: Final[list] = []
+        output_items: Final[list[object]] = []
         for choice in chat_completion_response.choices or []:
             message: object = getattr(choice, "message", None)
             if not message:
@@ -3454,6 +3455,15 @@ class LiteLLMCompletionResponsesConfig:
                     else:
                         output_items.append(item)
         return output_items
+
+    @staticmethod
+    def code_interpreter_calls_by_id(
+        chat_completion_response: ModelResponse,
+    ) -> Mapping[str, OutputCodeInterpreterCall]:
+        extracted: Final = parts_of(
+            LiteLLMCompletionResponsesConfig._extract_tool_result_output_items(chat_completion_response)
+        )
+        return MappingProxyType({item.id: item for item in extracted if isinstance(item, OutputCodeInterpreterCall)})
 
     @staticmethod
     def _extract_compaction_output_items(choices: Sequence[Choices]) -> tuple[ResponseCompactionItem, ...]:

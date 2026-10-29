@@ -23,6 +23,7 @@ from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
+from litellm.types.llms.anthropic import ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
@@ -32,6 +33,7 @@ from litellm.types.llms.openai import (
 
 CLAUDE_COMPUTER_TOOLSET_TYPE: Final = "computer_toolset_20260801"
 CLAUDE_CODE_EXECUTION_TOOL_TYPE: Final = "code_execution_20260521"
+CLAUDE_BASH_CODE_EXECUTION_TOOL_NAME: Final = "bash_code_execution"
 COMPUTER_TOOLSET_NAME: Final = "computer"
 COMPUTER_MEMBERS_WITHOUT_AN_OPENAI_ACTION: Final = (
     "zoom",
@@ -169,6 +171,10 @@ def is_computer_member_call(tool_call: object) -> bool:
             return True
         case _:
             return False
+
+
+def is_claude_code_execution_use(call_id: str, tool_name: str) -> bool:
+    return call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) and tool_name == CLAUDE_BASH_CODE_EXECUTION_TOOL_NAME
 
 
 def openai_computer_call(

@@ -188,7 +188,7 @@ def _load_json_value(payload: str | bytes) -> object:
     return _DECODED_JSON.validate_python(json.loads(payload))
 
 
-def _model_id_from_metadata(litellm_metadata: Mapping[str, object] | None) -> str | None:
+def model_id_from_metadata(litellm_metadata: Mapping[str, object] | None) -> str | None:
     model_info: Final = litellm_metadata.get("model_info") if litellm_metadata else None
     model_id: Final = model_info.get("id") if _is_json_object(model_info) else None
     return model_id if isinstance(model_id, str) else None
@@ -420,7 +420,7 @@ class BaseResponsesAPIStreamingIterator:
             optional_params=_typed_gets_litellm_params(self.logging_obj.model_call_details.get)("litellm_params", {}),
         )
         self._hidden_params: dict[str, object] = {
-            "model_id": _model_id_from_metadata(litellm_metadata),
+            "model_id": model_id_from_metadata(litellm_metadata),
             "api_base": _api_base,
             "custom_llm_provider": custom_llm_provider,
         }
@@ -500,7 +500,7 @@ class BaseResponsesAPIStreamingIterator:
                         self._generated_tool_arguments += _args_delta
                 if _event_type in _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS:
                     self._started_tool_call = True
-                _stream_model_id: Final = _model_id_from_metadata(self.litellm_metadata)
+                _stream_model_id: Final = model_id_from_metadata(self.litellm_metadata)
                 if _event_type in (
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
@@ -552,7 +552,7 @@ class BaseResponsesAPIStreamingIterator:
                         if item:
                             encrypted_content: Final = getattr(item, "encrypted_content", None)
                             if encrypted_content and isinstance(encrypted_content, str):
-                                model_id: Final = _model_id_from_metadata(self.litellm_metadata)
+                                model_id: Final = model_id_from_metadata(self.litellm_metadata)
                                 if model_id:
                                     wrapped_content: Final = (
                                         ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
@@ -2403,7 +2403,7 @@ def _wrap_output_item_encrypted_content(
 ) -> dict[str, object] | None:
     if not litellm_metadata.get("encrypted_content_affinity_enabled"):
         return None
-    model_id: Final = _model_id_from_metadata(litellm_metadata)
+    model_id: Final = model_id_from_metadata(litellm_metadata)
     item: Final = event_obj.get("item")
     if model_id is None or not _is_json_object(item):
         return None

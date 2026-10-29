@@ -9987,7 +9987,8 @@ def test_tool_type_claude_cannot_express_answers_400_naming_it_or_drops_under_dr
         litellm.completion(**request)
 
     assert rejected.value.status_code == 400
-    assert f"`{tool['type']}`" in str(rejected.value)
+    assert f"`{tool['type']}` tool type, since LiteLLM does not map it to a Claude tool" in str(rejected.value)
+    assert "`litellm.drop_params=True`" in str(rejected.value)
     assert route.call_count == 0
 
     litellm.completion(**request, drop_params=True)

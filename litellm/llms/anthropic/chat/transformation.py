@@ -486,7 +486,8 @@ TOOL_SEARCH_MODEL_INFO_REMEDY: Final = (
 
 
 DROP_UNEXPRESSIBLE_TOOLS_WARNING: Final = (
-    "Dropping the %s tool(s) for model=%s on %s (drop_params=True) because Claude has no equivalent of them."
+    "Dropping the %s tool(s) for model=%s on %s (drop_params=True) because LiteLLM does not map them to a Claude "
+    "tool on this endpoint."
 )
 
 
@@ -502,8 +503,8 @@ def tools_anthropic_can_express(tools: Sequence[object], model: str, route: str,
     if not (litellm.drop_params or drop_params):
         raise litellm.utils.UnsupportedParamsError(
             message=(
-                f"{model} on {route} does not support the {named_types} tool type, since Claude has no "
-                "equivalent of it. To drop it, set `litellm.drop_params=True` or for proxy:\n\n"
+                f"{model} on {route} does not support the {named_types} tool type, since LiteLLM does not map it "
+                "to a Claude tool on this endpoint. To drop it, set `litellm.drop_params=True` or for proxy:\n\n"
                 "`litellm_settings:\n drop_params: true`\n"
             ),
             status_code=400,
