@@ -6,6 +6,7 @@ import base64
 import json
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from itertools import chain
 from types import MappingProxyType
@@ -386,6 +387,76 @@ class _CursorPageArgs(TypedDict, total=False):
 class _RouterFileCallKwargs(TypedDict, total=False):
     client: ReadOnly[AsyncOpenAI | None]
     custom_llm_provider: ReadOnly[str | None]
+
+
+_MODEL_FILE_ID_MAPPING: Final = TypeAdapter(dict[str, str])
+_FILE_UPLOAD_ONLY_FIELDS: Final = frozenset({"file", "purpose", "expires_after", "extra_body"})
+_FILE_DELETE_RESERVED_FIELDS: Final = frozenset({"model", "file_id", "_litellm_internal_model_credentials"})
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderUpload:
+    model_id: str
+    provider_file_id: str
+
+
+def _provider_uploads(file_object: OpenAIFileObject) -> tuple[_ProviderUpload, ...]:
+    file_hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic file metadata
+        dict[str, object], getattr(file_object, HIDDEN_PARAMS_ATTR)
+    )
+    model_file_id_mapping: Final = _MODEL_FILE_ID_MAPPING.validate_python(
+        file_hidden_params.get("model_file_id_mapping") or {}
+    )
+    return tuple(
+        _ProviderUpload(model_id=model_id, provider_file_id=provider_file_id)
+        for model_id, provider_file_id in model_file_id_mapping.items()
+    )
+
+
+def _is_first_upload_to_its_deployment(uploads: Sequence[_ProviderUpload], index: int) -> bool:
+    return all(earlier.model_id != uploads[index].model_id for earlier in uploads[:index])
+
+
+async def _delete_provider_file(
+    llm_router: Router,
+    model_id: str,
+    provider_file_id: str,
+    request_data: Mapping[str, object],
+) -> None:
+    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+    delete_data: Final = {
+        **{k: v for k, v in request_data.items() if k not in _FILE_DELETE_RESERVED_FIELDS},
+        **(
+            {"_litellm_internal_model_credentials": MappingProxyType(dict(credentials))}
+            if credentials is not None
+            else {}
+        ),
+    }
+    await llm_router.afile_delete(
+        model=model_id,
+        file_id=provider_file_id,
+        **cast(_RouterFileCallKwargs, delete_data),
+    )
+
+
+async def _delete_redundant_upload(
+    llm_router: Router,
+    upload: _ProviderUpload,
+    create_file_request: CreateFileRequest,
+) -> None:
+    try:
+        await _delete_provider_file(
+            llm_router,
+            upload.model_id,
+            upload.provider_file_id,
+            {k: v for k, v in create_file_request.items() if k not in _FILE_UPLOAD_ONLY_FIELDS},
+        )
+    except Exception as error:
+        verbose_logger.warning(
+            f"Could not delete the redundant upload provider_file_id={sanitize_for_log(upload.provider_file_id)} "
+            f"at deployment model_id={sanitize_for_log(upload.model_id)}: "
+            f"{type(error).__name__} {sanitize_for_log(error)}"
+        )
 
 
 def _managed_database(prisma_client: _ManagedResourcePrismaClient) -> _ManagedResourceDatabase:
@@ -1989,16 +2060,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             target_model_names_list=target_model_names_list,
         )
 
-        ## STORE MODEL MAPPINGS IN DB
-        model_mappings: Dict[str, str] = {}
-
-        for file_object in responses:
-            file_hidden_params = cast(  # cast-ok: preserve mapping operations on dynamic file metadata
-                dict[str, object], getattr(file_object, HIDDEN_PARAMS_ATTR)
-            )
-            model_file_id_mapping = file_hidden_params.get("model_file_id_mapping")
-            if model_file_id_mapping and isinstance(model_file_id_mapping, dict):
-                model_mappings.update(model_file_id_mapping)
+        uploads: Final = tuple(chain.from_iterable(map(_provider_uploads, responses)))
+        kept_uploads: Final = tuple(
+            upload for index, upload in enumerate(uploads) if _is_first_upload_to_its_deployment(uploads, index)
+        )
+        for redundant_upload in (upload for upload in uploads if upload not in kept_uploads):
+            await _delete_redundant_upload(llm_router, redundant_upload, create_file_request)
+        model_mappings: Final = {upload.model_id: upload.provider_file_id for upload in kept_uploads}
 
         await self.store_unified_file_id(
             file_id=response.id,
@@ -2646,24 +2714,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         specific_model_file_id_mapping: Final = model_file_id_mapping.get(file_id)
         if not specific_model_file_id_mapping:
             return
-        filtered_data: Final = {
-            k: v for k, v in data.items() if k not in ("model", "file_id", "_litellm_internal_model_credentials")
-        }
         for model_id, model_file_id in specific_model_file_id_mapping.items():
-            credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
-            delete_data = {
-                **filtered_data,
-                **(
-                    {"_litellm_internal_model_credentials": MappingProxyType(dict(credentials))}
-                    if credentials is not None
-                    else {}
-                ),
-            }
-            await llm_router.afile_delete(
-                model=model_id,
-                file_id=model_file_id,
-                **cast(_RouterFileCallKwargs, delete_data),
-            )
+            await _delete_provider_file(llm_router, model_id, model_file_id, data)
 
     async def afile_content(
         self,
