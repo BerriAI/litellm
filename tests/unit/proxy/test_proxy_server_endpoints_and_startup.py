@@ -1656,6 +1656,12 @@ class MockPrisma:
     async def stop_background_tasks(self):
         pass
 
+    async def aclose(self):
+        try:
+            await self.stop_background_tasks()
+        finally:
+            await self.disconnect()
+
 
 mock_prisma = MockPrisma()
 
@@ -1854,6 +1860,12 @@ class _PrismaClientWhoseDatabaseRejectsQueries:
 
     async def stop_background_tasks(self) -> None:
         pass
+
+    async def aclose(self) -> None:
+        try:
+            await self.stop_background_tasks()
+        finally:
+            await self.disconnect()
 
     class _Database:
         async def query_raw(self, query, *args):
@@ -14032,6 +14044,14 @@ def _mock_startup_prisma_client(health_check_error=None, connect_error=None):
     client.start_view_setup_task = MagicMock()
     client.start_db_health_watchdog_task = AsyncMock()
     client.health_check = AsyncMock(side_effect=health_check_error)
+
+    async def close_client() -> None:
+        try:
+            await client.stop_background_tasks()
+        finally:
+            await client.disconnect()
+
+    client.aclose = AsyncMock(side_effect=close_client)
     return client
 
 
