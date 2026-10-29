@@ -2987,10 +2987,10 @@ async def test_update_pass_through_endpoint_keeps_serving_the_old_route_until_th
     )
 
     def registered_target() -> object:
-        registered = InitPassThroughEndpointHelpers.get_registered_pass_through_route(route="/operator") or {}
+        registered: Final = InitPassThroughEndpointHelpers.get_registered_pass_through_route(route="/operator") or {}
         return registered.get("passthrough_params", {}).get("target")
 
-    targets_during_db_write: list[object] = []
+    targets_during_db_write: Final[list[object]] = []
 
     async def record_registered_target(**_: object) -> None:
         targets_during_db_write.append(registered_target())
