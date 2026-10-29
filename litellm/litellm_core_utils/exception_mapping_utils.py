@@ -2443,6 +2443,39 @@ def with_deployment_api_base(litellm_params: object) -> Mapping[str, object]:
     return MappingProxyType({**params, "api_base": deployment_api_base})
 
 
+_DEBUG_INFO_ATTRIBUTE: Final = "litellm_debug_info"
+
+
+def _attach_debug_info(exception: Exception, debug_info: str) -> None:
+    if debug_info and getattr(exception, _DEBUG_INFO_ATTRIBUTE, None) is None:
+        setattr(exception, _DEBUG_INFO_ATTRIBUTE, debug_info)
+
+
+def mapped_stream_exception(
+    original_exception: Exception, model: str, custom_llm_provider: str, litellm_params: object
+) -> Exception:
+    try:
+        return exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=original_exception,
+            completion_kwargs={},
+            extra_kwargs=with_deployment_api_base(litellm_params),
+        )
+    except Exception as mapped_exception:
+        return mapped_exception
+
+
+def with_deployment_debug_info(
+    error: Exception, model: str, custom_llm_provider: str, litellm_params: object
+) -> Exception:
+    debug_info: Final[object] = getattr(
+        mapped_stream_exception(error, model, custom_llm_provider, litellm_params), _DEBUG_INFO_ATTRIBUTE, None
+    )
+    _attach_debug_info(error, debug_info if isinstance(debug_info, str) else "")
+    return error
+
+
 def _api_base_without_credentials(api_base: str) -> str:
     scheme, separator, _ = api_base.partition("://")
     scheme_prefix: Final = scheme + separator if separator and _URL_SCHEME.fullmatch(scheme) else ""
@@ -2492,11 +2525,11 @@ def exception_type(
         print()  # noqa: T201
 
     litellm_response_headers: Final = _get_response_headers(original_exception=original_exception)
+    extra_information = ""
     try:
         error_str = (
             redact_secret_string(str(original_exception)) if _ENABLE_SECRET_REDACTION else str(original_exception)
         )
-        extra_information = ""
         if model or custom_llm_provider:
             if hasattr(original_exception, "message"):
                 error_str = (
@@ -2837,11 +2870,13 @@ def exception_type(
         # don't let an error with mapping interrupt the user from receiving an error from the llm api calls
         if exception_mapping_worked:
             setattr(e, "litellm_response_headers", litellm_response_headers)
+            _attach_debug_info(e, extra_information)
             raise e
         else:
             for error_type in litellm.LITELLM_EXCEPTION_TYPES:
                 if isinstance(e, error_type):
                     setattr(e, "litellm_response_headers", litellm_response_headers)
+                    _attach_debug_info(e, extra_information)
                     raise e  # it's already mapped
             raised_exc: Final = APIConnectionError(
                 message=f"{original_exception}\n{redact_string(traceback.format_exc())}",

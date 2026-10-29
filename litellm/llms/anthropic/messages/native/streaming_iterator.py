@@ -15,6 +15,7 @@ from litellm.constants import (
     ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE,
 )
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_debug_info
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP
@@ -562,6 +563,7 @@ class BaseAnthropicMessagesStreamingIterator:
             start_time=self.start_time,
             passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
             url_route="/v1/messages",
+            on_upstream_error=self._with_deployment_debug_info,
         )
 
     def _convert_chunk_to_sse_format(self, chunk: dict | Any) -> bytes:
@@ -609,8 +611,9 @@ class BaseAnthropicMessagesStreamingIterator:
         An upstream failure (Bedrock read / decode / chunk-conversion error)
         that happens while the client is still connected is forwarded through
         the queue and re-raised here, so the original provider exception (and
-        its status) reaches the proxy's failure handling unchanged rather than
-        being masked by a generic incomplete-stream event.
+        its status) reaches the proxy's failure handling with the deployment's
+        debug info attached, rather than being masked by a generic
+        incomplete-stream event.
 
         This method provides the common logic for both Anthropic and Bedrock implementations.
         """
@@ -797,18 +800,29 @@ class BaseAnthropicMessagesStreamingIterator:
         """
         from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
 
+        described: Final = self._with_deployment_debug_info(exc)
         await PassThroughStreamingHandler.schedule_stream_failure_logging(
             litellm_logging_obj=self.litellm_logging_obj,
             endpoint_type=EndpointType.ANTHROPIC,
             request_body=self.request_body,
             raw_bytes=collected_chunks,
-            exception=exc,
+            exception=described,
         )
-        if not client_detached.is_set() and await self._enqueue_for_client(queue, client_detached, exc):
+        if not client_detached.is_set() and await self._enqueue_for_client(queue, client_detached, described):
             await client_detached.wait()
-            if not _exception_left_unconsumed(queue, exc):
+            if not _exception_left_unconsumed(queue, described):
                 return
-        await self._fire_detached_failure_hook(exc)
+        await self._fire_detached_failure_hook(described)
+
+    def _with_deployment_debug_info(self, exc: Exception) -> Exception:
+        details: Final = self.litellm_logging_obj.model_call_details
+        provider: Final = details.get("custom_llm_provider")
+        return with_deployment_debug_info(
+            exc,
+            self.litellm_logging_obj.model,
+            provider if isinstance(provider, str) and provider else "anthropic",
+            details.get("litellm_params"),
+        )
 
     async def _fire_detached_failure_hook(self, exc: Exception) -> None:
         from litellm._logging import verbose_proxy_logger

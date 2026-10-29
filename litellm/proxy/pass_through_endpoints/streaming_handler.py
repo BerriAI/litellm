@@ -166,6 +166,7 @@ class PassThroughStreamingHandler:
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
         route_streaming_logging: RouteStreamingLogging | None = None,
+        on_upstream_error: Callable[[Exception], object] = lambda _: None,
     ):
         resolved_route_streaming_logging: Final[RouteStreamingLogging] = (
             route_streaming_logging or PassThroughStreamingHandler.route_streaming_logging_to_handler
@@ -265,6 +266,7 @@ class PassThroughStreamingHandler:
                 litellm_logging_obj._deferred_stream_complete_args = (_build_logging_coroutine(),)
         except Exception as e:
             verbose_proxy_logger.error("Error in chunk_processor: %s", e)
+            on_upstream_error(e)
             if response.status_code < 400:
                 logging_scheduled = True
                 await PassThroughStreamingHandler.schedule_stream_failure_logging(

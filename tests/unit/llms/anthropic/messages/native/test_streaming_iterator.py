@@ -645,6 +645,67 @@ async def test_async_sse_wrapper_reraises_upstream_error_to_connected_client():
     assert detached_hook.exceptions == [], "the relay re-raised the error, so the proxy failure hook already ran"
 
 
+_DEPLOYMENT_PARAMS: Final = {
+    "metadata": {
+        "api_base": "https://relay.example/anthropic",
+        "model_group": "claude-alias",
+        "deployment": "anthropic/claude-opus-5-5",
+    }
+}
+
+
+def _assert_names_the_deployment(error: Exception) -> None:
+    debug_info: Final = getattr(error, "litellm_debug_info", None)
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/anthropic`" in debug_info
+    assert "model_group: `claude-alias`" in debug_info
+    assert "deployment: `anthropic/claude-opus-5-5`" in debug_info
+
+
+@pytest.mark.asyncio
+async def test_relayed_upstream_error_reaches_the_client_naming_the_deployment():
+    async def _cut_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 52, "output_tokens": 1}}}
+        raise _ProviderStreamError("Response payload is not completed", status_code=529)
+
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("test_upstream_error_names_the_deployment"),
+        request_body={},
+    )
+    iterator.litellm_logging_obj.model_call_details["litellm_params"] = _DEPLOYMENT_PARAMS
+
+    with pytest.raises(_ProviderStreamError) as excinfo:
+        async for _ in iterator.async_sse_wrapper(_cut_stream()):
+            pass
+
+    assert excinfo.value.status_code == 529
+    _assert_names_the_deployment(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_native_anthropic_stream_cut_reaches_the_client_naming_the_deployment() -> None:
+    logging_obj: Final = _make_logging_obj("native_anthropic_stream_cut")
+    logging_obj.model_call_details["litellm_params"] = _DEPLOYMENT_PARAMS
+    cut: Final = httpx.ReadError("Response payload is not completed")
+
+    async def _cut_upstream() -> AsyncIterator[bytes]:
+        yield b'event: message_start\ndata: {"type": "message_start"}\n\n'
+        raise cut
+
+    stream: Final = AnthropicMessagesConfig().get_async_streaming_response_iterator(
+        model=logging_obj.model,
+        httpx_response=httpx.Response(200, content=_cut_upstream()),
+        request_body={"model": logging_obj.model},
+        litellm_logging_obj=logging_obj,
+    )
+
+    with pytest.raises(httpx.ReadError) as excinfo:
+        _ = [chunk async for chunk in stream]
+
+    assert excinfo.value is cut
+    _assert_names_the_deployment(cut)
+
+
 @pytest.mark.asyncio
 async def test_async_sse_wrapper_logs_failure_on_upstream_error_after_disconnect():
     """

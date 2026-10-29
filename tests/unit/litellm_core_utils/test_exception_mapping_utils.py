@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     exception_type,
     extract_and_raise_litellm_exception,
 )
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -154,6 +155,41 @@ def test_api_base_line_is_left_out_when_a_password_breaks_the_url(configured_api
 )
 def test_api_base_line_keeps_an_at_sign_in_the_path(api_base: str) -> None:
     assert f"API Base: `{api_base}`" in _debug_info_for_api_base(api_base)
+
+
+@pytest.mark.parametrize(
+    ("provider_error", "mapped_class"),
+    [
+        (
+            httpx.ReadError("peer closed connection", request=httpx.Request("POST", "https://relay.example/v1/messages")),
+            litellm.APIConnectionError,
+        ),
+        (RuntimeError("stream decoder failed"), litellm.APIConnectionError),
+        (AnthropicError(status_code=500, message="[Errno 104] Connection reset by peer"), litellm.InternalServerError),
+        (AnthropicError(status_code=429, message="rate_limit_error"), litellm.RateLimitError),
+    ],
+    ids=["unmapped_with_request", "unmapped_without_request", "anthropic_500", "anthropic_429"],
+)
+def test_mapped_provider_error_carries_the_deployment_debug_info(
+    provider_error: Exception, mapped_class: type[Exception]
+) -> None:
+    with pytest.raises(mapped_class) as caught:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=provider_error,
+            custom_llm_provider="anthropic",
+            completion_kwargs={},
+            extra_kwargs={
+                "api_base": "https://relay.example",
+                "metadata": {"model_group": "claude-alias", "deployment": "anthropic/claude-opus-5-5"},
+            },
+        )
+    debug_info: Final = caught.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example`" in debug_info
+    assert "model_group: `claude-alias`" in debug_info
+    assert "deployment: `anthropic/claude-opus-5-5`" in debug_info
+    assert "Messages:" not in debug_info
 
 
 # Test cases for is_error_str_context_window_exceeded

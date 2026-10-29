@@ -79,6 +79,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.exception_mapping_utils import mapped_stream_exception
 from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
     OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
@@ -817,7 +818,7 @@ def _text_completion_response_from_cached_dict(cached_response_dict: Mapping[str
     return TextCompletionResponse(stream=bool(cached_response_dict.get("stream", False)), **fields)
 
 
-async def _async_streaming(response, model, custom_llm_provider, args):
+async def _async_streaming(response, model, custom_llm_provider, litellm_params: Mapping[str, object]):
     try:
         print_verbose(f"received response in _async_streaming: {response}")
         if asyncio.iscoroutine(response):
@@ -826,11 +827,11 @@ async def _async_streaming(response, model, custom_llm_provider, args):
             print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e:
-        custom_llm_provider = custom_llm_provider or "openai"
-        raise exception_type(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            original_exception=e,
+        raise mapped_stream_exception(
+            e,
+            model if isinstance(model, str) else "",
+            custom_llm_provider if isinstance(custom_llm_provider, str) and custom_llm_provider else "openai",
+            litellm_params,
         )
 
 
@@ -7804,7 +7805,7 @@ async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextComp
                     response=response,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
-                    args=args,
+                    litellm_params=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
                 ),
                 model=model,
                 custom_llm_provider=custom_llm_provider,

@@ -366,6 +366,34 @@ def test_sync_transport_read_timeout_raises_litellm_timeout(prefix):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
+@pytest.mark.parametrize("error_class", [httpx.ReadError, httpx.RemoteProtocolError])
+async def test_transport_cut_error_names_the_deployment(prefix, error_class):
+    logging_obj: Final = _logging_obj_stub()
+    logging_obj.model_call_details = {
+        "litellm_params": {
+            "metadata": {
+                "api_base": "https://relay.example/openai/v1",
+                "model_group": "responses-alias",
+                "deployment": "openai/gpt-4o-mini",
+            }
+        }
+    }
+    trailing_error: Final = error_class("peer closed connection without sending complete message body")
+    iterator: Final = _make_iterator(sse_events=prefix, logging_obj=logging_obj, trailing_error=trailing_error)
+
+    with pytest.raises((error_class, MidStreamFallbackError)) as exc_info:
+        async for _ in iterator:
+            pass
+
+    debug_info: Final = exc_info.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/openai/v1`" in debug_info
+    assert "model_group: `responses-alias`" in debug_info
+    assert "deployment: `openai/gpt-4o-mini`" in debug_info
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("trailer", [[], [_DONE_MARKER]], ids=["eof", "done-marker"])
 async def test_stream_ending_after_partial_output_without_terminal_event_raises(trailer):
     """A clean EOF or `[DONE]` after output text but with no response.completed /
