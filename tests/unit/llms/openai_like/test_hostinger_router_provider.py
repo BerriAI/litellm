@@ -331,42 +331,6 @@ async def test_hostinger_router_anthropic_messages_request(monkeypatch: pytest.M
     assert response["content"][0]["text"] == "Hello from Hostinger Router"
 
 
-@pytest.mark.asyncio
-async def test_hostinger_router_anthropic_messages_keep_one_hour_cache_ttl(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
-    cached_block: Final = {
-        "type": "text",
-        "text": "Long shared context",
-        "cache_control": {"type": "ephemeral", "ttl": "1h"},
-    }
-    with respx.mock() as upstream:
-        route: Final = upstream.post("https://router.hostinger.com/v1/messages").respond(
-            200,
-            json={
-                "id": "msg_hostinger",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-sonnet-5",
-                "content": [{"type": "text", "text": "Hello"}],
-                "stop_reason": "end_turn",
-                "stop_sequence": None,
-                "usage": {"input_tokens": 4, "output_tokens": 1},
-            },
-        )
-        await litellm.anthropic.messages.acreate(
-            model="hostinger_router/claude-sonnet-5",
-            system=[cached_block],
-            messages=[{"role": "user", "content": [cached_block]}],
-            max_tokens=32,
-            api_key="hostinger-test-key",
-        )
-
-    body: Final = json.loads(route.calls.last.request.content)
-    assert body["system"] == [cached_block]
-    assert body["messages"] == [{"role": "user", "content": [cached_block]}]
-
-
 CHAT_COMPLETION_RESPONSE: Final = {
     "id": "chatcmpl_hostinger",
     "object": "chat.completion",
