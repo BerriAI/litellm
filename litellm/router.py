@@ -11569,22 +11569,17 @@ class Router:
             backend_model=backend_model,
             custom_llm_provider=pricing_provider,
         )
-        billing_minimum: Final[Mapping[str, int]] = (
-            Router._builtin_billing_minimum(backend_model=backend_model, custom_llm_provider=pricing_provider)
+        backend_info: Final = (
+            lookup_model_info_for_registration(model=backend_model, custom_llm_provider=pricing_provider)
             if model_info.get("input_cost_per_token") is not None
-            else MappingProxyType({})
+            else None
         )
-        return {**billing_minimum, **model_info}
-
-    @staticmethod
-    def _builtin_billing_minimum(backend_model: str, custom_llm_provider: str | None) -> Mapping[str, int]:
-        backend_info: Final = lookup_model_info_for_registration(
-            model=backend_model, custom_llm_provider=custom_llm_provider
+        billing_minimum: Final = (
+            None
+            if backend_info is None or isinstance(backend_info, ModelInfoLookupMiss)
+            else backend_info.get("min_billed_input_tokens")
         )
-        minimum: Final = (
-            None if isinstance(backend_info, ModelInfoLookupMiss) else backend_info.get("min_billed_input_tokens")
-        )
-        return MappingProxyType({} if minimum is None else {"min_billed_input_tokens": minimum})
+        return model_info if billing_minimum is None else {"min_billed_input_tokens": billing_minimum, **model_info}
 
     @staticmethod
     def _register_deployment_pricing(deployment: Deployment) -> None:
