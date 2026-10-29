@@ -508,6 +508,12 @@ class TestAnthropicBetaHeadersFiltering:
         assert sdk_betas
         assert sdk_betas - provider_column.keys() == frozenset()
 
+    @pytest.mark.parametrize("provider", ["azure_ai", "vertex_ai"])
+    def test_every_anthropic_beta_has_a_decision_for_vertex_ai_and_azure_ai(self, provider: str) -> None:
+        config: Final = GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
+
+        assert config["anthropic"].keys() - config[provider].keys() == set()
+
     def test_null_value_headers_filtered(self):
         """Test that headers with null values are always filtered out."""
         for provider in [
