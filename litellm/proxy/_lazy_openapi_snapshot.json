@@ -3487,6 +3487,13 @@
               "title": "Entities",
               "type": "object"
             },
+            "guardrails": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/GuardrailMetric"
+              },
+              "title": "Guardrails",
+              "type": "object"
+            },
             "mcp_servers": {
               "additionalProperties": {
                 "$ref": "#/components/schemas/MetricWithMetadata"
@@ -3801,6 +3808,74 @@
           ],
           "title": "ExportType",
           "type": "string"
+        },
+        "GuardrailKeyMetric": {
+          "properties": {
+            "metadata": {
+              "$ref": "#/components/schemas/KeyMetadata"
+            },
+            "metrics": {
+              "$ref": "#/components/schemas/GuardrailSpendMetrics"
+            }
+          },
+          "required": [
+            "metrics",
+            "metadata"
+          ],
+          "title": "GuardrailKeyMetric",
+          "type": "object"
+        },
+        "GuardrailMetadata": {
+          "properties": {
+            "guardrail_name": {
+              "title": "Guardrail Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "guardrail_name"
+          ],
+          "title": "GuardrailMetadata",
+          "type": "object"
+        },
+        "GuardrailMetric": {
+          "properties": {
+            "api_key_breakdown": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/GuardrailKeyMetric"
+              },
+              "title": "Api Key Breakdown",
+              "type": "object"
+            },
+            "metadata": {
+              "$ref": "#/components/schemas/GuardrailMetadata"
+            },
+            "metrics": {
+              "$ref": "#/components/schemas/GuardrailSpendMetrics"
+            }
+          },
+          "required": [
+            "metrics",
+            "metadata"
+          ],
+          "title": "GuardrailMetric",
+          "type": "object"
+        },
+        "GuardrailSpendMetrics": {
+          "properties": {
+            "spend": {
+              "default": 0.0,
+              "title": "Spend",
+              "type": "number"
+            },
+            "untracked_units": {
+              "default": 0,
+              "title": "Untracked Units",
+              "type": "integer"
+            }
+          },
+          "title": "GuardrailSpendMetrics",
+          "type": "object"
         },
         "HTTPAuthSecurityScheme": {
           "description": "Defines a security scheme using HTTP authentication.",
@@ -15015,7 +15090,7 @@
           ]
         },
         "post": {
-          "description": "Create a named custom agent on the Gemini side.\n\nExample:\n```bash\ncurl -X POST \"http://localhost:4000/v1beta/agents\" \\\n    -H \"Authorization: Bearer sk-...\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"name\": \"my-custom-slides-agent\",\n        \"base_agent\": \"waverunner\",\n        \"instructions\": \"You are a helpful assistant that creates slides.\",\n        \"base_environment\": {\n            \"type\": \"remote\",\n            \"sources\": [\n                {\"type\": \"gcs\", \"source\": \"gs://eap-templates/slides-skill\",\n                 \"target\": \"/.agents/skills/slides-skill\"}\n            ]\n        }\n    }'\n```",
+          "description": "Create a named custom agent on the Gemini side.\n\nExample:\n```bash\ncurl -X POST \"http://localhost:4000/v1beta/agents\" \\\n    -H \"Authorization: Bearer sk-...\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"id\": \"my-custom-slides-agent\",\n        \"base_agent\": \"antigravity-preview-09-2026\",\n        \"system_instruction\": \"You are a helpful assistant that creates slides.\",\n        \"agent_config\": {\"type\": \"antigravity\", \"model\": \"gemini-3.8-flash\"},\n        \"base_environment\": {\n            \"type\": \"remote\",\n            \"sources\": [\n                {\"type\": \"gcs\", \"source\": \"gs://eap-templates/slides-skill\",\n                 \"target\": \"/.agents/skills/slides-skill\"}\n            ]\n        }\n    }'\n```",
           "operationId": "create_gemini_agent_v1beta_agents_post",
           "responses": {
             "200": {

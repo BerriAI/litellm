@@ -2143,7 +2143,6 @@ class TestBedrockPassthroughAwsErrors:
         assert exc_info.value.aws_error_type == "ValidationException"
         assert (exc_info.value.error.message, exc_info.value.error.code) == (message, status_code)
 
-
     @pytest.mark.asyncio
     async def test_bedrock_request_check_is_raised_with_the_aws_error_type_it_carries(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2184,6 +2183,7 @@ class TestBedrockPassthroughAwsErrors:
             await self._answer(error)
 
         assert (exc_info.value.code, exc_info.value.headers.get("x-model-group")) == ("403", "modèle")
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("error", "message", "code"),
@@ -7250,6 +7250,189 @@ async def test_bedrock_count_tokens_error_forwards_provider_headers():
     assert exc_info.value.status_code == 500
     assert exc_info.value.headers["llm_provider-x-amzn-requestid"] == "req-count-tokens-500"
 
+
+_BEDROCK_COUNT_ALIAS: Final = "count-log-bedrock"
+_BEDROCK_COUNT_MODEL: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+async def _bedrock_native_count(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, aws_reply: httpx.Response
+) -> dict[str, object]:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": _BEDROCK_COUNT_ALIAS,
+                    "litellm_params": {
+                        "model": _BEDROCK_COUNT_MODEL,
+                        "aws_region_name": "us-east-1",
+                        "aws_access_key_id": "AKIATESTACCESSKEY",
+                        "aws_secret_access_key": "test-secret",
+                    },
+                    "model_info": {"id": "count-log-bedrock-deployment"},
+                }
+            ]
+        ),
+    )
+    respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com", path__regex=r"/count-tokens$").mock(
+        return_value=aws_reply
+    )
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/bedrock/model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
+            "headers": [(b"x-litellm-call-id", b"bedrock-native-count")],
+        }
+    )
+    return await handle_bedrock_count_tokens(
+        endpoint=f"model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
+        request=request,
+        fastapi_response=Response(),
+        user_api_key_dict=MagicMock(),
+        request_body={"model": _BEDROCK_COUNT_ALIAS, "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_logs_the_count_against_the_router_model(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12})
+    )
+
+    assert result == {"input_tokens": 12}
+    assert len(respx_mock.calls) == 1
+    assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "bedrock-native-count",
+            "request_model": _BEDROCK_COUNT_ALIAS,
+            "model_id": "count-log-bedrock-deployment",
+            "model_used": "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "input_tokens": 12,
+            "count_source": "provider",
+            "status_code": 200,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_count_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    rejected: Final = httpx.Response(400, json={"message": "The provided model doesn't support counting tokens."})
+    with pytest.raises(HTTPException) as exc_info:
+        await _bedrock_native_count(monkeypatch, respx_mock, rejected)
+
+    assert exc_info.value.status_code == 400
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "bedrock-native-count",
+            "request_model": _BEDROCK_COUNT_ALIAS,
+            "model_id": "count-log-bedrock-deployment",
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_without_a_model_logs_the_400_it_answers(
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/bedrock/model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
+            "headers": [(b"x-litellm-call-id", b"bedrock-native-no-model")],
+        }
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await handle_bedrock_count_tokens(
+            endpoint=f"model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(),
+            request_body={"messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert exc_info.value.status_code == 400
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "bedrock-native-no-model",
+            "request_model": None,
+            "model_id": None,
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )
+
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_with_a_region_only_model_answers_the_validation_error_and_logs_it(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/bedrock/model/us/count-tokens",
+            "headers": [(b"x-litellm-call-id", b"bedrock-native-region-only")],
+        }
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await handle_bedrock_count_tokens(
+            endpoint="model/us/count-tokens",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(),
+            request_body={"model": "us"},
+        )
+
+    assert exc_info.value.detail == {
+        "error": "CountTokens processing error: Request must contain content to count tokens"
+    }
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "bedrock-native-region-only",
+            "request_model": "us",
+            "model_id": None,
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": exc_info.value.status_code,
+        },
+    )
 
 class _AzureGroupRouter:
     def __init__(self, captured: list[dict]) -> None:

@@ -192,7 +192,7 @@ handler.get_secret_from_manager = get_secret_from_manager
                 KeyManagementSettings::default(),
             )),
             Arc::new(move |_: &str| fallback.map(str::to_owned)),
-            OidcResolver::new(litellm_http::Client::plain_for_test()),
+            OidcResolver::new(litellm_http::Client::for_test()),
         )
         .with_failure_policy(FailurePolicy::EnvironmentFallback);
         (resolver, locals, handler)

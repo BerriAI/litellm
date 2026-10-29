@@ -10,7 +10,7 @@ use litellm_core_utils::{
 use litellm_host::interceptors::{
     Cost, ExecutionFacts, Interceptors, ProviderIdentity, RequestContext, ResultSource, WireRequest,
 };
-use litellm_http::{request::with_default_headers, transport::Error as TransportError};
+use litellm_http::request::with_default_headers;
 use litellm_llms::base_llm::{
     auth::{Authenticated, ValidatedEnvironment, resolve_auth},
     messages::{
@@ -26,7 +26,7 @@ use serde_json::Value;
 
 use super::{
     Error, MessagesCall, MessagesCallResponse, MessagesRoute,
-    common_utils::{MessagesProvider, string_headers, truncate_error_body},
+    common_utils::{MessagesProvider, string_headers},
     constants::MESSAGES_TIMEOUT_SECS,
     route::Messages,
     types::invalid_request,
@@ -188,7 +188,7 @@ async fn provider_call(
         None | Some(Value::Null) => false,
         Some(Value::Bool(stream)) => *stream,
         Some(value) => {
-            return Err(Error::InvalidRequest(
+            return Err(Error::invalid_request(
                 litellm_llms::ErrorDetail::InvalidValue {
                     field: "stream",
                     expected: "a boolean",
@@ -261,7 +261,7 @@ async fn call_provider(
             provider_name,
         ));
     }
-    let text = response.text().await.map_err(network)?;
+    let text = response.text().await.map_err(litellm_http::Error::from)?;
     log_response_body(&text);
     context.response_received(&text).await?;
     decode_response(config, &identity.model, &text)
@@ -269,14 +269,10 @@ async fn call_provider(
 }
 
 fn serialize_failure(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(litellm_llms::ErrorDetail::failed(
+    Error::invalid_request(litellm_llms::ErrorDetail::failed(
         "Anthropic messages request serialization",
         err,
     ))
-}
-
-fn network(error: reqwest::Error) -> Error {
-    Error::Transport(TransportError::Network(error.to_string()))
 }
 
 async fn send(
@@ -288,13 +284,11 @@ async fn send(
 ) -> Result<reqwest::Response, Error> {
     let request = outbound_request(
         authenticated,
-        url.to_string(),
+        url,
         body,
         Some(timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS))),
     )?;
-    litellm_inference::outbound::send(request, http)
-        .await
-        .map_err(network)
+    Ok(litellm_inference::outbound::send(request, http).await?)
 }
 
 async fn provider_error(response: reqwest::Response) -> Error {
@@ -302,12 +296,9 @@ async fn provider_error(response: reqwest::Response) -> Error {
     match response.text().await {
         Ok(text) => {
             log_error_body(status, &text);
-            Error::Transport(TransportError::Http {
-                status,
-                body: truncate_error_body(&text),
-            })
+            litellm_http::Error::upstream(status, text).into()
         }
-        Err(error) => network(error),
+        Err(error) => litellm_http::Error::from(error).into(),
     }
 }
 
@@ -317,7 +308,7 @@ fn decode_response(
     text: &str,
 ) -> Result<MessagesResponse, Error> {
     let response = serde_json::from_str(text).map_err(|err| {
-        Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+        Error::invalid_response(litellm_llms::ErrorDetail::invalid(
             "messages response JSON",
             err,
         ))
@@ -325,6 +316,7 @@ fn decode_response(
     config
         .transform_anthropic_messages_response(model, response)
         .map_err(Error::from)
+        .map_err(Error::after_send)
 }
 
 fn streaming_response(
@@ -339,7 +331,7 @@ fn streaming_response(
         .collect();
     let chunks = match decoder {
         None => futures_util::stream::try_unfold(response, move |mut response| async move {
-            let chunk = response.chunk().await.map_err(network)?;
+            let chunk = response.chunk().await.map_err(litellm_http::Error::from)?;
             Ok(chunk.map(|chunk| {
                 log_chunk(provider, "provider_response", &chunk);
                 (chunk, response)
@@ -362,7 +354,7 @@ fn decoded_chunks(
     let bytes: ByteStream = response
         .bytes_stream()
         .inspect_ok(move |chunk| log_chunk(provider, "provider_response", chunk))
-        .map_err(std::io::Error::other)
+        .map_err(|error| std::io::Error::other(litellm_http::Error::from(error)))
         .boxed();
     futures_util::stream::try_unfold(decode(bytes), move |mut events| async move {
         let Some(event) = events.try_next().await? else {
@@ -541,14 +533,10 @@ mod tests {
             shaping,
         })
         .await;
-        assert!(
-            matches!(
-                result,
-                Err(Error::Auth(litellm_auth::Error::MissingApiKey { .. }))
-            ),
-            "{:?}",
-            result.err()
-        );
+        let Err(error) = result else {
+            panic!("a call without credentials fails");
+        };
+        assert!(error.is_missing_credential(), "{error:?}");
     }
 
     #[rstest]
@@ -771,19 +759,18 @@ mod tests {
             },
             ..shaping
         };
-        assert!(matches!(
-            wire_body(
-                json!({
-                    "model": "claude-test",
-                    "messages": [{"role": "user", "content": "hi"}],
-                    "max_tokens": 16,
-                    "metadata": {"user_id": 123}
-                }),
-                shaping,
-            )
-            .await,
-            Err(Error::InvalidRequest(_))
-        ));
+        let error = wire_body(
+            json!({
+                "model": "claude-test",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 16,
+                "metadata": {"user_id": 123}
+            }),
+            shaping,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.is_request(), "{error:?}");
     }
 
     #[rstest]
@@ -800,7 +787,7 @@ mod tests {
                 shaping,
             )
             .await,
-            Err(Error::InvalidRequest(
+            Err(Error::invalid_request(
                 litellm_llms::ErrorDetail::InvalidValue {
                     field: "metadata.user_id",
                     expected: "a string",
@@ -859,12 +846,12 @@ mod tests {
                 headers: call.wire.headers,
                 signer: call.signer,
             },
-            call.wire.url,
+            &call.wire.url,
             &call.wire.body,
             None,
         )
         .unwrap();
-        let authorization = signed.header("authorization").unwrap_or_default();
+        let authorization = signed.headers()["authorization"].to_str().unwrap();
         assert!(
             authorization.contains(&format!("/us-west-2/{service}/aws4_request")),
             "{authorization}"
@@ -888,7 +875,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
             .mount(&upstream)
             .await;
-        let response = litellm_http::Client::plain_for_test()
+        let response = litellm_http::Client::for_test()
             .get(upstream.uri())
             .send()
             .await
@@ -902,7 +889,7 @@ mod tests {
         let chunk = chunks.next().await.unwrap();
         match expected {
             Some(expected) => assert_eq!(chunk.unwrap().as_ref(), expected.as_bytes()),
-            None => assert!(matches!(chunk, Err(Error::InvalidResponse(_))), "{chunk:?}"),
+            None => assert!(chunk.unwrap_err().is_response()),
         }
         assert!(chunks.next().await.is_none());
     }

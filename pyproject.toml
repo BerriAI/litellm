@@ -296,7 +296,7 @@ ci = [
     "anthropic==0.84.0",
     "blockbuster==1.5.26",
     "beautifulsoup4==4.14.3",
-    "pylint==4.0.5",
+    "pylint==4.0.9",
     "langchain-openai==1.1.14",
     "langgraph>=1.2.4,<1.3.0",
     "langgraph-prebuilt>=1.1.0,<1.3.0",
@@ -401,7 +401,7 @@ markers = [
     "asyncio: mark test as an asyncio test",
     "limit_leaks: mark test with memory limit for leak detection (e.g., '40 MB')",
     "no_parallel: mark test to run sequentially (not in parallel) - typically for memory measurement tests",
-    "requires_rust_extension: public Python contract requiring an enabled, compiled Rust extension",
+    "requires_rust_extension: public Python contract tests that run against the release-built wheel",
 ]
 filterwarnings = [
     # Suppress Pydantic serializer warnings from mock server responses (non-critical for memory tests)
