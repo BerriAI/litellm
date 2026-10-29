@@ -16,7 +16,6 @@ import litellm
 
 # client is imported from litellm as it's a decorator
 from litellm import client
-from litellm.constants import DEFAULT_IMAGE_ENDPOINT_MODEL
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.litellm_core_utils.get_llm_provider_logic import (
@@ -69,6 +68,11 @@ from litellm.utils import (
 )
 
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
+_PROVIDERS_RESOLVING_THEIR_OWN_IMAGE_BASE: Final = (
+    LlmProviders.DASHSCOPE,
+    LlmProviders.QWENCLOUD,
+    LlmProviders.QWEN_AI_PLATFORM,
+)
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: type["ImageEditRequestUtils"] | None = None
@@ -272,6 +276,7 @@ def image_generation(
     """
     try:
         args: Final = locals()
+        requested_api_base: Final = api_base
         aimg_generation: Final = kwargs.get("aimg_generation", False)
         litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         logger_fn: Final = kwargs.get("logger_fn", None)
@@ -299,17 +304,14 @@ def image_generation(
             if custom_llm_provider == "chatgpt" or (model is not None and model.startswith("chatgpt/"))
             else None
         )
-        dynamic_api_key: str | None = None
-        if model is not None or custom_llm_provider is not None:
-            model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                api_base=api_base,
-                litellm_params=chatgpt_params,
-            )
-        else:
-            model = "dall-e-2"
-            custom_llm_provider = "openai"  # default to dall-e-2 on openai
+        if model is None and custom_llm_provider is None:
+            raise litellm.BadRequestError(message="model is required", model="", llm_provider="")
+        model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            litellm_params=chatgpt_params,
+        )
         model_response.hidden_params["model"] = model
         openai_params: Final = [
             "user",
@@ -472,7 +474,11 @@ def image_generation(
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
 
             # Resolve api_base from litellm.api_base if not explicitly provided
-            _api_base: Final = api_base or litellm.api_base
+            _api_base: Final = (
+                requested_api_base
+                if custom_llm_provider in _PROVIDERS_RESOLVING_THEIR_OWN_IMAGE_BASE
+                else api_base or litellm.api_base
+            )
             litellm_params_dict["api_base"] = _api_base
 
             return llm_http_handler.image_generation_handler(
@@ -645,6 +651,8 @@ def image_generation(
                     timeout=timeout,
                     client=custom_client,
                 )
+        elif custom_llm_provider == LlmProviders.KYMA.value:
+            raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
 
         return model_response
     except Exception as e:
@@ -712,7 +720,7 @@ async def aimage_variation(*args, **kwargs) -> ImageResponse:
 @client
 def image_variation(
     image: FileTypes,
-    model: str = "dall-e-2",  # set to dall-e-2 by default - like OpenAI.
+    model: str | None = None,
     n: int = 1,
     response_format: Literal["url", "b64_json"] = "url",
     size: str | None = None,
@@ -728,7 +736,7 @@ def image_variation(
     litellm_params: Final = get_litellm_params(**kwargs)
     # get the custom llm provider
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-        model=model,
+        model=model or "",
         custom_llm_provider=litellm_params.get("custom_llm_provider", None),
         api_base=litellm_params.get("api_base", None),
         api_key=litellm_params.get("api_key", None),
@@ -747,7 +755,7 @@ def image_variation(
     response: ImageResponse | None = None
 
     provider_config: Final = ProviderConfigManager.get_provider_model_info(
-        model=model or "",  # openai defaults to dall-e-2
+        model=model,
         provider=llm_provider,
     )
 
@@ -772,7 +780,7 @@ def image_variation(
             model_response=model_response,
             api_key=api_key,
             api_base=api_base,
-            model=model,
+            model=model or None,
             image=image,
             timeout=litellm_params.get("timeout", None),
             custom_llm_provider=custom_llm_provider,
@@ -790,7 +798,7 @@ def image_variation(
             model_response=model_response,
             api_key=api_key,
             api_base=api_base,
-            model=model,
+            model=model or None,
             image=image,
             timeout=litellm_params.get("timeout", None) or DEFAULT_REQUEST_TIMEOUT,
             custom_llm_provider=custom_llm_provider,
@@ -901,7 +909,7 @@ def image_edit(
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
         model, custom_llm_provider, _, _ = get_llm_provider(
-            model=model or DEFAULT_IMAGE_ENDPOINT_MODEL,
+            model=model or "",
             custom_llm_provider=custom_llm_provider,
         )
 

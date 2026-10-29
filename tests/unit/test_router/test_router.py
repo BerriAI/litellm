@@ -59,6 +59,7 @@ from litellm.router import (
     _is_retriable_anthropic_status,
     _responses_stream_holds_event,
     _without_line_breaks,
+    _search_tool_support,
     Span,
 )
 from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
@@ -7938,6 +7939,86 @@ def test_pre_call_checks_counts_once_and_filters_on_max_input_tokens(monkeypatch
     assert calls == [1]
 
 
+_MULTILINGUAL_PROMPT: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+
+
+def _context_limited_router(*served: str) -> litellm.Router:
+    limit: Final = (
+        litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT)
+        + litellm.token_counter(model="prod", messages=_MULTILINGUAL_PROMPT)
+    ) // 2
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "prod",
+                "litellm_params": {"model": model, "api_key": "sk-test"},
+                "model_info": {"max_input_tokens": limit},
+            }
+            for model in served
+        ],
+        enable_pre_call_checks=True,
+    )
+
+
+def test_pre_call_checks_count_a_group_of_one_openai_model_with_that_models_tokenizer():
+    router: Final = _context_limited_router("openai/gpt-6.1-sol")
+
+    kept: Final = router._pre_call_checks(
+        model="prod", healthy_deployments=router.get_model_list(model_name="prod"), messages=_MULTILINGUAL_PROMPT
+    )
+
+    assert len(kept) == 1
+
+
+def test_pre_call_checks_count_a_group_mixing_in_another_vendor_by_its_own_name():
+    router: Final = _context_limited_router("openai/gpt-6.1-sol", "anthropic/claude-sonnet-5-5")
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="prod", healthy_deployments=router.get_model_list(model_name="prod"), messages=_MULTILINGUAL_PROMPT
+        )
+
+
+async def test_acount_pre_call_check_tokens_counts_a_group_of_one_openai_model_with_that_models_tokenizer():
+    router: Final = _context_limited_router("openai/gpt-6.1-sol")
+
+    count: Final = await router._acount_pre_call_check_tokens(
+        model="prod",
+        healthy_deployments=router.get_model_list(model_name="prod"),
+        messages=_MULTILINGUAL_PROMPT,
+        input=None,
+        request_kwargs=None,
+    )
+
+    assert count == litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT)
+
+
+async def test_a_wildcard_route_checks_the_context_window_with_the_requested_openai_models_tokenizer():
+    limit: Final = (
+        litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT)
+        + litellm.token_counter(model="my-model", messages=_MULTILINGUAL_PROMPT)
+    ) // 2
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "sk-test"},
+                "model_info": {"max_input_tokens": limit},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    sync_response: Final = router.completion(
+        model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT, mock_response="ok"
+    )
+    async_response: Final = await router.acompletion(
+        model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT, mock_response="ok"
+    )
+
+    assert (sync_response.choices[0].message.content, async_response.choices[0].message.content) == ("ok", "ok")
+
+
 def test_pre_call_checks_uses_precounted_tokens(monkeypatch):
     """
     An async caller counts off the event loop and passes the result in. _pre_call_checks
@@ -12189,6 +12270,67 @@ def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
     )
 
 
+def test_synchronous_text_completion_rejects_a_restricted_model_before_the_provider() -> None:
+    model: Final = "text-completion-openai/unit-text-model"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": model,
+                    "api_base": "https://sync-router.invalid/v1",
+                    "api_key": "unit-provider-key",
+                },
+                "model_info": {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
+            }
+        ],
+        num_retries=0,
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        provider: Final = upstream.post("https://sync-router.invalid/v1/completions").respond(
+            200,
+            json={
+                "id": "cmpl-unit",
+                "object": "text_completion",
+                "created": 1,
+                "model": "unit-text-model",
+                "choices": [{"text": "provider called", "index": 0, "finish_reason": "stop", "logprobs": None}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+        with pytest.raises(litellm.BadRequestError, match="/v1/completions is not supported"):
+            router.text_completion(model=model, prompt="test")
+        assert provider.call_count == 0
+
+
+def test_routable_deployments_leave_out_models_that_refuse_the_call_type() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "available",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "unit-provider-key"},
+            },
+            {
+                "model_name": "embed-only",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "unit-provider-key"},
+                "model_info": {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
+            },
+        ],
+        num_retries=0,
+    )
+
+    def routable(model: str, call_type: str | None) -> tuple[str, ...]:
+        return tuple(
+            deployment["model_name"] for deployment in router.get_routable_deployments(model, {}, call_type=call_type)
+        )
+
+    assert routable("unregistered-fallback", "acompletion") == ()
+    assert routable("available", "acompletion") == ("available",)
+    assert routable("embed-only", "acompletion") == ()
+    assert routable("embed-only", "aembedding") == ("embed-only",)
+    assert routable("embed-only", None) == ("embed-only",)
+
+
 def test_routing_groups_legacy_property_forwards_to_public_attribute():
     router = _router_with_two_deployments([False, False])
 
@@ -13435,6 +13577,80 @@ def test_get_configured_service_tiers_reads_only_the_deployments_a_request_can_r
     assert router.get_configured_service_tiers("gpt-6-astra", team_id="team-1") == (["ultrafast"],)
     assert router.get_configured_service_tiers("gpt-6-astra", team_id="team-2") == (["ultrafast"], None)
     assert router.get_configured_service_tiers("gpt-6-astra") == (["ultrafast"],)
+
+
+@pytest.mark.parametrize(
+    "litellm_params, model_info, expected",
+    [
+        ({"model": "anthropic/claude-fable-5-1"}, None, True),
+        ({"model": "bedrock/invoke/us.anthropic.claude-fable-5-1"}, None, True),
+        ({"model": "openai/gpt-6-astra"}, None, None),
+        ({"model": "gemini/gemini-3.8-flash"}, None, None),
+        ({"model": "sonar-pro", "api_base": "https://api.perplexity.ai"}, None, None),
+        ({"model": "gemini/gemini-3.8-flash"}, {"supports_search_tool": True}, True),
+        ({"model": "anthropic/claude-fable-5-1"}, {"supports_search_tool": False}, False),
+    ],
+    ids=[
+        "anthropic-defaults-on",
+        "bedrock-invoke-anthropic-defaults-on",
+        "openai-passthrough-unset",
+        "other-bridged-provider-unset",
+        "provider-inferred-from-api-base-unset",
+        "model-info-opt-in-wins",
+        "model-info-opt-out-wins",
+    ],
+)
+def test_get_search_tool_support_defaults_from_the_provider_and_lets_model_info_override(
+    litellm_params: dict[str, str], model_info: dict[str, bool] | None, expected: bool | None
+):
+    deployment: Final = {"model_name": "codex-model", "litellm_params": litellm_params}
+    router: Final = litellm.Router(model_list=[{**deployment, "model_info": model_info} if model_info else deployment])
+
+    assert router.get_search_tool_support("codex-model") == (expected,)
+
+
+def test_get_search_tool_support_reports_each_routable_deployment_of_the_group():
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "mixed", "litellm_params": {"model": "anthropic/claude-fable-5-1"}},
+            {"model_name": "mixed", "litellm_params": {"model": "openai/gpt-6-astra"}},
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "anthropic/claude-fable-5-1", "api_base": "https://paused.example"},
+                "model_info": {"blocked": True, "supports_search_tool": False},
+            },
+        ]
+    )
+
+    assert router.get_search_tool_support("mixed") == (True, None)
+    assert router.get_search_tool_support("not-a-real-model") == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize("provider", ["chatgpt", "github_copilot"])
+@pytest.mark.parametrize("explicit_provider", [False, True])
+async def test_search_tool_catalog_lookup_needs_no_credentials(
+    provider: str, explicit_provider: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "chatgpt"))
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path / "copilot"))
+    (tmp_path / "chatgpt").mkdir()
+    (tmp_path / "chatgpt" / "auth.json").write_text(
+        json.dumps({"access_token": "expired-access", "refresh_token": "test-refresh", "expires_at": 1})
+    )
+    (tmp_path / "copilot").mkdir()
+    (tmp_path / "copilot" / "api-key.json").write_text(json.dumps({"token": "expired-key", "expires_at": 1}))
+    (tmp_path / "copilot" / "access-token").write_text("test-access")
+    respx_mock.route().respond(401, json={"error": "invalid_grant"})
+    params: Final = (
+        {"model": "catalog-model", "custom_llm_provider": provider}
+        if explicit_provider
+        else {"model": f"{provider}/catalog-model"}
+    )
+
+    assert _search_tool_support({"model_name": "catalog-model", "litellm_params": params}) is None
+    assert len(respx_mock.calls) == 0
 
 
 @pytest.mark.parametrize(
@@ -18648,6 +18864,35 @@ async def test_anthropic_messages_stream_dropped_before_content_is_retried_withi
     assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2)]
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_same_group_retry_skips_an_embedding_only_deployment():
+    """The retry of a /v1/messages stream dropped before content must not land on an enforced embedding-only
+    deployment of the same group, even when that deployment is the group's preferred order."""
+    router: Final = Router(
+        model_list=[
+            {"model_name": "glm", "litellm_params": {"model": "anthropic/glm-chat", "api_key": "sk-test", "order": 2}},
+            {
+                "model_name": "glm",
+                "litellm_params": {"model": "anthropic/glm-embed", "api_key": "sk-test", "order": 1},
+                "model_info": {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
+            },
+        ],
+        num_retries=1,
+    )
+    provider: Final = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content, _anthropic_messages_retried_stream
+    )
+
+    async def anthropic_messages(**kwargs: object) -> object:
+        return await provider(**kwargs)
+
+    stream: Final = await _anthropic_messages_stream_through_router(router, anthropic_messages)
+    body: Final = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [model for model, _, _ in provider.calls] == ["anthropic/glm-chat", "anthropic/glm-chat"]
+
+
 class _AnthropicMessagesRetryStashRecorder:
     def __init__(self) -> None:
         self.observed: tuple[Usage | None, ...] = ()
@@ -21477,7 +21722,7 @@ async def test_router_retry_policy_controls_upstream_attempt_count(
     "error_body,error_type",
     [
         ({"message": "model is down", "type": "server_error"}, litellm.NotFoundError),
-        ({"message": "Response with id 'resp_x' not found.", "type": "invalid_request_error"}, litellm.BadRequestError),
+        ({"message": "Response with id 'resp_x' not found.", "type": "invalid_request_error"}, litellm.NotFoundError),
     ],
 )
 @pytest.mark.parametrize(
@@ -31276,3 +31521,26 @@ def test_router_keeps_supported_fallback_shapes(
     router: Final = Router(model_list=list(_FALLBACK_VALIDATION_MODEL_LIST), **router_kwargs)
 
     assert router.fallbacks == expected_fallbacks
+
+
+def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "embed-from-config",
+                    "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "sk-fake"},
+                    "model_info": {"enforce_supported_endpoints": True},
+                }
+            ]
+        )
+        router.add_deployment(
+            Deployment(
+                model_name="embed-from-api",
+                litellm_params=LiteLLM_Params(model="openai/text-embedding-3-small", api_key="sk-fake"),
+                model_info=ModelInfo(enforce_supported_endpoints=True, supported_endpoints=["/v1/embeddings", 7]),
+            )
+        )
+
+    assert "Deployment 'embed-from-config' sets enforce_supported_endpoints without" in caplog.text
+    assert "Deployment 'embed-from-api' sets enforce_supported_endpoints without" in caplog.text
