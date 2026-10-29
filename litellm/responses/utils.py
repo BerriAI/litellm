@@ -766,6 +766,12 @@ class ResponsesAPIRequestUtils:
                 model_id=model_id,
                 response_id=decoded_response_id,
             )
+        except ValueError:
+            return DecodedResponseId(
+                custom_llm_provider=None,
+                model_id=None,
+                response_id=response_id,
+            )
         except Exception as e:
             verbose_logger.debug("Error decoding response_id '%s': %s", response_id, e)
             return DecodedResponseId(
