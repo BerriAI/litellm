@@ -3275,7 +3275,7 @@ class ProxyBaseLLMRequestProcessing:
                     )
                 ),
             )
-        except (Exception, asyncio.CancelledError):
+        except (Exception, asyncio.CancelledError) as exc:
             _exception_raised = True
             if logging_obj.prepared_cost is not None:
                 await finalize_proxy_response_cost(
@@ -3285,6 +3285,13 @@ class ProxyBaseLLMRequestProcessing:
                         _guardrail_entries_for_headers(get_or_create_metadata_bucket(self.data)[1], logging_obj)
                     ),
                 )
+                if isinstance(exc, asyncio.CancelledError):
+                    await proxy_logging_obj.post_call_failure_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        original_exception=HTTPException(status_code=499, detail=_CLIENT_DISCONNECT_DETAIL),
+                        request_data=self.data,
+                        dispatched_call_type=self.route_type,
+                    )
             raise
         finally:
             ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
@@ -3952,6 +3959,8 @@ class ProxyBaseLLMRequestProcessing:
                 media_type="application/json",
                 headers=response_headers,
             )
+        if logging_obj is not None and not logging_obj.stream:
+            prepare_response_cost(logging_obj, response, datetime.now(timezone.utc))
         processed: Final = await proxy_logging_obj.post_call_success_hook(
             data=self.data,
             user_api_key_dict=user_api_key_dict,
@@ -4260,7 +4269,7 @@ class ProxyBaseLLMRequestProcessing:
     ) -> Never:
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
         log_llm_api_exception(e, self.litellm_call_id)
-        billing_logging_obj: Final = self.data.get("litellm_logging_obj")
+        billing_logging_obj: Final = _REQUEST_FIELDS.validate_python(self.data).get("litellm_logging_obj")
         # Allow callbacks to transform the error response
         transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -4281,7 +4290,9 @@ class ProxyBaseLLMRequestProcessing:
         timeout: Final = getattr(
             e, "timeout", None
         )  # returns the timeout set by the wrapper. Used for testing if model-specific timeout are set correctly
-        _litellm_logging_obj: Final[LiteLLMLoggingObj | None] = billing_logging_obj
+        _litellm_logging_obj: Final = (
+            billing_logging_obj if isinstance(billing_logging_obj, LiteLLMLoggingObj) else None
+        )
 
         # Attempt to get model_id from logging object
         #

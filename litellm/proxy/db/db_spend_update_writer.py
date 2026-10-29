@@ -613,6 +613,7 @@ class DBSpendUpdateWriter:
         """
         from litellm.proxy.proxy_server import (
             disable_spend_logs,
+            general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy proxy configuration is narrowed below
             litellm_proxy_budget_name,
             prisma_client,
         )
@@ -659,10 +660,18 @@ class DBSpendUpdateWriter:
             if team_id is not None and team_id != "":
                 payload["team_id"] = team_id
 
+            error_log_settings: Final = cast(  # cast-ok: proxy settings use string keys
+                Mapping[str, object], general_settings
+            )
+            keep_spend_logs: Final = disable_spend_logs is False and not (
+                "status" in payload
+                and payload["status"] == "failure"
+                and error_log_settings.get("disable_error_logs") is True
+            )
             if not await self._record_spend_log(
                 payload=payload,
                 prisma_client=prisma_client,
-                disable_spend_logs=disable_spend_logs,
+                disable_spend_logs=not keep_spend_logs,
                 llm_router=llm_router,
             ):
                 return False
@@ -672,9 +681,9 @@ class DBSpendUpdateWriter:
             await self._enqueue_autorouter_turn_transaction(
                 payload=payload,
                 prisma_client=prisma_client,
-                spend_logs_kept=disable_spend_logs is False,
+                spend_logs_kept=keep_spend_logs,
             )
-            if disable_spend_logs is False:
+            if keep_spend_logs:
                 await self._enqueue_tool_usage_transaction(
                     payload=payload,
                     completion_response=completion_response,

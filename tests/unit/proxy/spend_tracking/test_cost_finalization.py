@@ -257,12 +257,18 @@ async def test_collector_event_preserves_finalized_cost(logging_obj: Logging) ->
 
 
 @pytest.mark.asyncio
-async def test_cancellation_finishes_an_inflight_allocation_before_releasing_callbacks(logging_obj: Logging) -> None:
+@pytest.mark.parametrize("cancel_count", [1, 2])
+async def test_cancellation_finishes_an_inflight_allocation_before_releasing_callbacks(
+    logging_obj: Logging, cancel_count: int
+) -> None:
     counter: Final = BlockingCounter()
     result: Final = response()
     pending: Final = asyncio.create_task(finalize_response_cost(logging_obj, result, counter, NOW))
     await counter.started.wait()
-    pending.cancel()
+    for _ in range(cancel_count):
+        pending.cancel()
+        await asyncio.sleep(0)
+    assert not pending.done()
     counter.release.set()
     with pytest.raises(asyncio.CancelledError):
         await pending
@@ -399,12 +405,14 @@ async def test_deferred_cache_hit_finalizes_zero_for_results_without_hidden_para
 @pytest.mark.parametrize("failure", [RuntimeError("post-call failed"), asyncio.CancelledError()])
 @pytest.mark.parametrize("guardrail_cost", [0.0, 0.2])
 @pytest.mark.parametrize("mutate_usage", [False, True])
+@pytest.mark.parametrize("disable_error_logs", [False, True])
 async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     logging_obj: Logging,
     monkeypatch: pytest.MonkeyPatch,
     failure: BaseException,
     guardrail_cost: float,
     mutate_usage: bool,
+    disable_error_logs: bool,
 ) -> None:
     from unittest.mock import create_autospec
 
@@ -417,6 +425,7 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
     from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
     from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy import proxy_server
     from litellm.proxy.utils import ProxyLogging
 
     class RejectCompletedCall(CustomLogger):
@@ -427,6 +436,7 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
                 response.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
             raise failure
 
+    monkeypatch.setattr(proxy_server, "general_settings", {"disable_error_logs": disable_error_logs})
     writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
     monkeypatch.setattr(litellm, "callbacks", [RejectCompletedCall(), ProxyDBLogger(spend_writer=lambda: writer)])
     monkeypatch.setattr(litellm, "apply_search_free_tier", False)
@@ -459,11 +469,10 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
             user_model=MODEL,
             skip_pre_call_logic=True,
         )
-    with pytest.raises(ProxyException) as error:
-        await processor.handle_llm_api_exception(
-            e=RuntimeError("post-call failed"), user_api_key_dict=auth, proxy_logging_obj=proxy_logging
-        )
-    assert float(error.value.headers["x-litellm-response-cost"]) == pytest.approx(0.5 + guardrail_cost)
+    if isinstance(failure, Exception):
+        with pytest.raises(ProxyException) as error:
+            await processor.handle_llm_api_exception(e=failure, user_api_key_dict=auth, proxy_logging_obj=proxy_logging)
+        assert float(error.value.headers["x-litellm-response-cost"]) == pytest.approx(0.5 + guardrail_cost)
     assert writer.update_database.await_count == 1
     recorded: Final = writer.update_database.call_args.kwargs
     assert recorded["response_cost"] == pytest.approx(0.5 + guardrail_cost)
@@ -473,3 +482,68 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     assert payload["completion_tokens"] == 5
     assert payload["response_cost"] == pytest.approx(recorded["response_cost"])
     assert not logging_obj.async_success_log_enqueued
+
+
+@pytest.mark.asyncio
+async def test_redacted_completed_call_preserves_usage_and_search_allowance(
+    logging_obj: Logging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.spend_tracking.cost_finalization import prepare_response_cost
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    result: Final = response()
+    prepared: Final = prepare_response_cost(logging_obj, result, NOW)
+    assert prepared is not None
+    result.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+    counter: Final = Counter()
+    finalized: Final = await finalize_response_cost(logging_obj, result, counter, NOW)
+    assert finalized is not None
+    assert finalized.amount == pytest.approx(0.48)
+    assert counter.total == 3
+    logging_obj._failure_handler_helper_fn(RuntimeError("post-call failed"), "", NOW, NOW)
+    payload: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert (payload["prompt_tokens"], payload["completion_tokens"]) == (10, 5)
+    assert payload["response_cost"] == pytest.approx(0.48)
+    assert payload["response"] == {"text": "redacted-by-litellm"}
+
+
+@pytest.mark.asyncio
+async def test_guardrail_json_rejection_retains_completed_provider_usage(
+    logging_obj: Logging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+    from litellm.caching.dual_cache import DualCache
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy.utils import ProxyLogging
+
+    class RejectJSON(CustomGuardrail):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            raise RuntimeError("blocked JSON response")
+
+    monkeypatch.setattr(
+        litellm, "callbacks", [RejectJSON(guardrail_name="reject", event_hook="post_call", default_on=True)]
+    )
+    monkeypatch.setattr(litellm, "apply_search_free_tier", False)
+    ProxyLogging._callback_capabilities_cache.clear()
+    normalized: Final = response()
+    logging_obj.deferred_success_result = (normalized, NOW, NOW)
+    upstream: Final = httpx.Response(200, json={"message": "hello"})
+    processor: Final = ProxyBaseLLMRequestProcessing(data={"custom_llm_provider": "bedrock"})
+    with pytest.raises(RuntimeError, match="blocked JSON response"):
+        await processor._handle_non_streaming_allm_passthrough_route(
+            response=upstream,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+            user_api_key_dict=UserAPIKeyAuth(),
+            custom_headers={},
+            request_headers={},
+            logging_obj=logging_obj,
+        )
+    assert logging_obj.prepared_cost is not None
+    normalized.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+    finalized: Final = await finalize_response_cost(logging_obj, upstream, Counter(), NOW)
+    assert finalized is not None and finalized.amount == 0.5
+    logging_obj._failure_handler_helper_fn(RuntimeError("blocked JSON response"), "", NOW, NOW)
+    payload: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert (payload["prompt_tokens"], payload["completion_tokens"]) == (10, 5)
+    assert payload["response_cost"] == 0.5
+    ProxyLogging._callback_capabilities_cache.clear()

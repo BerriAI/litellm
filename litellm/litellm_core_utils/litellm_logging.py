@@ -2485,12 +2485,21 @@ class Logging(LiteLLMLoggingBaseClass):
         if payload is None or not isinstance(raw_cost, (int, float)):
             return None
         recorded_usage: Final[object] = self.model_call_details.get("combined_usage_object")
-        logged_response: Final = payload["response"]
         usage: Final = StandardLoggingPayloadSetup.get_usage_from_response_obj(
-            logged_response if isinstance(logged_response, dict) else None,
+            _extract_response_obj_and_hidden_params(prepared[2], None)[0],
             combined_usage_object=recorded_usage if isinstance(recorded_usage, Usage) else None,
         ).model_copy(deep=True)
-        self.prepared_cost = PreparedCost(raw_cost, copy.deepcopy(payload), usage)
+        self.prepared_cost = PreparedCost(
+            raw_cost,
+            {
+                **payload,
+                "response": None,
+                "messages": None,
+                "model_map_information": copy.deepcopy(payload["model_map_information"]),
+                "cost_breakdown": copy.deepcopy(payload["cost_breakdown"]),
+            },
+            usage,
+        )
         self.record_partial_usage_for_failure(usage, raw_cost)
         return self.prepared_cost
 

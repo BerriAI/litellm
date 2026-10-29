@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Final
 
@@ -66,7 +67,10 @@ async def _finalize_response_cost(
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
-            await asyncio.shield(task)
+            while not task.done():
+                with suppress(asyncio.CancelledError):
+                    await asyncio.shield(task)
+            task.result()
             raise
 
 

@@ -400,8 +400,12 @@ class _ProxyDBLogger(CustomLogger):
                 )
 
         request_route: Final = user_api_key_dict.request_route
+        completed_cost: Final = (
+            _str_keyed_fields(request_data.get("standard_logging_object")).get("cost_finalized") is True
+        )
         if (
             ProxyDBLogger._should_track_errors_in_db() is False
+            and not completed_cost
             or ProxyDBLogger._skips_pre_routing_rejections()
             and is_pre_routing_rejection(original_exception, _REQUEST_DATA.validate_python(request_data))
             or request_route is not None
