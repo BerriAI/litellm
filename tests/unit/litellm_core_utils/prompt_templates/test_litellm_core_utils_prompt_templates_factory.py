@@ -1032,6 +1032,100 @@ async def test_bedrock_converse_keeps_dropping_redacted_thinking_for_non_claude_
     assert assistant_content == [{"text": "hello"}]
 
 
+CONVERSE_EMPTY_USER_MESSAGES: Final = pytest.mark.parametrize(
+    "empty_user_message",
+    [
+        {"role": "user", "content": []},
+        {"role": "user", "content": None},
+        {"role": "user"},
+        {"role": "user", "content": ""},
+        {"role": "user", "content": [{"type": "text", "text": ""}]},
+    ],
+    ids=["empty-list", "null", "content-key-dropped", "empty-string", "empty-text-block"],
+)
+
+_CONVERSE_TOOL_CALL_TURN: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [{"id": "tooluse_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+}
+
+
+async def _converse(messages: Sequence[Mapping[str, object]], use_async: bool) -> Sequence[Mapping[str, object]]:
+    model: Final = "us.anthropic.claude-opus-5-5"
+    if use_async:
+        return await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=list(messages), model=model, llm_provider="bedrock"
+        )
+    return _bedrock_converse_messages_pt(messages=list(messages), model=model, llm_provider="bedrock")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_keeps_an_empty_trailing_user_turn(
+    use_async: bool, empty_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse(
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}, empty_user_message], use_async
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert result[-1]["content"] == [{"text": _EMPTY_TEXT_PLACEHOLDER}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("empty_user_first", [True, False], ids=["empty-user-then-tool", "tool-then-empty-user"])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_empty_user_message_beside_a_tool_result_keeps_the_tool_result_only(
+    use_async: bool, empty_user_first: bool, empty_user_message: Mapping[str, object]
+) -> None:
+    tool_result: Final = {"role": "tool", "tool_call_id": "tooluse_1", "content": "ok"}
+    result: Final = await _converse(
+        [
+            {"role": "user", "content": "hi"},
+            _CONVERSE_TOOL_CALL_TURN,
+            *((empty_user_message, tool_result) if empty_user_first else (tool_result, empty_user_message)),
+        ],
+        use_async,
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert [list(block) for block in result[-1]["content"]] == [["toolResult"]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_keeps_turns_alternating_around_an_empty_user_message(
+    use_async: bool, empty_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse(
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            empty_user_message,
+            {"role": "assistant", "content": "anything else?"},
+            {"role": "user", "content": "no"},
+        ],
+        use_async,
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user", "assistant", "user"]
+    assert result[2]["content"] == [{"text": _EMPTY_TEXT_PLACEHOLDER}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_adds_no_placeholder_before_a_leading_assistant_turn(use_async: bool) -> None:
+    result: Final = await _converse(
+        [{"role": "assistant", "content": "hello"}, {"role": "user", "content": "hi"}], use_async
+    )
+
+    assert [message["role"] for message in result] == ["assistant", "user"]
+
+
 @pytest.mark.parametrize(
     "thinking_block",
     [
@@ -5746,19 +5840,16 @@ async def test_bedrock_converse_messages_pt_async_lone_content_less_user_turn_co
 
 
 @pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
-def test_bedrock_converse_messages_pt_lone_content_less_user_turn_adds_no_block_without_a_continue_message(
+def test_bedrock_converse_messages_pt_lone_content_less_user_turn_sends_the_placeholder_without_a_continue_message(
     content_less_user_message: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "modify_params", False)
 
-    assert (
-        _bedrock_converse_messages_pt(
-            messages=validate_and_fix_openai_messages([content_less_user_message]),
-            model="anthropic.claude-haiku-4-5",
-            llm_provider="bedrock",
-        )
-        == []
-    )
+    assert _bedrock_converse_messages_pt(
+        messages=validate_and_fix_openai_messages([content_less_user_message]),
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+    ) == [{"role": "user", "content": [{"text": _EMPTY_TEXT_PLACEHOLDER}]}]
 
 
 @pytest.fixture()

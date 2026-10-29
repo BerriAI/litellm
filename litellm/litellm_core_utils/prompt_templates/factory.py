@@ -4661,6 +4661,14 @@ def _sort_bedrock_assistant_content_blocks(
     return sorted(blocks, key=_sort_key)
 
 
+def _bedrock_empty_user_turn(
+    consumed_messages: bool, contents: Sequence[BedrockMessageBlock]
+) -> BedrockMessageBlock | None:
+    if not consumed_messages or (contents and contents[-1]["role"] == "user"):
+        return None
+    return BedrockMessageBlock(role="user", content=[BedrockContentBlock(text=_EMPTY_TEXT_PLACEHOLDER)])
+
+
 def _insert_assistant_continue_message(
     messages: list[BedrockMessageBlock],
     assistant_continue_message: str | ChatCompletionAssistantMessage | None = None,
@@ -5111,6 +5119,8 @@ class BedrockConverseMessagesProcessor:
                         contents[-1]["content"].extend(tool_content)
                 else:
                     contents.append(BedrockMessageBlock(role="user", content=tool_content))
+            if (empty_user_turn := _bedrock_empty_user_turn(msg_i > init_msg_i, contents)) is not None:
+                contents.append(empty_user_turn)
             assistant_content: list[BedrockContentBlock] = []
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
             while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
@@ -5524,6 +5534,8 @@ def _bedrock_converse_messages_pt(
                     contents[-1]["content"].extend(tool_content)
             else:
                 contents.append(BedrockMessageBlock(role="user", content=tool_content))
+        if (empty_user_turn := _bedrock_empty_user_turn(msg_i > init_msg_i, contents)) is not None:
+            contents.append(empty_user_turn)
         assistant_content: list[BedrockContentBlock] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
