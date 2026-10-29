@@ -10593,3 +10593,65 @@ async def test_update_pass_through_endpoint_keeps_llm_api_route_checks_on_the_up
         _registered_pass_through_routes.clear()
         _registered_pass_through_routes.update(saved_registry)
         LiteLLMRoutes.openai_routes.value[:] = saved_openai_routes
+
+
+@pytest.mark.asyncio
+async def test_update_pass_through_endpoint_keeps_llm_api_route_checks_on_a_path_another_endpoint_shares(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import (
+        ConfigFieldInfo,
+        ConfigFieldUpdate,
+        LiteLLMRoutes,
+        PassThroughGenericEndpoint,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import update_pass_through_endpoints
+
+    async def serve_stored_endpoints(data: ConfigFieldUpdate, **_: object) -> None:
+        await initialize_pass_through_endpoints(data.field_value)
+
+    stored_endpoints: Final = [
+        {
+            "id": f"shared-{method.lower()}",
+            "path": "/shared",
+            "target": "http://example.com/api",
+            "auth": True,
+            "methods": [method],
+        }
+        for method in ("GET", "POST")
+    ]
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    saved_openai_routes: Final = tuple(LiteLLMRoutes.openai_routes.value)
+    try:
+        _registered_pass_through_routes.clear()
+        monkeypatch.setattr(proxy_server, "app", FastAPI())
+        monkeypatch.setattr(proxy_server, "premium_user", True)
+        monkeypatch.setattr(proxy_server, "config_passthrough_endpoints", None)
+        await initialize_pass_through_endpoints(stored_endpoints)
+        with (
+            patch(
+                "litellm.proxy.proxy_server.get_config_general_settings",
+                return_value=ConfigFieldInfo(field_name="pass_through_endpoints", field_value=stored_endpoints),
+            ),
+            patch("litellm.proxy.proxy_server.update_config_general_settings", side_effect=serve_stored_endpoints),
+        ):
+            await update_pass_through_endpoints(
+                endpoint_id="shared-get",
+                data=PassThroughGenericEndpoint.model_validate(
+                    {"target": "http://example.com/api", "path": "/moved", "auth": True, "methods": ["GET"]}
+                ),
+                request=MagicMock(spec=Request),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+        assert (RouteChecks.is_llm_api_route(route="/shared"), RouteChecks.is_llm_api_route(route="/moved")) == (
+            True,
+            True,
+        )
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+        LiteLLMRoutes.openai_routes.value[:] = saved_openai_routes

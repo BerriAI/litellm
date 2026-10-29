@@ -3431,11 +3431,9 @@ class InitPassThroughEndpointHelpers:
         return frozenset(chain.from_iterable(map(InitPassThroughEndpointHelpers._llm_api_routes_of_route, route_infos)))
 
     @staticmethod
-    def auth_enforced_llm_api_routes_of_endpoint(endpoint_id: str) -> frozenset[str]:
+    def auth_enforced_llm_api_routes() -> frozenset[str]:
         route_infos: Final = (
-            route_info
-            for route_info in _registered_pass_through_routes.values()
-            if route_info["endpoint_id"] == endpoint_id and route_info.get("auth") is True
+            route_info for route_info in _registered_pass_through_routes.values() if route_info.get("auth") is True
         )
         return frozenset(chain.from_iterable(map(InitPassThroughEndpointHelpers._llm_api_routes_of_route, route_infos)))
 
@@ -4096,8 +4094,7 @@ async def update_pass_through_endpoints(
             timeout=updated_endpoint.timeout,
         )
     InitPassThroughEndpointHelpers.drop_llm_api_routes(
-        replaced_llm_api_routes
-        - InitPassThroughEndpointHelpers.auth_enforced_llm_api_routes_of_endpoint(updated_endpoint.id or endpoint_id)
+        replaced_llm_api_routes - InitPassThroughEndpointHelpers.auth_enforced_llm_api_routes()
     )
 
     return PassThroughEndpointResponse(endpoints=[updated_endpoint] if updated_endpoint else [])
