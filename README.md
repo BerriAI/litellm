@@ -122,8 +122,6 @@ response = completion(model="openai/gpt-4o", messages=[{"role": "user", "content
 response = completion(model="anthropic/claude-sonnet-4-20250514", messages=[{"role": "user", "content": "Hello!"}])
 ```
 
-[**Autorouter SDK**](https://docs.litellm.ai/docs/autorouter_sdk) - Route each prompt to a model based on complexity, with routing rules defined in Python.
-
 ### AI Gateway (Proxy Server)
 
 [**Getting Started - E2E Tutorial**](https://docs.litellm.ai/docs/proxy/docker_quick_start) - Setup virtual keys, make your first request
@@ -144,6 +142,23 @@ response = client.chat.completions.create(
 ```
 
 [**Docs: LLM Providers**](https://docs.litellm.ai/docs/providers)
+
+</details>
+
+<details>
+<summary><b>Auto Routing</b> - Choose a model for each prompt (Python SDK + AI Gateway)</summary>
+
+### Python SDK
+
+Define your models and routing rules in Python with `litellm.Router`.
+
+[**Get Started with the Autorouter SDK**](https://docs.litellm.ai/docs/autorouter_sdk) - Configure routing and see which model answers each request.
+
+### AI Gateway (Proxy Server)
+
+Configure an Auto Router in your gateway, then use its model name in your requests.
+
+[**Set Up Auto Routing**](https://docs.litellm.ai/docs/auto_router/setup) - Configure your models and tiers in the dashboard or YAML.
 
 </details>
 
