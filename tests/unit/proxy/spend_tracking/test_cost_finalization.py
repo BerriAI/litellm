@@ -458,6 +458,7 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
         "custom_llm_provider": "vertex_ai",
         "messages": [{"role": "user", "content": "hello"}],
         "mock_response": response(),
+        "proxy_server_request": {"headers": {"user-agent": "budget-client"}},
         "metadata": {
             "standard_logging_guardrail_information": [
                 {"guardrail_name": "charged-guardrail", "guardrail_cost": guardrail_cost, "guardrail_status": "success"}
@@ -471,6 +472,7 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     counters: Final = DualCache()
     for key in ("spend:key:completed-key", "spend:team:completed-team"):
         counters.set_cache(key=key, value=1.5 + reserved_cost)
+    counters.set_cache(key="spend:tag:User-Agent: budget-client", value=1.5)
     monkeypatch.setattr(proxy_server, "spend_counter_cache", counters)
     reservation: Final = (
         {
@@ -519,6 +521,10 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
         assert auth.budget_reservation["finalized"] is True
     assert await counters.async_get_cache(key="spend:key:completed-key") == pytest.approx(2.0 + guardrail_cost)
     assert await counters.async_get_cache(key="spend:team:completed-team") == pytest.approx(2.0 + guardrail_cost)
+
+    assert await counters.async_get_cache(key="spend:tag:User-Agent: budget-client") == pytest.approx(
+        2.0 + guardrail_cost
+    )
 
 
 @pytest.mark.asyncio

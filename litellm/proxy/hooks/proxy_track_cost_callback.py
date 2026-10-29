@@ -538,7 +538,12 @@ class _ProxyDBLogger(CustomLogger):
 
         await self._write_failure_spend_rows(
             completed_cost=completed_cost,
-            request_tags=_get_request_tags_for_cost_tracking(None, existing_metadata),
+            request_tags=_get_request_tags_for_cost_tracking(
+                cast(  # cast-ok: ProxyLogging lifts its built failure payload onto the request
+                    StandardLoggingPayload | None, request_data.get("standard_logging_object")
+                ),
+                existing_metadata,
+            ),
             user_api_key_dict=user_api_key_dict,
             original_exception=original_exception,
             start_time=actual_start_time,
