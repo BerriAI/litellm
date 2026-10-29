@@ -152,9 +152,7 @@ async def resync_model_deployments_by_ids(model_ids: tuple[str, ...]) -> None:
     writer_table: Final = ModelRepository(WriterPinnedClient(prisma_client.db)).table
     async with proxy_server.MODEL_RECONCILE_LOCK:
         rows: Final = await _find_rows_by_ids(model_ids, writer_table)
-        outcome: Final = await _install_model_rows(rows, _names_an_unloaded_credential)
-    if outcome == "no_router":
-        await _reload_every_model()
+        _ = await _install_model_rows(rows, _names_an_unloaded_credential)
 
 
 async def _find_rows_by_name_or_id(model_name: str, table: "_ModelTable") -> "_ModelRows":

@@ -439,6 +439,20 @@ async def test_model_ids_published_inside_the_throttle_wait_apply_without_waitin
     assert events == ["resync@1000.0", "apply:m-2@1004.0", "apply:m-3,m-4@1006.0", "resync@1010.0"]
 
 
+async def test_model_ids_already_waiting_apply_together_in_one_call() -> None:
+    clock = _FakeClock()
+    pubsub = _VirtualTimePubSub(
+        clock, deliveries=[(1000.0, _change("m-1")), (1000.0, _change("m-2", "m-1")), (1000.0, _change("m-3"))]
+    )
+    events: List[str] = []
+    resynced = asyncio.Event()
+    subscriber = _virtual_time_subscriber(pubsub, clock, events, resynced)
+
+    await _run_until_resynced(subscriber, resynced)
+
+    assert events == ["apply:m-1,m-2,m-3@1000.0", "resync@1000.0"]
+
+
 async def test_redis_shaped_message_applies_its_model_ids() -> None:
     clock = _FakeClock()
     pubsub = _VirtualTimePubSub(clock, deliveries=[(1000.0, _redis_delivery(_change("m-1")))])

@@ -552,7 +552,7 @@ async def test_resync_model_deployments_by_ids_leaves_the_router_alone_for_delet
 
 
 @pytest.mark.asyncio
-async def test_resync_model_deployments_by_ids_without_a_router_reloads_everything(
+async def test_resync_model_deployments_by_ids_without_a_router_leaves_the_reload_to_the_debounced_resync(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from unittest.mock import AsyncMock, MagicMock
@@ -572,7 +572,7 @@ async def test_resync_model_deployments_by_ids_without_a_router_reloads_everythi
 
     await resync_model_deployments_by_ids(("m-1",))
 
-    full_reload.assert_awaited_once_with(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+    full_reload.assert_not_awaited()
 
 
 @pytest.mark.asyncio

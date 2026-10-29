@@ -493,6 +493,16 @@ async def update_specific_deployments_with_access_group(
     return tuple(pair for pair in tagged if pair is not None)
 
 
+def _deployments_outside_selection(
+    deployments: Sequence[_DeploymentRow], data: UpdateModelGroupRequest
+) -> tuple[_DeploymentRow, ...]:
+    if data.model_ids:
+        selected_model_ids: Final = frozenset(data.model_ids)
+        return tuple(deployment for deployment in deployments if deployment.model_id not in selected_model_ids)
+    selected_model_names: Final = frozenset(data.model_names or ())
+    return tuple(deployment for deployment in deployments if deployment.model_name not in selected_model_names)
+
+
 async def _find_deployment_or_400(model_id: str, prisma_client: PrismaClient) -> object:
     deployment: Final = await _model_table(prisma_client).find_unique(where={"model_id": model_id})
     if deployment is None:
@@ -835,8 +845,8 @@ async def update_access_group(
     Update an access group's model names.
     
     This will:
-    1. Remove the access group from all current deployments
-    2. Add the access group to all deployments for the new model_names list
+    1. Add the access group to all deployments for the new model_names list
+    2. Remove the access group from every other deployment
     
     Example:
     ```bash
@@ -912,21 +922,7 @@ async def update_access_group(
             )
 
     try:
-        # Step 1: Remove access group from ALL DB deployments (skip config models)
-        all_deployments: Final = await _model_table(prisma_client).find_many()
-
-        stripped: Final = [
-            await _strip_access_group_from_deployment(
-                model_id=deployment.model_id,
-                model_info=deployment.model_info,
-                access_group=access_group,
-                prisma_client=prisma_client,
-            )
-            for deployment in all_deployments
-        ]
-        stripped_pairs: Final = tuple(pair for pair in stripped if pair is not None)
-
-        # Step 2: Add access group using the appropriate method
+        # Step 1: Add access group using the appropriate method
         if use_model_ids:
             assert data.model_ids is not None
             updated_pairs = await update_specific_deployments_with_access_group(
@@ -941,7 +937,21 @@ async def update_access_group(
                 access_group=access_group,
                 prisma_client=prisma_client,
             )
-        models_updated: Final = len(updated_pairs)
+
+        # Step 2: Remove access group from the other DB deployments (skip config models)
+        all_deployments: Final = await _model_table(prisma_client).find_many()
+        unselected_deployments: Final = _deployments_outside_selection(deployments=all_deployments, data=data)
+        stripped: Final = [
+            await _strip_access_group_from_deployment(
+                model_id=deployment.model_id,
+                model_info=deployment.model_info,
+                access_group=access_group,
+                prisma_client=prisma_client,
+            )
+            for deployment in unselected_deployments
+        ]
+        stripped_pairs: Final = tuple(pair for pair in stripped if pair is not None)
+        models_updated: Final = len(all_deployments) - len(unselected_deployments)
 
         # Clear cache and reload models to pick up the access group changes
         live_before_reload: Final = live_model_ids_snapshot()

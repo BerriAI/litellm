@@ -2,8 +2,9 @@ import asyncio
 import json
 import random
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import asdict, dataclass
+from itertools import chain
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast  # noqa: TID251  # untyped prisma/redis boundary
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -217,6 +218,11 @@ def wrap_table_actions_for_config_sync(
     return cast("TableActions[RowT_co]", wrapped)  # cast-ok: dynamic write-through proxy keeps the wrapped row type
 
 
+def _published_model_ids(messages: tuple[object, ...]) -> tuple[str, ...]:
+    changes: Final = (parse_config_change(message) for message in messages)
+    return tuple(dict.fromkeys(chain.from_iterable(change.model_ids for change in changes if change is not None)))
+
+
 class ConfigSyncSubscriber:
     __slots__ = (
         "_apply_model_ids",
@@ -312,7 +318,7 @@ class ConfigSyncSubscriber:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_POLL_TIMEOUT_SECONDS)
             if message is None:
                 continue
-            await self._apply(message)
+            await self._apply(pubsub, message)
             await self._debounce_and_resync(pubsub)
 
     async def _debounce_and_resync(self, pubsub: ConfigSyncPubSub) -> None:
@@ -345,22 +351,30 @@ class ConfigSyncSubscriber:
                 ignore_subscribe_messages=True, timeout=min(remaining, _POLL_TIMEOUT_SECONDS)
             )
             if message is not None:
-                await self._apply(message)
+                await self._apply(pubsub, message)
 
     @staticmethod
     async def _drain_pending(pubsub: ConfigSyncPubSub) -> None:
         while await pubsub.get_message(ignore_subscribe_messages=True, timeout=0) is not None:
             pass
 
-    async def _apply(self, message: object) -> None:
+    @staticmethod
+    async def _ready_messages(pubsub: ConfigSyncPubSub) -> AsyncIterator[object]:
+        while (message := await pubsub.get_message(ignore_subscribe_messages=True, timeout=0)) is not None:
+            yield message
+
+    async def _apply(self, pubsub: ConfigSyncPubSub, message: object) -> None:
         apply: Final = self._apply_model_ids
-        change: Final = parse_config_change(message)
-        if apply is None or change is None or not change.model_ids:
+        if apply is None:
+            return
+        ready: Final = (message, *[ready_message async for ready_message in self._ready_messages(pubsub)])
+        model_ids: Final = _published_model_ids(ready)
+        if not model_ids:
             return
         try:
-            await apply(change.model_ids)
+            await apply(model_ids)
         except Exception as e:  # noqa: BLE001  # the debounced full resync retries what a targeted apply could not
-            verbose_proxy_logger.warning("config sync targeted apply of %s failed: %s", change.model_ids, e)
+            verbose_proxy_logger.warning("config sync targeted apply of %s failed: %s", model_ids, e)
 
     async def _run_resync_callbacks(self) -> None:
         for callback in self._resync_callbacks:
