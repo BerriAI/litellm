@@ -170,7 +170,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
     vector_store_request_metadata,
 )
-from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+from litellm.llms.bedrock.common_utils import get_bedrock_base_model, strip_bedrock_routing_prefix
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
@@ -1201,6 +1201,18 @@ def _exact_base_model_max_input_tokens(base_model: str) -> int | None:
 def _provider_model_id(model_name: str, custom_llm_provider: str) -> str:
     model_id: Final = model_name.rsplit("/", 1)[-1]
     return get_bedrock_base_model(model_id) if custom_llm_provider.startswith("bedrock") else model_id
+
+
+def _passthrough_route_model_id(model_name: str, custom_llm_provider: str | None, api_base: str | None) -> str:
+    from litellm import get_llm_provider
+
+    try:
+        provider_model, provider, _, _ = get_llm_provider(
+            model=model_name, custom_llm_provider=custom_llm_provider, api_base=api_base
+        )
+    except Exception:
+        return model_name
+    return strip_bedrock_routing_prefix(provider_model) if provider == LlmProviders.BEDROCK.value else provider_model
 
 
 def _names_route_model(base_model: str, route_key: str, custom_llm_provider: str) -> bool:
@@ -6350,22 +6362,9 @@ class Router:
           it should be actually sent as /model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke
         """
         if "endpoint" in kwargs and kwargs["endpoint"]:
-            # For provider-specific endpoints, strip the provider prefix from model_name
-            # e.g., "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0" -> "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
-            from litellm import get_llm_provider
-
-            try:
-                # get_llm_provider returns (model_without_prefix, provider, api_key, api_base)
-                stripped_model_name, _, _, _ = get_llm_provider(
-                    model=model_name,
-                    custom_llm_provider=kwargs.get("custom_llm_provider"),
-                    api_base=kwargs.get("api_base"),
-                )
-                replacement_model_name = stripped_model_name
-            except Exception:
-                # If get_llm_provider fails, fall back to using model_name as-is
-                replacement_model_name = model_name
-
+            replacement_model_name: Final = _passthrough_route_model_id(
+                model_name, kwargs.get("custom_llm_provider"), kwargs.get("api_base")
+            )
             kwargs["endpoint"] = replace_path_segment(kwargs["endpoint"], model, replacement_model_name)
         return kwargs
 

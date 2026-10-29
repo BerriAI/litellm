@@ -8937,6 +8937,24 @@ def test_get_deployment_model_info_base_model_merge_priority():
             "gpt-5.4-mini/openai/deployments/gpt-5.4-mini/chat/completions",
         ),
         (
+            "sonnet-bedrock",
+            {"model": "bedrock/invoke/us.anthropic.claude-sonnet-5-5"},
+            "/model/sonnet-bedrock/invoke-with-response-stream",
+            "/model/us.anthropic.claude-sonnet-5-5/invoke-with-response-stream",
+        ),
+        (
+            "sonnet-bedrock",
+            {"model": "bedrock/converse/us.anthropic.claude-sonnet-5-5"},
+            "/model/sonnet-bedrock/converse",
+            "/model/us.anthropic.claude-sonnet-5-5/converse",
+        ),
+        (
+            "gpt-oss",
+            {"model": "hosted_vllm/openai/gpt-oss-20b", "api_base": "http://localhost:8000"},
+            "v1/models/gpt-oss",
+            "v1/models/openai/gpt-oss-20b",
+        ),
+        (
             "aws/anthropic/bedrock-claude",
             {"model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"},
             "/model/aws/anthropic/bedrock-claude/invoke",
@@ -8960,6 +8978,18 @@ def test_add_deployment_model_to_endpoint_rewrites_the_model_group_only_as_whole
     )
 
     assert result["endpoint"] == expected
+
+
+def test_add_deployment_model_to_endpoint_keeps_a_model_name_no_provider_resolves():
+    router = litellm.Router(
+        model_list=[{"model_name": "unresolved", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "key"}}]
+    )
+
+    result = router._add_deployment_model_to_endpoint_for_llm_passthrough_route(
+        kwargs={"endpoint": "/model/unresolved/invoke"}, model="unresolved", model_name="model-with-no-provider"
+    )
+
+    assert result["endpoint"] == "/model/model-with-no-provider/invoke"
 
 
 def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
