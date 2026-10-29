@@ -73,6 +73,9 @@ litellm-python-compat = { path = "crates/python-compat" }
 litellm-circuit-breaker = { path = "crates/circuit-breaker" }
 litellm-redis-client = { path = "crates/redis-client" }
 litellm-redis-testing = { path = "crates/redis-testing" }
+litellm-cost = { path = "crates/cost" }
+litellm-model-catalog = { path = "crates/model-catalog" }
+litellm-model-catalog-refresh = { path = "crates/model-catalog-refresh" }
 
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 tracing = "0.1"
@@ -109,6 +112,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 serde_with = { version = "=3.21.0", default-features = false, features = ["std", "macros"] }
 sha2 = "0.10"
+sha1 = "0.10"
 syn = { version = "2", default-features = false }
 sqlx = { version = "0.9.0", default-features = false, features = ["json", "macros", "postgres", "runtime-tokio", "chrono", "tls-rustls-ring-native-roots"] }
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }

@@ -3150,6 +3150,7 @@ dependencies = [
  "defmt",
  "jiff-core",
  "jiff-static",
+ "jiff-tzdb",
  "log",
  "portable-atomic",
  "portable-atomic-util",
@@ -3177,6 +3178,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "jiff-tzdb"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa8377070c6bae868759445e5a77f66d84f0b72f3a054bfb00e6d038b8282da7"
 
 [[package]]
 name = "jni"
@@ -3729,9 +3736,12 @@ dependencies = [
 name = "litellm-cost"
 version = "0.1.0"
 dependencies = [
- "criterion",
- "proptest",
+ "jiff",
  "rstest",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "strum",
  "thiserror 2.0.19",
 ]
 
@@ -4277,15 +4287,33 @@ name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
  "indexmap 2.14.0",
+ "jiff",
  "jsonschema",
+ "litellm-cost",
  "litellm-error",
- "litellm-llms-types",
+ "macro_rules_attribute",
  "rstest",
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "serde_with",
+ "strum",
  "thiserror 2.0.19",
  "time",
+]
+
+[[package]]
+name = "litellm-model-catalog-refresh"
+version = "0.1.0"
+dependencies = [
+ "litellm-error",
+ "litellm-http",
+ "litellm-model-catalog",
+ "reqwest",
+ "rstest",
+ "thiserror 2.0.19",
+ "tokio",
+ "url",
 ]
 
 [[package]]

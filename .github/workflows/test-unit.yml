@@ -42,7 +42,7 @@ jobs:
         id: rust-bridge-key
         if: steps.changes.outputs.decision != 'skip'
         env:
-          RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm-rust/Cargo.lock', 'litellm-rust/Cargo.toml', 'litellm-rust/crates/**', 'pyproject.toml') }}
+          RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm-rust/Cargo.lock', 'litellm-rust/Cargo.toml', 'litellm-rust/crates/**', 'model_prices_and_context_window.json', 'pyproject.toml') }}
         run: echo "key=$RUST_BRIDGE_CACHE_KEY" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
