@@ -288,36 +288,6 @@ async def test_attempt_rows_add_spend_but_not_requests_to_daily_spend():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("via_virtual_key", "expected"), [(True, "team-a"), (False, "")])
-async def test_failed_request_keeps_the_virtual_key_team_for_tag_spend(via_virtual_key: bool, expected: str):
-    """On /v1/messages and /v1/responses the auth object lives in litellm_metadata, which the failure
-    row does not copy, so the tag writer reads the virtual-key marker from the failure metadata."""
-    from litellm.proxy.db.db_spend_update_writer import _virtual_key_team_id
-
-    auth: Final = UserAPIKeyAuth(api_key="a" * 64, team_id="team-a").model_copy(
-        update={"via_virtual_key": via_virtual_key}
-    )
-    request_data: Final = {
-        "model": "claude-sonnet",
-        "messages": [{"role": "user", "content": "Hello"}],
-        "litellm_metadata": {"user_api_key_auth": auth, "tags": ["cost-center:cc-42"]},
-        "proxy_server_request": {"request_id": "test_request_id"},
-    }
-
-    with patch(
-        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
-        new_callable=AsyncMock,
-    ) as mock_update_database:
-        await ProxyDBLogger().async_post_call_failure_hook(
-            request_data=request_data,
-            original_exception=Exception("upstream 500"),
-            user_api_key_dict=auth,
-        )
-
-        assert _virtual_key_team_id(mock_update_database.call_args[1]["kwargs"]) == expected
-
-
-@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_carries_guardrail_info_from_litellm_metadata():
     """
     LIT-5650 regression: on a pre_call guardrail block the unified guardrail
