@@ -780,7 +780,7 @@ class TestCodexModelSync:
             "availability_nux": None,
             "default_reasoning_level": None,
         }
-        assert "supports_search_tool" not in entries["m"]
+        assert entries["m"]["supports_search_tool"] is False
 
     def test_alias_gets_no_upgrade_nudge_away_from_its_own_name(self, tmp_path):
         listing = self._listing(self._row("gpt-5.6-terra"), self._row("api-54"))
@@ -939,7 +939,7 @@ class TestCodexModelSync:
         assert result == ModelSyncArgs(("-c", f"model_catalog_json={json.dumps(str(catalog))}"))
         entry = self._entries(tmp_path)["api-terra"]
         assert entry["slug"] == "api-terra"
-        assert "supports_search_tool" not in entry
+        assert entry["supports_search_tool"] is False
 
     def test_stock_catalog_is_decoded_as_utf8_regardless_of_locale(self, tmp_path):
         description = "Modelo equilibrado para el trabajo diario, con acentos y ñ."

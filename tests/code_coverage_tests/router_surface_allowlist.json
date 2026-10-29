@@ -102,6 +102,7 @@
     "get_routable_upstream_model",
     "get_router_deployment_budget_limiter",
     "get_routing_group",
+    "get_search_tool_support",
     "get_settings",
     "get_valid_args",
     "guardrail_list",
