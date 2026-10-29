@@ -5,7 +5,7 @@ import logging
 import math
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 from itertools import chain
 from types import MappingProxyType
@@ -131,7 +131,7 @@ from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
     route_request,
 )
-from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost
+from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost, prepare_response_cost
 from litellm.proxy.telemetry.request_context import bind_call_id as bind_telemetry_call_id
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     ProxyLogging,
@@ -3259,6 +3259,7 @@ class ProxyBaseLLMRequestProcessing:
                 if _early is not None:
                     return _early
 
+            prepare_response_cost(logging_obj, response, datetime.now(timezone.utc))
             response = await proxy_logging_obj.post_call_success_hook(
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
@@ -3275,8 +3276,16 @@ class ProxyBaseLLMRequestProcessing:
                     )
                 ),
             )
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             _exception_raised = True
+            if logging_obj.prepared_cost is not None:
+                await finalize_proxy_response_cost(
+                    logging_obj,
+                    response,
+                    guardrail_information_cost(
+                        _guardrail_entries_for_headers(get_or_create_metadata_bucket(self.data)[1], logging_obj)
+                    ),
+                )
             raise
         finally:
             ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
@@ -4252,6 +4261,7 @@ class ProxyBaseLLMRequestProcessing:
     ) -> Never:
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
         log_llm_api_exception(e, self.litellm_call_id)
+        billing_logging_obj: Final = self.data.get("litellm_logging_obj")
         # Allow callbacks to transform the error response
         transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -4272,7 +4282,7 @@ class ProxyBaseLLMRequestProcessing:
         timeout: Final = getattr(
             e, "timeout", None
         )  # returns the timeout set by the wrapper. Used for testing if model-specific timeout are set correctly
-        _litellm_logging_obj: Final[LiteLLMLoggingObj | None] = self.data.get("litellm_logging_obj", None)
+        _litellm_logging_obj: Final[LiteLLMLoggingObj | None] = billing_logging_obj
 
         # Attempt to get model_id from logging object
         #
@@ -4285,7 +4295,12 @@ class ProxyBaseLLMRequestProcessing:
             call_id=self.litellm_call_id,
             model_id=model_id,
             version=version,
-            response_cost=0,
+            response_cost=(
+                _litellm_logging_obj.finalized_cost.amount
+                if isinstance(_litellm_logging_obj, LiteLLMLoggingObj)
+                and _litellm_logging_obj.finalized_cost is not None
+                else 0
+            ),
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             request_data=self.data,
             timeout=timeout,

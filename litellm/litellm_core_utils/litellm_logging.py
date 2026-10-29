@@ -97,7 +97,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
     is_unbilled_non_inference_call,
 )
-from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost
+from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost, PreparedCost
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     bedrock_guardrail_trace,
     cost_breakdown_with_guardrail,
@@ -814,6 +814,8 @@ class Logging(LiteLLMLoggingBaseClass):
         # Initialize cost breakdown field
         self.cost_breakdown: CostBreakdown | None = None
         self.finalized_cost: FinalizedCost | None = None
+        self.prepared_cost: PreparedCost | None = None
+        self.cost_allowance_discount: float | None = None
         self.cost_finalization_lock = asyncio.Lock()
         self.deferred_success_result: tuple[object, datetime.datetime, datetime.datetime] | None = None
         self.billed_token_rates: BilledTokenRates | None = None
@@ -878,6 +880,8 @@ class Logging(LiteLLMLoggingBaseClass):
             "litellm_params": litellm_params,
         }
         new_call.finalized_cost = None
+        new_call.prepared_cost = None
+        new_call.cost_allowance_discount = None
         new_call.cost_finalization_lock = asyncio.Lock()
         new_call.deferred_success_result = None
         new_call.streaming_chunks = []
@@ -2464,6 +2468,38 @@ class Logging(LiteLLMLoggingBaseClass):
             for_async_request=True,
             **kwargs,
         )
+
+    def prepare_response_cost(self, response: object, now: datetime.datetime) -> PreparedCost | None:
+        if self.prepared_cost is not None:
+            return self.prepared_cost
+        recorded_cache_hit: Final[object] = self.model_call_details.get("cache_hit")
+        deferred: Final = self.deferred_success_result
+        prepared: Final = self.prepare_success_logging(
+            result=deferred[0] if deferred is not None else response,
+            start_time=deferred[1] if deferred is not None else self.start_time,
+            end_time=deferred[2] if deferred is not None else now.replace(tzinfo=None),
+            cache_hit=recorded_cache_hit if isinstance(recorded_cache_hit, bool) else None,
+            standard_logging_object=None,
+            build_logging_payload=True,
+            publish_logging_payload=False,
+        )
+        payload: Final = prepared[3]
+        raw_cost: Final[object] = self.model_call_details.get("response_cost")
+        if payload is None or not isinstance(raw_cost, (int, float)):
+            return None
+        recorded_usage: Final[object] = self.model_call_details.get("combined_usage_object")
+        logged_response: Final = payload["response"]
+        usage: Final = StandardLoggingPayloadSetup.get_usage_from_response_obj(
+            logged_response if isinstance(logged_response, dict) else None,
+            combined_usage_object=recorded_usage if isinstance(recorded_usage, Usage) else None,
+        ).model_copy(deep=True)
+        self.prepared_cost = PreparedCost(raw_cost, copy.deepcopy(payload), usage)
+        self.record_partial_usage_for_failure(usage, raw_cost)
+        return self.prepared_cost
+
+    def record_finalized_cost(self, finalized: FinalizedCost) -> None:
+        self.finalized_cost = finalized
+        self.model_call_details["response_cost"] = finalized.amount
 
     def record_partial_usage_for_failure(self, usage: Usage, response_cost: float) -> None:
         """Stash what an interrupted stream already consumed so the failure log bills it instead of zero."""
@@ -4219,7 +4255,9 @@ class Logging(LiteLLMLoggingBaseClass):
         # chunks already delivered; the router stashes that recovered usage as
         # ``combined_usage_object`` and pre-computes its cost, so preserve it
         # here instead of zeroing the spend on an otherwise-failed request.
-        if self.model_call_details.get("combined_usage_object") is None:
+        if self.finalized_cost is not None:
+            self.model_call_details["response_cost"] = self.finalized_cost.amount
+        elif self.model_call_details.get("combined_usage_object") is None:
             self.model_call_details["response_cost"] = 0
 
         if hasattr(exception, "headers") and isinstance(exception.headers, dict):

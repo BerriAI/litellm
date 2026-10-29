@@ -5,11 +5,18 @@ from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter
 
-from litellm.types.utils import CostBreakdown, StandardLoggingPayload
+from litellm.types.utils import CostBreakdown, StandardLoggingPayload, Usage
 
 BreakdownValue: TypeAlias = float | str | None | Mapping[str, float]
 _BREAKDOWN_FIELDS: Final = TypeAdapter(Mapping[str, BreakdownValue])
 _COST_BREAKDOWN: Final = TypeAdapter(CostBreakdown)
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedCost:
+    amount: float
+    payload: StandardLoggingPayload
+    usage: Usage
 
 
 @dataclass(frozen=True, slots=True)

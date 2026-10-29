@@ -393,3 +393,83 @@ async def test_deferred_cache_hit_finalizes_zero_for_results_without_hidden_para
     finalized: Final = await finalize_response_cost(logging_obj, cached_result, counter, NOW)
     assert finalized is not None and finalized.amount == 0.0
     assert counter.calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [RuntimeError("post-call failed"), asyncio.CancelledError()])
+@pytest.mark.parametrize("guardrail_cost", [0.0, 0.2])
+@pytest.mark.parametrize("mutate_usage", [False, True])
+async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
+    logging_obj: Logging,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+    guardrail_cost: float,
+    mutate_usage: bool,
+) -> None:
+    from unittest.mock import create_autospec
+
+    from fastapi import Request, Response
+
+    from litellm.proxy._types import ProxyException
+
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import ProxyLogging
+
+    class RejectCompletedCall(CustomLogger):
+        async def async_post_call_success_hook(
+            self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+        ) -> object:
+            if mutate_usage and isinstance(response, ModelResponse):
+                response.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+            raise failure
+
+    writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    monkeypatch.setattr(litellm, "callbacks", [RejectCompletedCall(), ProxyDBLogger(spend_writer=lambda: writer)])
+    monkeypatch.setattr(litellm, "apply_search_free_tier", False)
+    data: Final = {
+        "model": MODEL,
+        "custom_llm_provider": "vertex_ai",
+        "messages": [{"role": "user", "content": "hello"}],
+        "mock_response": response(),
+        "metadata": {
+            "standard_logging_guardrail_information": [
+                {"guardrail_name": "charged-guardrail", "guardrail_cost": guardrail_cost, "guardrail_status": "success"}
+            ]
+        },
+        "litellm_logging_obj": logging_obj,
+        "litellm_call_id": logging_obj.litellm_call_id,
+    }
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    auth: Final = UserAPIKeyAuth(request_route="/v1/chat/completions")
+    request: Final = Request({"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []})
+    with pytest.raises(type(failure)):
+        await processor._process_llm_request(
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=auth,
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging,
+            general_settings={},
+            proxy_config=ProxyConfig(),
+            user_model=MODEL,
+            skip_pre_call_logic=True,
+        )
+    with pytest.raises(ProxyException) as error:
+        await processor.handle_llm_api_exception(
+            e=RuntimeError("post-call failed"), user_api_key_dict=auth, proxy_logging_obj=proxy_logging
+        )
+    assert float(error.value.headers["x-litellm-response-cost"]) == pytest.approx(0.5 + guardrail_cost)
+    assert writer.update_database.await_count == 1
+    recorded: Final = writer.update_database.call_args.kwargs
+    assert recorded["response_cost"] == pytest.approx(0.5 + guardrail_cost)
+    payload: Final = recorded["kwargs"]["standard_logging_object"]
+    assert payload["status"] == "failure"
+    assert payload["prompt_tokens"] == 10
+    assert payload["completion_tokens"] == 5
+    assert payload["response_cost"] == pytest.approx(recorded["response_cost"])
+    assert not logging_obj.async_success_log_enqueued

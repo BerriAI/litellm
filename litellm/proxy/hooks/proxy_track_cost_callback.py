@@ -517,8 +517,13 @@ class _ProxyDBLogger(CustomLogger):
             if isinstance(request_data.get("combined_usage_object"), litellm.Usage)
             else 0.0
         )
-        recovered_response_cost: Final = recovered_stream_cost + guardrail_information_cost(
-            existing_metadata.get("standard_logging_guardrail_information")
+        finalized_failure: Final = _str_keyed_fields(request_data.get("standard_logging_object"))
+        finalized_amount: Final = finalized_failure.get("response_cost")
+        recovered_response_cost: Final = (
+            float(finalized_amount)
+            if finalized_failure.get("cost_finalized") is True and isinstance(finalized_amount, (int, float))
+            else recovered_stream_cost
+            + guardrail_information_cost(existing_metadata.get("standard_logging_guardrail_information"))
         )
 
         failure_snapshot_with_late_guardrails: Final = _failure_snapshot_with_guardrails_recorded_after_it(
