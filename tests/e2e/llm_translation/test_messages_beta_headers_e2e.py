@@ -15,6 +15,9 @@ pytestmark = pytest.mark.e2e
 
 _BETA_CONFIG: Final = files("litellm").joinpath("anthropic_beta_headers_config.json")
 _ANTHROPIC_MODEL: Final = "anthropic/claude-sonnet-5-5"
+_VERTEX_MODEL: Final = "vertex_ai/claude-sonnet-5-5"
+_VERTEX_LOCATION: Final = "global"
+_AZURE_AI_MODEL: Final = "azure_ai/claude-fable-5-1"
 _BEDROCK_MODEL_ID: Final = "us.anthropic.claude-fable-5-1"
 _BETA_CONFIG_FILE: Final = TypeAdapter(dict[str, JsonValue])
 _BETA_MAPPING: Final = TypeAdapter(dict[str, str | None])
@@ -27,14 +30,29 @@ def _mapped_beta_headers(provider: str) -> str:
 
 
 def _deployment(backend: str) -> LiteLLMParamsBody:
-    if backend.startswith("anthropic/"):
-        return LiteLLMParamsBody(model=backend, api_key="os.environ/ANTHROPIC_API_KEY")
-    return LiteLLMParamsBody(
-        model=backend,
-        aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
-        aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
-        aws_region_name="us-east-1",
-    )
+    match backend.split("/", 1)[0]:
+        case "anthropic":
+            return LiteLLMParamsBody(model=backend, api_key="os.environ/ANTHROPIC_API_KEY")
+        case "vertex_ai":
+            return LiteLLMParamsBody(
+                model=backend,
+                vertex_project="os.environ/VERTEXAI_PROJECT",
+                vertex_location=_VERTEX_LOCATION,
+                vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
+            )
+        case "azure_ai":
+            return LiteLLMParamsBody(
+                model=backend,
+                api_base="os.environ/AZURE_AI_API_BASE",
+                api_key="os.environ/AZURE_AI_API_KEY",
+            )
+        case _:
+            return LiteLLMParamsBody(
+                model=backend,
+                aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+                aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+                aws_region_name="us-east-1",
+            )
 
 
 class TestAnthropicBetaHeaders:
@@ -42,6 +60,8 @@ class TestAnthropicBetaHeaders:
         ("backend", "beta_provider", "tools"),
         [
             pytest.param(_ANTHROPIC_MODEL, "anthropic", [_CODE_EXECUTION], id="anthropic"),
+            pytest.param(_VERTEX_MODEL, "vertex_ai", [], id="vertex-ai"),
+            pytest.param(_AZURE_AI_MODEL, "azure_ai", [_CODE_EXECUTION], id="azure-ai"),
             pytest.param(f"bedrock/invoke/{_BEDROCK_MODEL_ID}", "bedrock", [], id="bedrock-invoke"),
             pytest.param(f"bedrock/converse/{_BEDROCK_MODEL_ID}", "bedrock_converse", [], id="bedrock-converse"),
         ],
@@ -50,13 +70,15 @@ class TestAnthropicBetaHeaders:
         "llm.messages.anthropic.basic.nonstream.works",
         "llm.messages.bedrock_invoke.basic.nonstream.works",
         "llm.messages.bedrock_converse.basic.nonstream.works",
+        "llm.messages.vertex.basic.nonstream.works",
+        "llm.messages.azure_foundry.basic.nonstream.works",
     )
     @meta(
         Subject(
             domain=Domain.LLM_TRANSLATION,
             route=Route.MESSAGES,
-            providers=(Provider.ANTHROPIC, Provider.BEDROCK),
-            models=(_ANTHROPIC_MODEL, _BEDROCK_MODEL_ID),
+            providers=(Provider.ANTHROPIC, Provider.BEDROCK, Provider.VERTEX_AI, Provider.AZURE_AI),
+            models=(_ANTHROPIC_MODEL, _BEDROCK_MODEL_ID, _VERTEX_MODEL, _AZURE_AI_MODEL),
             mode=Mode.NONSTREAM,
         )
     )

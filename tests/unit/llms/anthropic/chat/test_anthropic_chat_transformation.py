@@ -9228,7 +9228,7 @@ def test_completion_forwards_caller_anthropic_beta_header_with_computer_tool(res
     sent_betas: Final = frozenset(
         beta.strip() for beta in route.calls.last.request.headers["anthropic-beta"].split(",")
     )
-    assert sent_betas == frozenset({"computer-use-2025-01-24"})
+    assert sent_betas == frozenset({"computer-use-2024-10-22", "computer-use-2025-01-24"})
     assert json.loads(route.calls.last.request.content)["tools"] == [
         {
             "type": "computer_20241022",

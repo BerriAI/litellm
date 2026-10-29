@@ -10,10 +10,11 @@ This test validates:
 
 import json
 import os
-from typing import Dict, Final, List
+from typing import Dict, Final, List, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from anthropic.types.anthropic_beta_param import AnthropicBetaParam
 
 import litellm
 from litellm.anthropic_beta_headers_manager import (
@@ -23,6 +24,13 @@ from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
     update_request_with_filtered_beta,
 )
+
+
+def _literal_strings(annotation: object) -> frozenset[str]:
+    args: Final = get_args(annotation)
+    if not args:
+        return frozenset({annotation}) if isinstance(annotation, str) else frozenset()
+    return frozenset[str]().union(*(_literal_strings(arg) for arg in args))
 
 
 class TestAnthropicBetaHeadersFiltering:
@@ -85,7 +93,7 @@ class TestAnthropicBetaHeadersFiltering:
         filtered = filter_and_transform_beta_headers(
             beta_headers=all_headers, provider=provider
         )
-        assert ("compact-2026-09-04" in filtered) is (provider == "anthropic")
+        assert ("compact-2026-09-04" in filtered) is (provider in ("anthropic", "azure_ai", "vertex_ai"))
 
         for header in unsupported_headers:
             assert (
@@ -473,6 +481,32 @@ class TestAnthropicBetaHeadersFiltering:
         )
 
         assert filtered == ["inline-tools-2026-09-15"]
+
+    @pytest.mark.parametrize(
+        ("provider", "expected_beta"),
+        [
+            ("anthropic", "computer-use-2025-11-24,task-budgets-2026-03-13"),
+            ("azure_ai", "computer-use-2025-11-24,task-budgets-2026-03-13"),
+            ("vertex_ai", "task-budgets-2026-03-13"),
+        ],
+    )
+    def test_betas_follow_what_each_platform_accepts(self, provider: str, expected_beta: str) -> None:
+        """Live probes on 2026-10-28 (each beta alone on a minimal Messages call): all three platforms
+        accept task-budgets-2026-03-13, and Vertex answers 400 "Unexpected value(s)" for
+        computer-use-2025-11-24 while Anthropic and Azure AI Foundry accept it."""
+        headers: Final = update_headers_with_filtered_beta(
+            {"anthropic-beta": "task-budgets-2026-03-13,computer-use-2025-11-24"}, provider
+        )
+
+        assert headers == {"anthropic-beta": expected_beta}
+
+    @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
+    def test_every_anthropic_sdk_beta_has_a_decision_for_the_probed_platforms(self, provider: str) -> None:
+        sdk_betas: Final = _literal_strings(AnthropicBetaParam)
+        provider_column: Final = GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()[provider]
+
+        assert sdk_betas
+        assert sdk_betas - provider_column.keys() == frozenset()
 
     def test_null_value_headers_filtered(self):
         """Test that headers with null values are always filtered out."""
