@@ -209,7 +209,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
 
 
 def make_ui_spend_logs_mock_prisma(
-    mock_spend_logs, filter_fn, team_lookup_fn=None, query_observer=None, error_code_index_ready=False
+    mock_spend_logs, filter_fn, team_lookup_fn=None, query_observer=None, error_code_index_ready: bool = False
 ):
     """
     Create a MockPrismaClient for /spend/logs/ui endpoint tests.
@@ -4703,7 +4703,7 @@ async def test_view_spend_logs_summarize_unhashed_api_key_without_padding(client
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error_code_index_ready", [True, False], ids=["with_the_index", "without_the_index"])
-async def test_ui_view_spend_logs_with_error_code(client, error_code_index_ready):
+async def test_ui_view_spend_logs_with_error_code(client: TestClient, error_code_index_ready: bool):
     """Test filtering spend logs by error code"""
     mock_spend_logs = [
         {
