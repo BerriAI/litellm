@@ -660,6 +660,8 @@ def _open_off_peak_block(model_info: ModelInfo, current_time: datetime | None) -
 
 
 def unbilled_minimum_input_tokens(model_info: ModelInfo, prompt_tokens: int) -> int:
+    if prompt_tokens <= 0:
+        return 0
     return max((model_info.get("min_billed_input_tokens") or 0) - prompt_tokens, 0)
 
 

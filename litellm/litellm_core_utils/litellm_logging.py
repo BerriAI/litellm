@@ -351,6 +351,7 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
 _METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
+MODEL_INFO_RATE_KEYS: Final[frozenset[str]] = _MODEL_INFO_CUSTOM_PRICING_KEYS - {"min_billed_input_tokens"}
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     ("user_api_key_auth", "user_api_key_budget_reservation")
 )
@@ -6384,13 +6385,16 @@ def _deployment_model_info(litellm_params: dict | None) -> Mapping[str, object]:
     return MappingProxyType({})
 
 
-def use_custom_pricing_for_model(litellm_params: dict | None) -> bool:
+def use_custom_pricing_for_model(
+    litellm_params: dict | None, model_info_pricing_keys: frozenset[str] = _MODEL_INFO_CUSTOM_PRICING_KEYS
+) -> bool:
     """
     Check if the model uses custom pricing
 
     Returns True if any custom pricing field is present in `litellm_params`, or if
-    any custom pricing or deployment-scoped pricing field (such as
-    ``off_peak_pricing``) is present in the metadata ``model_info``
+    any of `model_info_pricing_keys` (by default every custom pricing or
+    deployment-scoped pricing field, such as ``off_peak_pricing``) is present in
+    the metadata ``model_info``
     """
     if litellm_params is None:
         return False
@@ -6408,7 +6412,7 @@ def use_custom_pricing_for_model(litellm_params: dict | None) -> bool:
         model_info: dict = metadata.get("model_info", {}) or {}
 
         if model_info:
-            matching_keys = _MODEL_INFO_CUSTOM_PRICING_KEYS & model_info.keys()
+            matching_keys = model_info_pricing_keys & model_info.keys()
             for key in matching_keys:
                 if model_info.get(key) is not None:
                     return True

@@ -101,8 +101,13 @@ def test_generic_cost_per_token_bills_cache_reads_at_input_rate_when_no_cache_re
 
 @pytest.mark.parametrize(
     ("prompt_tokens", "billed_prompt_tokens"),
-    [(10, 600), (600, 600), (900, 900)],
-    ids=["below_the_minimum_bills_the_minimum", "at_the_minimum", "above_the_minimum_bills_as_reported"],
+    [(0, 0), (10, 600), (600, 600), (900, 900)],
+    ids=[
+        "no_counted_prompt_bills_no_minimum",
+        "below_the_minimum_bills_the_minimum",
+        "at_the_minimum",
+        "above_the_minimum_bills_as_reported",
+    ],
 )
 def test_generic_cost_per_token_bills_at_least_the_minimum_input_tokens(
     prompt_tokens: int, billed_prompt_tokens: int

@@ -525,7 +525,7 @@ def cost_per_token(
 
     billed_prompt_tokens: Final = (
         max(_normalized_prompt_tokens, _min_billed_input_tokens(model, custom_llm_provider))
-        if custom_cost_per_token is not None
+        if custom_cost_per_token is not None and _normalized_prompt_tokens > 0
         else _normalized_prompt_tokens
     )
     response_cost: Final = _cost_per_token_custom_pricing_helper(
@@ -1472,6 +1472,17 @@ def _store_cost_breakdown_in_logging_obj(
         # Don't fail the main cost calculation if breakdown storage fails
 
 
+def _prices_only_a_billing_minimum(litellm_logging_obj: LitellmLoggingObject | None) -> bool:
+    from litellm.litellm_core_utils.litellm_logging import MODEL_INFO_RATE_KEYS, use_custom_pricing_for_model
+
+    logged_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
+    return (
+        isinstance(logged_params, dict)
+        and use_custom_pricing_for_model(logged_params)
+        and not use_custom_pricing_for_model(logged_params, MODEL_INFO_RATE_KEYS)
+    )
+
+
 def _without_provider_stated_cost(usage: Usage | None) -> Usage | None:
     if usage is None or getattr(usage, "cost", None) is None:
         return usage
@@ -1643,8 +1654,9 @@ def completion_cost(
         cache_read_input_tokens: int | None = None
         audio_transcription_file_duration: float = 0.0
         provider_usage_object: Final = get_usage_object(completion_response=completion_response)
+        sets_prices: Final = custom_pricing is True and not _prices_only_a_billing_minimum(litellm_logging_obj)
         cost_per_token_usage_object: Final[Usage | None] = (
-            _without_provider_stated_cost(provider_usage_object) if custom_pricing else provider_usage_object
+            _without_provider_stated_cost(provider_usage_object) if sets_prices else provider_usage_object
         )
         rerank_billed_units: RerankBilledUnits | None = None
 
@@ -1659,7 +1671,10 @@ def completion_cost(
 
         explicit_pricing: Final = custom_pricing is True or base_model is not None
         caller_set_prices: Final = (
-            explicit_pricing or custom_cost_per_token is not None or custom_cost_per_second is not None
+            sets_prices
+            or base_model is not None
+            or custom_cost_per_token is not None
+            or custom_cost_per_second is not None
         )
         custom_priced_request_model: Final = model if custom_pricing is True else None
         configured_cost_per_query: Final = (

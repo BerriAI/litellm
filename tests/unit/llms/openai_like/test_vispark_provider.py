@@ -372,7 +372,17 @@ def test_vispark_bills_a_short_prompt_at_its_minimum_input_tokens(model: str):
     assert prompt_cost == pytest.approx(minimum * cost_entry["input_cost_per_token"])
 
 
-def test_vispark_router_deployment_with_custom_pricing_still_bills_the_minimum_input_tokens():
+@pytest.mark.parametrize(
+    "custom_pricing",
+    [
+        {"input_cost_per_token": 2e-6, "output_cost_per_token": 5e-6},
+        {"tiered_pricing": [{"range": [0, 1_000_000], "input_cost_per_token": 2e-6, "output_cost_per_token": 5e-6}]},
+    ],
+    ids=["flat", "tiered"],
+)
+def test_vispark_router_deployment_with_custom_pricing_still_bills_the_minimum_input_tokens(
+    custom_pricing: dict[str, object],
+):
     minimum: Final = litellm.model_cost["vispark/vision-small"]["min_billed_input_tokens"]
     router: Final = litellm.Router(
         model_list=[
@@ -381,8 +391,7 @@ def test_vispark_router_deployment_with_custom_pricing_still_bills_the_minimum_i
                 "litellm_params": {
                     "model": "vispark/vision-small",
                     "api_key": "vispark-test-key",
-                    "input_cost_per_token": 2e-6,
-                    "output_cost_per_token": 5e-6,
+                    **custom_pricing,
                 },
             }
         ]
@@ -445,6 +454,19 @@ def test_vispark_explicit_custom_cost_per_token_still_bills_the_minimum_input_to
     )
 
     assert prompt_cost == pytest.approx(minimum * 2e-6)
+    assert completion_cost == pytest.approx(3 * 5e-6)
+
+
+def test_vispark_explicit_custom_cost_per_token_bills_no_minimum_without_a_counted_prompt():
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model="vision-small",
+        custom_llm_provider="vispark",
+        prompt_tokens=0,
+        completion_tokens=3,
+        custom_cost_per_token={"input_cost_per_token": 2e-6, "output_cost_per_token": 5e-6},
+    )
+
+    assert prompt_cost == 0.0
     assert completion_cost == pytest.approx(3 * 5e-6)
 
 

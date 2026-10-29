@@ -11918,7 +11918,7 @@ class Router(DeprecatedRouterMembers):
         )
         backend_info: Final = (
             lookup_model_info_for_registration(model=backend_model, custom_llm_provider=pricing_provider)
-            if model_info.get("input_cost_per_token") is not None
+            if model_info.get("input_cost_per_token") is not None or model_info.get("tiered_pricing") is not None
             else None
         )
         billing_minimum: Final = (
