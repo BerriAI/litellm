@@ -144,6 +144,7 @@ from litellm.exceptions import (
     SensitiveDataRouteException,
 )
 from litellm.integrations.custom_guardrail import (
+    MCP_SERVER_GUARDRAILS_KEY,
     CustomGuardrail,
     ModifyResponseException,
 )
@@ -2873,6 +2874,7 @@ class ProxyLogging:
         self,
         request_metadata: Mapping[str, object],
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+        server_guardrails: Sequence[str] = (),
     ) -> bool:
         """
         Whether anything configured would inspect the content of a request carrying this metadata.
@@ -2890,7 +2892,7 @@ class ProxyLogging:
         caps: Final = ProxyLogging.callback_capabilities()
         if caps.has_content_enforcer:
             return True
-        probe: Final = {"metadata": dict(request_metadata)}
+        probe: Final = {"metadata": dict(request_metadata), MCP_SERVER_GUARDRAILS_KEY: list(server_guardrails)}
         return any(
             isinstance(callback, CustomGuardrail) and callback.should_run_guardrail(data=probe, event_type=event_type)
             for callback in caps.resolved_callbacks

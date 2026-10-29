@@ -73,6 +73,7 @@ from litellm.constants import (
     MCP_UPSTREAM_SESSION_SHUTDOWN_TIMEOUT_SECONDS,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.integrations.custom_guardrail import MCP_SERVER_GUARDRAILS_KEY
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.mcp_client.client import (
@@ -434,6 +435,7 @@ class MCPServerConfig(TypedDict, total=False):
     allowed_tools: _StringList
     disallowed_tools: _StringList
     allowed_params: _ToolParamMap
+    guardrails: _StringList
     access_groups: _StringList
     static_headers: _StringMap
     env_vars: _EnvVarList
@@ -2799,6 +2801,7 @@ class MCPServerManager:
                 disallowed_tools=server_config.get("disallowed_tools", None),
                 allowed_params=server_config.get("allowed_params", None),
                 pinned_tools=server_config.get("pinned_tools", None),
+                guardrails=server_config.get("guardrails", None),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
                 env_vars=server_config.get("env_vars", None),
@@ -6275,6 +6278,7 @@ class MCPServerManager:
             and proxy_logging_obj.has_pre_call_guardrails(
                 TypeAdapter(Mapping[str, object]).validate_python(initial_data.get("metadata") or {}),
                 event_type=GuardrailEventHooks.pre_mcp_call,
+                server_guardrails=server.guardrails or (),
             )
             else tool
         )
@@ -6293,6 +6297,7 @@ class MCPServerManager:
                 else {}
             ),
             "litellm_logging_obj": litellm_logging_obj,
+            MCP_SERVER_GUARDRAILS_KEY: list(server.guardrails or ()),
         }
 
         try:
