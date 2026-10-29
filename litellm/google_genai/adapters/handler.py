@@ -4,6 +4,7 @@ from typing import Final, cast
 from openai.types.chat import ChatCompletionStreamOptionsParam
 
 import litellm
+from litellm.caching.caching import requested_skip_controls
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.google_genai.adapters import GenerateContentCompletionKwargs
 from litellm.types.router import GenericLiteLLMParams
@@ -69,8 +70,9 @@ class GenerateContentToCompletionHandler:
                 completion_kwargs["proxy_server_request"] = extra_kwargs["proxy_server_request"]
             if "litellm_metadata" in extra_kwargs:
                 completion_kwargs["litellm_metadata"] = extra_kwargs["litellm_metadata"]
-            if "cache" in extra_kwargs and litellm.cache is not None and litellm.cache.is_semantic_cache():
-                completion_kwargs["cache"] = extra_kwargs["cache"]
+            skip_controls: Final = requested_skip_controls(extra_kwargs.get("cache"))
+            if skip_controls and litellm.cache is not None and litellm.cache.is_semantic_cache():
+                completion_kwargs["cache"] = skip_controls
 
         if stream:
             completion_kwargs["stream"] = stream

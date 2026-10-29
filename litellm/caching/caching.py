@@ -16,6 +16,7 @@ import traceback
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Final, Literal, cast
 
 from pydantic import BaseModel, TypeAdapter
@@ -43,6 +44,15 @@ from .s3_cache import S3Cache
 
 RESPONSE_CACHE_TARGET: Final = "llm_response"
 _ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token"})
+SKIP_CACHE_CONTROLS: Final = MappingProxyType({"no-cache": True, "no-store": True})
+
+
+def requested_skip_controls(controls: object) -> Mapping[str, object]:
+    if not isinstance(controls, Mapping):
+        return {}
+    return {key: value for key, value in SKIP_CACHE_CONTROLS.items() if controls.get(key) is value}
+
+
 _DECODED_LITERAL: Final = TypeAdapter(object)
 
 

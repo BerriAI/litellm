@@ -236,6 +236,45 @@ async def test_a_rejected_team_cannot_reopen_the_semantic_cache_through_its_own_
 
 
 @pytest.mark.asyncio
+async def test_a_rejected_team_cannot_reopen_the_semantic_cache_through_grouped_or_nested_fallback_targets() -> None:
+    skip: Final = {"no-cache": True, "no-store": True}
+    data: Final = {
+        **_request(),
+        "fallbacks": [
+            {
+                "gpt-4o-mini": [
+                    "gpt-4.1-mini",
+                    {"model": "gpt-4o", "cache": {}},
+                    {"model": "gpt-4.1", "fallbacks": [{"model": "gpt-5", "cache": {"ttl": 5}}]},
+                ]
+            }
+        ],
+        "router_settings_override": {"content_policy_fallbacks": [{"gpt-4o-mini": [{"model": "gpt-4o", "cache": {}}]}]},
+    }
+
+    overrides: Final = await gated_cache_overrides(
+        data=data,
+        user_api_key_dict=_key(OTHER_TEAM),
+        call_type="acompletion",
+        gates=(_TeamAllowlist(frozenset({ALLOWED_TEAM})),),
+        cache=_semantic_cache(),
+    )
+
+    assert overrides["fallbacks"] == [
+        {
+            "gpt-4o-mini": [
+                "gpt-4.1-mini",
+                {"model": "gpt-4o", "cache": skip},
+                {"model": "gpt-4.1", "fallbacks": [{"model": "gpt-5", "cache": {"ttl": 5, **skip}}]},
+            ]
+        }
+    ]
+    assert overrides["router_settings_override"] == {
+        "content_policy_fallbacks": [{"gpt-4o-mini": [{"model": "gpt-4o", "cache": skip}]}]
+    }
+
+
+@pytest.mark.asyncio
 async def test_a_rejected_team_cannot_reopen_the_semantic_cache_through_router_settings_fallbacks() -> None:
     data: Final = {
         **_request(),

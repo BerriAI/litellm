@@ -1,16 +1,14 @@
 from collections.abc import Mapping, Sequence
-from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.caching import Cache
+from litellm.caching.caching import SKIP_CACHE_CONTROLS, Cache
 from litellm.constants import REQUEST_FALLBACK_KEYS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
-SKIP_CACHE_CONTROLS: Final = MappingProxyType({"no-cache": True, "no-store": True})
 SEMANTIC_CACHE_ROUTES: Final = frozenset(
     {
         "acompletion",
@@ -60,13 +58,20 @@ def _skipping(controls: object) -> Mapping[str, object]:
     return {**(controls if isinstance(controls, Mapping) else {}), **SKIP_CACHE_CONTROLS}
 
 
+def _skipping_chain(value: object) -> object:
+    if not isinstance(value, list):
+        return value
+    return [_skipping_fallback_entry(target) for target in _FALLBACK_ENTRIES.validate_python(value)]
+
+
 def _skipping_fallback_entry(entry: object) -> object:
     if not isinstance(entry, Mapping):
         return entry
     fields: Final = _FIELDS.validate_python(entry)
-    if "cache" not in fields:
-        return fields
-    return {**fields, "cache": _skipping(fields["cache"])}
+    return {
+        **{key: _skipping_chain(value) for key, value in fields.items()},
+        **({"cache": _skipping(fields["cache"])} if "cache" in fields else {}),
+    }
 
 
 def _skipping_fallbacks(data: Mapping[str, object]) -> Mapping[str, Sequence[object]]:

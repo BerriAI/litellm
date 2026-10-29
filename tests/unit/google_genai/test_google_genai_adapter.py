@@ -1859,12 +1859,19 @@ async def test_generate_content_bridge_leaves_an_exact_match_cache_as_it_was(
 
 
 @pytest.mark.parametrize(
-    ("semantic", "expected_cache"),
-    [(True, {"no-cache": True, "no-store": True}), (False, None)],
-    ids=["semantic", "exact-match"],
+    ("semantic", "request_cache", "expected_cache"),
+    [
+        (True, {"no-cache": True, "no-store": True}, {"no-cache": True, "no-store": True}),
+        (True, {"use-cache": True, "ttl": 5, "namespace": "team-a", "no-store": True}, {"no-store": True}),
+        (True, {"use-cache": True}, None),
+        (True, "true", None),
+        (True, ["no-cache"], None),
+        (False, {"no-cache": True, "no-store": True}, None),
+    ],
+    ids=["semantic", "only-skips-forwarded", "opt-in-dropped", "string", "list", "exact-match"],
 )
-def test_generate_content_bridge_forwards_the_request_cache_controls_only_to_a_semantic_cache(
-    monkeypatch: pytest.MonkeyPatch, semantic: bool, expected_cache: Mapping[str, bool] | None
+def test_generate_content_bridge_forwards_only_skip_controls_and_only_to_a_semantic_cache(
+    monkeypatch: pytest.MonkeyPatch, semantic: bool, request_cache: object, expected_cache: Mapping[str, bool] | None
 ) -> None:
     from litellm.caching.caching import Cache
     from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
@@ -1878,7 +1885,7 @@ def test_generate_content_bridge_forwards_the_request_cache_controls_only_to_a_s
     completion_kwargs: Final = GenerateContentToCompletionHandler._prepare_completion_kwargs(
         model="openai/gpt-4.1",
         contents=[{"role": "user", "parts": [{"text": "What is the capital of France?"}]}],
-        extra_kwargs={"cache": {"no-cache": True, "no-store": True}},
+        extra_kwargs={"cache": request_cache},
     )
 
     assert completion_kwargs.get("cache") == expected_cache
