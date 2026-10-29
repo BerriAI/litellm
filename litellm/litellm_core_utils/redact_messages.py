@@ -447,22 +447,22 @@ def _redacted_responses_api_response(
 
 _REQUEST_TEXT_KEYS: Final = ("messages", "input", "prompt", "system", "instructions")
 _STRUCTURAL_KEYS: Final = frozenset({"role", "type", "id", "tool_call_id", "name"})
-_MIN_SCRUBBED_TEXT_LENGTH: Final = 4
+_MIN_UNQUOTED_TEXT_LENGTH: Final = 4
 _ECHO_FRAGMENT_LENGTH: Final = 24
 _MAX_SCRUB_COMPARISONS: Final = 10_000_000
 
 
 def request_texts(*values: object) -> frozenset[str]:
     """
-    The strings a request carries under ``values``, skipping structural fields such as ``role`` and
-    ``type`` and strings too short to point at the prompt.
+    The non-empty strings a request carries under ``values``, skipping structural fields such as ``role``
+    and ``type``.
     """
     texts: Final[set[str]] = set()  # mutable-ok: filled by the walk below
     pending: Final[list[object]] = list(values)  # mutable-ok: the walk's work stack
     while pending:
         value = pending.pop()
         if isinstance(value, str):
-            if len(value) >= _MIN_SCRUBBED_TEXT_LENGTH:
+            if value:
                 texts.add(value)
         elif (mapping := _as_mapping(value)) is not None:
             pending.extend(item for key, item in mapping.items() if key not in _STRUCTURAL_KEYS)
@@ -508,7 +508,13 @@ def scrub_request_text(text: str, texts: Collection[str]) -> str:
     quoted: Final = sorted((form for form in forms if form in text), key=len, reverse=True)
     if not quoted:
         return text
-    return re.sub("|".join(map(re.escape, quoted)), REDACTED_BY_LITELLM, text)
+    return re.sub("|".join(map(_echo_pattern, quoted)), REDACTED_BY_LITELLM, text)
+
+
+def _echo_pattern(form: str) -> str:
+    """A quote of ``form``. A form short enough to occur in ordinary wording only counts between quotes."""
+    escaped: Final = re.escape(form)
+    return escaped if len(form) >= _MIN_UNQUOTED_TEXT_LENGTH else f"(?<=['\"]){escaped}(?=['\"])"
 
 
 def scrubbed_error_information(
@@ -553,16 +559,19 @@ def scrubbed_error_fields(payload: Mapping[str, object], texts: Collection[str])
 def scrubbed_exception_text(model_call_details: Mapping[str, object]) -> tuple[str, str] | None:
     """
     The error message and traceback a failure payload logged when redaction scrubbed the request's text
-    out of them, for callbacks that would otherwise record the raw exception. ``None`` when nothing was
+    out of either, for callbacks that would otherwise record the raw exception. ``None`` when nothing was
     scrubbed.
     """
     payload: Final = _as_mapping(model_call_details.get("standard_logging_object")) or {}
     error_information: Final = _as_mapping(payload.get("error_information")) or {}
     message: Final = error_information.get("error_message")
-    if not isinstance(message, str) or REDACTED_BY_LITELLM not in message:
-        return None
     traceback_text: Final = error_information.get("traceback")
-    return message, traceback_text if isinstance(traceback_text, str) else ""
+    if not any(isinstance(text, str) and REDACTED_BY_LITELLM in text for text in (message, traceback_text)):
+        return None
+    return (
+        message if isinstance(message, str) else "",
+        traceback_text if isinstance(traceback_text, str) else "",
+    )
 
 
 def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
@@ -851,26 +860,27 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
 def should_redact_failure_logging(model_call_details: Mapping[str, object]) -> bool:
     """
     ``should_redact_message_logging`` for the failure path, which must log the failure whatever the
-    request carried. Headers that are not a mapping make the payload build fail on the success and
-    failure paths alike, so the failure is logged unredacted, as before.
+    request carried. Headers that are not a mapping carry no redaction header, so the request's own
+    setting or the global one decides.
     """
     try:
         return should_redact_message_logging(dict(model_call_details))
     except AttributeError:
-        return False
+        dynamic_turn_off: Final = _get_turn_off_message_logging_from_dynamic_params(dict(model_call_details))
+        return dynamic_turn_off if dynamic_turn_off is not None else litellm.turn_off_message_logging is True
 
 
 def should_redact_failed_request(request_data: Mapping[str, object]) -> bool:
     """
     The redaction decision for proxy failure hooks, which get the request body but not its logging
-    object: the same metadata, headers and dynamic params the logging object would read. Callback
-    params the logging object rejects leave the failure unredacted, as before.
+    object: the same metadata, headers and dynamic params the logging object would read. When the
+    logging object would reject the request's callback params, the global setting decides.
     """
     body: Final = dict(request_data)
     try:
         dynamic_params: Final = initialize_standard_callback_dynamic_params(body)
     except ValueError:
-        return False
+        return litellm.turn_off_message_logging is True
     return should_redact_failure_logging(
         {
             "litellm_params": {key: body[key] for key in ("metadata", "litellm_metadata") if key in body},

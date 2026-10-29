@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.redact_messages import (
     request_texts,
     scrub_request_text,
     scrubbed_error_information_for_request,
+    scrubbed_exception_text,
     should_redact_failed_request,
     should_redact_message_logging,
 )
@@ -2102,6 +2103,12 @@ def test_scrub_request_text_leaves_an_error_that_does_not_quote_the_prompt() -> 
     assert scrub_request_text("Incorrect API key provided", request_texts(PROMPT, "hi")) == "Incorrect API key provided"
 
 
+def test_scrub_request_text_replaces_a_short_text_only_between_quotes() -> None:
+    scrubbed: Final = scrub_request_text("Invalid value '432' and \"432\"; 432 is too short", request_texts("432"))
+
+    assert scrubbed == "Invalid value 'redacted-by-litellm' and \"redacted-by-litellm\"; 432 is too short"
+
+
 def test_scrub_request_text_replaces_the_whole_text_when_the_search_is_too_large() -> None:
     texts: Final = request_texts([f"message number {index}" for index in range(5_000)])
 
@@ -2139,12 +2146,36 @@ def test_should_redact_failed_request_follows_the_request_opt_ins(request_data: 
     [{"metadata": {"headers": "x"}}, {"turn_off_message_logging": "os.environ/REDACT"}],
     ids=["non_mapping_headers", "env_reference"],
 )
-def test_should_redact_failed_request_leaves_an_undecidable_request_unredacted(
-    monkeypatch: pytest.MonkeyPatch, request_data: dict
+@pytest.mark.parametrize("global_redaction", [True, False], ids=["global_on", "global_off"])
+def test_should_redact_failed_request_falls_back_to_the_global_setting_for_an_undecidable_request(
+    monkeypatch: pytest.MonkeyPatch, request_data: dict, global_redaction: bool
 ) -> None:
-    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", global_redaction)
 
-    assert should_redact_failed_request(request_data) is False
+    assert should_redact_failed_request(request_data) is global_redaction
+
+
+def test_should_redact_failed_request_reads_the_request_setting_past_non_mapping_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+
+    assert should_redact_failed_request({"metadata": {"headers": "x"}, "turn_off_message_logging": True}) is True
+
+
+@pytest.mark.parametrize(
+    "error_information",
+    [
+        {"error_message": "bad: redacted-by-litellm", "traceback": "tb"},
+        {"error_message": "bad input", "traceback": "tb redacted-by-litellm"},
+    ],
+    ids=["message", "traceback_only"],
+)
+def test_scrubbed_exception_text_reports_a_scrub_of_either_field(error_information: dict) -> None:
+    logged: Final = scrubbed_exception_text({"standard_logging_object": {"error_information": error_information}})
+
+    assert logged == (error_information["error_message"], error_information["traceback"])
+    assert scrubbed_exception_text({"standard_logging_object": {"error_information": {"error_message": "bad"}}}) is None
 
 
 def test_scrubbed_error_information_for_request_scrubs_only_when_the_request_redacts() -> None:

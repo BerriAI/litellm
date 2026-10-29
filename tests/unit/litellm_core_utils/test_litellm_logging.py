@@ -11782,9 +11782,10 @@ async def test_failure_with_non_mapping_headers_is_still_logged(monkeypatch, hea
     monkeypatch.setattr(litellm, "_async_failure_callback", [capture])
     logging_obj: Final = _prompt_failure_logging_obj({"metadata": {"headers": headers}})
 
-    await logging_obj.async_failure_handler(_prompt_echo_error(), "Traceback")
+    await logging_obj.async_failure_handler(_prompt_echo_error(), f"Traceback: {SCRUB_PROMPT}")
 
     assert capture.async_kwargs is not None
+    assert (SCRUB_PROMPT in capture.async_kwargs["traceback_exception"]) is not redact
 
 
 def test_sync_failure_hands_callbacks_and_langfuse_the_scrubbed_error(monkeypatch):
