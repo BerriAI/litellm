@@ -5,8 +5,9 @@ import contextlib
 import io
 import json
 import logging
+import math
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Iterator, Mapping, Sequence
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
 
 import anyio
@@ -20,7 +21,12 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.llms import discover_guardrail_translation_mappings, load_guardrail_translation_mappings
+from litellm.llms import (
+    CachedGuardrailTranslationDiscovery,
+    GuardrailTranslationDiscovery,
+    discover_guardrail_translation_mappings,
+    load_guardrail_translation_mappings,
+)
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
@@ -3249,6 +3255,47 @@ class TestUnscannedRequestIsAnnounced:
         ), self._warnings(caplog)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("unavailable", "named_failure"),
+        [
+            ({"litellm.llms.openai.chat.guardrail_translation": "ImportError: broken"}, True),
+            ({}, False),
+        ],
+    )
+    async def test_the_skip_warning_names_a_package_that_failed_to_import_only_when_one_did(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        unavailable: dict[str, str],
+        named_failure: bool,
+    ) -> None:
+        mappings: Final = MappingProxyType({CallTypes.aembedding: _NoopTranslation})
+        monkeypatch.setattr(
+            litellm.llms,
+            "guardrail_translation_discovery",
+            CachedGuardrailTranslationDiscovery(
+                discovery=GuardrailTranslationDiscovery(mappings=mappings, unavailable=MappingProxyType(unavailable)),
+                retry_at=math.inf,
+            ),
+        )
+        _patch_translation_mappings(monkeypatch, mappings)
+        guardrail: Final = RecordingGuardrail()
+
+        with self._capturing(caplog):
+            await UnifiedLLMGuardrails().async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions"),
+                cache=DualCache(),
+                data=self._request(guardrail),
+                call_type=CallTypes.acompletion.value,
+            )
+
+        skipped: Final = [message for message in self._distinct_warnings(caplog) if "skipping pre-call scanning" in message]
+        assert len(skipped) == 1, skipped
+        assert (
+            "handlers from litellm.llms.openai.chat.guardrail_translation failed to import" in skipped[0]
+        ) is named_failure, skipped
+
+    @pytest.mark.asyncio
     async def test_pre_call_warns_instead_of_raising_on_a_call_type_outside_the_enum(self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
         guardrail: Final = RecordingGuardrail()
@@ -3266,7 +3313,6 @@ class TestUnscannedRequestIsAnnounced:
         assert returned["messages"] == [{"role": "user", "content": "hello world"}]
         assert any(
             "call type 'not_a_call_type' is not one litellm can scan" in message
-            and "Map the route to a CallTypes member in API_ROUTE_TO_CALL_TYPES." in message
             and "skipping pre-call scanning" in message
             for message in self._warnings(caplog)
         ), self._warnings(caplog)

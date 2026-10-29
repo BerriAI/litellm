@@ -222,6 +222,11 @@ class CachedGuardrailTranslationDiscovery:
 guardrail_translation_discovery: CachedGuardrailTranslationDiscovery | None = None  # rebind-ok: per-worker cache
 
 
+def unavailable_guardrail_translation_packages() -> tuple[str, ...]:
+    cached: Final = guardrail_translation_discovery
+    return () if cached is None else tuple(cached.discovery.unavailable)
+
+
 def load_guardrail_translation_mappings(
     now: Callable[[], float] = time.monotonic,
 ) -> Mapping[CallTypes, type["BaseTranslation"]]:

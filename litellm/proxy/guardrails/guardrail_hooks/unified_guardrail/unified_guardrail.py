@@ -26,7 +26,11 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
-from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
+from litellm.llms import (
+    get_guardrail_translation_mapping,
+    load_guardrail_translation_mappings,
+    unavailable_guardrail_translation_packages,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -251,30 +255,32 @@ def _log_left_unscanned(
 ) -> None:
     route: Final = _without_line_breaks(request_route)
     shown_call_type: Final = _without_line_breaks(call_type)
-    if _resolved_call_type(call_type) is not None:
+    if not call_type:
         verbose_proxy_logger.warning(
-            "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; %s.",
+            "Guardrail '%s' selected for route '%s' but its call type could not be resolved; %s. "
+            "Add the route to API_ROUTE_TO_CALL_TYPES.",
+            guardrail_name,
+            route,
+            consequence,
+        )
+        return
+    if _resolved_call_type(call_type) is None:
+        verbose_proxy_logger.warning(
+            "Guardrail '%s' selected for route '%s' but call type '%s' is not one litellm can scan; %s.",
             guardrail_name,
             route,
             shown_call_type,
             consequence,
         )
         return
-    unscannable, remedy = (
-        (
-            f"call type '{shown_call_type}' is not one litellm can scan",
-            "Map the route to a CallTypes member in API_ROUTE_TO_CALL_TYPES",
-        )
-        if call_type
-        else ("its call type could not be resolved", "Add the route to API_ROUTE_TO_CALL_TYPES")
-    )
+    failed_packages: Final = unavailable_guardrail_translation_packages()
     verbose_proxy_logger.warning(
-        "Guardrail '%s' selected for route '%s' but %s, so no guardrail can run on that route; %s. %s.",
+        "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler%s; %s.",
         guardrail_name,
         route,
-        unscannable,
+        shown_call_type,
+        f", and handlers from {', '.join(failed_packages)} failed to import" if failed_packages else "",
         consequence,
-        remedy,
     )
 
 
