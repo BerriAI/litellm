@@ -83,6 +83,14 @@ class BaseLLMModelInfo(ABC):
         """
         return None
 
+    def lists_served_model_ids(self) -> bool:
+        """
+        True when every id `discover_models` returns is exactly the id the server serves, with no `<provider>/` prefix
+        added by LiteLLM. The default False means a listed id may carry that prefix, so a leading `<provider>/` is
+        LiteLLM's own and not part of the served id.
+        """
+        return False
+
     @abstractmethod
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         """

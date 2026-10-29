@@ -1,11 +1,15 @@
+import json
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
+
+if TYPE_CHECKING:
+    from litellm import Router
 
 
 def test_get_team_models_for_all_models_and_team_only_models():
@@ -1630,3 +1634,139 @@ def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_through_it(mo
     ]
     assert f"team-partial-route/{_ROUTE_OPENAI_ID}" in v1_models
     assert unrouted_ids == []
+
+
+_SERVER_API_BASE: Final = "https://openai-compatible-listing.example/v1"
+_SERVED_ORG_ID: Final = "openai/gpt-oss-20b"
+_SERVED_HUB_ID: Final = "Qwen/Qwen3-8B"
+
+
+def _chat_completion_echoing_the_model(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-listing",
+            "object": "chat.completion",
+            "created": 1,
+            "model": json.loads(request.content)["model"],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+@pytest.fixture
+def openai_compatible_server() -> Generator[respx.MockRouter, None, None]:
+    from litellm.utils import _model_cache
+
+    _model_cache.flush_cache()
+    with respx.mock(base_url=_SERVER_API_BASE, assert_all_called=False) as server:
+        server.get("/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": _SERVED_ORG_ID}, {"id": _SERVED_HUB_ID}]})
+        )
+        server.post("/chat/completions", name="chat").mock(side_effect=_chat_completion_echoing_the_model)
+        yield server
+    _model_cache.flush_cache()
+
+
+def _wildcard_router(model_name: str, deployment_model: str) -> "Router":
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": deployment_model, "api_base": _SERVER_API_BASE, "api_key": "sk-listing"},
+            }
+        ]
+    )
+
+
+def _v1_models(router: "Router", model_name: str) -> list[str]:
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    return get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=[model_name],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+
+def _model_the_server_received(router: "Router", server: respx.MockRouter, listed_id: str) -> str:
+    router.completion(model=listed_id, messages=[{"role": "user", "content": "hi"}])
+    return json.loads(server["chat"].calls.last.request.content)["model"]
+
+
+@pytest.mark.parametrize(
+    ("model_name", "deployment_model", "served_id_by_listed_id"),
+    [
+        pytest.param(
+            "openai/*",
+            "openai/*",
+            {"openai/openai/gpt-oss-20b": _SERVED_ORG_ID, "openai/Qwen/Qwen3-8B": _SERVED_HUB_ID},
+            id="provider-wildcard",
+        ),
+        pytest.param(
+            "vllm-box/*",
+            "openai/*",
+            {"vllm-box/openai/gpt-oss-20b": _SERVED_ORG_ID, "vllm-box/Qwen/Qwen3-8B": _SERVED_HUB_ID},
+            id="custom-prefix-wildcard",
+        ),
+        pytest.param(
+            "openai/openai/gpt-oss-*",
+            "openai/openai/gpt-oss-*",
+            {"openai/openai/gpt-oss-20b": _SERVED_ORG_ID},
+            id="partial-wildcard-over-an-org-id",
+        ),
+        pytest.param(
+            "baseten/*",
+            "baseten/*",
+            {"baseten/openai/gpt-oss-20b": _SERVED_ORG_ID, "baseten/Qwen/Qwen3-8B": _SERVED_HUB_ID},
+            id="provider-whose-listing-adds-its-own-prefix",
+        ),
+    ],
+)
+def test_every_id_a_live_listing_lists_reaches_the_id_the_server_serves(
+    openai_compatible_server: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model_name: str,
+    deployment_model: str,
+    served_id_by_listed_id: dict[str, str],
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    router: Final = _wildcard_router(model_name, deployment_model)
+    v1_models: Final = _v1_models(router, model_name)
+    model_info_names: Final = [
+        str(row["model_name"])
+        for row in expand_wildcard_deployments_for_model_info(
+            [dict(deployment) for deployment in router.get_model_list() or []], router
+        )
+    ]
+
+    assert {
+        listed_id: _model_the_server_received(router, openai_compatible_server, listed_id) for listed_id in v1_models
+    } == served_id_by_listed_id
+    assert sorted(model_info_names) == sorted(v1_models)
+
+
+def test_a_static_catalog_id_stored_with_the_provider_prefix_still_lists_and_reaches_its_model(
+    openai_compatible_server: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    catalog_id: Final = "openai/static-catalog-listing-model"
+    router: Final = _wildcard_router("openai/*", "openai/*")
+    with _registered_chat_models({catalog_id: "openai"}):
+        v1_models: Final = _v1_models(router, "openai/*")
+
+    assert catalog_id in v1_models
+    assert _model_the_server_received(router, openai_compatible_server, catalog_id) == catalog_id.removeprefix(
+        "openai/"
+    )

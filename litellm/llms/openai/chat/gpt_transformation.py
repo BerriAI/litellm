@@ -892,6 +892,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             api_base=api_base, bearer_token=get_secret_str("OPENAI_API_KEY") if api_key is None else api_key
         )
 
+    def lists_served_model_ids(self) -> bool:
+        return type(self).get_models is OpenAIGPTConfig.get_models
+
     def discover_models(
         self, litellm_params: Mapping[str, object] | None = None
     ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override

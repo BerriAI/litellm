@@ -11,6 +11,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.router import Router
@@ -49,17 +50,21 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
     if provider == "*":
         return get_valid_models(litellm_params=litellm_params)
 
-    if provider in litellm.models_by_provider:
-        provider_models: Final = get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
+    model_info: Final = _provider_model_info(provider)
+    if provider not in litellm.models_by_provider and model_info is None:
+        return None
+    provider_models: Final = get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
+    if not litellm.check_provider_endpoint or model_info is None or not model_info.lists_served_model_ids():
         return provider_models
+    return [f"{provider}/{served_model_id}" for served_model_id in provider_models]
 
+
+def _provider_model_info(provider: str) -> BaseLLMModelInfo | None:
     try:
         llm_provider: Final = LlmProviders(provider)
     except ValueError:
         return None
-    if ProviderConfigManager.get_provider_model_info(model=None, provider=llm_provider) is None:
-        return None
-    return get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
+    return ProviderConfigManager.get_provider_model_info(model=None, provider=llm_provider)
 
 
 def _get_models_from_access_groups(
