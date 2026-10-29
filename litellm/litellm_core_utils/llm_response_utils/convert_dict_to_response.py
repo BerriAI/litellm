@@ -170,7 +170,19 @@ def _drop_choice_fields(choice: StreamingChoices, fields: Iterable[str]) -> None
 
 
 def _vllm_choice_fields(choice: Mapping[str, object]) -> Mapping[str, object]:
-    return MappingProxyType({field: choice[field] for field in VLLM_CHOICE_FIELDS if field in choice})
+    cached_fields: Final = _choice_provider_specific_fields(choice)
+    return MappingProxyType(
+        {
+            field: choice[field] if field in choice else cached_fields[field]
+            for field in VLLM_CHOICE_FIELDS
+            if field in choice or field in cached_fields
+        }
+    )
+
+
+def _choice_provider_specific_fields(choice: Mapping[str, object]) -> Mapping[str, object]:
+    fields: Final = choice.get("provider_specific_fields")
+    return _FIELD_MAP.validate_python(fields) if isinstance(fields, dict) else MappingProxyType({})
 
 
 def _first_replay_delta(

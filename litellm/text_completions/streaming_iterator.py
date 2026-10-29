@@ -30,20 +30,19 @@ class TextCompletionStreamWrapper:
             response["object"] = "text_completion"
             response["created"] = chunk.get("created", None)
             response["model"] = chunk.get("model", None)
-            text_choices: Final = TextChoices()
             if isinstance(chunk, Choices):  # chunk should always be of type StreamingChoices
                 raise Exception
 
             if chunk["choices"]:
                 chat_choice: Final = chunk["choices"][0]
+                text_choices: Final = TextChoices(
+                    **{field: chat_choice[field] for field in VLLM_CHOICE_FIELDS if field in chat_choice}
+                )
                 delta: Final = chat_choice["delta"]
                 text_choices["text"] = delta["content"]
                 text_choices["reasoning_content"] = delta.get("reasoning_content")
                 text_choices["index"] = chat_choice["index"]
                 text_choices["finish_reason"] = chat_choice["finish_reason"]
-                for field in VLLM_CHOICE_FIELDS:
-                    if field in chat_choice:
-                        text_choices[field] = chat_choice[field]
                 response["choices"] = [text_choices]
             else:
                 response["choices"] = []

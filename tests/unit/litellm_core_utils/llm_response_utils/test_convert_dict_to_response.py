@@ -3004,3 +3004,34 @@ def test_vllm_choice_fields_stay_on_the_choice_through_a_cache_round_trip(
         vllm_choice_fields,
         vllm_choice_fields,
     ]
+
+
+@pytest.mark.parametrize(
+    "vllm_choice_fields",
+    [{"stop_reason": ", 5", "token_ids": [16, 11, 220]}, {"stop_reason": None, "token_ids": None}],
+    ids=["stop-string-with-token-ids", "natural-stop"],
+)
+def test_vllm_choice_fields_cached_only_under_provider_specific_fields_come_back_on_the_choice(
+    vllm_choice_fields: dict[str, object],
+) -> None:
+    cached_before_upgrade: Final = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "Qwen/Qwen3-0.6B",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "1, 2, 3, 4"},
+                "finish_reason": "stop",
+                "provider_specific_fields": vllm_choice_fields,
+            }
+        ],
+    }
+    cache_hit: Final = convert_to_model_response_object(
+        response_object=cached_before_upgrade, model_response_object=ModelResponse()
+    )
+    assert isinstance(cache_hit, ModelResponse)
+
+    dumped_choice: Final = json.loads(cache_hit.model_dump_json())["choices"][0]
+    assert {field: dumped_choice.get(field, "missing") for field in vllm_choice_fields} == vllm_choice_fields

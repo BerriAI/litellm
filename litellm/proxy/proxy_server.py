@@ -10159,7 +10159,33 @@ def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
         if serialized_chunk is not None:
             return serialized_chunk
 
-    return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+    choices: Final = _streaming_chunk_choices(chunk)
+    if not any(_null_vllm_choice_fields(choice) for choice in choices):
+        return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+    return json.dumps(
+        {
+            **_dump_set_fields(chunk, exclude=frozenset({"choices"})),
+            "choices": [{**_dump_set_fields(choice), **_null_vllm_choice_fields(choice)} for choice in choices],
+        },
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
+def _streaming_chunk_choices(chunk: BaseModel) -> Sequence[BaseModel]:
+    match chunk:
+        case ModelResponseStream() | TextCompletionResponse():
+            return chunk.choices
+        case _:
+            return ()
+
+
+def _null_vllm_choice_fields(choice: BaseModel) -> Mapping[str, None]:
+    return MappingProxyType({field: None for field, value in _vllm_choice_fields(choice).items() if value is None})
+
+
+def _dump_set_fields(model: BaseModel, exclude: AbstractSet[str] = frozenset()) -> Mapping[str, object]:
+    return model.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=set(exclude))
 
 
 def _is_injected_stream_usage_artifact(chunk: object) -> bool:

@@ -6053,6 +6053,8 @@ def test_chunk_creator_keeps_upstream_index_on_single_choice_chunk(logging_obj: 
 
 
 _TOKEN_IDS: Final = TypeAdapter(list[int] | None)
+_CHOICE_INDEX: Final = TypeAdapter(int)
+_DELTA: Final = TypeAdapter(Mapping[str, object])
 
 
 def _joined_token_ids(choices: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
@@ -6101,8 +6103,30 @@ def test_hosted_vllm_stream_keeps_stop_reason_and_every_token_id(
         ),
     )
 
-    assert (emitted[-1]["finish_reason"], emitted[-1].get("stop_reason")) == ("stop", stop_reason)
+    assert [
+        (choice["finish_reason"], choice.get("stop_reason"))
+        for choice in emitted
+        if choice["finish_reason"] is not None or choice.get("stop_reason") is not None
+    ] == [("stop", stop_reason)]
     assert _joined_token_ids(emitted) == (16, 11, 17, 20)
+
+
+def test_hosted_vllm_stream_sends_empty_content_on_token_id_only_chunks(logging_obj: Logging) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": None, "token_ids": [11]},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": None, "token_ids": [220]},
+            {"index": 0, "delta": {"content": "1"}, "finish_reason": None, "token_ids": [16]},
+        ),
+    )
+
+    assert [
+        (_DELTA.validate_python(choice["delta"]).get("content"), choice.get("token_ids"))
+        for choice in emitted
+        if choice.get("token_ids")
+    ] == [("", [11]), ("", [220]), ("1", [16])]
 
 
 def test_hosted_vllm_stream_keeps_held_back_token_ids_on_their_own_choice(logging_obj: Logging) -> None:
@@ -6142,18 +6166,55 @@ def test_hosted_vllm_stream_with_null_token_ids_emits_the_same_chunks_as_without
     ]
 
 
-def test_hosted_vllm_stream_finish_chunk_keeps_the_first_choice_stop_reason(logging_obj: Logging) -> None:
-    emitted: Final = _hosted_vllm_stream_choices(
-        logging_obj,
-        (
-            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
-            {"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
-            {"index": 0, "delta": {"content": "1, 2"}, "finish_reason": "stop", "stop_reason": ", 3"},
-            {"index": 1, "delta": {"content": "1, 2, 3"}, "finish_reason": "stop", "stop_reason": 151645},
+_TWO_CHOICE_STOP_REASONS: Final[Mapping[int, str | int]] = MappingProxyType({0: ", 3", 1: 151645})
+_TWO_CHOICE_TOKEN_IDS: Final[Mapping[int, tuple[int, int]]] = MappingProxyType({0: (16, 17), 1: (26, 27)})
+
+
+def _two_choice_stream(first_finished: int, finish_contents: tuple[str, str]) -> tuple[Mapping[str, object], ...]:
+    return (
+        *({"index": index, "delta": {"role": "assistant", "content": ""}, "finish_reason": None} for index in (0, 1)),
+        *(
+            {"index": index, "delta": {"content": "1"}, "finish_reason": None, "token_ids": [ids[0]]}
+            for index, ids in _TWO_CHOICE_TOKEN_IDS.items()
+        ),
+        *(
+            {
+                "index": index,
+                "delta": {"content": content},
+                "finish_reason": "stop",
+                "stop_reason": _TWO_CHOICE_STOP_REASONS[index],
+                "token_ids": [_TWO_CHOICE_TOKEN_IDS[index][1]],
+            }
+            for index, content in zip((first_finished, 1 - first_finished), finish_contents)
         ),
     )
 
-    assert [choice.get("stop_reason") for choice in emitted if choice["finish_reason"] is not None] == [", 3"]
+
+def _carries_another_choices_fields(choice: Mapping[str, object]) -> bool:
+    own_index: Final = _CHOICE_INDEX.validate_python(choice["index"])
+    token_ids: Final = _TOKEN_IDS.validate_python(choice.get("token_ids")) or ()
+    return not set(token_ids) <= set(_TWO_CHOICE_TOKEN_IDS[own_index]) or choice.get("stop_reason") not in (
+        None,
+        _TWO_CHOICE_STOP_REASONS[own_index],
+    )
+
+
+@pytest.mark.parametrize("first_finished", [0, 1])
+@pytest.mark.parametrize(
+    "finish_contents",
+    [("", ""), ("2", ""), ("2", "2")],
+    ids=["both-finish-only", "content-then-finish-only", "both-content-then-finish"],
+)
+def test_hosted_vllm_stream_with_two_choices_keeps_ids_and_stop_reason_on_their_own_choice(
+    logging_obj: Logging, first_finished: int, finish_contents: tuple[str, str]
+) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(logging_obj, _two_choice_stream(first_finished, finish_contents))
+
+    assert [
+        (choice["index"], choice.get("token_ids"), choice.get("stop_reason"))
+        for choice in emitted
+        if _carries_another_choices_fields(choice)
+    ] == []
 
 
 _CACHED_VLLM_TOKEN_IDS: Final = (16, 11, 220, 17, 11, 220, 18, 11, 220, 19)
@@ -6203,7 +6264,7 @@ async def test_a_streamed_cache_hit_keeps_the_vllm_stop_reason_and_every_token_i
     emitted: Final = await _replayed_cache_hit_choices(logging_obj, replay)
 
     assert [choice.get("stop_reason") for choice in emitted if choice["finish_reason"] is not None] == [", 5"]
-    assert {choice.get("stop_reason") for choice in emitted[:-2]} == {None}
+    assert {choice.get("stop_reason") for choice in emitted if choice["finish_reason"] is None} == {None}
     assert _joined_token_ids(emitted) == _CACHED_VLLM_TOKEN_IDS
 
 

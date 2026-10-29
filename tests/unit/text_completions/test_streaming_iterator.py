@@ -147,6 +147,24 @@ def test_text_completion_stream_keeps_held_back_token_ids_and_the_stop_reason(fi
     assert [choice.get("stop_reason") for choice in choices if choice.finish_reason is not None] == [", 7"]
 
 
+def test_text_completion_stream_sends_empty_text_on_token_id_only_chunks() -> None:
+    responses: Final = _text_completion_stream(
+        (
+            _completion_chunk("", None, token_ids=[11]),
+            _completion_chunk("", None, token_ids=[220]),
+            _completion_chunk(", 5", None, token_ids=[20]),
+        )
+    )
+
+    choices: Final = [response.choices[0] for response in responses]
+
+    assert [(choice.text, choice.get("token_ids")) for choice in choices if choice.get("token_ids")] == [
+        ("", [11]),
+        ("", [220]),
+        (", 5", [20]),
+    ]
+
+
 def test_text_completion_conversion_rejects_non_streaming_choices() -> None:
     chunk: Final = Choices()
     wrapper: Final = TextCompletionStreamWrapper(completion_stream=None, model="test-model")
