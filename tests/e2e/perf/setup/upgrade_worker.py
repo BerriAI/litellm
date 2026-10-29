@@ -102,7 +102,7 @@ def main() -> int:
             UNION (SELECT request_id FROM "LiteLLM_SpendLogs" ORDER BY request_id DESC LIMIT 32)""").fetchall()
         ids: Final = tuple(row[0] for row in _STRINGS.validate_python(sample))
         assert ids, "Restored baseline has no spend logs"
-        names: Final = tuple(index.name for index in request_log_indexes.REQUEST_LOG_INDEXES)
+        names: Final = tuple(index.name for index in request_log_indexes.REQUEST_LOG_INDEXES if index.max_bytes is None)
         migrations: Final = Path(request_log_indexes.__file__).parent / "migrations"
         initial: Final = UpgradeState(
             phase="schema",
