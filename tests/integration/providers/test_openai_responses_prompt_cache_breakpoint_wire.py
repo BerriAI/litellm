@@ -16,6 +16,7 @@ pytestmark: Final = pytest.mark.timeout(120)
 
 _EPHEMERAL: Final[Mapping[str, JsonValue]] = {"type": "ephemeral"}
 _EPHEMERAL_1H: Final[Mapping[str, JsonValue]] = {"type": "ephemeral", "ttl": "1h"}
+_EXPLICIT_12H: Final[Mapping[str, JsonValue]] = {"mode": "explicit", "ttl": "12h"}
 _OPTED_IN: Final[Mapping[str, JsonValue]] = {"prompt_cache_options": {"mode": "explicit"}}
 _LOOKUP_TOOL: Final[Mapping[str, JsonValue]] = {
     "type": "function",
@@ -104,7 +105,7 @@ def _assert_marked_history_on_wire(body: Mapping[str, JsonValue], marker: str) -
             "role": "developer",
             "content": [
                 _input_text("Answer briefly"),
-                pcb.marked(_input_text("Stable rules"), pcb.EXPLICIT),
+                pcb.marked(_input_text("Stable rules"), _EXPLICIT_12H),
             ],
         },
         {"role": "user", "content": [pcb.marked(_input_text(pcb.prompt(marker)), pcb.EXPLICIT)]},
