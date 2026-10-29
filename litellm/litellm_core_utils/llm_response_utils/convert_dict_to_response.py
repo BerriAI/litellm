@@ -155,11 +155,15 @@ def _fields_in(fields: Mapping[str, object], keys: frozenset[str]) -> dict[str, 
 
 
 def _replay_deltas(delta: Delta) -> tuple[Delta, ...]:
-    pieces: Final = _split_assembled_content_for_replay(delta.content)
-    if not pieces:
-        return (delta,)
     fields: Final[dict[str, object]] = delta.model_dump(exclude_none=True)
     lead: Final = _fields_in(fields, _REPLAY_LEAD_FIELDS) if _REPLAY_REASONING_FIELDS.intersection(fields) else {}
+    pieces: Final = _split_assembled_content_for_replay(delta.content)
+    if not pieces and not lead:
+        return (delta,)
+    if not pieces:
+        held_back: Final = lead.keys() | {"content"}
+        rest: Final = {key: value for key, value in fields.items() if key not in held_back}
+        return (Delta.model_validate(lead),) + ((Delta.model_validate(rest),) if rest else ())
     tools: Final = _fields_in(fields, _REPLAY_TOOL_FIELDS)
     annotations: Final = _fields_in(fields, frozenset({"annotations"}))
     moved: Final = lead.keys() | _REPLAY_TOOL_FIELDS | _REPLAY_TEXT_FIELDS

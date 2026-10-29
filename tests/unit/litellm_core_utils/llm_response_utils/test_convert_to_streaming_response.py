@@ -564,3 +564,26 @@ async def test_a_cached_answer_streams_its_tool_call_after_the_reasoning_and_the
     assert called == [max(text) + 1]
     assert deltas[called[0]]["tool_calls"] == [tool_call]
     assert deltas[-1]["finish"] == "stop"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replay", ["async", "sync"])
+async def test_a_cached_tool_turn_without_text_streams_the_reasoning_before_the_tool_call(
+    replay: Literal["async", "sync"],
+) -> None:
+    tool_call: Final[JsonValue] = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "count_apples", "arguments": '{"basket": "all"}'},
+        "index": 0,
+    }
+    deltas: Final = await _client_stream(
+        {"content": None, "reasoning_content": "I need the basket totals", "tool_calls": [tool_call]}, replay
+    )
+    reasoning: Final = [i for i, delta in enumerate(deltas) if "reasoning_content" in delta]
+    called: Final = [i for i, delta in enumerate(deltas) if delta.get("tool_calls")]
+    assert deltas[0]["role"] == "assistant"
+    assert "".join(str(deltas[i]["reasoning_content"]) for i in reasoning) == "I need the basket totals"
+    assert reasoning and called and max(reasoning) < min(called)
+    assert [deltas[i]["tool_calls"] for i in called] == [[tool_call]]
+    assert deltas[-1]["finish"] == "stop"
