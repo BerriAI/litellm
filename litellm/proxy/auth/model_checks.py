@@ -374,6 +374,17 @@ def _ids_routing_to_catalog_models(
     )
 
 
+def _ids_routing_through_catch_all(
+    name_pattern: str, catalog_ids: Sequence[str], routes_to_model: Callable[[str, str], bool]
+) -> tuple[str, ...]:
+    if name_pattern.count("*") != 1:
+        return ()
+    listed_ids: Final = ((name_pattern.replace("*", catalog_id), catalog_id) for catalog_id in catalog_ids)
+    return tuple(
+        dict.fromkeys(listed_id for listed_id, catalog_id in listed_ids if routes_to_model(listed_id, catalog_id))
+    )
+
+
 def _model_info_field(deployment: Mapping[str, object], field: str) -> object:
     model_info: Final = deployment.get("model_info")
     return model_info.get(field) if is_str_keyed_mapping(model_info) else None
@@ -436,6 +447,8 @@ def get_known_models_from_wildcard(
 
     if wildcard_models is None:
         return []
+    if litellm_params is not None and litellm_params.model == "*":
+        return list(_ids_routing_through_catch_all(wildcard_model, wildcard_models, routes_to_model))
     if deployment_pattern_naming_listed_ids is not None:
         return list(
             _ids_routing_to_catalog_models(

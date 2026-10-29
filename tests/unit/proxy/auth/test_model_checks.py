@@ -1609,24 +1609,51 @@ def test_wildcard_lists_an_id_a_more_specific_sibling_serves_with_the_same_model
     assert "openai/gpt-partial-route-9*" not in model_info_names
 
 
-def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_through_it(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("model_name", "expected_id"),
+    [
+        pytest.param("team-partial-route/*", f"team-partial-route/{_ROUTE_OPENAI_ID}", id="whole-name"),
+        pytest.param("team-partial-route/gpt-*", f"team-partial-route/gpt-{_ROUTE_OPENAI_ID}", id="partial-name"),
+        pytest.param("team-partial-route/*-*", None, id="more-wildcards-than-the-deployment"),
+    ],
+)
+def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_to_catalog_models(
+    monkeypatch: pytest.MonkeyPatch, model_name: str, expected_id: str | None
+) -> None:
     from litellm import Router
-    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+    from litellm.utils import get_valid_models
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-partial-route-test")
-    router: Final = Router(model_list=[{"model_name": "team-partial-route/*", "litellm_params": {"model": "*"}}])
+    router: Final = Router(model_list=[{"model_name": model_name, "litellm_params": {"model": "*"}}])
+
+    def routed_model(listed_id: str) -> object:
+        routed: Final = router.wildcard_route_deployments(listed_id, None)
+        return routed[0]["litellm_params"]["model"] if routed else None
+
     with _registered_chat_models({_ROUTE_OPENAI_ID: "openai"}):
+        catalog_ids: Final = frozenset(get_valid_models())
         v1_models: Final = get_complete_model_list(
             key_models=[],
             team_models=[],
-            proxy_model_list=["team-partial-route/*"],
+            proxy_model_list=[model_name],
             user_model=None,
             infer_model_from_keys=False,
             llm_router=router,
         )
+        model_info_names: Final = [
+            str(row["model_name"])
+            for row in expand_wildcard_deployments_for_model_info(
+                [dict(deployment) for deployment in router.get_model_list() or []], router
+            )
+            if row["model_name"] != model_name
+        ]
 
-    unrouted_ids: Final = [
-        listed_id for listed_id in v1_models if not router.wildcard_route_deployments(listed_id, None)
-    ]
-    assert f"team-partial-route/{_ROUTE_OPENAI_ID}" in v1_models
-    assert unrouted_ids == []
+    listed_ids: Final = [*v1_models, *model_info_names]
+    assert [listed_id for listed_id in listed_ids if routed_model(listed_id) not in catalog_ids] == []
+    if expected_id is None:
+        assert listed_ids == []
+    else:
+        assert expected_id in v1_models
+        assert expected_id in model_info_names
+        assert routed_model(expected_id) == _ROUTE_OPENAI_ID
