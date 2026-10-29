@@ -9,6 +9,7 @@ gate, the URL construction for both paths, and the shared Bearer auth.
 
 import copy
 import logging
+from typing import Final
 
 import pytest
 from botocore.exceptions import (
@@ -570,6 +571,32 @@ class TestBedrockMantleServiceTier:
             )
         assert mock_warning.call_count == 1
         assert "priority" in str(mock_warning.call_args)
+
+
+class TestBedrockMantleRefusedEffort:
+    def test_dropping_a_refused_effort_does_not_suggest_declaring_levels_mantle_ignores(
+        self, local_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        refused: Final = next(
+            level
+            for level in ("none", "minimal", "low")
+            if litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is False
+        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            params: Final = BedrockMantleResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": refused}},
+                model="openai.gpt-6.1-sol",
+                drop_params=True,
+            )
+
+        assert "reasoning" not in params
+        drop_warnings: Final = [
+            record.getMessage()
+            for record in caplog.records
+            if f"Dropping reasoning.effort={refused!r}" in record.getMessage()
+        ]
+        assert len(drop_warnings) == 1
+        assert "model_info" not in drop_warnings[0]
 
 
 class TestBedrockMantleReasoningSummary:
