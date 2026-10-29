@@ -2324,9 +2324,10 @@ class ProxyBaseLLMRequestProcessing:
             version=version,
             proxy_config=proxy_config,
         )
+        request_fields: Final = _REQUEST_FIELDS.validate_python(self.data)
+        metadata_variable_name: Final = get_metadata_variable_name(request, request_fields)
         if logging_auth is not None:
-            metadata_variable_name: Final = get_metadata_variable_name(request)
-            request_metadata: Final = self.data.get(metadata_variable_name)
+            request_metadata: Final = request_fields.get(metadata_variable_name)
             if isinstance(request_metadata, dict):
                 self.data[metadata_variable_name] = {
                     **TypeAdapter(dict[str, object]).validate_python(request_metadata),
@@ -2354,12 +2355,11 @@ class ProxyBaseLLMRequestProcessing:
 
         # Store queue time in metadata after add_litellm_data_to_request to ensure it's preserved
         if queue_time_seconds is not None:
-            _metadata_variable_name: Final = get_metadata_variable_name(request)
-            if _metadata_variable_name not in self.data:
-                self.data[_metadata_variable_name] = {}
-            if not isinstance(self.data[_metadata_variable_name], dict):
-                self.data[_metadata_variable_name] = {}
-            self.data[_metadata_variable_name]["queue_time_seconds"] = queue_time_seconds
+            if metadata_variable_name not in self.data:
+                self.data[metadata_variable_name] = {}
+            if not isinstance(self.data[metadata_variable_name], dict):
+                self.data[metadata_variable_name] = {}
+            self.data[metadata_variable_name]["queue_time_seconds"] = queue_time_seconds
 
         if isinstance(model, str):
             reject_url_valued_destination("model", model)

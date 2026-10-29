@@ -440,7 +440,7 @@ def _request_has_trace_id(request_body: Mapping[str, object], request: Request, 
     from litellm.proxy.litellm_pre_call_utils import (
         _trace_id_from_traceparent,  # pyright: ignore[reportPrivateUsage]  # reuse W3C traceparent parser
         get_chain_id_from_headers,
-        metadata_variable_name_for_route,
+        metadata_variable_name_for_request,
     )
 
     if get_chain_id_from_headers(dict(request.headers)):
@@ -454,7 +454,7 @@ def _request_has_trace_id(request_body: Mapping[str, object], request: Request, 
         traceparent: Final[str | None] = request.headers.get("traceparent")
         if isinstance(traceparent, str) and _trace_id_from_traceparent(traceparent):
             return True
-    metadata_variable_name: Final = metadata_variable_name_for_route(get_request_route(request))
+    metadata_variable_name: Final = metadata_variable_name_for_request(get_request_route(request), request_body)
     selected_metadata: Final[object] = request_body.get(metadata_variable_name)
     if isinstance(selected_metadata, dict):
         selected_metadata_dict: Final = _TRACE_ID_METADATA_ADAPTER.validate_python(selected_metadata)

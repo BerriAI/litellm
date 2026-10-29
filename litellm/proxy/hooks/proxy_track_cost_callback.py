@@ -37,7 +37,7 @@ from litellm.proxy.db.db_spend_update_writer import (
     get_llm_router,
 )
 from litellm.proxy.hooks.search_free_tier import apply_search_free_tier
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_route
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_counter_batch import post_call_counter_keys, spend_counter_batch_scope
 from litellm.proxy.spend_tracking.spend_event import (
@@ -143,7 +143,7 @@ def _proxy_stamped_used_client_oauth_token(
     proxy_bucket: Final = (
         get_metadata_variable_name_from_kwargs(request_data)
         if request_route is None
-        else metadata_variable_name_for_route(request_route)
+        else metadata_variable_name_for_request(request_route, request_data)
     )
     proxy_metadata: Final = request_data.get(proxy_bucket)
     stamped: Final = proxy_metadata.get("used_client_oauth_token") if isinstance(proxy_metadata, dict) else None

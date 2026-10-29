@@ -90,52 +90,65 @@ class TestGetMetadataVariableName:
 
     def test_returns_litellm_metadata_for_thread_routes(self):
         request = self._make_request("/v1/threads/thread_123/messages")
-        assert get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request, {}) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_assistant_routes(self):
         request = self._make_request("/v1/assistants/asst_123")
-        assert get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request, {}) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_batches_route(self):
         request = self._make_request("/v1/batches")
-        assert get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request, {}) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_messages_route(self):
         request = self._make_request("/v1/messages")
-        assert get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request, {}) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_files_route(self):
         request = self._make_request("/v1/files")
-        assert get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request, {}) == "litellm_metadata"
 
     @pytest.mark.parametrize(
         "path", ["/v1beta/interactions", "/interactions", "/v1beta/interactions/v1_abc123", "/interactions/v1_abc123/cancel"]
     )
     def test_returns_litellm_metadata_for_interactions_routes(self, path):
         request = self._make_request(path)
-        assert get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request, {}) == "litellm_metadata"
 
     def test_returns_metadata_for_chat_completions(self):
         request = self._make_request("/chat/completions")
-        assert get_metadata_variable_name(request) == "metadata"
+        assert get_metadata_variable_name(request, {}) == "metadata"
+
+    @pytest.mark.parametrize(
+        "body, expected",
+        [
+            ({"messages": [{"role": "user", "content": "hi"}]}, "metadata"),
+            ({"messages": []}, "metadata"),
+            ({"input": [{"role": "user", "content": "hi"}]}, "litellm_metadata"),
+            ({"input": "hi", "messages": []}, "litellm_metadata"),
+        ],
+    )
+    def test_cursor_route_picks_the_metadata_field_by_body_shape(self, body, expected):
+        request = self._make_request("/cursor/chat/completions")
+        assert get_metadata_variable_name(request, body) == expected
 
     def test_returns_metadata_for_completions(self):
         request = self._make_request("/v1/completions")
-        assert get_metadata_variable_name(request) == "metadata"
+        assert get_metadata_variable_name(request, {}) == "metadata"
 
     def test_returns_metadata_for_embeddings(self):
         request = self._make_request("/v1/embeddings")
-        assert get_metadata_variable_name(request) == "metadata"
+        assert get_metadata_variable_name(request, {}) == "metadata"
 
     def test_returns_litellm_metadata_for_bedrock_invoke(self):
         # GH#30629: bedrock passthrough must use litellm_metadata
         # to prevent key-level tags from leaking into provider body
         request = self._make_request("/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke")
-        assert get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request, {}) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_bedrock_converse(self):
         request = self._make_request("/bedrock/model/us.anthropic.claude-sonnet-4-6/converse")
-        assert get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request, {}) == "litellm_metadata"
 
 
 def test_get_enforced_params_for_service_account_settings():
@@ -7844,7 +7857,7 @@ class TestPromotedTraceControlFields:
         )
 
     def test_returns_litellm_metadata_for_responses_route(self):
-        assert get_metadata_variable_name(self._make_request("/v1/responses")) == "litellm_metadata"
+        assert get_metadata_variable_name(self._make_request("/v1/responses"), {}) == "litellm_metadata"
 
     def test_promotes_trace_prefixed_and_allow_listed_fields(self):
         requester_metadata = {

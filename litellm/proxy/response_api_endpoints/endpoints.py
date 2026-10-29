@@ -75,6 +75,7 @@ from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decry
 from litellm.proxy.litellm_pre_call_utils import (
     _CLIENT_PRICING_METADATA_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
+    is_chat_completions_body,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
@@ -175,13 +176,6 @@ def _normalize_tool_dialect(
     return {**data, **{key: value for key, value in replaceable if key in data}}
 
 
-def _is_chat_completions_body(data: Mapping[str, object]) -> bool:
-    messages: Final = data.get("messages")
-    if isinstance(messages, list) and messages:
-        return True
-    return "messages" in data and "input" not in data
-
-
 _CURSOR_THINKING_SEPARATOR: Final = "-thinking-"
 _CURSOR_FAST_SUFFIX: Final = "-fast"
 _CURSOR_THINKING_LEVELS: Final[frozenset[str]] = frozenset(get_args(REASONING_EFFORT))
@@ -222,7 +216,7 @@ def _resolve_cursor_model_variant(
     resolved: Final = {**data, "model": variant.base_model}
     if variant.reasoning_effort is None:
         return resolved
-    if _is_chat_completions_body(data):
+    if is_chat_completions_body(data):
         if "reasoning_effort" in data:
             return resolved
         return {**resolved, "reasoning_effort": variant.reasoning_effort}
@@ -604,7 +598,7 @@ async def cursor_chat_completions(
 
     raw_body: Final = await read_request_body(request=request)
 
-    if _is_chat_completions_body(raw_body):
+    if is_chat_completions_body(raw_body):
         # Genuine chat completions body (Cursor sends these for models whose BYOK it
         # already fixed); delegate so behavior matches /chat/completions exactly.
         # Keyed on messages CONTENT, not key presence: Cursor can send a null or

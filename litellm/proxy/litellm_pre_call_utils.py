@@ -340,8 +340,9 @@ LITELLM_METADATA_ROUTES: Final = (
     "responses",
     "files",
     "interactions",
-    "/cursor/chat/completions",
 )
+
+CURSOR_CHAT_COMPLETIONS_ROUTE: Final = "/cursor/chat/completions"
 
 LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
     {
@@ -827,7 +828,7 @@ def _strip_router_reserved_metadata(
             )
 
 
-def get_metadata_variable_name(request: Request) -> str:
+def get_metadata_variable_name(request: Request, data: Mapping[str, object]) -> str:
     """
     Helper to return what the "metadata" field should be called in the request data
 
@@ -838,7 +839,7 @@ def get_metadata_variable_name(request: Request) -> str:
     # Inline imports — auth_utils/route_checks participate in a proxy import cycle.
     from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
 
-    return metadata_variable_name_for_route(get_request_route(request))
+    return metadata_variable_name_for_request(get_request_route(request), data)
 
 
 _get_metadata_variable_name: Final = get_metadata_variable_name
@@ -852,6 +853,25 @@ def metadata_variable_name_for_route(route: str) -> Literal["metadata", "litellm
         return "litellm_metadata"
 
     return "metadata"
+
+
+def is_chat_completions_body(data: Mapping[str, object]) -> bool:
+    messages: Final = data.get("messages")
+    if isinstance(messages, list) and messages:
+        return True
+    return "messages" in data and "input" not in data
+
+
+def is_cursor_responses_request(route: str, body: Mapping[str, object]) -> bool:
+    return CURSOR_CHAT_COMPLETIONS_ROUTE in route and not is_chat_completions_body(body)
+
+
+def metadata_variable_name_for_request(
+    route: str, body: Mapping[str, object]
+) -> Literal["metadata", "litellm_metadata"]:
+    if is_cursor_responses_request(route, body):
+        return "litellm_metadata"
+    return metadata_variable_name_for_route(route)
 
 
 def _promoted_trace_control_fields(
@@ -2263,7 +2283,9 @@ class LiteLLMProxyRequestSetup:
         ``_tag_max_budget_check`` resolve to ``litellm_metadata``, leaving
         header tags invisible to per-tag budget enforcement.
         """
-        if any(metadata_route in route for metadata_route in LITELLM_METADATA_ROUTES):
+        if any(metadata_route in route for metadata_route in LITELLM_METADATA_ROUTES) or is_cursor_responses_request(
+            route, request_data
+        ):
             request_data.setdefault("litellm_metadata", {})
 
     @staticmethod
@@ -2590,7 +2612,7 @@ async def add_litellm_data_to_request(
     }
 
     safe_add_api_version_from_query_params(data, request)
-    _metadata_variable_name: Final = get_metadata_variable_name(request)
+    _metadata_variable_name: Final = get_metadata_variable_name(request, _REQUEST_FIELDS.validate_python(data))
     if data.get(_metadata_variable_name, None) is None:
         data[_metadata_variable_name] = {}
 

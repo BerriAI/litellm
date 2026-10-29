@@ -8,6 +8,7 @@ from hashlib import sha256
 from importlib.resources import files
 from typing import Final
 
+import httpx
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, list_value, object_value
 from integration._support.responses_vendor import same_response
@@ -150,11 +151,12 @@ def _chat_completion(stream: bool, identity: str) -> bytes | tuple[bytes, ...]:
     ).encode()
 
 
-def _deployment(scenario: Scenario, wire: Wire) -> str:
+def _deployment(scenario: Scenario, wire: Wire, **pricing: JsonValue) -> str:
     model: Final = scenario.model(
         model=f"openai/{_MODEL}",
         api_key=_API_KEY,
         api_base=f"{wire.url}/v1",
+        **pricing,
     )
     wait_for_worker_readiness(scenario.gateway, model, 1, _PROXY_WORKERS)
     return model
@@ -514,3 +516,53 @@ def test_cursor_messages_body_uses_chat_completions_wire(
         )
         assert (row["call_type"], row["team_id"]) == ("acompletion", team), row
         assert _REQUEST_TAG in list_value(row["request_tags"]), row
+
+
+def test_cursor_messages_body_keeps_client_and_key_tags_and_enforces_the_client_tag_budget(gateway: Gateway) -> None:
+    chat_id: Final = f"chat_cursor_{uuid.uuid4().hex}"
+    budget_tag: Final = f"cursor-tag-budget-{uuid.uuid4().hex}"
+    key_tag: Final = f"cursor-key-tag-{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return model_discovery_reply(_MODEL)
+        completion: Final = _chat_completion(False, chat_id)
+        return Reply(body=completion if isinstance(completion, bytes) else b"")
+
+    def delete_tag() -> None:
+        gateway.post("/tag/delete", {"name": budget_tag})
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, input_cost_per_token=0.01, output_cost_per_token=0.01)
+        key: Final = scenario.key(models=[model], metadata={"tags": [key_tag]})
+        gateway.post("/tag/new", {"name": budget_tag, "max_budget": 0.0001})
+        scenario.cleanups.callback(delete_tag)
+
+        def tagged_chat(text: str) -> httpx.Response:
+            return gateway.request(
+                "POST",
+                "/cursor/chat/completions",
+                {
+                    "model": model,
+                    "messages": [{"role": "user", "content": text}],
+                    "metadata": {"tags": [budget_tag]},
+                },
+                key=key,
+            )
+
+        first: Final = tagged_chat("first tagged chat")
+        assert first.status_code == 200, first.text
+        (row,) = eventually(
+            lambda: gateway.rows(
+                'SELECT request_tags FROM "LiteLLM_SpendLogs" WHERE api_key = %s',
+                (sha256(key.encode()).hexdigest(),),
+            ),
+            lambda rows: len(rows) == 1,
+            seconds=70,
+        )
+        assert {budget_tag, key_tag} <= set(list_value(row["request_tags"])), row
+        blocked: Final = eventually(
+            lambda: tagged_chat("tag budget probe"), lambda response: response.status_code != 200, seconds=70
+        )
+        assert blocked.status_code == 422, blocked.text
+        assert "budget" in blocked.text.lower(), blocked.text
