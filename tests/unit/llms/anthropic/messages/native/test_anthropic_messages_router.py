@@ -545,6 +545,37 @@ async def test_router_aanthropic_messages_bills_a_per_second_deployment_for_the_
     )
 
 
+async def _wait_for_payloads(recorder: _RecordingLogger, count: int) -> None:
+    async def arrived() -> None:
+        while len(recorder.payloads) < count:
+            await asyncio.sleep(0.05)
+
+    await asyncio.wait_for(arrived(), timeout=30.0)
+
+
+@pytest.mark.asyncio
+async def test_router_aanthropic_messages_bills_a_short_call_on_a_long_context_rate_like_a_deployment_without_one(
+    respx_mock, monkeypatch
+):
+    messages: Final = _unique_messages()
+    recorder: Final = _RecordingLogger(messages)
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
+        side_effect=lambda request: httpx.Response(200, json=_anthropic_body())
+    )
+
+    await _route_like_the_proxy(_priced_router(), messages=messages)
+    await _route_like_the_proxy(
+        _priced_router(input_cost_per_token_above_200k_tokens=1.0, output_cost_per_token_above_200k_tokens=1.0),
+        messages=messages,
+    )
+    await _wait_for_payloads(recorder, 2)
+
+    costs: Final = {payload["response_cost"] for payload in recorder.payloads}
+    assert len(costs) == 1, costs
+    assert costs.pop() > 0
+
+
 _LARGE_SYSTEM_PROMPT: Final = "This is a comprehensive legal agreement between Party A and Party B. " * 100
 
 
