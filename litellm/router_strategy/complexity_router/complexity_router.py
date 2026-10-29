@@ -1063,14 +1063,16 @@ def _extract_agent_progress(
 
     An agent loop learns what the ask really involves from its tools, so these are what the classifier
     needs on a continuation turn. Only what follows the newest human ask counts, since tool traffic
-    before it served an earlier ask. Newest first is what the budget keeps, so the latest result always
-    reaches the classifier. Harness reminders are stripped from tool output the same way they are from asks.
+    before it served an earlier ask; a follow-up approving that work ("yes, go ahead") is what
+    classifier_context_include_assistant_turns is for. The latest result always reaches the classifier.
+    Harness reminders are stripped from tool output the same way they are from asks.
 
     A loop that overflows the budget has each entry cut to a quarter of it first, since one large file read
-    would otherwise fill the block alone. Its first tool result is kept even then, ahead of the newest entries
-    the rest of the budget buys, because that is usually the read that told the agent what the task is, and a
-    long loop of later reads would otherwise push it out and leave the classifier with routine output alone. A
-    loop that fits is quoted whole.
+    would otherwise fill the block alone. The oldest entries then fill half the budget and the newest the
+    rest, because the reads a loop opens with usually told the agent what the task is, and a long loop of
+    later reads would otherwise push them out and leave the classifier with routine output alone. Half
+    rather than the first result alone, since that one can be a failed read that says nothing about the
+    task. A loop that fits is quoted whole.
     """
     from litellm.litellm_core_utils.prompt_templates.factory import tool_exchange_texts
 
@@ -1094,12 +1096,13 @@ def _extract_agent_progress(
         return tuple(reversed(clamped))
     share: Final = budget_chars // _TOOL_ENTRY_SHARES_OF_BUDGET
     oldest_first: Final = tuple((kind, _truncate(text, share)) for kind, text in reversed(clamped))
-    first_result: Final = next((index for index, (kind, _) in enumerate(oldest_first) if kind == "tool result"), None)
-    if first_result is None or share < _MIN_QUOTED_TURN_CHARS:
+    if share < _MIN_QUOTED_TURN_CHARS or sum(len(text) for _, text in oldest_first) <= budget_chars:
         return tuple(reversed(_turns_within_budget(tuple(reversed(oldest_first)), budget_chars)))
-    anchor: Final = oldest_first[first_result]
-    newer: Final = tuple(reversed(oldest_first[first_result + 1 :]))
-    return (anchor, *reversed(_turns_within_budget(newer, budget_chars - len(anchor[1]))))
+    opening: Final = _turns_within_budget(oldest_first, budget_chars // 2)
+    latest: Final = _turns_within_budget(
+        tuple(reversed(oldest_first[len(opening) :])), budget_chars - sum(len(text) for _, text in opening)
+    )
+    return (*opening, *reversed(latest))
 
 
 def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bool:

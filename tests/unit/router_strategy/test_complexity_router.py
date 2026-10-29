@@ -11734,12 +11734,35 @@ class TestAgentProgressReachesClassifier:
         assert "balance = 0" in client.states[-1]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("reads,read_chars", [(4, 3000), (6, 1500), (20, 400)])
-    async def test_long_loop_keeps_the_read_that_described_the_task(self, reads: int, read_chars: int) -> None:
+    @pytest.mark.parametrize("failed_first_read", [False, True])
+    @pytest.mark.parametrize("reads,read_chars", [(4, 3000), (6, 1500), (20, 400), (4, 20000)])
+    async def test_long_loop_keeps_the_read_that_described_the_task(
+        self, reads: int, read_chars: int, failed_first_read: bool
+    ) -> None:
         """Every later read in a long loop is routine on its own, so once they overflow the budget the classifier
-        must still see the task file the loop opened with, or every_request drops the loop to the cheap tier."""
+        must still see the task file the loop opened with, or every_request drops the loop to the cheap tier. That
+        holds when a failed read comes before the task file too."""
         client: Final = _TaskAwareJevClient()
         router: Final = self._jev_router(client, classifier_context_include_tool_turns=True)
+        ask, *task_read = _tool_loop_continuation("chat_completions")
+        failed_read: Final = (
+            (
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_0",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": '{"path": "docs/TASK.md"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_0", "content": "Error: sandbox denied the read (exit code 1)"},
+            )
+            if failed_first_read
+            else ()
+        )
         later_reads: Final = tuple(
             turn
             for i in range(reads)
@@ -11762,7 +11785,7 @@ class TestAgentProgressReachesClassifier:
         response: Final = await router.async_pre_routing_hook(
             model="test-router",
             request_kwargs={},
-            messages=[*_tool_loop_continuation("chat_completions"), *later_reads],
+            messages=[ask, *failed_read, *task_read, *later_reads],
         )
 
         assert response is not None
