@@ -248,9 +248,13 @@ class OpenAITextCompletionHandler(BaseTranslation):
     def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
         chunks: Final = _text_completion_chunks(responses_so_far)
         streamed_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in chunks))
-        finished_indices: Final = frozenset(choice.index for choice in streamed_choices if choice.finish_reason)
+        finished_indices: Final = frozenset(
+            _choice_index(choice) for choice in streamed_choices if choice.finish_reason
+        )
         unfinished_indices: Final = tuple(
-            dict.fromkeys(choice.index for choice in streamed_choices if choice.index not in finished_indices)
+            dict.fromkeys(
+                _choice_index(choice) for choice in streamed_choices if _choice_index(choice) not in finished_indices
+            )
         )
         if not unfinished_indices:
             return tuple(responses_so_far)
@@ -305,16 +309,16 @@ class OpenAITextCompletionHandler(BaseTranslation):
     @staticmethod
     def _assemble_ended_stream(responses_so_far: Sequence[TextCompletionResponse]) -> TextCompletionResponse:
         streamed_choices: Final = tuple(chain.from_iterable(item.choices for item in responses_so_far))
-        choice_indices: Final = tuple(dict.fromkeys(choice.index for choice in streamed_choices))
+        choice_indices: Final = tuple(dict.fromkeys(_choice_index(choice) for choice in streamed_choices))
         assembled_choices: Final = [
             TextChoices(
                 index=index,
-                text="".join(_choice_text(choice) for choice in streamed_choices if choice.index == index),
+                text="".join(_choice_text(choice) for choice in streamed_choices if _choice_index(choice) == index),
                 finish_reason=next(
                     (
                         choice.finish_reason
                         for choice in streamed_choices
-                        if choice.index == index and choice.finish_reason
+                        if _choice_index(choice) == index and choice.finish_reason
                     ),
                     None,
                 ),
@@ -334,7 +338,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
     @staticmethod
     def _write_choice_text(responses_so_far: Sequence[TextCompletionResponse], choice_index: int, text: str) -> None:
         streamed_choices: Final = chain.from_iterable(item.choices for item in responses_so_far)
-        head, *tail = (choice for choice in streamed_choices if choice.index == choice_index)
+        head, *tail = (choice for choice in streamed_choices if _choice_index(choice) == choice_index)
         head.text = text
         for choice in tail:
             if isinstance(stream_item_field(choice, "text"), str):
@@ -361,5 +365,9 @@ def _choice_text(choice: TextChoices) -> str:
     return text if isinstance(text, str) else ""
 
 
+def _choice_index(choice: TextChoices) -> int:
+    return choice.index or 0
+
+
 def _choice_texts(response: TextCompletionResponse) -> tuple[tuple[int, str], ...]:
-    return tuple((choice.index, _choice_text(choice)) for choice in response.choices)
+    return tuple((_choice_index(choice), _choice_text(choice)) for choice in response.choices)

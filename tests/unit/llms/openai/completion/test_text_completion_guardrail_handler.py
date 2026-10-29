@@ -388,7 +388,7 @@ class _PassthroughReplaceGuardrail(CustomGuardrail):
         return inputs
 
 
-def _text_chunk(index: int, text: str | None, finish_reason: str | None = None) -> TextCompletionResponse:
+def _text_chunk(index: int | None, text: str | None, finish_reason: str | None = None) -> TextCompletionResponse:
     return TextCompletionResponse(
         id="cmpl-stream",
         created=1589478378,
@@ -478,6 +478,30 @@ class TestStreamingOutputProcessing:
     @pytest.mark.asyncio
     async def test_ended_stream_block_raises_the_guardrail_error(self):
         chunks = [_text_chunk(0, "A kum"), _text_chunk(0, "quat tart"), _text_chunk(0, "", "stop")]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await OpenAITextCompletionHandler().process_output_streaming_response(
+                responses_so_far=chunks, guardrail_to_apply=_RecordingKeywordFilter(), deliver_ended_stream_rewrites=True
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "kumquat" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_treats_a_null_choice_index_as_choice_zero(self):
+        guardrail = _RecordingKeywordFilter()
+        chunks = [_text_chunk(None, "A pers"), _text_chunk(0, "immon tart"), _text_chunk(0, "", "stop")]
+
+        await OpenAITextCompletionHandler().process_output_streaming_response(
+            responses_so_far=chunks, guardrail_to_apply=guardrail, request_data={}, deliver_ended_stream_rewrites=True
+        )
+
+        assert guardrail.scanned_texts == (("A persimmon tart",),)
+        assert [choice.text for chunk in chunks for choice in chunk.choices] == ["A [KEYWORD_REDACTED] tart", "", ""]
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_blocks_a_keyword_split_across_a_null_and_a_zero_choice_index(self):
+        chunks = [_text_chunk(None, "A kum"), _text_chunk(0, "quat tart"), _text_chunk(0, "", "stop")]
 
         with pytest.raises(HTTPException) as exc_info:
             await OpenAITextCompletionHandler().process_output_streaming_response(
