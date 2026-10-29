@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from types import MappingProxyType
@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend, Uncach
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.mcp.parked_stream_dispatch import (
     DISPATCH_RELEASE,
+    IN_FLIGHT_ROUND,
     PARKED_DISPATCH,
     SERVED_FROM_CACHE,
     DeferredStreamRelease,
@@ -21,6 +22,7 @@ from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
 Parked: TypeAlias = tuple[object, ...]
+PartialAnswer: TypeAlias = Callable[[], object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +93,7 @@ class ChatStreamRoundBilling:
     def __init__(self, logging_obj: LiteLLMLoggingObj) -> None:
         self._logging_obj: Final = logging_obj
         self._first: _FirstRound | None = None
+        self._partial_follow_up: PartialAnswer | None = None
         self._reading_loop: asyncio.AbstractEventLoop | None = None
 
     @contextmanager
@@ -136,10 +139,17 @@ class ChatStreamRoundBilling:
         setattr(self._logging_obj, PARKED_DISPATCH, None)
         self._log_through_the_release((*first.parked, first.banked.guardrail_scoped_copy()))
 
-    def bill_partial_follow_up(self, partial: ModelResponse) -> None:
+    def follow_up_started(self, partial_follow_up: PartialAnswer) -> None:
+        self._partial_follow_up = partial_follow_up
+        setattr(self._logging_obj, IN_FLIGHT_ROUND, self.bill_in_flight_round)
+
+    def bill_in_flight_round(self) -> None:
         first: Final = self._first
-        final_round: Final = _assembled_round((partial, False))
-        if first is None or final_round is None or not self._holds_round_one_alone(first):
+        partial_follow_up: Final = self._partial_follow_up
+        if first is None or partial_follow_up is None or not self._holds_round_one_alone(first):
+            return
+        final_round: Final = _assembled_round((partial_follow_up(), False))
+        if final_round is None:
             return
         self._first = None
         setattr(

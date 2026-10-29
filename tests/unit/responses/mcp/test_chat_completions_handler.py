@@ -2232,6 +2232,21 @@ async def test_stream_auto_execute_hung_up_during_the_follow_up_bills_round_one_
     _assert_one_row_bills_round_one_and_the_partial_answer(recorder, respx_mock)
 
 
+def _chat_rounds_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "mcp-chat-rounds",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-mcp-chat-rounds",
+                    "api_base": "https://mcp-chat-rounds.example.com/v1",
+                },
+            }
+        ]
+    )
+
+
 class _StallsOnceTheAnswerStarts(httpx.AsyncByteStream):
     async def __aiter__(self) -> AsyncIterator[bytes]:
         yield _sse(_chat_stream_events(_CHAT_ROUND_TWO)[:1])
@@ -2277,18 +2292,7 @@ async def test_stream_auto_execute_routed_through_the_proxy_bills_the_partial_an
             Response(200, stream=_StallsOnceTheAnswerStarts(), headers={"content-type": "text/event-stream"}),
         ),
     )
-    router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": "mcp-chat-rounds",
-                "litellm_params": {
-                    "model": "openai/gpt-5.6",
-                    "api_key": "sk-mcp-chat-rounds",
-                    "api_base": "https://mcp-chat-rounds.example.com/v1",
-                },
-            }
-        ]
-    )
+    router: Final = _chat_rounds_router()
     monkeypatch.setattr(proxy_server, "llm_router", router)
     recorder: Final = _ChatRoundRecorder()
     logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-routed-hang-up", stream=True)
@@ -2320,6 +2324,100 @@ async def test_stream_auto_execute_routed_through_the_proxy_bills_the_partial_an
     await recorder.settled(logged=1)
 
     _assert_one_row_bills_round_one_and_the_partial_answer(recorder, respx_mock)
+
+
+async def _stop_reading_once_the_proxy_sent(served: AsyncIterator[object], content: str) -> None:
+    async for frame in served:
+        if _streams_content(frame, content):
+            return
+    pytest.fail(f"the proxy never sent {content!r}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deferred_for_a_post_call_guardrail", [False, True])
+async def test_stream_auto_execute_routed_through_the_proxy_bills_the_partial_answer_when_hung_up_between_reads(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, deferred_for_a_post_call_guardrail: bool
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), _streamed(_CHAT_ROUND_TWO)))
+    router: Final = _chat_rounds_router()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-routed-hang-up-between-reads", stream=True)
+
+    with _echo_tool_served():
+        stream: Final = await router.acompletion(
+            model="mcp-chat-rounds",
+            messages=[{"role": "user", "content": "Call echo with PING"}],
+            tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
+            stream=True,
+            stream_options={"include_usage": True},
+            litellm_logging_obj=logging_obj,
+        )
+        if deferred_for_a_post_call_guardrail:
+            ProxyBaseLLMRequestProcessing(data={})._arm_deferred_stream_dispatch(
+                response=stream, route_type="acompletion", user_api_key_dict=MagicMock(), logging_obj=logging_obj
+            )
+        served: Final = proxy_server.async_data_generator(
+            response=stream,
+            user_api_key_dict=UserAPIKeyAuth(),
+            request_data={"litellm_logging_obj": logging_obj, "model": "mcp-chat-rounds", "metadata": {}},
+        )
+        await _stop_reading_once_the_proxy_sent(served, "PING")
+        await served.aclose()
+    await recorder.settled(logged=1)
+
+    _assert_one_row_bills_round_one_and_the_partial_answer(recorder, respx_mock)
+
+
+class _StallsBeforeTheAnswerStarts(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.opened: Final = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b": the answer has not started\n\n"
+        self.opened.set()
+        await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deferred_for_a_post_call_guardrail", [False, True])
+async def test_stream_auto_execute_hung_up_before_the_answer_starts_bills_round_one_alone_on_one_row(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, deferred_for_a_post_call_guardrail: bool
+):
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    answer: Final = _StallsBeforeTheAnswerStarts()
+    _serve_chat_rounds(
+        respx_mock,
+        monkeypatch,
+        (_streamed(_CHAT_ROUND_ONE), Response(200, stream=answer, headers={"content-type": "text/event-stream"})),
+    )
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-hung-up-before-answer", stream=True)
+
+    with _echo_tool_served():
+        stream: Final = await _open_chat_echo_stream(logging_obj)
+        if deferred_for_a_post_call_guardrail:
+            ProxyBaseLLMRequestProcessing(data={})._arm_deferred_stream_dispatch(
+                response=stream, route_type="acompletion", user_api_key_dict=MagicMock(), logging_obj=logging_obj
+            )
+        reading: Final = asyncio.create_task(_read_all(stream))
+        await asyncio.wait_for(answer.opened.wait(), timeout=10)
+        reading.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await reading
+        await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
+            request=None, request_data={"litellm_logging_obj": logging_obj}, response=stream, client_disconnected=True
+        )
+    await recorder.settled(logged=1)
+
+    _assert_one_row_bills_round_one(recorder.logged)
+    assert recorder.failed == ()
 
 
 async def _read_through_the_usage_chunk(

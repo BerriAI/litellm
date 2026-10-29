@@ -77,6 +77,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     team_member_budget_entity_id,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.responses.mcp.parked_stream_dispatch import IN_FLIGHT_ROUND
 from litellm.router import Router
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.utils import ModelResponseListIterator
@@ -9066,9 +9067,8 @@ class TestStreamingClientDisconnectBilling:
         def cannot_price_the_in_flight_round() -> None:
             raise RuntimeError("the in-flight round could not be priced")
 
-        stream: Final = types.SimpleNamespace(
-            chunks=[], messages=None, aclose=closed, bill_in_flight_round_on_disconnect=cannot_price_the_in_flight_round
-        )
+        setattr(response.logging_obj, IN_FLIGHT_ROUND, cannot_price_the_in_flight_round)
+        stream: Final = types.SimpleNamespace(chunks=[], messages=None, aclose=closed)
         proxy_logging_obj: Final = types.SimpleNamespace(arelease_max_parallel_requests_on_disconnect=AsyncMock())
 
         await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(

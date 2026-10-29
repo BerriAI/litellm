@@ -274,18 +274,6 @@ async def acompletion_with_mcp(
                 if isinstance(round_billing, ChatStreamRoundBilling):
                     round_billing.release_abandoned()
 
-            def bill_in_flight_round_on_disconnect(self) -> None:
-                follow_up: Final[object] = self.follow_up_stream
-                if (
-                    self._round_billing is None
-                    or self.follow_up_exhausted
-                    or not isinstance(follow_up, CustomStreamWrapper)
-                ):
-                    return
-                partial: Final = follow_up.partial_response()
-                if isinstance(partial, ModelResponse):
-                    self._round_billing.bill_partial_follow_up(partial)
-
             def _add_mcp_list_tools_to_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
                 """Add mcp_list_tools to the first chunk."""
                 from litellm.types.utils import (
@@ -385,7 +373,7 @@ async def acompletion_with_mcp(
                             raise
                         return usage_chunk
                     except asyncio.CancelledError:
-                        self.bill_in_flight_round_on_disconnect()
+                        round_billing.bill_in_flight_round()
                         raise
                     except Exception:
                         round_billing.fail()
@@ -555,6 +543,8 @@ async def acompletion_with_mcp(
                     if earlier_rounds is not None:
                         follow_up_response.bill_failure_after_earlier_rounds(earlier_rounds)
                     follow_up_response.messages = follow_up_messages
+                    if self._round_billing is not None:
+                        self._round_billing.follow_up_started(follow_up_response.partial_response)
                     self.follow_up_stream = follow_up_response
                     from litellm._logging import verbose_logger
 
@@ -614,9 +604,6 @@ async def acompletion_with_mcp(
             async def aclose(self) -> None:
                 self._custom_iterator.release_abandoned()
                 await super().aclose()
-
-            def bill_in_flight_round_on_disconnect(self) -> None:
-                self._custom_iterator.bill_in_flight_round_on_disconnect()
 
             def __iter__(self):
                 # For synchronous iteration, create a sync wrapper

@@ -137,7 +137,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_and_merge_model_level_guardrails,
 )
-from litellm.responses.mcp.parked_stream_dispatch import parked_success
+from litellm.responses.mcp.parked_stream_dispatch import in_flight_round_biller, parked_success
 from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect, spawn_logging_task
 from litellm.router import Router
 from litellm.router_strategy.auto_router.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
@@ -528,16 +528,12 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     return await _dispatch_disconnect_billing_event(logging_obj, partial_response)
 
 
-@runtime_checkable
-class _BillsInFlightRoundOnDisconnect(Protocol):
-    def bill_in_flight_round_on_disconnect(self) -> None: ...
-
-
-def _bill_in_flight_round_on_disconnect(response: object) -> None:
-    if not isinstance(response, _BillsInFlightRoundOnDisconnect):
+def _bill_in_flight_round_on_disconnect(request_data: Mapping[str, object]) -> None:
+    bill_in_flight_round: Final = in_flight_round_biller(request_data.get("litellm_logging_obj"))
+    if bill_in_flight_round is None:
         return
     try:
-        response.bill_in_flight_round_on_disconnect()
+        bill_in_flight_round()
     except Exception as e:  # noqa: BLE001  # disconnect billing is best-effort; never break stream teardown
         verbose_proxy_logger.debug("Failed to bill the in-flight round after client disconnect: %s", e)
 
@@ -4446,7 +4442,7 @@ class ProxyBaseLLMRequestProcessing:
                     client_disconnected,
                 )
             if recorded_client_disconnect:
-                _bill_in_flight_round_on_disconnect(response)
+                _bill_in_flight_round_on_disconnect(_REQUEST_FIELDS.validate_python(request_data))
                 deferred_stream_logging_armed: Final = _deferred_stream_logging_is_armed(request_data)
                 ProxyLogging.fire_deferred_stream_logging(request_data)
                 # A disconnect-time success event (the deferred-guardrail flush

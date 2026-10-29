@@ -1,4 +1,4 @@
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Final, Protocol
 
@@ -7,6 +7,7 @@ from litellm.litellm_core_utils.litellm_logging import UncachedPrice
 
 PARKED_DISPATCH: Final = "_deferred_stream_complete_args"
 DISPATCH_RELEASE: Final = "_on_deferred_stream_complete"
+IN_FLIGHT_ROUND: Final = "_bill_in_flight_round_on_disconnect"
 SERVED_FROM_CACHE: Final = UncachedPrice(cost=0.0, cost_breakdown=None)
 
 
@@ -40,6 +41,11 @@ class ParkedSuccess:
         await success_dispatcher(logger).dispatch_success_handlers(
             self.assembled, cache_hit=self.cache_hit, start_time=None, end_time=None, prefer_async_handlers=True
         )
+
+
+def in_flight_round_biller(logging_obj: object) -> Callable[[], object] | None:
+    biller: Final[object] = getattr(logging_obj, IN_FLIGHT_ROUND, None)
+    return biller if isinstance(logging_obj, LiteLLMLoggingObj) and callable(biller) else None
 
 
 def parked_success(parked: tuple[object, ...]) -> ParkedSuccess | None:
