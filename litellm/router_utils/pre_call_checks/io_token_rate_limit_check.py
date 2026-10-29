@@ -195,10 +195,7 @@ def _sent_deployment_cap_keys(request_kwargs: Mapping[str, object] | None) -> tu
     return _RESPONSES_OUTPUT_CAP_KEYS if is_responses_request else _CHAT_OUTPUT_CAP_KEYS
 
 
-def _output_cap(request_kwargs: Mapping[str, object] | None, deployment: Mapping[str, object]) -> int | None:
-    from_request: Final = _explicit_max_tokens(request_kwargs)
-    if from_request is not None:
-        return from_request
+def _deployment_output_cap(request_kwargs: Mapping[str, object] | None, deployment: Mapping[str, object]) -> int | None:
     params: Final = deployment.get("litellm_params")
     return (
         _explicit_max_tokens(params, _sent_deployment_cap_keys(request_kwargs))
@@ -207,12 +204,24 @@ def _output_cap(request_kwargs: Mapping[str, object] | None, deployment: Mapping
     )
 
 
-def _otpm_reservation(output_cap: int | None, model_name: str, otpm_limit: int) -> int:
-    if output_cap is not None:
-        return output_cap
+def _default_otpm_reservation(model_name: str, otpm_limit: int) -> int:
     model_max: Final = _model_max_output_tokens(model_name) if model_name else None
     share_of_limit: Final = max(1, int(otpm_limit * NO_MAX_TOKENS_TPM_RESERVATION_FRACTION))
     return min(4096 if model_max is None else model_max, share_of_limit)
+
+
+def _otpm_reservation(
+    request_kwargs: Mapping[str, object] | None,
+    deployment: Mapping[str, object],
+    model_name: str,
+    otpm_limit: int,
+) -> int:
+    from_request: Final = _explicit_max_tokens(request_kwargs)
+    if from_request is not None:
+        return from_request
+    default: Final = _default_otpm_reservation(model_name, otpm_limit)
+    from_deployment: Final = _deployment_output_cap(request_kwargs, deployment)
+    return default if from_deployment is None else min(from_deployment, default)
 
 
 def _get_usage_tokens(usage: object) -> tuple[int, int, int]:
@@ -493,7 +502,9 @@ def io_token_pre_call_check(
     request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
     _model, served_model = _tokenizer_and_served_models(deployment)
     estimated_input: Final = _estimate_input_tokens(request_kwargs, model=_model)
-    output_cap: Final = _output_cap(request_kwargs, deployment)
+    otpm_to_reserve: Final = (
+        _otpm_reservation(request_kwargs, deployment, served_model, otpm_limit) if otpm_limit is not None else 0
+    )
 
     dt: Final = get_utc_datetime()
     current_minute: Final = dt.strftime("%H-%M")
@@ -516,7 +527,7 @@ def io_token_pre_call_check(
         )
 
     if otpm_limit is not None:
-        otpm_reserved = _otpm_reservation(output_cap, served_model, otpm_limit)
+        otpm_reserved = otpm_to_reserve
         try:
             _sync_increment_with_rollback(
                 dual_cache,
@@ -557,7 +568,9 @@ async def async_io_token_pre_call_check(
     request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
     _model, served_model = _tokenizer_and_served_models(deployment)
     estimated_input: Final = await offload_token_count(_estimate_input_tokens)(request_kwargs, model=_model)
-    output_cap: Final = _output_cap(request_kwargs, deployment)
+    otpm_to_reserve: Final = (
+        _otpm_reservation(request_kwargs, deployment, served_model, otpm_limit) if otpm_limit is not None else 0
+    )
 
     dt: Final = get_utc_datetime()
     current_minute: Final = dt.strftime("%H-%M")
@@ -581,7 +594,7 @@ async def async_io_token_pre_call_check(
         )
 
     if otpm_limit is not None:
-        otpm_reserved = _otpm_reservation(output_cap, served_model, otpm_limit)
+        otpm_reserved = otpm_to_reserve
         try:
             await _increment_with_rollback(
                 dual_cache,
