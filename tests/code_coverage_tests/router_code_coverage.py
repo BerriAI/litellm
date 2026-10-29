@@ -183,7 +183,6 @@ ignored_function_names = [
     "_aresponses_background_stream_can_release",  # Tested through the background Responses stream tests in test_router.py
     "_raise_released_stream_error",  # Tested through the background Responses stream content-policy tests in test_router.py
     "_mid_stream_error_before_output",  # Tested through the Responses mid-stream fallback and background stream tests
-    "_deployment_model_id_pin",  # Tested through the SageMaker model_id tests in test_router.py
 ]
 
 

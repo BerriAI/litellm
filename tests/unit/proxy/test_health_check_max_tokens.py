@@ -1572,12 +1572,33 @@ async def test_a_failing_health_probe_leaves_the_deployment_serving_requests(mon
             {"model_id": "own-component", "extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"}},
             "own-component",
         ),
+        (
+            {"model_id": "own-component", "extra_headers": {1: "other", "X-Amzn-SageMaker-Inference-Component": "x"}},
+            "own-component",
+        ),
+        (
+            {"extra_headers": {1: "other", "X-Amzn-SageMaker-Inference-Component": "header-component"}},
+            "header-component",
+        ),
+        (
+            {
+                "configurable_clientside_auth_params": ["model_id"],
+                "extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"},
+            },
+            None,
+        ),
     ],
-    ids=["header_pinned", "own_model_id_beats_the_header"],
+    ids=[
+        "header_pinned",
+        "own_model_id_beats_the_header",
+        "own_model_id_beside_a_non_string_header_key",
+        "header_pinned_beside_a_non_string_header_key",
+        "client_configurable_model_id_takes_no_header_pin",
+    ],
 )
 @pytest.mark.asyncio
 async def test_run_model_health_check_probes_a_legacy_sagemaker_embedding_at_the_deployments_component(
-    component_params: dict[str, object], probed_component: str
+    component_params: dict[str, object], probed_component: str | None
 ) -> None:
     embedding_reply: Final = {"object": "list", "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}]}
     invoke_endpoint: Final = MagicMock(return_value={"Body": io.BytesIO(json.dumps(embedding_reply).encode())})
@@ -1598,4 +1619,4 @@ async def test_run_model_health_check_probes_a_legacy_sagemaker_embedding_at_the
 
     assert "error" not in result, result
     assert invoke_endpoint.call_count == 1
-    assert invoke_endpoint.call_args.kwargs["InferenceComponentName"] == probed_component
+    assert invoke_endpoint.call_args.kwargs.get("InferenceComponentName") == probed_component

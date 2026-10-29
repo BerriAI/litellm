@@ -182,7 +182,6 @@ from litellm.llms.openai_like.model_info import (
     MODEL_INFO_REFRESH_SECONDS,
     get_openai_compatible_model_info,
 )
-from litellm.llms.sagemaker.common_utils import deployment_inference_component
 from litellm.responses.bridge_check import keep_registered_mode
 from litellm.responses.retrieve_stream_query import requests_streamed_retrieval, without_retrieve_stream_defaults
 from litellm.router_api import (
@@ -256,6 +255,7 @@ from litellm.router_utils.clientside_credential_handler import (
 from litellm.router_utils.common_utils import (
     MID_STREAM_CONTINUATION_KWARG,
     as_retry_skipped_deployment_ids,
+    deployment_model_id_pin,
     deployments_the_caller_may_use,
     filter_team_based_models,
     filter_web_search_deployments,
@@ -672,7 +672,6 @@ _NO_DEFAULT_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_CLIENTSIDE_PARAMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
@@ -5317,7 +5316,7 @@ class Router(DeprecatedRouterMembers):
         ):
             kwargs[STREAM_USAGE_INJECTED_FIELD] = True
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
-        pinned_model_id: Final = self._deployment_model_id_pin(deployment_context)
+        pinned_model_id: Final = deployment_model_id_pin(deployment_context)
         if pinned_model_id is not None:
             kwargs["model_id"] = pinned_model_id  # rebind-ok: this method's contract is filling the caller's kwargs
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
@@ -6246,7 +6245,7 @@ class Router(DeprecatedRouterMembers):
                     kwargs[k] = v
                 elif k == "metadata":
                     kwargs[k].update(v)
-            pinned_model_id: Final = self._deployment_model_id_pin(_LITELLM_PARAMS_ADAPTER.validate_python(data))
+            pinned_model_id: Final = deployment_model_id_pin(_LITELLM_PARAMS_ADAPTER.validate_python(data))
             if pinned_model_id is not None:
                 kwargs["model_id"] = pinned_model_id  # rebind-ok: this call's own kwargs, filled like the defaults
 
@@ -16519,17 +16518,6 @@ class Router(DeprecatedRouterMembers):
             for key in forwarded_keys
             if isinstance(key, str) and Router._deployment_sets_litellm_param(deployment_litellm_params, key)
         )
-
-    @staticmethod
-    def _deployment_model_id_pin(deployment_litellm_params: Mapping[str, object]) -> object | None:
-        clientside_params: Final = _CLIENTSIDE_PARAMS_ADAPTER.validate_python(
-            deployment_litellm_params.get("configurable_clientside_auth_params") or ()
-        )
-        if "model_id" in clientside_params:
-            return None
-        if Router._deployment_sets_litellm_param(deployment_litellm_params, "model_id"):
-            return deployment_litellm_params["model_id"]
-        return deployment_inference_component(deployment_litellm_params)
 
     @staticmethod
     def _deployment_sets_litellm_param(deployment_litellm_params: Mapping[str, object], key: str) -> bool:

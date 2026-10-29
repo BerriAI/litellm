@@ -17,6 +17,7 @@ from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import LlmProviders, StreamingChatCompletionChunk
 
 STR_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_OBJECT_KEYED_MAPPING: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -190,8 +191,8 @@ def deployment_inference_component(litellm_params: Mapping[str, object]) -> str 
     return next(
         (
             value
-            for name, value in STR_KEYED_MAPPING.validate_python(headers).items()
-            if name.lower() == INFERENCE_COMPONENT_HEADER.lower() and isinstance(value, str)
+            for name, value in _OBJECT_KEYED_MAPPING.validate_python(headers).items()
+            if isinstance(name, str) and name.lower() == INFERENCE_COMPONENT_HEADER.lower() and isinstance(value, str)
         ),
         None,
     )
